@@ -1,0 +1,100 @@
+// Copyright 2026 The IREE Authors
+//
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+// Generic GGML GET_ROWS: output[row, col] = source[ids[row], col] for an
+// arbitrary (non-contiguous) row index list.  This is the embedding lookup
+// every model needs at the start of the graph; the fused Qwen3-MoE dispatch
+// handles it inside fused kernels, and this standalone kernel covers the
+// unfused (dense) graphs that otherwise fail-closed.
+//
+// source_format: 0 = f32 rows ([rows]x[width] f32), 1 = q8_0 rows (each row
+// is width/32 block_q8_0: f16 scale + 32 int8 quants; width % 32 == 0).
+amdgpu.target<gfx11-generic> @ggml_get_rows_gfx11_wave64 {subgroup_size = 64}
+
+kernel.def target(@ggml_get_rows_gfx11_wave64) export("ggml_get_rows_f32") @ggml_get_rows_f32(
+    %source_row_count: index, %output_row_count: index, %width: index, %source_format: i32) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded_width = index.add %width, %rounding : index
+  %column_workgroup_count = index.div %rounded_width, %twofiftysix : index
+  kernel.launch.config workgroups(%column_workgroup_count, %output_row_count, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%source_row_count: index, %output_row_count: index, %width: index, %source_format: i32,
+         %source: buffer, %output_ids: buffer, %output: buffer) {
+  %source_count = index.assume %source_row_count [range(%source_row_count, 1, 131072)] : index
+  %output_count = index.assume %output_row_count [range(%output_row_count, 1, 2048)] : index
+  %cols = index.assume %width [range(%width, 32, 16384)] : index
+  %column_workgroup = kernel.workgroup.id<x> : index
+  %output_row0 = kernel.workgroup.id<y> : index
+  %workitem = kernel.workitem.id<x> : index
+  %twofiftysix = index.constant 256 : index
+  %output_row, %launch_output_count = index.assume %output_row0, %output_count [lt(%output_row0, %output_count)] : index, index
+  %base0 = index.mul %column_workgroup, %twofiftysix : index
+  %column0 = index.add %base0, %workitem : index
+  %column = index.assume %column0 [range(%column0, 0, 65535)] : index
+  %in_bounds = index.cmp ult, %column, %cols : index
+  %zero_offset = index.constant 0 : offset
+  %source_noalias, %ids_noalias, %output_noalias = buffer.assume.noalias %source, %output_ids, %output : buffer, buffer, buffer
+  %ids_view = buffer.view %ids_noalias[%zero_offset] : buffer -> view<[%launch_output_count]xi32>
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%launch_output_count]x[%cols]xf32>
+  scf.if %in_bounds {
+    %safe_column = index.assume %column [lt(%column, %cols)] : index
+    %source_row_i32 = view.load %ids_view[%output_row] : view<[%launch_output_count]xi32> -> i32
+    %source_row0 = index.cast %source_row_i32 : i32 to index
+    %source_row = index.assume %source_row0 [range(%source_row0, 0, 131071), lt(%source_row0, %source_count)] : index
+    %source_format_idx = index.cast %source_format : i32 to index
+    %c0_idx = index.constant 0 : index
+    %is_f32 = index.cmp eq, %source_format_idx, %c0_idx : index
+    scf.if %is_f32 {
+      %source_view = buffer.view %source_noalias[%zero_offset] : buffer -> view<[%source_count]x[%cols]xf32>
+      %value = view.load %source_view[%source_row, %safe_column] : view<[%source_count]x[%cols]xf32> -> f32
+      view.store %value, %output_view[%output_row, %safe_column] : f32, view<[%launch_output_count]x[%cols]xf32>
+    } else {
+      // q8_0: row stride = width/32 blocks x (2 bytes f16 scale + 32 int8).
+      %c32 = index.constant 32 : index
+      %c2 = index.constant 2 : offset
+      %block_count = index.div %cols, %c32 : index
+      %c34_off = index.constant 34 : offset
+      %row_bytes_off = index.scale %block_count, %c34_off : index, offset -> offset
+      %row_base = index.scale %source_row, %row_bytes_off : index, offset -> offset
+      %block0 = index.div %safe_column, %c32 : index
+      %block = index.assume %block0 [lt(%block0, %block_count)] : index
+      %block_off = index.scale %block, %c34_off : index, offset -> offset
+      %block_base = index.add %row_base, %block_off : offset
+      %c0_idx = index.constant 0 : index
+      %dm_view = buffer.view %source_noalias[%block_base] : buffer -> view<2xf16>
+      %dm = vector.load %dm_view[%c0_idx] : view<2xf16> -> vector<2xf16>
+      %d_f16 = vector.extract %dm[0] : vector<2xf16> -> f16
+      %d = scalar.extf %d_f16 : f16 to f32
+      %col_in_block0 = index.rem %safe_column, %c32 : index
+      %col_in_block = index.assume %col_in_block0 [lt(%col_in_block0, %c32)] : index
+      %qs_offset = index.add %block_base, %c2 : offset
+      %qs_view = buffer.view %source_noalias[%qs_offset] : buffer -> view<32xi8>
+      %q_i8 = view.load %qs_view[%col_in_block] : view<32xi8> -> i8
+      %q = scalar.sitofp %q_i8 : i8 to f32
+      %value = scalar.mulf %d, %q : f32
+      view.store %value, %output_view[%output_row, %safe_column] : f32, view<[%launch_output_count]x[%cols]xf32>
+    }
+  }
+  kernel.return
+}
+
+// Check: f32 source, identity ids (output rows 0..1 = source rows 0..1).
+check.case public @ggml_get_rows_f32_identity_case {
+  %two = check.literal value(2) : index
+  %three = check.literal value(3) : index
+  %four = check.literal value(4) : index
+  %fmt = check.literal value(0) : i32
+  %source = check.generate.iota offset(0) step(1) : tensor<3x4xf32>
+  %output_ids = check.generate.iota offset(0) step(1) : tensor<2xi32>
+  %output = check.generate.fill value(0) : tensor<2x4xf32>
+  %expected = check.generate.iota offset(0) step(1) : tensor<2x4xf32>
+  func.call @ggml_get_rows_f32(%three, %two, %four, %fmt, %source, %output_ids, %output) : (index, index, index, i32, tensor<3x4xf32>, tensor<2xi32>, tensor<2x4xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<2x4xf32>
+  check.return
+}
+
+check.benchmark<@ggml_get_rows_f32_identity_case> @ggml_get_rows_f32_identity

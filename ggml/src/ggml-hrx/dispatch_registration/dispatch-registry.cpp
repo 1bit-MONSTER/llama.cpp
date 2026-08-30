@@ -1,6 +1,7 @@
 #include "dispatch-registry.h"
 
 #include "dispatch-add.h"
+#include "dispatch-get-rows.h"
 #include "dispatch-gather-add.h"
 #include "dispatch-llm-matmul.h"
 #include "dispatch-moe-router.h"
@@ -45,6 +46,7 @@ static void register_llm_dispatches(DispatchRegistryBuilder & builder) {
 static DispatchRegistry build_llm_registry() {
     DispatchRegistryBuilder builder;
     register_add_dispatch(builder);
+    register_get_rows_dispatch(builder);
     register_gather_add_dispatch(builder);
     register_llm_dispatches(builder);
     return builder.build();

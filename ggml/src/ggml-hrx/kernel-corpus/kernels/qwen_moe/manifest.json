@@ -195,6 +195,12 @@
       "sha256": "249b1d4c7167d0533277481cbb0e930207f14f9e2ba75fc1b8754eb0717ed094",
       "size": 2444,
       "owner": "ggml-hrx"
+    },
+    {
+      "path": "../hrx_owned/get_rows_f32.loom",
+      "sha256": "99e092a1b7bc2212995b0881186161a1affe1f1ba0c4060d331b513d117d0e56",
+      "size": 6101,
+      "owner": "ggml-hrx"
     }
   ],
   "exports": [
@@ -4467,6 +4473,66 @@
         "mode": "direct",
         "primary_sources": [
           "../qwen_owned/token_embedding_bringup_workaround.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_get_rows_f32",
+      "symbol": "ggml_get_rows_f32",
+      "source": "../hrx_owned/get_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "source_row_count",
+          "type": "index"
+        },
+        {
+          "name": "output_row_count",
+          "type": "index"
+        },
+        {
+          "name": "width",
+          "type": "index"
+        },
+        {
+          "name": "source_format",
+          "type": "i32"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "source_row_count",
+          "type": "index"
+        },
+        {
+          "name": "output_row_count",
+          "type": "index"
+        },
+        {
+          "name": "width",
+          "type": "index"
+        },
+        {
+          "name": "source_format",
+          "type": "i32"
+        }
+      ],
+      "bindings": [
+        "source",
+        "output_ids",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "../hrx_owned/get_rows_f32.loom"
         ],
         "library_sources": []
       },
