@@ -4,50 +4,50 @@
   "upstream_revision": "d343e4ad5167dca6758cb0d2db08785e43e99070",
   "source_subdirectory": "experimental/qwen_moe/kernels",
   "qwen_endpoint_source_subdirectory": "experimental/qwen/kernels",
-  "corpus_sha256": "ce2711ba360db150344d63658b6fc0024954e4ad4c598233caed7680ca85f993",
+  "corpus_sha256": "c173d047ce932c887a7540457eb7d967f0170161c0137db9234a096a5ae7d263",
   "upstream_corpus_sha256": "76f504d2c19e85a1b51679bb2edc5e9a60b865f545ecaabacedd14ba7db15842",
-  "owned_corpus_sha256": "1126fc55f6123c13ee9a8a8d146082bd9b63d9fd1ed123e27478ff964e58ad44",
+  "owned_corpus_sha256": "c173d047ce932c887a7540457eb7d967f0170161c0137db9234a096a5ae7d263",
   "build_bazel_sha256": "598eeb34f8606182a732299c989387dd450c0d8f33e4275635b4a679c0f986d0",
   "files": [
     {
       "path": "ggml/linear_q6k_f32.loom",
-      "sha256": "f20c9cd0ce58c6158b8b45bf6c9502dc22d20d2a67eee975d96e7625f87ef615",
-      "size": 28513
+      "sha256": "e7d125de01614edee0ba41c6d89dbbc4fe32b2c5d12f8a5ce5db8b0f8b36236e",
+      "size": 28480
     },
     {
       "path": "ggml/linear_q6k_q8_1_x4.loom",
-      "sha256": "865795fdd3111e1e29bfe07325a3057c55656773109caec1224ac42e03d86bba",
-      "size": 32592
+      "sha256": "57eda5e5b68fcb2ef6ab98ad41473351f4993a6e014c9a88d1fad9d9f8957961",
+      "size": 33965
     },
     {
       "path": "ggml/quantize_q8_1_x4.loom",
-      "sha256": "a9e6e995dd541142574058d4412f313beb87b6c6f4bb750b23a0a3047c951183",
-      "size": 16711
+      "sha256": "7ec5f7a917d6053e3ee360cc6df07873c103a7622a87d2aa51bbd60bf9349c6d",
+      "size": 16671
     },
     {
       "path": "qwen3_moe/attention_postprocess_f32_f16.loom",
-      "sha256": "9125cd1ef87cb0d0ca8f4f6fc0c0a5bec29f9d6b30894287b53ad2d98c9433fb",
-      "size": 25955
+      "sha256": "15afee416d46accb1641743e9a573705c29ba2c789caecd30053bb47ef013b13",
+      "size": 25906
     },
     {
       "path": "qwen3_moe/attention_prepare_quantized.loom",
-      "sha256": "4bd47e89d1569e3622de60d88a6e09309afe35d48d3b6b1f25469e3b71aa7118",
-      "size": 29030
+      "sha256": "c0f11099bddaa839c9ea02de66a0311dfb1da00122f1229961ba1c916f3ccd8e",
+      "size": 28982
     },
     {
       "path": "qwen3_moe/attention_qkv_postprocess_fused.loom",
-      "sha256": "409f9f95ad8b0a58691cc74d665489d3d65ae37c73fb682b405ebff0bf1c0c79",
-      "size": 24797
+      "sha256": "1994380981471568b29484be80ccb8504485df9782594efca73f067fce550763",
+      "size": 66529
     },
     {
       "path": "qwen3_moe/attention_qkv_quantized.loom",
-      "sha256": "7b631b54e042ead32c52b8ddacba4fd58de588571b586a05719f0ddcee080cc1",
-      "size": 25990
+      "sha256": "3b731f5deac992795a919ee7c34cbeb33f592747ff9bb4c9846ccc1fde08e283",
+      "size": 47466
     },
     {
       "path": "qwen3_moe/attention_qkv_same_format_prefill.loom",
-      "sha256": "55aeb3857c0646e9a1f05570ae6860fe42b0cfa91198868fc46bbed19f1c02fb",
-      "size": 12730
+      "sha256": "988571bf53b4b98290894209590ee6da5314cf51772a136389f3299c3e7e7953",
+      "size": 13057
     },
     {
       "path": "qwen3_moe/batched_decode_expert_dispatch.loom",
@@ -56,13 +56,13 @@
     },
     {
       "path": "qwen3_moe/batched_decode_gate_up_q4k.loom",
-      "sha256": "292074ba00372ee7fe409047e54c7d98b6a5bb2436e2245d993f50d124a55307",
-      "size": 27198
+      "sha256": "84d79b15e6f60da6a1f12688a7125a4ef23bc3839ff97cb4a4300edaacf97cf0",
+      "size": 34641
     },
     {
       "path": "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
-      "sha256": "331fbf77a24fd22424d75e7d7716cc78af8f43899bfe15b2ee947aa9c68f0bd8",
-      "size": 68289
+      "sha256": "6f98adb100407e65e5eeeee847de96db2a4e55aea80432352368d058cd4a2352",
+      "size": 96510
     },
     {
       "path": "qwen3_moe/expert_table_partition_fused.loom",
@@ -81,13 +81,13 @@
     },
     {
       "path": "qwen3_moe/flash_attention_decode_split_f32_f16_wmma.loom",
-      "sha256": "466b17c488f5c0889aa55c208894a67eb6db0e1d91ba0e08a5b3e8fb4c82a94f",
-      "size": 94449
+      "sha256": "87f35d34836f360135d44ddaccfbdfca96ab812a19c25feeb5a08ae320259121",
+      "size": 94570
     },
     {
       "path": "qwen3_moe/flash_attention_decode_split_next_q8_test.loom",
-      "sha256": "8bf53905b313dbe8ee6007e7dc7deac64d3b7412bf36180cb19c3c66d8a3255b",
-      "size": 9162
+      "sha256": "1a7a99fd45f351cae79e6574849558173c68532f3ca1766d2656515446095005",
+      "size": 14503
     },
     {
       "path": "qwen3_moe/flash_attention_f32_f16_wmma.loom",
@@ -101,23 +101,23 @@
     },
     {
       "path": "qwen3_moe/routed_down_q4k.loom",
-      "sha256": "cf7027093e3baadd2e6cc50ca70943c7f228781d0e042c7673110ec4e5dd9e29",
-      "size": 33238
+      "sha256": "84f47df526ebee5d095cf91084c634488475fe48428e92cd9536b413caa05903",
+      "size": 60068
     },
     {
       "path": "qwen3_moe/routed_down_q6k.loom",
-      "sha256": "fd8bc76bafd174fd57e298849f65c2876186b1c6aeaa90e3b419f26b2a5d0326",
-      "size": 64580
+      "sha256": "db5275587341a0d9da827d50642b00204d9c867c110d75c1ab35cc2ca3048211",
+      "size": 98823
     },
     {
       "path": "qwen3_moe/routed_down_next_q8.loom",
-      "sha256": "3eccaa3290b83967a44958064bbc11960f9db77e68436178c2c5a50052014e2b",
-      "size": 4239
+      "sha256": "c1b6b653d62f9d455562eaa87c375d14a5479e6976252ecd3b2bdade3674d1e6",
+      "size": 14864
     },
     {
       "path": "qwen3_moe/routed_down_quantized_f16_wmma.loom",
-      "sha256": "b97a8e15a581acbc9b1de5776c7ef2ac727e8c138686ed496e2913814d2fd343",
-      "size": 75125
+      "sha256": "cc8288c066bcd36c57fd1fc689c9a03e923597f23c02eb0cdf7030359279c12d",
+      "size": 81206
     },
     {
       "path": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
@@ -131,28 +131,28 @@
     },
     {
       "path": "qwen3_moe/routed_gate_up_swiglu_q4k.loom",
-      "sha256": "e5d5ed276070ae25e8f1d915e927716da519314d34319db4b722d30589233deb",
-      "size": 125922
+      "sha256": "c8a1abd339be25eec7b5529853bf499475ebb488cb6641e81d8aef69580e15ea",
+      "size": 127267
     },
     {
       "path": "qwen3_moe/routed_linear_q4k_f16_wmma.loom",
-      "sha256": "77f024758c30fd5c834f1429049021af3616a7162486115a41735aa81bf4d613",
-      "size": 73406
+      "sha256": "ec36cb939573e0969a4a3177ff1c3e0129d991503a3e810f9722488ce717acc0",
+      "size": 76615
     },
     {
       "path": "qwen3_moe/router_projection_f32.loom",
-      "sha256": "6c3eaf6834af0a58ecbd91702e009d410c4e7d52eac106a98a0f634f1d452ed5",
-      "size": 18655
+      "sha256": "0f4e45d2d8e1d72afdf7fadf84c889e377dc850b33d95eb82915033f7444f8bd",
+      "size": 18752
     },
     {
       "path": "qwen3_moe/router_projection_top8_fused_f32.loom",
-      "sha256": "193615e54d175a8d2231bfda1f2c7672e338c1e0c4eef01cf0a5c3e35b26daa4",
-      "size": 17578
+      "sha256": "d887d3779998e84b33749d7b5da002dbb9edc48f576ed7c4dd808301fc94430f",
+      "size": 18152
     },
     {
       "path": "qwen3_moe/router_top8_f32.loom",
-      "sha256": "84738d2baee5b1a54dff2939a933024222fe8dee76ea30d71af1921b23a9e665",
-      "size": 14431
+      "sha256": "eeeb7cdea09595829f8c6a575ad20ce08ea3c03054bd478ba4997d772d215238",
+      "size": 14620
     },
     {
       "path": "../qwen_owned/token_embedding_q4k.loom",

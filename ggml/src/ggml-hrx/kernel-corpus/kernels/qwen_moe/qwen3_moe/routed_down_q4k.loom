@@ -13,6 +13,404 @@
 // registers. Four eight-lane cohorts contract four independent routes while
 // walking every Q4_K block. Qwen's eight-route, three-block decode shape uses
 // all 32 lanes across two route batches without addressing synthetic blocks.
+config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @qwen3_moe.model.rms_epsilon : f32
+
+func.def inline @qwen3_moe_q4k_chunk_pair_global(%weight: buffer, %row_byte_base: offset, %q4_block: index, %q4_group_pair: index, %q4_half: index, %header_words: vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %block_bytes = index.constant 144 : offset
+  %code_byte_add = index.constant 16 : offset
+  %c4_i32 = scalar.constant 4 : i32
+  %nibble_mask = vector.constant 252645135 : vector<4xi32>
+  %bounded_pair = index.assume %q4_group_pair [range(%q4_group_pair, 0, 3)] : index
+  %bounded_half = index.assume %q4_half [range(%q4_half, 0, 1)] : index
+  %block_byte_add = index.scale %q4_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %code_byte_base = index.add %block_byte_base, %code_byte_add : offset
+  %code_view = buffer.view %weight[%code_byte_base] : buffer -> view<32xi32>
+  %header_halves = vector.bitcast %header_words : vector<4xi32> to vector<8xf16>
+  %d_f16 = vector.extract %header_halves[0] : vector<8xf16> -> f16
+  %dmin_f16 = vector.extract %header_halves[1] : vector<8xf16> -> f16
+  %scale0 = vector.extract %header_words[1] : vector<4xi32> -> i32
+  %scale1 = vector.extract %header_words[2] : vector<4xi32> -> i32
+  %scale2 = vector.extract %header_words[3] : vector<4xi32> -> i32
+  %d = scalar.extf %d_f16 : f16 to f32
+  %dmin = scalar.extf %dmin_f16 : f16 to f32
+  %pair_code_base = index.mul %bounded_pair, %c8 : index
+  %half_code_add = index.mul %bounded_half, %c4 : index
+  %code_index0 = index.add %pair_code_base, %half_code_add : index
+  %code_index = index.assume %code_index0 [range(%code_index0, 0, 28)] : index
+  %packed_codes = vector.load %code_view[%code_index] : view<32xi32> -> vector<4xi32>
+  %low_codes = vector.andi %packed_codes, %nibble_mask : vector<4xi32>
+  %c4_i32v = vector.splat %c4_i32 : vector<4xi32>
+  %high_shifted = vector.shrui %packed_codes, %c4_i32v : vector<4xi32>
+  %high_codes = vector.andi %high_shifted, %nibble_mask : vector<4xi32>
+  %q4_low = vector.bitcast %low_codes : vector<4xi32> to vector<16xi8>
+  %q4_high = vector.bitcast %high_codes : vector<4xi32> to vector<16xi8>
+  %low_group = index.mul %bounded_pair, %c2 : index
+  %high_group = index.add %low_group, %c1 : index
+  %low_scale, %low_minimum = func.call @qwen3_moe_q4k_scale_from_header(%scale0, %scale1, %scale2, %low_group) : (i32, i32, i32, index) -> (i32, i32)
+  %high_scale, %high_minimum = func.call @qwen3_moe_q4k_scale_from_header(%scale0, %scale1, %scale2, %high_group) : (i32, i32, i32, index) -> (i32, i32)
+  %low_scale_f32 = scalar.uitofp %low_scale : i32 to f32
+  %low_minimum_f32 = scalar.uitofp %low_minimum : i32 to f32
+  %high_scale_f32 = scalar.uitofp %high_scale : i32 to f32
+  %high_minimum_f32 = scalar.uitofp %high_minimum : i32 to f32
+  %low_d_scale = scalar.mulf %d, %low_scale_f32 : f32
+  %low_dmin_scale = scalar.mulf %dmin, %low_minimum_f32 : f32
+  %high_d_scale = scalar.mulf %d, %high_scale_f32 : f32
+  %high_dmin_scale = scalar.mulf %dmin, %high_minimum_f32 : f32
+  func.return %q4_low, %low_d_scale, %low_dmin_scale, %q4_high, %high_d_scale, %high_dmin_scale : vector<16xi8>, f32, f32, vector<16xi8>, f32, f32
+}
+
+func.def inline @qwen3_moe_q4k_q8_1_dot(%q4_values: vector<16xi8>, %d_scale: f32, %dmin_scale: f32, %q8_values: vector<16xi8>, %q8_d: f32, %q8_s: f32) -> (f32) {
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_i32v = vector.constant 0 : vector<4xi32>
+  %half_f32 = scalar.constant 0.5 : f32
+  %partial_dots = vector.dot4i<u8s8> %q4_values, %q8_values, %c0_i32v : vector<16xi8>, vector<16xi8>, vector<4xi32>
+  %q_sum = vector.reduce<addi> %partial_dots, %c0_i32 : vector<4xi32>, i32
+  %q_sum_f32 = scalar.sitofp %q_sum : i32 to f32
+  %scaled_dot0 = scalar.mulf %q8_d, %d_scale : f32
+  %scaled_dot = scalar.mulf %scaled_dot0, %q_sum_f32 : f32
+  %q8_half_sum = scalar.mulf %q8_s, %half_f32 : f32
+  %minimum_correction = scalar.mulf %dmin_scale, %q8_half_sum : f32
+  %contribution = scalar.subf %scaled_dot, %minimum_correction : f32
+  func.return %contribution : f32
+}
+
+func.def inline @qwen3_moe_q4k_q8_1_x4_cohort_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %cohort_lane: index) -> (f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_cohort_lane = index.assume %cohort_lane [range(%cohort_lane, 0, 7)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %q4_block_count = index.div %bounded_input_size, %c256 : index
+  %sum = scf.for %q4_block0 = [%c0 to %q4_block_count step %c1](%block_acc = %c0_f32 : f32) -> (f32) unroll {
+    %q4_block, %bounded_q4_block_count = index.assume %q4_block0, %q4_block_count [lt(%q4_block0, %q4_block_count)] : index, index
+    %pair = func.call @qwen3_moe_q4k_q8_1_x4_paired_block_lane(%bounded_input_size, %weight, %weight_row_byte_base, %q8_input, %q8_row_byte_base, %q4_block, %bounded_cohort_lane) : (index, buffer, offset, buffer, offset, index, index) -> (f32)
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %block_acc, %pair : f32
+    scf.yield %next : f32
+  }
+  func.return %sum : f32
+}
+
+func.def inline @qwen3_moe_q4k_q8_1_x4_paired_block_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %q4_block: index, %block_lane: index) -> (f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_q4_block0 = index.assume %q4_block [range(%q4_block, 0, 127)] : index
+  %bounded_block_lane = index.assume %block_lane [range(%block_lane, 0, 7)] : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %q4_block_bytes = index.constant 144 : offset
+  %q8_group_bytes = index.constant 144 : offset
+  %q8_payload_byte_add = index.constant 16 : offset
+  %q4_block_count = index.div %bounded_input_size, %c256 : index
+  %q8_group_count = index.div %bounded_input_size, %c128 : index
+  %bounded_q4_block, %bounded_q4_block_count = index.assume %bounded_q4_block0, %q4_block_count [lt(%bounded_q4_block0, %q4_block_count)] : index, index
+  %q4_group_pair0 = index.div %bounded_block_lane, %c2 : index
+  %q4_group_pair = index.assume %q4_group_pair0 [range(%q4_group_pair0, 0, 3)] : index
+  %q4_half0 = index.rem %bounded_block_lane, %c2 : index
+  %q4_half = index.assume %q4_half0 [range(%q4_half0, 0, 1)] : index
+  %q8_group_in_block0 = index.div %q4_group_pair, %c2 : index
+  %q8_group_in_block = index.assume %q8_group_in_block0 [range(%q8_group_in_block0, 0, 1)] : index
+  %pair_in_q8_group0 = index.rem %q4_group_pair, %c2 : index
+  %pair_in_q8_group = index.assume %pair_in_q8_group0 [range(%pair_in_q8_group0, 0, 1)] : index
+  %q8_low_inner_block0 = index.mul %pair_in_q8_group, %c2 : index
+  %q8_low_inner_block = index.assume %q8_low_inner_block0 [range(%q8_low_inner_block0, 0, 2)] : index
+  %q8_high_inner_block0 = index.add %q8_low_inner_block, %c1 : index
+  %q8_high_inner_block = index.assume %q8_high_inner_block0 [range(%q8_high_inner_block0, 1, 3)] : index
+  %q8_half_word_add = index.mul %q4_half, %c4 : index
+  %q8_low_inner_word_base = index.mul %q8_low_inner_block, %c8 : index
+  %q8_low_word_index0 = index.add %q8_low_inner_word_base, %q8_half_word_add : index
+  %q8_low_word_index = index.assume %q8_low_word_index0 [range(%q8_low_word_index0, 0, 20)] : index
+  %q8_high_inner_word_base = index.mul %q8_high_inner_block, %c8 : index
+  %q8_high_word_index0 = index.add %q8_high_inner_word_base, %q8_half_word_add : index
+  %q8_high_word_index = index.assume %q8_high_word_index0 [range(%q8_high_word_index0, 8, 28)] : index
+  %q8_low_ds_index0 = index.mul %q8_low_inner_block, %c2 : index
+  %q8_low_ds_index = index.assume %q8_low_ds_index0 [range(%q8_low_ds_index0, 0, 4)] : index
+  %q8_block_group_base = index.mul %bounded_q4_block, %c2 : index
+  %q8_group0 = index.add %q8_block_group_base, %q8_group_in_block : index
+  %q8_group, %bounded_q8_group_count = index.assume %q8_group0, %q8_group_count [lt(%q8_group0, %q8_group_count)] : index, index
+  %q8_group_byte_add = index.scale %q8_group, %q8_group_bytes : index, offset -> offset
+  %q8_group_byte_base = index.add %q8_row_byte_base, %q8_group_byte_add : offset
+  %q8_payload_byte_base = index.add %q8_group_byte_base, %q8_payload_byte_add : offset
+  %q8_ds_view = buffer.view %q8_input[%q8_group_byte_base] : buffer -> view<8xf16>
+  %q8_words_view = buffer.view %q8_input[%q8_payload_byte_base] : buffer -> view<32xi32>
+  %q8_ds = vector.load %q8_ds_view[%q8_low_ds_index] : view<8xf16> -> vector<4xf16>
+  %q8_low_d_f16 = vector.extract %q8_ds[0] : vector<4xf16> -> f16
+  %q8_low_s_f16 = vector.extract %q8_ds[1] : vector<4xf16> -> f16
+  %q8_high_d_f16 = vector.extract %q8_ds[2] : vector<4xf16> -> f16
+  %q8_high_s_f16 = vector.extract %q8_ds[3] : vector<4xf16> -> f16
+  %q8_low_d = scalar.extf %q8_low_d_f16 : f16 to f32
+  %q8_low_s = scalar.extf %q8_low_s_f16 : f16 to f32
+  %q8_high_d = scalar.extf %q8_high_d_f16 : f16 to f32
+  %q8_high_s = scalar.extf %q8_high_s_f16 : f16 to f32
+  %q8_low_words = vector.load %q8_words_view[%q8_low_word_index] : view<32xi32> -> vector<4xi32>
+  %q8_high_words = vector.load %q8_words_view[%q8_high_word_index] : view<32xi32> -> vector<4xi32>
+  %q8_low_values = vector.bitcast %q8_low_words : vector<4xi32> to vector<16xi8>
+  %q8_high_values = vector.bitcast %q8_high_words : vector<4xi32> to vector<16xi8>
+  %q4_block_byte_add = index.scale %bounded_q4_block, %q4_block_bytes : index, offset -> offset
+  %q4_block_byte_base = index.add %weight_row_byte_base, %q4_block_byte_add : offset
+  %q4_header_view = buffer.view %weight[%q4_block_byte_base] : buffer -> view<4xi32>
+  %q4_header_words = vector.load %q4_header_view[0] : view<4xi32> -> vector<4xi32>
+  %q4_low, %low_d_scale, %low_dmin_scale, %q4_high, %high_d_scale, %high_dmin_scale = func.call @qwen3_moe_q4k_chunk_pair_global(%weight, %weight_row_byte_base, %bounded_q4_block, %q4_group_pair, %q4_half, %q4_header_words) : (buffer, offset, index, index, index, vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32)
+  %low = func.call @qwen3_moe_q4k_q8_1_dot(%q4_low, %low_d_scale, %low_dmin_scale, %q8_low_values, %q8_low_d, %q8_low_s) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
+  %high = func.call @qwen3_moe_q4k_q8_1_dot(%q4_high, %high_d_scale, %high_dmin_scale, %q8_high_values, %q8_high_d, %q8_high_s) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
+  %pair = scalar.addf %low, %high : f32
+  func.return %pair : f32
+}
+
+func.def inline @qwen3_moe_q4k_scale_from_header(%scale0: i32, %scale1: i32, %scale2: i32, %q4_group: index) -> (i32, i32) {
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c2_i32 = scalar.constant 2 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c15_i32 = scalar.constant 15 : i32
+  %c48_i32 = scalar.constant 48 : i32
+  %bounded_group = index.assume %q4_group [range(%q4_group, 0, 7)] : index
+  %is_low_group = index.cmp ult, %bounded_group, %c4 : index
+  %scale_lane = index.rem %bounded_group, %c4 : index
+  %scale_shift_index = index.mul %scale_lane, %c8 : index
+  %scale_shift = index.cast %scale_shift_index : index to i32
+  %high_shift = scalar.addi %scale_shift, %c2_i32 : i32
+  %minimum_shift = scalar.addi %scale_shift, %c4_i32 : i32
+  %selected_scale_source = scf.select %is_low_group, %scale0, %scale2 : i32
+  %selected_minimum_source = scf.select %is_low_group, %scale1, %scale2 : i32
+  %selected_scale_high_shift = scf.select %is_low_group, %scale_shift, %high_shift : i32
+  %selected_minimum_low_shift = scf.select %is_low_group, %scale_shift, %minimum_shift : i32
+  %scale_low0 = scalar.shrui %selected_scale_source, %scale_shift : i32
+  %scale_low = scalar.andi %scale_low0, %c15_i32 : i32
+  %scale_high0 = scalar.shrui %scale0, %selected_scale_high_shift : i32
+  %scale_high = scalar.andi %scale_high0, %c48_i32 : i32
+  %scale = scalar.ori %scale_low, %scale_high : i32
+  %minimum_low0 = scalar.shrui %selected_minimum_source, %selected_minimum_low_shift : i32
+  %minimum_low = scalar.andi %minimum_low0, %c15_i32 : i32
+  %minimum_high0 = scalar.shrui %scale1, %selected_scale_high_shift : i32
+  %minimum_high = scalar.andi %minimum_high0, %c48_i32 : i32
+  %minimum = scalar.ori %minimum_low, %minimum_high : i32
+  func.return %scale, %minimum : i32, i32
+}
+
+func.def inline @qwen3_moe_rmsnorm_quantize_q8_1_x4_body(%publish_normalized: i1, %reduction_subgroup_count0: index, %token_count: index, %token0: index, %input: buffer, %weight: buffer, %normalized_output: buffer, %q8_output: buffer) {
+  %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
+  %epsilon = config.get @qwen3_moe.model.rms_epsilon : f32
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %reduction_subgroup_count = index.assume %reduction_subgroup_count0 [range(%reduction_subgroup_count0, 1, 8)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c1024 = index.constant 1024 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_byte_add = index.constant 16 : offset
+  %scratch_d_byte_add = index.constant 1024 : offset
+  %scratch_bytes = index.constant 1152 : offset
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %c127 = scalar.constant 127.0 : f32
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %token, %launch_token_count = index.assume %safe_token0, %bounded_token_count [lt(%safe_token0, %bounded_token_count)] : index, index
+  %hidden_size_i32 = index.cast %hidden_size : index to i32
+  %hidden_size_f32 = scalar.sitofp %hidden_size_i32 : i32 to f32
+  %physical_group_count = index.div %hidden_size, %c128 : index
+  %row_bytes = index.scale %physical_group_count, %group_bytes : index, offset -> offset
+  %token_output_byte_base = index.scale %token, %row_bytes : index, offset -> offset
+  %input_noalias, %weight_noalias, %q8_output_noalias = buffer.assume.noalias %input, %weight, %q8_output : buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
+  %normalized_output_view = buffer.view %normalized_output[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<32xf32>
+  // Reduce the complete row before any block-local quantization.
+  %thread_sum = scf.for %channel = [%workitem to %hidden_size step %c256](%running_sum = %c0_f32 : f32) -> (f32) {
+    %value = view.load %input_view[%token, %channel] : view<[%launch_token_count]x[%hidden_size]xf32> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+    %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square : f32
+    scf.yield %next_sum : f32
+  }
+  %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
+  %is_subgroup_leader = index.cmp eq, %lane, %c0 : index
+  scf.if %is_subgroup_leader {
+    view.store %subgroup_sum, %scratch_values[%subgroup] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %is_reduction_subgroup = index.cmp eq, %subgroup, %c0 : index
+  %is_reduction_lane = index.cmp ult, %lane, %reduction_subgroup_count : index
+  %loads_subgroup_sum = scalar.andi %is_reduction_subgroup, %is_reduction_lane : i1
+  %subgroup_partial = scf.if %loads_subgroup_sum -> (f32) {
+    %value = view.load %scratch_values[%lane] : view<256xf32> -> f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %row_sum = kernel.subgroup.reduce<addf> %subgroup_partial : f32
+  %writes_scale = scalar.andi %is_reduction_subgroup, %is_subgroup_leader : i1
+  scf.if %writes_scale {
+    %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_size_f32 : f32
+    %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+    %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+    view.store %scale, %scratch_values[%c0] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %row_scale = view.load %scratch_values[%c0] : view<256xf32> -> f32
+  %row_scale_vector = vector.splat %row_scale : vector<4xf32>
+  %publishes_normalized = scalar.andi %publish_normalized, %valid_token : i1
+  // Reuse one scratch frame for each 1024-element stripe. Hidden sizes need
+  // only be divisible by 128; inactive workitems in the final stripe carry
+  // zeros and never publish.
+  scf.for %stripe_base = [%c0 to %hidden_size step %c1024] {
+    %word_element_add = index.mul %workitem, %c4 : index
+    %channel = index.add %stripe_base, %word_element_add : index
+    %valid_word = index.cmp ult, %channel, %hidden_size : index
+    %mask = vector.mask.range [%channel to %hidden_size step %c1] : index -> vector<4xi1>
+    %input_values = vector.load.mask %input_view[%token, %channel], %mask, %c0_f32x4 : view<[%launch_token_count]x[%hidden_size]xf32>, vector<4xi1>, vector<4xf32>
+    %learned_weights = vector.load.mask %weight_view[%channel], %mask, %c0_f32x4 : view<[%hidden_size]xf32>, vector<4xi1>, vector<4xf32>
+    %normalized0 = vector.mulf %input_values, %row_scale_vector : vector<4xf32>
+    %normalized = vector.mulf %normalized0, %learned_weights : vector<4xf32>
+    scf.if %publishes_normalized {
+      vector.store.mask %normalized, %normalized_output_view[%token, %channel], %mask : vector<4xf32>, view<[%launch_token_count]x[%hidden_size]xf32>, vector<4xi1>
+    }
+    %absolute_values = vector.absf %normalized : vector<4xf32>
+    %thread_max = vector.reduce<maxnumf> %absolute_values, %c0_f32 : vector<4xf32>, f32
+    view.store %thread_max, %scratch_values[%workitem] : f32, view<256xf32>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %word_in_block = index.rem %workitem, %c8 : index
+    %block_in_stripe = index.div %workitem, %c8 : index
+    %is_block_leader = index.cmp eq, %word_in_block, %c0 : index
+    %writes_block_d = scalar.andi %valid_word, %is_block_leader : i1
+    scf.if %writes_block_d {
+      %cohort_base = index.mul %block_in_stripe, %c8 : index
+      %cohort_maxima = vector.load %scratch_values[%cohort_base] : view<256xf32> -> vector<8xf32>
+      %amax = vector.reduce<maxnumf> %cohort_maxima, %c0_f32 : vector<8xf32>, f32
+      %d = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %amax, %c127 : f32
+      view.store %d, %scratch_d[%block_in_stripe] : f32, view<32xf32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %d = scf.if %valid_word -> (f32) {
+      %block_d = view.load %scratch_d[%block_in_stripe] : view<32xf32> -> f32
+      scf.yield %block_d : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    %d_nonzero = scalar.cmpf one, %d, %c0_f32 : f32
+    %d_inverse = scf.if %d_nonzero -> (f32) {
+      %inverse = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %c1_f32, %d : f32
+      scf.yield %inverse : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    %d_inverse_vector = vector.splat %d_inverse : vector<4xf32>
+    %scaled_values = vector.mulf %normalized, %d_inverse_vector : vector<4xf32>
+    %rounded_values = vector.roundf %scaled_values : vector<4xf32>
+    %quantized_values = vector.fptosi %rounded_values : vector<4xf32> to vector<4xi8>
+    %packed_word = vector.bitcast %quantized_values : vector<4xi8> to vector<1xi32>
+    %publishes_q8_word = scalar.andi %valid_word, %valid_token : i1
+    scf.if %publishes_q8_word {
+      %q8_block = index.div %channel, %c32 : index
+      %physical_group = index.div %q8_block, %c4 : index
+      %block_in_group = index.rem %q8_block, %c4 : index
+      %group_byte_add = index.scale %physical_group, %group_bytes : index, offset -> offset
+      %group_byte_offset = index.add %token_output_byte_base, %group_byte_add : offset
+      %payload_byte_offset = index.add %group_byte_offset, %payload_byte_add : offset
+      %group_ds = buffer.view %q8_output_noalias[%group_byte_offset] : buffer -> view<8xf16>
+      %group_qs = buffer.view %q8_output_noalias[%payload_byte_offset] : buffer -> view<32xi32>
+      %block_word_base = index.mul %block_in_group, %c8 : index
+      %packed_word_index0 = index.add %block_word_base, %word_in_block : index
+      %packed_word_index = index.assume %packed_word_index0 [range(%packed_word_index0, 0, 31)] : index
+      vector.store %packed_word, %group_qs[%packed_word_index] : vector<1xi32>, view<32xi32>
+    }
+    %thread_quantized_sum = vector.reduce<addf> %rounded_values, %c0_f32 : vector<4xf32>, f32
+    view.store %thread_quantized_sum, %scratch_values[%workitem] : f32, view<256xf32>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %publishes_block_ds = scalar.andi %writes_block_d, %valid_token : i1
+    scf.if %publishes_block_ds {
+      %cohort_base = index.mul %block_in_stripe, %c8 : index
+      %cohort_sums = vector.load %scratch_values[%cohort_base] : view<256xf32> -> vector<8xf32>
+      %quantized_sum = vector.reduce<addf> %cohort_sums, %c0_f32 : vector<8xf32>, f32
+      %s = scalar.mulf<reassoc|nnan|ninf|nsz> %quantized_sum, %d : f32
+      %q8_block = index.div %channel, %c32 : index
+      %physical_group = index.div %q8_block, %c4 : index
+      %block_in_group = index.rem %q8_block, %c4 : index
+      %group_byte_add = index.scale %physical_group, %group_bytes : index, offset -> offset
+      %group_byte_offset = index.add %token_output_byte_base, %group_byte_add : offset
+      %group_ds = buffer.view %q8_output_noalias[%group_byte_offset] : buffer -> view<8xf16>
+      %d_f16 = scalar.fptrunc %d : f32 to f16
+      %s_f16 = scalar.fptrunc %s : f32 to f16
+      %ds_index = index.mul %block_in_group, %c2 : index
+      %s_index = index.add %ds_index, %c1 : index
+      view.store %d_f16, %group_ds[%ds_index] : f16, view<8xf16>
+      view.store %s_f16, %group_ds[%s_index] : f16, view<8xf16>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  }
+  func.return
+}
+
+func.def inline @qwen3_moe_routed_down_next_q8_completion(%output_channels_per_workgroup0: index, %reduction_subgroup_count0: index, %token_count: index, %output_size: index, %output: buffer, %norm_weight: buffer, %completion_counter: buffer, %next_q8_output: buffer) {
+  %output_channels_per_workgroup = index.assume %output_channels_per_workgroup0 [range(%output_channels_per_workgroup0, 1, 8)] : index
+  %reduction_subgroup_count = index.assume %reduction_subgroup_count0 [range(%reduction_subgroup_count0, 1, 8)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 128, 32768), mul(%output_size, 128)] : index
+  %token0 = kernel.workgroup.id<y> : index
+  %token = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
+  %c0 = index.constant 0 : index
+  %workitem = kernel.workitem.id<x> : index
+  %output_tile_count = index.div %bounded_output_size, %output_channels_per_workgroup : index
+  %is_arrival_workitem = index.cmp eq, %workitem, %c0 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c0_offset = index.constant 0 : offset
+  %counter_scratch_bytes = index.constant 4 : offset
+  %output_noalias, %norm_weight_noalias, %completion_counter_noalias, %next_q8_output_noalias = buffer.assume.noalias %output, %norm_weight, %completion_counter, %next_q8_output : buffer, buffer, buffer, buffer
+  %completion_counter_aligned = buffer.assume.alignment %completion_counter_noalias {minimum_alignment = 16} : buffer
+  %completion_counter_view = buffer.view %completion_counter_aligned[%c0_offset] : buffer -> view<1xi32>
+  %counter_scratch = buffer.alloca<workgroup> align(4) %counter_scratch_bytes : buffer
+  %counter_scratch_view = buffer.view %counter_scratch[%c0_offset] : buffer -> view<1xi32>
+  // Publish every producer's residual stores before the leader advances one
+  // workgroup arrival. The last arrival then acquires the complete row.
+  kernel.barrier<global> scope(workgroup) ordering(release)
+  scf.if %is_arrival_workitem {
+    %old_counter = view.atomic.rmw<addi> %c1_i32, %completion_counter_view[%c0] {ordering = acq_rel, scope = device} : i32, view<1xi32> -> i32
+    view.store %old_counter, %counter_scratch_view[%c0] : i32, view<1xi32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %old_counter = view.load %counter_scratch_view[%c0] : view<1xi32> -> i32
+  %output_tile_count_i32 = index.cast %output_tile_count : index to i32
+  %last_output_tile_i32 = scalar.subi %output_tile_count_i32, %c1_i32 : i32
+  %negative_output_tile_count_i32 = scalar.subi %c0_i32, %output_tile_count_i32 : i32
+  %is_last_output_tile = scalar.cmpi eq, %old_counter, %last_output_tile_i32 : i32
+  scf.if %is_last_output_tile {
+    kernel.barrier<global> scope(workgroup) ordering(acquire)
+    %publish_normalized = scalar.constant false : i1
+    func.call @qwen3_moe_rmsnorm_quantize_q8_1_x4_body(%publish_normalized, %reduction_subgroup_count, %bounded_token_count, %token, %output_noalias, %norm_weight_noalias, %next_q8_output_noalias, %next_q8_output_noalias) : (i1, index, index, index, buffer, buffer, buffer, buffer)
+    kernel.barrier<global> scope(workgroup) ordering(release)
+    scf.if %is_arrival_workitem {
+      view.atomic.reduce<addi> %negative_output_tile_count_i32, %completion_counter_view[%c0] {ordering = release, scope = device} : i32, view<1xi32>
+    }
+  }
+  func.return
+}
+
 target.decl @qwen3_moe_attention_prepare_gfx11_wave32
 
 config.decl @qwen3_moe.routed_down.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
@@ -33,7 +431,7 @@ kernel.decl @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4(%token_count: index) l
 
 // Shared Q4_K contraction and residual publication. Each lane consumes both
 // nibbles of a packed code load before the subgroup reduces the row.
-func.template<qwen3_moe.routed_down.q4k_q8_1_x4.body> device @qwen3_moe_routed_down_q4k_q8_1_x4_body(%publish_output: i1, %token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
+func.def inline @qwen3_moe_routed_down_q4k_q8_1_x4_body(%publish_output: i1, %token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
   %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
@@ -164,7 +562,7 @@ kernel.def @qwen3_moe_routed_down_q4k_q8_1_x4(%token_count: index, %input_size: 
   %valid_token = index.cmp ult, %token0, %bounded_token_count : index
   %safe_token0 = scf.select %valid_token, %token0, %c0 : index
   %safe_token, %body_token_count = index.assume %safe_token0, %bounded_token_count [lt(%safe_token0, %bounded_token_count)] : index, index
-  func.apply<qwen3_moe.routed_down.q4k_q8_1_x4.body>(%valid_token, %body_token_count, %safe_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  func.call @qwen3_moe_routed_down_q4k_q8_1_x4_body(%valid_token, %body_token_count, %safe_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -193,8 +591,8 @@ kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_routed_d
   %c8 = index.constant 8 : index
   %publishes_output = scalar.constant true : i1
   %body_token = index.constant 0 : index
-  func.apply<qwen3_moe.routed_down.q4k_q8_1_x4.body>(%publishes_output, %bounded_token_count, %body_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
-  func.apply<qwen3_moe.routed_down.next_q8_completion>(%c8, %c8, %bounded_token_count, %configured_output_size, %output, %norm_weight, %completion_counter, %next_q8_output) : (index, index, index, index, buffer, buffer, buffer, buffer)
+  func.call @qwen3_moe_routed_down_q4k_q8_1_x4_body(%publishes_output, %bounded_token_count, %body_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  func.call @qwen3_moe_routed_down_next_q8_completion(%c8, %c8, %bounded_token_count, %configured_output_size, %output, %norm_weight, %completion_counter, %next_q8_output) : (index, index, index, index, buffer, buffer, buffer, buffer)
   kernel.return
 }
 

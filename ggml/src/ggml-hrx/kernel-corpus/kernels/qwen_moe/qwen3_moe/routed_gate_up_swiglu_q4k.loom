@@ -13,6 +13,33 @@
 // assignment table per expert, then group up to 32 selected rows with 32
 // output channels so raw weights and quantized activations can be reused
 // through workgroup memory.
+func.def inline @ggml_q8_1_x4_block(%q8_input: buffer, %row_byte_base: offset, %q8_block: index) -> (vector<32xi8>, f32, f32) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_byte_add = index.constant 16 : offset
+  %group = index.div %q8_block, %c4 : index
+  %inner0 = index.rem %q8_block, %c4 : index
+  %inner = index.assume %inner0 [range(%inner0, 0, 3)] : index
+  %group_byte_add = index.scale %group, %group_bytes : index, offset -> offset
+  %group_byte_base = index.add %row_byte_base, %group_byte_add : offset
+  %payload_byte_base = index.add %group_byte_base, %payload_byte_add : offset
+  %ds_view = buffer.view %q8_input[%group_byte_base] : buffer -> view<8xf16>
+  %payload_view = buffer.view %q8_input[%payload_byte_base] : buffer -> view<32xi32>
+  %d_index = index.mul %inner, %c2 : index
+  %s_index = index.add %d_index, %c1 : index
+  %word_index = index.mul %inner, %c8 : index
+  %d_f16 = view.load %ds_view[%d_index] : view<8xf16> -> f16
+  %s_f16 = view.load %ds_view[%s_index] : view<8xf16> -> f16
+  %words = vector.load %payload_view[%word_index] : view<32xi32> -> vector<8xi32>
+  %values = vector.bitcast %words : vector<8xi32> to vector<32xi8>
+  %d = scalar.extf %d_f16 : f16 to f32
+  %s = scalar.extf %s_f16 : f16 to f32
+  func.return %values, %d, %s : vector<32xi8>, f32, f32
+}
+
 config.decl @qwen3_moe.routed_gate_up.input_size : %value: index where [range(%value, 512, 32768), mul(%value, 512)]
 
 config.decl @qwen3_moe.routed_gate_up.expert_count : %value: index where [range(%value, 1, 512)]
@@ -729,7 +756,7 @@ kernel.def @qwen3_moe_build_expert_partition_table(%token_count: index, %route_c
 // Small-token body for routed Q4_K gate/up projections. One wave computes one
 // [token, route, output channel]. Callers own launch geometry and may append a
 // producer epilogue after the F32 SwiGLU value is visible.
-func.template<qwen3_moe.routed_gate_up.q4k_q8.body> device @qwen3_moe_routed_gate_up_swiglu_q4k_q8_body(%publish_output: i1, %token_count: index, %token: index, %route_count: index, %route: index, %route_stride: index, %expert_count: index, %output_size: index, %channel: index, %lane: index, %q8_input: buffer, %route_ids: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) {
+func.def inline @qwen3_moe_routed_gate_up_swiglu_q4k_q8_body(%publish_output: i1, %token_count: index, %token: index, %route_count: index, %route: index, %route_stride: index, %expert_count: index, %output_size: index, %channel: index, %lane: index, %q8_input: buffer, %route_ids: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) {
   %input_size = config.get @qwen3_moe.routed_gate_up.input_size : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 512)] : index
   %bounded_route_count, %bounded_route_stride = index.assume %route_count, %route_stride [range(%route_count, 1, 8), range(%route_stride, 1, 128), le(%route_count, %route_stride)] : index, index
@@ -903,7 +930,7 @@ kernel.def @qwen3_moe_routed_gate_up_swiglu_q4k_q8(%token_count: index, %route_c
   %safe_channel, %body_output_size = index.assume %safe_channel0, %bounded_output_size [lt(%safe_channel0, %bounded_output_size)] : index, index
   %route, %body_route_count = index.assume %route0, %bounded_route_count [lt(%route0, %bounded_route_count)] : index, index
   %publishes_output = scalar.andi %valid_token, %valid_channel : i1
-  func.apply<qwen3_moe.routed_gate_up.q4k_q8.body>(%publishes_output, %body_token_count, %safe_token, %body_route_count, %route, %bounded_route_stride, %bounded_expert_count, %body_output_size, %safe_channel, %lane, %q8_input, %route_ids, %gate_weight, %up_weight, %output) : (i1, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  func.call @qwen3_moe_routed_gate_up_swiglu_q4k_q8_body(%publishes_output, %body_token_count, %safe_token, %body_route_count, %route, %bounded_route_stride, %bounded_expert_count, %body_output_size, %safe_channel, %lane, %q8_input, %route_ids, %gate_weight, %up_weight, %output) : (i1, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -911,7 +938,7 @@ kernel.def @qwen3_moe_routed_gate_up_swiglu_q4k_q8(%token_count: index, %route_c
 // four adjacent values and contributes its maximum and sum to one of four
 // eight-lane logical blocks. One-hot vectors let ordinary subgroup reductions
 // compute all four block aggregates without LDS or workgroup barriers.
-func.template<qwen3_moe.routed_gate_up.quantize_q8_1_x4.subgroup_body> device @qwen3_moe_routed_gate_up_quantize_q8_1_x4_subgroup_body(%publish_output: i1, %group_count0: index, %group0: index, %input: buffer, %output: buffer) {
+func.def inline @qwen3_moe_routed_gate_up_quantize_q8_1_x4_subgroup_body(%publish_output: i1, %group_count0: index, %group0: index, %input: buffer, %output: buffer) {
   %group_count, %group = index.assume %group_count0, %group0 [range(%group_count0, 1, 524288), lt(%group0, %group_count0)] : index, index
   %lane0 = kernel.subgroup.lane.id : index
   %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
@@ -1024,7 +1051,7 @@ kernel.def @qwen3_moe_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8(%token_count: in
   %counter_scratch_bytes = index.constant 4 : offset
   %channel_base = index.mul %channel_workgroup, %c4 : index
   %channel = index.add %channel_base, %subgroup : index
-  func.apply<qwen3_moe.routed_gate_up.q4k_q8.body>(%publishes_swiglu, %bounded_token_count, %body_token, %bounded_route_count, %route, %bounded_route_stride, %bounded_expert_count, %bounded_output_size, %channel, %lane, %q8_input_noalias, %route_ids_noalias, %gate_weight_noalias, %up_weight_noalias, %output_noalias) : (i1, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  func.call @qwen3_moe_routed_gate_up_swiglu_q4k_q8_body(%publishes_swiglu, %bounded_token_count, %body_token, %bounded_route_count, %route, %bounded_route_stride, %bounded_expert_count, %bounded_output_size, %channel, %lane, %q8_input_noalias, %route_ids_noalias, %gate_weight_noalias, %up_weight_noalias, %output_noalias) : (i1, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
   %physical_group_count = index.div %bounded_output_size, %c128 : index
   %row_count = index.mul %bounded_token_count, %bounded_route_count : index
   %completion_counter_count = index.mul %row_count, %physical_group_count : index
@@ -1057,7 +1084,7 @@ kernel.def @qwen3_moe_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8(%token_count: in
     %publish_output = scalar.constant true : i1
     %is_quantize_subgroup = index.cmp eq, %subgroup, %c0 : index
     scf.if %is_quantize_subgroup {
-      func.apply<qwen3_moe.routed_gate_up.quantize_q8_1_x4.subgroup_body>(%publish_output, %bounded_completion_counter_count, %counter_index, %output_noalias, %next_q8_output_noalias) : (i1, index, index, buffer, buffer)
+      func.call @qwen3_moe_routed_gate_up_quantize_q8_1_x4_subgroup_body(%publish_output, %bounded_completion_counter_count, %counter_index, %output_noalias, %next_q8_output_noalias) : (i1, index, index, buffer, buffer)
     }
     kernel.barrier<global> scope(workgroup) ordering(release)
     scf.if %is_arrival_lane {

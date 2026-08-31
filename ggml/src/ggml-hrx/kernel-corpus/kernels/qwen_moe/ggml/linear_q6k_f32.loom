@@ -240,7 +240,7 @@ func.def inline @ggml_q6k_f32_block_row(%input_size: index, %row: index, %block:
 
 // Shared direct-F32 matrix-vector schedule. Target entry points below vary
 // subgroup width without duplicating the Q6_K decoding or memory schedule.
-func.template<ggml.linear_q6k_f32.body> device @ggml_linear_q6k_f32_body(%publish_output: i1, %token_count: index, %token0: index, %pair: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer) {
+func.def inline @ggml_linear_q6k_f32_body(%publish_output: i1, %token_count: index, %token0: index, %pair: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
@@ -323,7 +323,7 @@ kernel.def target(@ggml_q6k_gfx11_wave64) @ggml_linear_q6k_f32_wave64(%token_cou
   %c0 = index.constant 0 : index
   %safe_token = scf.select %valid_token, %token, %c0 : index
   %safe_pair = scf.select %valid_row, %pair, %c0 : index
-  func.apply<ggml.linear_q6k_f32.body>(%publish_output, %bounded_token_count, %safe_token, %safe_pair, %input_size, %bounded_output_size, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
+  func.call @ggml_linear_q6k_f32_body(%publish_output, %bounded_token_count, %safe_token, %safe_pair, %input_size, %bounded_output_size, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -353,7 +353,7 @@ kernel.def target(@ggml_q6k_gfx11_wave32) @ggml_linear_q6k_f32_wave32(%token_cou
   %c0 = index.constant 0 : index
   %safe_token = scf.select %valid_token, %token, %c0 : index
   %safe_pair = scf.select %valid_row, %pair, %c0 : index
-  func.apply<ggml.linear_q6k_f32.body>(%publish_output, %bounded_token_count, %safe_token, %safe_pair, %input_size, %bounded_output_size, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
+  func.call @ggml_linear_q6k_f32_body(%publish_output, %bounded_token_count, %safe_token, %safe_pair, %input_size, %bounded_output_size, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 

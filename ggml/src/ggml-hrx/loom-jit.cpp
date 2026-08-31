@@ -389,12 +389,19 @@ hrx_status_t ggml_hrx_loom_jit_copy_artifact_bytes(const loomc_artifact_t * arti
     if (!artifact || !out_data || !out_size) {
         return hrx_ok_status();
     }
-    void * copy = ggml_hrx_loom_jit_malloc_copy(artifact->contents.data, artifact->contents.data_length, nul_terminate);
+    // The new loomc API exposes artifact bytes as an opaque byte sequence;
+    // contiguous access is best-effort (true for the artifacts we produce).
+    loomc_byte_span_t span = {};
+    if (!loomc_byte_sequence_try_get_contiguous_span(artifact->contents, &span)) {
+        return ggml_hrx_loom_jit_make_status(HRX_STATUS_INTERNAL,
+                                             "Loom artifact is not a contiguous byte sequence");
+    }
+    void * copy = ggml_hrx_loom_jit_malloc_copy(span.data, span.data_length, nul_terminate);
     if (!copy) {
         return ggml_hrx_loom_jit_make_status(HRX_STATUS_OUT_OF_MEMORY, "failed to copy Loom artifact");
     }
     *out_data = copy;
-    *out_size = artifact->contents.data_length;
+    *out_size = span.data_length;
     return hrx_ok_status();
 }
 
@@ -411,8 +418,8 @@ hrx_status_t ggml_hrx_loom_jit_evaluate_launch_config(const loomc_artifact_t *  
     }
 
     LoomLaunchConfigProgram program;
-    loomc_status_t          status =
-        loomc_launch_config_program_load(artifact, nullptr, nullptr, loomc_allocator_system(), program.out());
+    loomc_status_t status =
+        loomc_launch_config_program_load(artifact, loomc_allocator_system(), program.out());
     if (!loomc_status_is_ok(status)) {
         return ggml_hrx_loom_jit_status_from_loom(status, "load Loom launch config program");
     }
@@ -881,9 +888,13 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     link_options.next                        = nullptr;
     link_options.link_index                  = link_index.get();
     link_options.module_name                 = loomc_make_cstring_view(options->module_name);
+    link_options.mode                        = LOOMC_LINK_MODE_LINK;
     link_options.root_symbols                = root_symbols;
     link_options.root_symbol_count           = 1;
     link_options.flags                       = LOOMC_LINK_FLAG_STRIP_TEST_SYMBOLS;
+    link_options.config.bindings             = config_bindings.get();
+    link_options.config.binding_count        = options->config_binding_count;
+    link_options.config.flags                = LOOMC_CONFIG_POLICY_FLAG_REQUIRE_RESOLVED;
     status = loomc_link_module(linker.get(), workspace.get(), &link_options, module.out(), result.out());
     if (!loomc_status_is_ok(status)) {
         return ggml_hrx_loom_jit_status_from_loom(status, "link Loom root");
@@ -911,9 +922,12 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     if (options->evaluate_launch_config) {
         compile_options.artifact_flags |= LOOMC_COMPILE_ARTIFACT_FLAG_LAUNCH_CONFIG;
     }
-    compile_options.config.bindings      = config_bindings.get();
-    compile_options.config.binding_count = options->config_binding_count;
-    compile_options.config.flags         = LOOMC_CONFIG_POLICY_FLAG_REQUIRE_RESOLVED;
+    // Config bindings are materialized as typed `config.def` ops by the root
+    // link invocation above; the compiled module already carries exact values,
+    // so no compile-time config module is needed. REQUIRE_RESOLVED verifies
+    // every reachable config.get has an exact value.
+    compile_options.config_flags  = LOOMC_CONFIG_POLICY_FLAG_REQUIRE_RESOLVED;
+    compile_options.config_module = nullptr;
     status = loomc_compile_module(jit->compiler, workspace.get(), jit->pass_program, module.get(), &compile_options,
                                   loomc_allocator_system(), result.out());
     if (!loomc_status_is_ok(status)) {
