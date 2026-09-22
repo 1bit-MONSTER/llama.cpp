@@ -1,5 +1,8 @@
 config.decl @hrx2.shape.k : %value: index where [range(%value, 1, 65536)]
-config.decl @hrx2.shape.rows : %value: index where [range(%value, 1, 262144)]
+// rows cap raised from 262144 to 524288: zaya's vocab is 262272 (262147 real rows
+// padded up to a multiple of 128), i.e. 128 rows past the old cap, which pushed the
+// tied F32 LM head off the GPU onto the CPU for every decode token.
+config.decl @hrx2.shape.rows : %value: index where [range(%value, 1, 524288)]
 config.decl @hrx2.shape.cols : %value: index where [range(%value, 1, 512)]
 config.decl @hrx2.shape.ntokens : %value: index where [range(%value, 1, 4194304)]
 config.decl @hrx2.shape.src1_cols_count : %value: index where [range(%value, 1, 4194304)]
@@ -53,7 +56,7 @@ kernel.def export("hrx2_mul_mat_f32_f32_ggml_tbl_tiled_static") @hrx2_mul_mat_f3
   %nselected = config.get @hrx2.shape.nselected : index
   %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
   %k_bounded = index.assume %k [range(%k, 1, 65536)] : index
-  %rows_bounded = index.assume %rows [range(%rows, 1, 262144)] : index
+  %rows_bounded = index.assume %rows [range(%rows, 1, 524288)] : index
   %cols_bounded = index.assume %cols [range(%cols, 1, 512)] : index
   // table views are padded to the workgroup column grid (ceil(cols/8)*8) so
   // the unconditional table loads at slots >= cols stay in bounds (the slot
@@ -84,7 +87,7 @@ kernel.def export("hrx2_mul_mat_f32_f32_ggml_tbl_tiled_static") @hrx2_mul_mat_f3
   %sel_total_m1 = index.sub %sel_total, %unit : index
 
   %row0 = kernel.workgroup.id<x> : index
-  %row = index.assume %row0 [range(%row0, 0, 262143)] : index
+  %row = index.assume %row0 [range(%row0, 0, 524287)] : index
   %cg0 = kernel.workgroup.id<y> : index
   %col_block0 = index.mul %cg0, %eight : index
   %col_block = index.assume %col_block0 [range(%col_block0, 0, 511)] : index

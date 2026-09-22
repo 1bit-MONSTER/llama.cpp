@@ -24,6 +24,7 @@
 #include <new>
 #include <string>
 #include <unordered_map>
+#include <atomic>
 #include <unordered_set>
 #include <vector>
 
@@ -142,6 +143,7 @@ struct ggml_backend_hrx2_device_context {
     std::vector<const ggml_backend_hrx2_kernel_route *> scale_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> clamp_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> sum_rows_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> ssm_conv_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> get_rows_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> get_rows_q8_0_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> get_rows_q4_k_routes;
@@ -418,6 +420,15 @@ struct ggml_backend_hrx2_sum_rows_shape {
     uint32_t ncols = 0;
     uint32_t nrows = 0;
     uint32_t src0_row_stride = 0;
+};
+
+struct ggml_backend_hrx2_ssm_conv_shape {
+    uint32_t d_conv = 0;
+    uint32_t ncs = 0;
+    uint32_t d_inner = 0;
+    uint32_t n_t = 0;
+    uint32_t n_s = 0;
+    uint32_t sx_seq_stride = 0;
 };
 
 struct ggml_backend_hrx2_get_rows_shape {
@@ -2415,6 +2426,37 @@ static bool ggml_backend_hrx2_supports_sum_rows(
            ggml_nrows(src0) <= std::numeric_limits<uint32_t>::max();
 }
 
+static bool ggml_backend_hrx2_supports_ssm_conv(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    GGML_UNUSED(device_context);
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    return op->op == GGML_OP_SSM_CONV &&
+           src0 &&
+           src1 &&
+           op->view_src == nullptr &&
+           src0->type == GGML_TYPE_F32 &&
+           src1->type == GGML_TYPE_F32 &&
+           op->type == GGML_TYPE_F32 &&
+           ggml_is_contiguous(src1) &&
+           ggml_is_contiguous(op) &&
+           src0->nb[0] == sizeof(float) &&
+           src0->nb[1] == src0->ne[0] * sizeof(float) &&
+           src0->ne[0] > 0 &&
+           src0->ne[1] > 0 &&
+           src1->ne[0] > 0 &&
+           src1->ne[1] > 0 &&
+           op->ne[0] > 0 &&
+           op->ne[1] > 0 &&
+           op->ne[2] > 0 &&
+           src0->ne[0] <= std::numeric_limits<uint32_t>::max() &&
+           src0->ne[1] <= std::numeric_limits<uint32_t>::max() &&
+           src0->ne[2] <= std::numeric_limits<uint32_t>::max() &&
+           src1->ne[0] <= std::numeric_limits<uint32_t>::max() &&
+           src0->nb[2] / sizeof(float) <= std::numeric_limits<uint32_t>::max();
+}
+
 static bool ggml_backend_hrx2_supports_get_rows_f32(
         ggml_backend_hrx2_device_context * device_context,
         const ggml_tensor * op) {
@@ -2570,6 +2612,113 @@ static bool ggml_backend_hrx2_extract_copy_shape(
     }
     *out_shape = { /* .n = */ n };
     return true;
+}
+
+// ── CONCAT ───────────────────────────────────────────────────────────────
+// CONCAT is otherwise unclaimed by HRX2, so the scheduler runs it on the CPU
+// backend and every CPU<->HRX2 hand-off is a graph split (a 1-token zaya decode
+// reserves ~1445 of them). zaya's concats are contiguous, which is just a
+// sequence of copies, so no new kernel is needed -- hrx_stream_copy_buffer
+// already exists. Only the cheap arrangement is claimed: one contiguous run per
+// source per outer index (inner == 1) with few outer indices. The interleaved
+// [3, 1280] conv-input assembly (outer == 1280) stays on the CPU, where ~3840
+// one-element copies would be slower than the fallback.
+// GGML_HRX2_NO_CONCAT=1 forces the old path, for A/B.
+static bool ggml_backend_hrx2_supports_concat(
+        const ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    GGML_UNUSED(device_context);
+    if (op->op != GGML_OP_CONCAT || !op->src[0] || !op->src[1] || op->view_src != nullptr) {
+        return false;
+    }
+    // MEASURED COUNTERPRODUCTIVE — opt-in only. Claiming CONCAT for HRX2 splits
+    // the CPU runs around it, so on a 1-token zaya decode the scheduler's graph
+    // splits ROSE 1445 -> 2005 and throughput fell (11.56 -> 10.25 tok/s) with
+    // bit-identical output. Partial claiming cannot pay off while IM2COL (20000
+    // rejections) still forces CPU runs; the whole fallback set has to move at
+    // once. GGML_HRX2_TRY_CONCAT=1 re-enables the experiment.
+    if (!ggml_backend_hrx2_env_enabled("GGML_HRX2_TRY_CONCAT")) {
+        return false;
+    }
+    if (ggml_is_quantized(op->type) || !ggml_is_contiguous(op)) {
+        return false;
+    }
+    const int dim = ggml_get_op_params_i32(op, 0);
+    if (dim < 0 || dim > 3) {
+        return false;
+    }
+    int64_t inner = 1;
+    for (int i = 0; i < dim; ++i) {
+        inner *= op->ne[i];
+    }
+    int64_t outer = 1;
+    for (int i = dim + 1; i < 4; ++i) {
+        outer *= op->ne[i];
+    }
+    if (inner != 1 || outer > 8) {
+        return false;
+    }
+    int64_t sum = 0;
+    for (int s = 0; s < GGML_MAX_SRC && op->src[s]; ++s) {
+        const ggml_tensor * src = op->src[s];
+        if (src->type != op->type || !ggml_is_contiguous(src)) {
+            return false;
+        }
+        for (int i = 0; i < 4; ++i) {
+            if (i != dim && src->ne[i] != op->ne[i]) {
+                return false;
+            }
+        }
+        sum += src->ne[dim];
+    }
+    return sum == op->ne[dim];
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_concat(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * dst) {
+    hrx_buffer_ref_t dst_ref = {};
+    if (!ggml_backend_hrx2_tensor_buffer_ref(dst, &dst_ref)) {
+        GGML_LOG_ERROR("HRX2: CONCAT destination is not backed by HRX2 buffers\n");
+        return GGML_STATUS_FAILED;
+    }
+    const int dim = ggml_get_op_params_i32(dst, 0);
+    int64_t inner = 1;
+    for (int i = 0; i < dim; ++i) {
+        inner *= dst->ne[i];
+    }
+    int64_t outer = 1;
+    for (int i = dim + 1; i < 4; ++i) {
+        outer *= dst->ne[i];
+    }
+    const size_t type_size = ggml_type_size(dst->type);
+
+    for (int64_t o = 0; o < outer; ++o) {
+        size_t dst_off = (size_t) o * (size_t) dst->ne[dim] * (size_t) inner * type_size;
+        for (int s = 0; s < GGML_MAX_SRC && dst->src[s]; ++s) {
+            const ggml_tensor * src = dst->src[s];
+            hrx_buffer_ref_t src_ref = {};
+            if (!ggml_backend_hrx2_tensor_buffer_ref(src, &src_ref)) {
+                GGML_LOG_ERROR("HRX2: CONCAT source is not backed by HRX2 buffers\n");
+                return GGML_STATUS_FAILED;
+            }
+            const size_t run = (size_t) src->ne[dim] * (size_t) inner * type_size;
+            const size_t from = (size_t) o * run;
+            if (from + run > src_ref.length || dst_off + run > dst_ref.length) {
+                GGML_LOG_ERROR("HRX2: CONCAT run exceeds buffer bounds\n");
+                return GGML_STATUS_FAILED;
+            }
+            if (!GGML_HRX2_CHECK(hrx_stream_copy_buffer(
+                    context->stream,
+                    src_ref.buffer, src_ref.offset + from,
+                    dst_ref.buffer, dst_ref.offset + dst_off,
+                    run))) {
+                return GGML_STATUS_FAILED;
+            }
+            dst_off += run;
+        }
+    }
+    return GGML_STATUS_SUCCESS;
 }
 
 static bool ggml_backend_hrx2_supports_cpy(
@@ -2764,6 +2913,15 @@ static bool ggml_backend_hrx2_supports_argsort_f32_i32_desc(
         ggml_backend_hrx2_device_context * device_context,
         const ggml_tensor * op) {
     GGML_UNUSED(device_context);
+    // Escape hatch: the Q4NX MoE dispatch has a zero-copy ids fast path that
+    // only applies when the expert ids arrive in the host-coherent buffer
+    // (i.e. a CPU-side argsort). Keeping ARGSORT on the device instead puts the
+    // ids in a device buffer, which forces a per-op copy + stream synchronize
+    // in ggml_backend_hrx2_dispatch_mul_mat_id_q4nx. This switch makes the two
+    // arrangements measurable.
+    if (ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_ARGSORT")) {
+        return false;
+    }
     const ggml_tensor * src0 = op->src[0];
     return op->op == GGML_OP_ARGSORT &&
            src0 &&
@@ -3400,6 +3558,27 @@ static bool ggml_backend_hrx2_extract_sum_rows_shape(
     return true;
 }
 
+static bool ggml_backend_hrx2_extract_ssm_conv_shape(
+        const ggml_tensor * op,
+        ggml_backend_hrx2_ssm_conv_shape * out_shape) {
+    if (!out_shape || !ggml_backend_hrx2_supports_ssm_conv(nullptr, op)) {
+        return false;
+    }
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    ggml_backend_hrx2_ssm_conv_shape shape;
+    if (!ggml_backend_hrx2_u32(src0->ne[0], &shape.ncs) ||
+        !ggml_backend_hrx2_u32(src0->ne[1], &shape.d_inner) ||
+        !ggml_backend_hrx2_u32(src0->ne[2], &shape.n_s) ||
+        !ggml_backend_hrx2_u32(src1->ne[0], &shape.d_conv) ||
+        !ggml_backend_hrx2_u32(op->ne[1], &shape.n_t) ||
+        !ggml_backend_hrx2_u32_size(src0->nb[2] / sizeof(float), &shape.sx_seq_stride)) {
+        return false;
+    }
+    *out_shape = shape;
+    return true;
+}
+
 static bool ggml_backend_hrx2_extract_get_rows_shape(
         const ggml_tensor * op,
         ggml_backend_hrx2_get_rows_shape * out_shape) {
@@ -3873,6 +4052,20 @@ static bool ggml_backend_hrx2_route_shape_matches(
 
 static bool ggml_backend_hrx2_route_shape_matches(
         const ggml_backend_hrx2_kernel_route * route,
+        const ggml_backend_hrx2_ssm_conv_shape & shape) {
+    if (!route ||
+        shape.d_conv < route->n_dims_min || shape.d_conv > route->n_dims_max ||
+        shape.ncs < route->k_min || shape.ncs > route->k_max ||
+        shape.d_inner < route->ncols_min || shape.d_inner > route->ncols_max ||
+        shape.n_t < route->nrows_min || shape.n_t > route->nrows_max ||
+        shape.n_s < route->rows_min || shape.n_s > route->rows_max) {
+        return false;
+    }
+    return true;
+}
+
+static bool ggml_backend_hrx2_route_shape_matches(
+        const ggml_backend_hrx2_kernel_route * route,
         const ggml_backend_hrx2_get_rows_shape & shape) {
     if (!route ||
         shape.ncols < route->ncols_min || shape.ncols > route->ncols_max ||
@@ -4190,6 +4383,65 @@ static bool ggml_backend_hrx2_make_sum_rows_plan(
         plan.cache_key += "|ncols=" + std::to_string(shape.ncols);
         plan.cache_key += "|nrows=" + std::to_string(shape.nrows);
         plan.cache_key += "|src0_row_stride=" + std::to_string(shape.src0_row_stride);
+        for (const auto & binding : plan.config_bindings) {
+            plan.cache_key += "|";
+            plan.cache_key += binding.key;
+            plan.cache_key += "=";
+            plan.cache_key += binding.value;
+        }
+    }
+
+    *out_plan = std::move(plan);
+    return true;
+}
+
+static bool ggml_backend_hrx2_make_ssm_conv_plan(
+        const ggml_backend_hrx2_device_context * device_context,
+        const ggml_backend_hrx2_kernel_route * route,
+        const ggml_backend_hrx2_ssm_conv_shape & shape,
+        ggml_backend_hrx2_provider_plan * out_plan) {
+    if (!out_plan ||
+        !ggml_backend_hrx2_route_available(device_context, route) ||
+        !ggml_backend_hrx2_route_shape_matches(route, shape)) {
+        return false;
+    }
+
+    ggml_backend_hrx2_provider_plan plan;
+    plan.route = route;
+    plan.cache_key = ggml_backend_hrx2_base_cache_key(device_context, route);
+
+    if (!route->specialization_mode.empty() && route->specialization_mode != "jit_config") {
+        return false;
+    }
+    for (const auto & spec : route->config_bindings) {
+        ggml_backend_hrx2_config_binding binding;
+        binding.key = spec.key;
+        if (spec.value_source == "shape.ssm_conv.d_conv") {
+            binding.value = std::to_string(shape.d_conv);
+        } else if (spec.value_source == "shape.ssm_conv.ncs") {
+            binding.value = std::to_string(shape.ncs);
+        } else if (spec.value_source == "shape.ssm_conv.d_inner") {
+            binding.value = std::to_string(shape.d_inner);
+        } else if (spec.value_source == "shape.ssm_conv.n_t") {
+            binding.value = std::to_string(shape.n_t);
+        } else if (spec.value_source == "shape.ssm_conv.n_s") {
+            binding.value = std::to_string(shape.n_s);
+        } else if (spec.value_source == "shape.ssm_conv.sx_seq_stride") {
+            binding.value = std::to_string(shape.sx_seq_stride);
+        } else if (spec.value_source.empty()) {
+            binding.value = spec.value;
+        } else {
+            return false;
+        }
+        plan.config_bindings.push_back(std::move(binding));
+    }
+    if (route->specialization_mode == "jit_config") {
+        plan.cache_key += "|d_conv=" + std::to_string(shape.d_conv);
+        plan.cache_key += "|ncs=" + std::to_string(shape.ncs);
+        plan.cache_key += "|d_inner=" + std::to_string(shape.d_inner);
+        plan.cache_key += "|n_t=" + std::to_string(shape.n_t);
+        plan.cache_key += "|n_s=" + std::to_string(shape.n_s);
+        plan.cache_key += "|sx_seq_stride=" + std::to_string(shape.sx_seq_stride);
         for (const auto & binding : plan.config_bindings) {
             plan.cache_key += "|";
             plan.cache_key += binding.key;
@@ -5709,6 +5961,22 @@ static bool ggml_backend_hrx2_supports_sum_rows_route(
     return false;
 }
 
+static bool ggml_backend_hrx2_supports_ssm_conv_route(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    ggml_backend_hrx2_ssm_conv_shape shape;
+    if (!ggml_backend_hrx2_extract_ssm_conv_shape(op, &shape)) {
+        return false;
+    }
+    for (const auto * route : device_context->ssm_conv_routes) {
+        ggml_backend_hrx2_provider_plan plan;
+        if (ggml_backend_hrx2_make_ssm_conv_plan(device_context, route, shape, &plan)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool ggml_backend_hrx2_supports_get_rows_route(
         ggml_backend_hrx2_device_context * device_context,
         const ggml_tensor * op) {
@@ -6955,6 +7223,109 @@ static ggml_status ggml_backend_hrx2_dispatch_sum_rows(
     }
 
     GGML_LOG_ERROR("HRX2: SUM_ROWS provider is not available for ncols=%u nrows=%u\n", shape.ncols, shape.nrows);
+    return GGML_STATUS_FAILED;
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_ssm_conv(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    ggml_backend_hrx2_ssm_conv_shape shape;
+    if (!ggml_backend_hrx2_extract_ssm_conv_shape(dst, &shape)) {
+        GGML_LOG_ERROR("HRX2: invalid SSM_CONV shape during dispatch: dst=%s src0=%s src1=%s\n",
+                ggml_backend_hrx2_tensor_summary(dst).c_str(),
+                ggml_backend_hrx2_tensor_summary(src0).c_str(),
+                ggml_backend_hrx2_tensor_summary(src1).c_str());
+        return GGML_STATUS_FAILED;
+    }
+
+    hrx_buffer_ref_t bindings[3] = {};
+    if (!ggml_backend_hrx2_tensor_buffer_ref(src0, &bindings[0]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(src1, &bindings[1]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[2])) {
+        GGML_LOG_ERROR("HRX2: SSM_CONV tensor is not backed by HRX2 buffers\n");
+        return GGML_STATUS_FAILED;
+    }
+
+    for (const auto * route : context->device_context->ssm_conv_routes) {
+        ggml_backend_hrx2_provider_plan plan;
+        if (!ggml_backend_hrx2_make_ssm_conv_plan(context->device_context, route, shape, &plan)) {
+            continue;
+        }
+
+        const auto * provider = ggml_backend_hrx2_get_provider(
+            context->device_context,
+            plan.route,
+            plan.config_bindings,
+            plan.cache_key);
+        if (!provider) {
+            ggml_backend_hrx2_trace_event(
+                "provider_unavailable",
+                ggml_backend_hrx2_json_kv("op", "SSM_CONV") + "," +
+                ggml_backend_hrx2_json_kv("route_id", plan.route->id) + "," +
+                ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+                ggml_backend_hrx2_json_kv("cache_key", plan.cache_key) + "," +
+                ggml_backend_hrx2_json_kv("d_conv", shape.d_conv) + "," +
+                ggml_backend_hrx2_json_kv("d_inner", shape.d_inner));
+            continue;
+        }
+
+        if (provider->route.constant_byte_length != 0) {
+            GGML_LOG_ERROR(
+                "HRX2: SSM_CONV route %s has constant byte length %u but dispatch has none\n",
+                provider->route.id.c_str(),
+                provider->route.constant_byte_length);
+            continue;
+        }
+
+        const uint32_t workgroup_size =
+            provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0];
+        const uint64_t total = (uint64_t) shape.d_inner * shape.n_t * shape.n_s;
+        const uint32_t workgroups = (uint32_t)((total + workgroup_size - 1) / workgroup_size);
+        hrx_dispatch_config_t config = {
+            /* .workgroup_count = */ { workgroups, 1, 1 },
+            /* .workgroup_size  = */ { workgroup_size, 1, 1 },
+            /* .subgroup_size   = */ 0,
+        };
+
+        ggml_backend_hrx2_trace_event(
+            "dispatch",
+            ggml_backend_hrx2_json_kv("op", "SSM_CONV") + "," +
+            ggml_backend_hrx2_json_kv("route_id", provider->route.id) + "," +
+            ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+            ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
+            ggml_backend_hrx2_json_kv("d_conv", shape.d_conv) + "," +
+            ggml_backend_hrx2_json_kv("d_inner", shape.d_inner) + "," +
+            ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
+            ggml_backend_hrx2_json_kv("workgroup_size_x", config.workgroup_size[0]));
+
+        if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
+                context->stream,
+                provider->executable,
+                provider->export_ordinal,
+                &config,
+                nullptr,
+                0,
+                bindings,
+                3,
+                HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+
+        // SSM_CONV's output (QK) is read by the CPU-side grouped conv
+        // (IM2COL + F16xF16 MUL_MAT, both CPU-only ops). In the zero-copy
+        // hybrid the buffer is shared, but the CPU read must wait for this
+        // GPU dispatch to finish, otherwise the decode reads stale QK and
+        // degenerates. Sync the stream after this one dispatch (40/token).
+        if (!GGML_HRX2_CHECK(hrx_stream_synchronize(context->stream))) {
+            return GGML_STATUS_FAILED;
+        }
+
+        return GGML_STATUS_SUCCESS;
+    }
+
+    GGML_LOG_ERROR("HRX2: SSM_CONV provider is not available for d_conv=%u d_inner=%u\n", shape.d_conv, shape.d_inner);
     return GGML_STATUS_FAILED;
 }
 
@@ -9110,6 +9481,17 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q4nx(
     const bool ids_direct = src2->buffer != nullptr &&
         src2->buffer->buft == &device_context->host_buffer_type &&
         src2->data != nullptr;
+    if (!ids_direct) {
+        // Observable evidence of which ids path this graph takes: the
+        // non-direct route copies the ids to a scratch buffer and drains the
+        // stream once per MoE op (see the round-25i note below).
+        static std::atomic<int> ids_slow_warn{0};
+        if (ids_slow_warn.fetch_add(1) == 0) {
+            GGML_LOG_WARN(
+                "HRX2: MUL_MAT_ID Q4NX ids are NOT host-direct -> "
+                "per-op copy + stream synchronize on every MoE dispatch\n");
+        }
+    }
     if (!ids_direct && !ggml_backend_hrx2_q4nx_scratch_grow(device_context, &device_context->q4nx_ids, &device_context->q4nx_ids_cap, ids_bytes)) {
         return GGML_STATUS_FAILED;
     }
@@ -11329,6 +11711,18 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
                     return GGML_STATUS_FAILED;
                 }
                 break;
+            case GGML_OP_SSM_CONV:
+                if (!ggml_backend_hrx2_supports_ssm_conv_route(context->device_context, node)) {
+                    GGML_LOG_ERROR("HRX2: unsupported SSM_CONV shape/type/layout: dst=%s src0=%s src1=%s\n",
+                            ggml_backend_hrx2_tensor_summary(node).c_str(),
+                            ggml_backend_hrx2_tensor_summary(node->src[0]).c_str(),
+                            ggml_backend_hrx2_tensor_summary(node->src[1]).c_str());
+                    return GGML_STATUS_FAILED;
+                }
+                if (ggml_backend_hrx2_dispatch_ssm_conv(context, node) != GGML_STATUS_SUCCESS) {
+                    return GGML_STATUS_FAILED;
+                }
+                break;
             case GGML_OP_GET_ROWS:
                 if (ggml_backend_hrx2_supports_get_rows_route(context->device_context, node)) {
                     if (ggml_backend_hrx2_dispatch_get_rows(context, node) != GGML_STATUS_SUCCESS) {
@@ -11433,6 +11827,16 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
                     return GGML_STATUS_FAILED;
                 }
                 if (ggml_backend_hrx2_dispatch_soft_max(context, node) != GGML_STATUS_SUCCESS) {
+                    return GGML_STATUS_FAILED;
+                }
+                break;
+            case GGML_OP_CONCAT:
+                if (!ggml_backend_hrx2_supports_concat(context->device_context, node)) {
+                    GGML_LOG_ERROR("HRX2: unsupported CONCAT shape/type/layout: dst=%s\n",
+                            ggml_backend_hrx2_tensor_summary(node).c_str());
+                    return GGML_STATUS_FAILED;
+                }
+                if (ggml_backend_hrx2_dispatch_concat(context, node) != GGML_STATUS_SUCCESS) {
                     return GGML_STATUS_FAILED;
                 }
                 break;
@@ -11772,6 +12176,11 @@ static bool ggml_backend_hrx2_device_supports_op(ggml_backend_dev_t dev, const g
             return ggml_backend_hrx2_supports_pointwise_route(devctx, op);
         case GGML_OP_SUM_ROWS:
             return ggml_backend_hrx2_supports_sum_rows_route(devctx, op);
+        case GGML_OP_SSM_CONV:
+            if (getenv("GGML_HRX2_NO_SSM_CONV")) {
+                return false;
+            }
+            return ggml_backend_hrx2_supports_ssm_conv_route(devctx, op);
         case GGML_OP_ROPE:
             return ggml_backend_hrx2_supports_rope_route(devctx, op);
         case GGML_OP_SOFT_MAX:
@@ -11782,6 +12191,8 @@ static bool ggml_backend_hrx2_device_supports_op(ggml_backend_dev_t dev, const g
             return ggml_backend_hrx2_supports_cpy(devctx, op);
         case GGML_OP_SET_ROWS:
             return ggml_backend_hrx2_supports_set_rows_route(devctx, op);
+        case GGML_OP_CONCAT:
+            return ggml_backend_hrx2_supports_concat(devctx, op);
         case GGML_OP_ARGSORT:
             return ggml_backend_hrx2_supports_argsort_route(devctx, op);
         case GGML_OP_GLU:
@@ -11793,8 +12204,34 @@ static bool ggml_backend_hrx2_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_MUL_MAT:
             // attention KQ^T/kqv mms: F16 src0 (KV cache) x F32 src1 (q/kq),
             // strided GQA batched views -> existing mul_mat_f16_f32_batched kernel
-            return ggml_backend_hrx2_supports_mul_mat_f16_f32_route(devctx, op);
+            if (ggml_backend_hrx2_supports_mul_mat_f16_f32_route(devctx, op)) {
+                return true;
+            }
+            // F32 x F32 matmuls -- notably the TIED LM HEAD: token_embd.weight is
+            // F32 (2048, 262272) = 2.149 GB and is re-read for EVERY decode token.
+            // This case used to consult only the attention route, so the LM head fell
+            // back to the CPU and streamed 2.1 GB per token there -- the dominant part
+            // of the M=1 decode wall (it also explains the Qwen asymmetry: Qwen's LM
+            // head is Q4_K, ~8x smaller). The F32 route, plan and dispatch machinery
+            // already existed; only this claim and the rows cap (262144, 128 short of
+            // the 262272 vocab) were missing.
+            // GGML_HRX2_NO_F32_MM=1 restores the old behaviour, for A/B.
+            return !ggml_backend_hrx2_env_enabled("GGML_HRX2_NO_F32_MM") &&
+                   ggml_backend_hrx2_supports_mul_mat_f32_f32_route(devctx, op);
         default:
+            // Ops not claimed here are assigned to the CPU backend by the
+            // scheduler, and every CPU<->HRX2 hand-off is a graph split. A
+            // 1-token zaya decode reserves ~1445 splits (8769 nodes), so the
+            // set of rejected ops is worth seeing. Inert unless the env var is
+            // set; logs each distinct op type once per process.
+            if (getenv("GGML_HRX2_LOG_UNSUPPORTED")) {
+                GGML_LOG_WARN(
+                    "HRX2 unsupported op -> CPU split: %s type=%s ne=[%lld,%lld,%lld,%lld]\n",
+                    ggml_op_name(op->op),
+                    ggml_type_name(op->type),
+                    (long long) op->ne[0], (long long) op->ne[1],
+                    (long long) op->ne[2], (long long) op->ne[3]);
+            }
             return false;
     }
 }
@@ -12052,6 +12489,11 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 "sum_rows_f32",
                 "SUM_ROWS",
                 &device_context->sum_rows_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
+                "ssm_conv_f32",
+                "SSM_CONV",
+                &device_context->ssm_conv_routes);
             ggml_backend_hrx2_catalog_find_routes(
                 *device_context->catalog,
                 "get_rows_f32",
