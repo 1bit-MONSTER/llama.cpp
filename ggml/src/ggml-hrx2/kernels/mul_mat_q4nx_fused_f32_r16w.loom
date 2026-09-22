@@ -1,5 +1,5 @@
 config.decl @hrx2.shape.k : %value: index where [range(%value, 1, 65536)]
-config.decl @hrx2.shape.rows : %value: index where [range(%value, 1, 262144)]
+config.decl @hrx2.shape.rows : %value: index where [range(%value, 1, 524288)]
 config.decl @hrx2.shape.cols : %value: index where [range(%value, 1, 512)]
 config.decl @hrx2.tuning.q4nx.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
 config.decl @hrx2.tuning.q4nx.n_tile_cols : %value: index where [range(%value, 1, 256)]
@@ -39,7 +39,7 @@ kernel.def export("hrx2_mul_mat_q4nx_fused_f32_r16w") @hrx2_mul_mat_q4nx_fused_f
   %workgroup_size = config.get @hrx2.tuning.q4nx.workgroup_size : index
   %n_tc = config.get @hrx2.tuning.q4nx.n_tile_cols : index
   %k_bounded = index.assume %k [range(%k, 1, 65536)] : index
-  %rows_bounded = index.assume %rows [range(%rows, 1, 262144)] : index
+  %rows_bounded = index.assume %rows [range(%rows, 1, 524288)] : index
   %cols_bounded = index.assume %cols [range(%cols, 1, 512)] : index
   %n_tc_bounded = index.assume %n_tc [range(%n_tc, 1, 256)] : index
   %row0 = kernel.workgroup.id<x> : index
@@ -48,7 +48,7 @@ kernel.def export("hrx2_mul_mat_q4nx_fused_f32_r16w") @hrx2_mul_mat_q4nx_fused_f
   %lane0 = kernel.workitem.id<x> : index
   %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
   %base_row0 = index.mul %row0_b, %sixteen : index
-  %base_row = index.assume %base_row0 [range(%base_row0, 0, 262143)] : index
+  %base_row = index.assume %base_row0 [range(%base_row0, 0, 524287)] : index
   %tile_row = index.div %base_row, %thirtytwo : index
   %in_tile_base = index.rem %base_row, %thirtytwo : index
   %lane_of_tile = index.div %in_tile_base, %sixteen : index

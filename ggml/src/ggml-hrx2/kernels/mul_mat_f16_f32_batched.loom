@@ -1,19 +1,22 @@
 config.decl @hrx2.shape.mul_mat_f16.k : %value: index where [range(%value, 1, 8192)]
-config.decl @hrx2.shape.mul_mat_f16.rows : %value: index where [range(%value, 1, 8192)]
+// rows cap raised from 8192: the f16 route (cols 1..512) is the only existing
+// route that can serve an f16 LM head, whose vocab is 262272, and it must also
+// cover that head shape for a single decode token.
+config.decl @hrx2.shape.mul_mat_f16.rows : %value: index where [range(%value, 1, 524288)]
 config.decl @hrx2.shape.mul_mat_f16.cols : %value: index where [range(%value, 1, 4096)]
 config.decl @hrx2.shape.mul_mat_f16.dst_ne2 : %value: index where [range(%value, 1, 4096)]
 config.decl @hrx2.shape.mul_mat_f16.dst_ne3 : %value: index where [range(%value, 1, 4096)]
 config.decl @hrx2.shape.mul_mat_f16.src0_ne2 : %value: index where [range(%value, 1, 4096)]
 config.decl @hrx2.shape.mul_mat_f16.src0_ne3 : %value: index where [range(%value, 1, 4096)]
-config.decl @hrx2.shape.mul_mat_f16.src0_stride_row : %value: index where [range(%value, 1, 1073741824)]
-config.decl @hrx2.shape.mul_mat_f16.src0_stride_ne2 : %value: index where [range(%value, 1, 1073741824)]
-config.decl @hrx2.shape.mul_mat_f16.src0_stride_ne3 : %value: index where [range(%value, 1, 1073741824)]
-config.decl @hrx2.shape.mul_mat_f16.src1_stride_col : %value: index where [range(%value, 1, 1073741824)]
-config.decl @hrx2.shape.mul_mat_f16.src1_stride_ne2 : %value: index where [range(%value, 1, 1073741824)]
-config.decl @hrx2.shape.mul_mat_f16.src1_stride_ne3 : %value: index where [range(%value, 1, 1073741824)]
-config.decl @hrx2.shape.mul_mat_f16.dst_stride_col : %value: index where [range(%value, 1, 1073741824)]
-config.decl @hrx2.shape.mul_mat_f16.dst_stride_ne2 : %value: index where [range(%value, 1, 1073741824)]
-config.decl @hrx2.shape.mul_mat_f16.dst_stride_ne3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.shape.mul_mat_f16.src0_stride_row : %value: index where [range(%value, 1, 4294967295)]
+config.decl @hrx2.shape.mul_mat_f16.src0_stride_ne2 : %value: index where [range(%value, 1, 4294967295)]
+config.decl @hrx2.shape.mul_mat_f16.src0_stride_ne3 : %value: index where [range(%value, 1, 4294967295)]
+config.decl @hrx2.shape.mul_mat_f16.src1_stride_col : %value: index where [range(%value, 1, 4294967295)]
+config.decl @hrx2.shape.mul_mat_f16.src1_stride_ne2 : %value: index where [range(%value, 1, 4294967295)]
+config.decl @hrx2.shape.mul_mat_f16.src1_stride_ne3 : %value: index where [range(%value, 1, 4294967295)]
+config.decl @hrx2.shape.mul_mat_f16.dst_stride_col : %value: index where [range(%value, 1, 4294967295)]
+config.decl @hrx2.shape.mul_mat_f16.dst_stride_ne2 : %value: index where [range(%value, 1, 4294967295)]
+config.decl @hrx2.shape.mul_mat_f16.dst_stride_ne3 : %value: index where [range(%value, 1, 4294967295)]
 config.decl @hrx2.tuning.mul_mat_f16.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
 
 kernel.def export("hrx2_mul_mat_f16_f32_batched") @hrx2_mul_mat_f16_f32_batched() {
@@ -53,7 +56,7 @@ kernel.def export("hrx2_mul_mat_f16_f32_batched") @hrx2_mul_mat_f16_f32_batched(
   %workgroup_size = config.get @hrx2.tuning.mul_mat_f16.workgroup_size : index
 
   %row0 = kernel.workgroup.id<x> : index
-  %row = index.assume %row0 [range(%row0, 0, 8191)] : index
+  %row = index.assume %row0 [range(%row0, 0, 524287)] : index
   %outer0 = kernel.workgroup.id<y> : index
   %outer = index.assume %outer0 [range(%outer0, 0, 1048575)] : index
   %lane0 = kernel.workitem.id<x> : index
@@ -178,7 +181,7 @@ kernel.def export("hrx2_mul_mat_f16_f32_batched_cols8") @hrx2_mul_mat_f16_f32_ba
   %workgroup_size = config.get @hrx2.tuning.mul_mat_f16.workgroup_size : index
 
   %row0 = kernel.workgroup.id<x> : index
-  %row = index.assume %row0 [range(%row0, 0, 8191)] : index
+  %row = index.assume %row0 [range(%row0, 0, 524287)] : index
   %outer0 = kernel.workgroup.id<y> : index
   %outer = index.assume %outer0 [range(%outer0, 0, 1048575)] : index
   %lane0 = kernel.workitem.id<x> : index
@@ -386,14 +389,14 @@ kernel.def export("hrx2_mul_mat_f16_f32_batched_rows2_cols8") @hrx2_mul_mat_f16_
   %workgroup_size = config.get @hrx2.tuning.mul_mat_f16.workgroup_size : index
 
   %row_group0 = kernel.workgroup.id<x> : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 0, 4095)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 0, 262143)] : index
   %outer0 = kernel.workgroup.id<y> : index
   %outer = index.assume %outer0 [range(%outer0, 0, 1048575)] : index
   %lane0 = kernel.workitem.id<x> : index
   %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
 
   %row_base0 = index.mul %row_group, %two : index
-  %row_base = index.assume %row_base0 [range(%row_base0, 0, 8190)] : index
+  %row_base = index.assume %row_base0 [range(%row_base0, 0, 524287)] : index
   %row1 = index.add %row_base, %unit : index
   %col_groups_round = index.add %cols, %seven : index
   %col_groups = index.div %col_groups_round, %eight : index
@@ -645,7 +648,7 @@ kernel.def export("hrx2_mul_mat_f16_f32_batched_cols8_contiguous") @hrx2_mul_mat
   %workgroup_size = config.get @hrx2.tuning.mul_mat_f16.workgroup_size : index
 
   %row0 = kernel.workgroup.id<x> : index
-  %row = index.assume %row0 [range(%row0, 0, 8191)] : index
+  %row = index.assume %row0 [range(%row0, 0, 524287)] : index
   %outer0 = kernel.workgroup.id<y> : index
   %outer = index.assume %outer0 [range(%outer0, 0, 1048575)] : index
   %lane0 = kernel.workitem.id<x> : index

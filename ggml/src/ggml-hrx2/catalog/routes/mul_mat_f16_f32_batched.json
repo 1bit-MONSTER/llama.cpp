@@ -29,7 +29,7 @@
    "k_min": 128,
    "k_max": 65536,
    "rows_min": 128,
-   "rows_max": 262144,
+   "rows_max": 524288,
    "cols_min": 512,
    "cols_max": 512
   },
@@ -141,7 +141,7 @@
    "k_min": 128,
    "k_max": 65536,
    "rows_min": 512,
-   "rows_max": 262144,
+   "rows_max": 524288,
    "cols_min": 512,
    "cols_max": 512
   },
@@ -265,7 +265,7 @@
    "k_min": 128,
    "k_max": 65536,
    "rows_min": 128,
-   "rows_max": 262144,
+   "rows_max": 524288,
    "cols_min": 8,
    "cols_max": 512
   },
@@ -389,7 +389,7 @@
    "k_min": 128,
    "k_max": 65536,
    "rows_min": 128,
-   "rows_max": 262144,
+   "rows_max": 524288,
    "cols_min": 1,
    "cols_max": 512
   },
