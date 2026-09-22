@@ -155,5 +155,9 @@
   "family": "q4nx_dequant_f32",
   "op": "Q4NX_DEQUANT",
   "dtype": "f32"
+ },
+ {
+  "family": "ssm_conv_f32",
+  "op": "SSM_CONV"
  }
 ]

@@ -235,5 +235,6 @@
  "mul_mat_q4nx_fused_f32_r16w",
  "mul_mat_q4nx_fused_f32_r16wb2",
  "mul_mat_q4nx_fused_f32_r16wb8",
- "mul_mat_q4nx_fused_f32_r16wb4c"
+ "mul_mat_q4nx_fused_f32_r16wb4c",
+ "ssm_conv_f32_generic_wg256"
 ]

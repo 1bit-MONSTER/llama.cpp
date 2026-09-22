@@ -243,5 +243,10 @@
   "path": "artifacts/mul_mat_q4nx_fused_f32_r16wb4c.loombc",
   "format": "loom-bytecode",
   "storage": "embedded"
+ },
+ "ssm_conv_f32_bc": {
+  "path": "artifacts/ssm_conv_f32.loombc",
+  "format": "loom-bytecode",
+  "storage": "embedded"
  }
 }

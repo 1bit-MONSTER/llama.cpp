@@ -439,8 +439,16 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
         case GGML_OP_MUL_MAT_Q4NX:
         case GGML_OP_MUL_MAT_ID_Q4NX:
             // 1bit-MONSTER: Q4NX ops run only on the HRX2 backend
-            // (tile-major weights live in HRX device memory).
-            return false;
+            // (tile-major weights live in HRX device memory). An EMPTY op is the
+            // exception and MUST be accepted here: it needs no compute
+            // (ggml_compute_forward returns early on ggml_is_empty), while HRX2's
+            // Q4NX routes all require cols >= 1, so rejecting it leaves the node
+            // with no backend at all and ggml_backend_sched_split_graph aborts on
+            // *cur_backend_id == -1. An UNTIED Q4NX LM head produces exactly such a
+            // node -- result_output ne=[n_vocab, 0] on a zero-token probe/prefill
+            // ubatch -- whereas a plain MUL_MAT head is absorbed silently by this
+            // same fallback.
+            return ggml_is_empty(op) ? true : false;
         case GGML_OP_CPY:
         case GGML_OP_SET_ROWS:
             return
