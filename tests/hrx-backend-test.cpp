@@ -5,6 +5,7 @@
 #include "dispatch/command-program-resolver.h"
 #include "dispatch/command-program.h"
 #include "dispatch/dispatch-scheduler.h"
+#include "dispatch_registration/common/dispatch-gather-add.h"
 #include "dispatch_registration/dispatch-registry.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -1164,6 +1165,42 @@ static void run_graph_import_checks() {
         ggml::hrx::verify_command_program(wrong_binding_access, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(!verification.valid());
     REQUIRE(status_contains(verification.status, "access=Write"));
+
+    ggml::hrx::CommandProgram transient_flow = copy_command_program_shape(commands);
+    transient_flow.commands.resize(2);
+    transient_flow.commands[0].ordinal = 0;
+    transient_flow.commands[0].dependencies.clear();
+    transient_flow.commands[1] = transient_flow.commands[0];
+    transient_flow.commands[1].ordinal = 1;
+    transient_flow.commands[1].dependencies.push_back(0);
+    const ggml::hrx::ValueId transient_value(100000);
+    transient_flow.transients.allocations.push_back({
+        transient_value,
+        command.bindings[2].length,
+        256,
+        0,
+    });
+    transient_flow.transients.arena_size = command.bindings[2].length;
+    transient_flow.commands[0].bindings[2].origin = ggml::hrx::CommandBindingOrigin::Transient;
+    transient_flow.commands[0].bindings[2].value  = transient_value;
+    transient_flow.commands[1].bindings[0].origin = ggml::hrx::CommandBindingOrigin::Transient;
+    transient_flow.commands[1].bindings[0].value  = transient_value;
+    transient_flow.commands[1].bindings[0].length = command.bindings[2].length;
+    verification =
+        ggml::hrx::verify_command_program(transient_flow, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(verification.valid());
+
+    ggml::hrx::CommandProgram read_before_write = copy_command_program_shape(transient_flow);
+    std::swap(read_before_write.commands[0], read_before_write.commands[1]);
+    read_before_write.commands[0].ordinal = 0;
+    read_before_write.commands[0].dependencies.clear();
+    read_before_write.commands[1].ordinal = 1;
+    read_before_write.commands[1].dependencies.clear();
+    read_before_write.commands[1].dependencies.push_back(0);
+    verification =
+        ggml::hrx::verify_command_program(read_before_write, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(!verification.valid());
+    REQUIRE(status_contains(verification.status, "reads transient value 100000 before write by command 1"));
 
     const ggml::hrx::KernelCorpus &                 corpus          = ggml::hrx::get_qwen_kernel_corpus();
     const ggml::hrx::CommandProgramExecutionContext prepare_context = {
@@ -2989,6 +3026,28 @@ static void require_matmul_swiglu_falls_back(ggml_context * ctx, ggml_tensor * o
     }
 }
 
+static void require_matmul_swiglu_falls_back_to_compilable_plan(ggml_context * ctx, ggml_tensor * output) {
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+    REQUIRE(scheduler.plan().dispatches.size() > 1);
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) != "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma");
+    }
+
+    const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+        imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(commands.valid());
+    REQUIRE(command_program_verifies(commands));
+}
+
 static void require_matmul_root_matches_identity_single(ggml_context * ctx, ggml_tensor * output) {
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
@@ -3551,6 +3610,80 @@ static bool partial_gather_add_graph_is_supported(ggml_context * ctx) {
     return ggml::hrx::DispatchScheduler::can_schedule_graph(graph, test_dispatch_target());
 }
 
+static void require_gather_add_rejects_unavailable_sources(ggml_context * ctx) {
+    ggml::hrx::Graph graph;
+
+    ggml_tensor * raw_attention = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 13);
+    ggml_tensor * attention     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 13);
+    ggml_tensor * residual      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 13);
+    ggml_tensor * row_ids       = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    ggml_tensor * selected0     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 1);
+    ggml_tensor * selected1     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 1);
+    ggml_tensor * output        = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 1);
+    REQUIRE(raw_attention != nullptr);
+    REQUIRE(attention != nullptr);
+    REQUIRE(residual != nullptr);
+    REQUIRE(row_ids != nullptr);
+    REQUIRE(selected0 != nullptr);
+    REQUIRE(selected1 != nullptr);
+    REQUIRE(output != nullptr);
+
+    const ggml::hrx::ValueId raw_attention_value =
+        graph.values().get_or_add_tensor_value(raw_attention, ggml::hrx::ValueKind::External);
+    const ggml::hrx::ValueId attention_value =
+        graph.values().get_or_add_tensor_value(attention, ggml::hrx::ValueKind::Transient);
+    const ggml::hrx::ValueId residual_value =
+        graph.values().get_or_add_tensor_value(residual, ggml::hrx::ValueKind::External);
+    const ggml::hrx::ValueId row_ids_value =
+        graph.values().get_or_add_tensor_value(row_ids, ggml::hrx::ValueKind::External);
+    const ggml::hrx::ValueId selected0_value =
+        graph.values().get_or_add_tensor_value(selected0, ggml::hrx::ValueKind::Transient);
+    const ggml::hrx::ValueId selected1_value =
+        graph.values().get_or_add_tensor_value(selected1, ggml::hrx::ValueKind::Transient);
+    const ggml::hrx::ValueId output_value =
+        graph.values().get_or_add_tensor_value(output, ggml::hrx::ValueKind::External);
+
+    graph.add_node(GGML_OP_SCALE, attention_value, { raw_attention_value });
+    graph.add_node(GGML_OP_GET_ROWS, selected0_value, { attention_value, row_ids_value });
+    graph.add_node(GGML_OP_GET_ROWS, selected1_value, { residual_value, row_ids_value });
+    graph.add_node(GGML_OP_ADD, output_value, { selected0_value, selected1_value });
+    REQUIRE(graph.build_index().success());
+
+    ggml::hrx::DispatchRegistryBuilder builder;
+    ggml::hrx::register_gather_add_dispatch(builder);
+    const ggml::hrx::DispatchRegistry gather_add_registry = builder.build();
+
+    const size_t producer_index = 0;
+    const size_t get_rows_index = 1;
+    ggml::hrx::CommandPlan plan;
+    ggml::hrx::DispatchMatch match;
+    std::vector<bool> covered_nodes(graph.nodes().size(), false);
+    ggml::hrx::DispatchMatchContext context = {
+        graph,
+        &graph.nodes()[get_rows_index],
+        get_rows_index,
+        covered_nodes,
+        plan,
+        ggml::hrx::ValueId(static_cast<int32_t>(graph.values().size())),
+    };
+
+    REQUIRE(!gather_add_registry.match(context, match));
+
+    covered_nodes[producer_index] = true;
+    const ggml::hrx::DispatchMatchContext available_context = {
+        graph,
+        &graph.nodes()[get_rows_index],
+        get_rows_index,
+        covered_nodes,
+        plan,
+        ggml::hrx::ValueId(static_cast<int32_t>(graph.values().size())),
+    };
+    match = {};
+    REQUIRE(gather_add_registry.match(available_context, match));
+    REQUIRE(match.dispatches.size() == 1);
+    REQUIRE(kernel_name_for_id(match.dispatches.front().kernel.kernel_id) == "hrx:ggml_gather_add_f32");
+}
+
 static void schedule_gather_add_command(ggml::hrx::Graph & graph,
                                         int64_t            expected_hidden_size,
                                         int64_t            expected_source_token_count,
@@ -3599,6 +3732,7 @@ static void run_gather_add_dispatch_checks() {
     REQUIRE(!manual_gather_add_graph_is_supported(ctx, 2048, 13, 1, true, 1024));
     REQUIRE(!manual_gather_add_graph_is_supported(ctx, 96, 13, 1, true));
     REQUIRE(!partial_gather_add_graph_is_supported(ctx));
+    require_gather_add_rejects_unavailable_sources(ctx);
 
     ggml_free(ctx);
 }
@@ -5521,6 +5655,22 @@ static void run_qwen_matmul_dispatch_checks() {
         REQUIRE(output != nullptr);
         schedule_fused_matmul_swiglu_command(ctx, output, GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL, 2, 640, 2048,
                                              ggml::hrx::BinaryKind::GeGLU);
+    }
+
+    {
+        ggml_tensor * gate_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_IQ4_NL, 640, 2048);
+        ggml_tensor * up_weight   = ggml_new_tensor_2d(ctx, GGML_TYPE_IQ4_NL, 640, 2048);
+        ggml_tensor * input       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 640, 1);
+        REQUIRE(gate_weight != nullptr);
+        REQUIRE(up_weight != nullptr);
+        REQUIRE(input != nullptr);
+        ggml_tensor * gate = ggml_mul_mat(ctx, gate_weight, input);
+        ggml_tensor * up   = ggml_mul_mat(ctx, up_weight, input);
+        REQUIRE(gate != nullptr);
+        REQUIRE(up != nullptr);
+        ggml_tensor * output = ggml_glu_split(ctx, gate, up, GGML_GLU_OP_SWIGLU);
+        REQUIRE(output != nullptr);
+        require_matmul_swiglu_falls_back_to_compilable_plan(ctx, output);
     }
 
     {
