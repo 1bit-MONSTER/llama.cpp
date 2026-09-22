@@ -1,0 +1,80 @@
+[
+ {
+  "id": "ssm_conv_f32_generic_wg256",
+  "family": "ssm_conv_f32",
+  "op": "SSM_CONV",
+  "target_key": "",
+  "source_id": "ssm_conv_f32",
+  "artifact_id": "ssm_conv_f32_bc",
+  "root_symbol": "@hrx2_ssm_conv_f32",
+  "export_name": "hrx2_ssm_conv_f32",
+  "loader_format": "amdgpu-hsaco",
+  "priority": 10,
+  "abi": {
+   "binding_count": 3,
+   "parameter_count": 3,
+   "constant_byte_length": 0
+  },
+  "dispatch": {
+   "workgroup_size": [
+    256,
+    1,
+    1
+   ],
+   "rows_per_workgroup": 1,
+   "cols_per_workgroup": 1
+  },
+  "shape_domain": {
+   "name": "ssm_conv_f32_generic",
+   "n_dims_min": 1,
+   "n_dims_max": 16,
+   "k_min": 1,
+   "k_max": 65536,
+   "ncols_min": 1,
+   "ncols_max": 65536,
+   "nrows_min": 1,
+   "nrows_max": 65536,
+   "rows_min": 1,
+   "rows_max": 65536
+  },
+  "specialization": {
+   "mode": "jit_config",
+   "bindings": [
+    {
+     "key": "@hrx2.shape.ssm_conv.d_conv",
+     "source": "shape.ssm_conv.d_conv"
+    },
+    {
+     "key": "@hrx2.shape.ssm_conv.ncs",
+     "source": "shape.ssm_conv.ncs"
+    },
+    {
+     "key": "@hrx2.shape.ssm_conv.d_inner",
+     "source": "shape.ssm_conv.d_inner"
+    },
+    {
+     "key": "@hrx2.shape.ssm_conv.n_t",
+     "source": "shape.ssm_conv.n_t"
+    },
+    {
+     "key": "@hrx2.shape.ssm_conv.n_s",
+     "source": "shape.ssm_conv.n_s"
+    },
+    {
+     "key": "@hrx2.shape.ssm_conv.sx_seq_stride",
+     "source": "shape.ssm_conv.sx_seq_stride"
+    },
+    {
+     "key": "@hrx2.tuning.ssm_conv.workgroup_size",
+     "value": "256"
+    }
+   ]
+  },
+  "supports": {
+   "src0_type": "F32",
+   "src1_type": "F32",
+   "dst_type": "F32",
+   "layout": "contiguous"
+  }
+ }
+]
