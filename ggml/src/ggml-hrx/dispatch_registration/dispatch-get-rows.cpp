@@ -76,7 +76,8 @@ static bool match_get_rows_f32_dispatch(const DispatchMatchContext & context, Di
 
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kGetRowsF32Kernel);
-    dispatch.kernel.integer_parameters.emplace("source_row_count", static_cast<int64_t>(source->ne[0]));
+    // source is [width, row_count]; the row count is ne[1] (ne[0] is the width).
+    dispatch.kernel.integer_parameters.emplace("source_row_count", static_cast<int64_t>(source->ne[1]));
     dispatch.kernel.integer_parameters.emplace("output_row_count", static_cast<int64_t>(output->ne[1]));
     dispatch.kernel.integer_parameters.emplace("width", static_cast<int64_t>(output->ne[0]));
     // source_format: 0 = f32, 1 = q8_0 (mirrors the kernel's format branch).

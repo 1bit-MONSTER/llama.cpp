@@ -4494,10 +4494,6 @@
         {
           "name": "width",
           "type": "index"
-        },
-        {
-          "name": "source_format",
-          "type": "i32"
         }
       ],
       "launch_parameters": [

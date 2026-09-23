@@ -38,7 +38,8 @@ static bool pack_kernel_constants(const KernelDefinition & definition,
         const char * name = parameter.name != nullptr ? parameter.name : "";
         const char * type = parameter.type != nullptr ? parameter.type : "";
         const auto   item = dispatch.kernel.integer_parameters.find(name);
-        if (item == dispatch.kernel.integer_parameters.end() || std::strcmp(type, "index") != 0 || item->second < 0 ||
+        const bool   supported_type = std::strcmp(type, "index") == 0 || std::strcmp(type, "i32") == 0;
+        if (item == dispatch.kernel.integer_parameters.end() || !supported_type || item->second < 0 ||
             static_cast<uint64_t>(item->second) > std::numeric_limits<uint32_t>::max()) {
             constants.clear();
             GGML_LOG_ERROR("%s: invalid launch scalar %s for %s\n", __func__, name,
@@ -128,7 +129,8 @@ static bool build_compile_request(const KernelDefinition &   definition,
         const char * name = parameter.name != nullptr ? parameter.name : "";
         const char * type = parameter.type != nullptr ? parameter.type : "";
         const auto   item = dispatch.kernel.integer_parameters.find(name);
-        if (item == dispatch.kernel.integer_parameters.end() || std::strcmp(type, "index") != 0) {
+        const bool   supported_type = std::strcmp(type, "index") == 0 || std::strcmp(type, "i32") == 0;
+        if (item == dispatch.kernel.integer_parameters.end() || !supported_type) {
             GGML_LOG_ERROR("%s: invalid workload scalar %s for %s\n", __func__, name,
                            kernel_definition_name(definition).c_str());
             return false;

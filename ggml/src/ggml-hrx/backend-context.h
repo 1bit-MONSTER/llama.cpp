@@ -50,6 +50,10 @@ struct ggml_backend_hrx_device_context {
     ggml::hrx::HostBufferRegistry                  host_buffers;
     std::atomic<uint64_t>                          synchronous_upload_fallbacks{ 0 };
     std::atomic<uint64_t>                          synchronous_download_fallbacks{ 0 };
+    // Set when a probe sees a weight type the Loom corpus has no kernel for. In
+    // that case the whole graph is delegated to the CPU backend (see
+    // device_supports_op) instead of letting the HRX graph scheduler fail-close.
+    std::atomic<bool>                              unsupported_weight_types{ false };
     std::mutex                                     buffer_stream_mutex;
     hrx_stream_t                                   buffer_stream = nullptr;
 };
