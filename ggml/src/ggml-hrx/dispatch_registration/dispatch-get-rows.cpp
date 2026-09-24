@@ -93,14 +93,15 @@ static bool match_get_rows_f32_dispatch(const DispatchMatchContext & context, Di
 }
 
 void register_get_rows_dispatch(DispatchRegistryBuilder & registry) {
-    registry.add({
-        "common.get_rows_f32",
-        GGML_OP_GET_ROWS,
-        DispatchMatchKind::SingleOp,
-        0,
-        DispatchSource::Common,
-        match_get_rows_f32_dispatch,
-    });
+    // The standalone GET_ROWS kernel is not registered: test-backend-ops -b HRX0
+    // -o GET_ROWS fails every claimed case today (the Loom module fails to compile for
+    // some widths, large row counts exceed the submission ring, and the remaining
+    // shapes return wrong values, most likely because the per-row source_format scalar
+    // is not carried through the launch ABI). Claiming it would make the backend
+    // silently return wrong embeddings, so GET_ROWS nodes are left to the CPU backend
+    // (the HRX buffer type is host-visible, so no copies are needed) until the kernel
+    // is fixed. Re-register it here once -o GET_ROWS passes.
+    GGML_UNUSED(registry);
 }
 
 }  // namespace ggml::hrx

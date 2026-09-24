@@ -15,7 +15,7 @@
 amdgpu.target<gfx11-generic> @ggml_get_rows_gfx11_wave64 {subgroup_size = 64}
 
 kernel.def target(@ggml_get_rows_gfx11_wave64) export("ggml_get_rows_f32") @ggml_get_rows_f32(
-    %source_row_count: index, %output_row_count: index, %width: index, %source_format: i32) {
+    %source_row_count: index, %output_row_count: index, %width: index) {
   %one = index.constant 1 : index
   %twofiftysix = index.constant 256 : index
   %rounding = index.constant 255 : index

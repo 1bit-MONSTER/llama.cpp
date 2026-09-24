@@ -198,8 +198,8 @@
     },
     {
       "path": "../hrx_owned/get_rows_f32.loom",
-      "sha256": "99e092a1b7bc2212995b0881186161a1affe1f1ba0c4060d331b513d117d0e56",
-      "size": 6101,
+      "sha256": "06838b0226016790cdf1391a97ff321b43beb21b7743b32abe6cddce171d6300",
+      "size": 6080,
       "owner": "ggml-hrx"
     },
     {
