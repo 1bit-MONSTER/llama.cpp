@@ -997,7 +997,7 @@ KERNELS = [
         "format": None,
         "binding_count": 4,
         "parameter_count": 5,
-        "constants_size": 88,
+        "constants_size": 104,
         "workgroup_size": (256, 1, 1),
     },
     {

@@ -4,6 +4,11 @@
 // expert ids; runs hrx_mul_mat_id_q4nx_fused_f32 and compares against an
 // independent CPU reference (per-expert dequant + matmul).
 //
+// Two activation shapes are covered:
+//   A) shared   src1 = [k, 1, ntokens]      (src1_nb1 = 0, broadcast)
+//   B) per-slot src1 = [k, nselected, ntokens] (each selected expert gets its
+//      own activation column, ggml_mul_mat_id's general form)
+//
 //   amdclang++ -x hip --offload-arch=gfx1151 -O2 mul_mat_id_q4nx_fused_bench.hip.cpp -lamdhip64 -o /tmp/q4nx_id_bench
 //   /tmp/q4nx_id_bench
 
@@ -67,7 +72,7 @@ static float reference_weight(const std::vector<uint8_t> & blob, int64_t expert,
     return static_cast<float>(val) * scale + zp;
 }
 
-int main() {
+static int run_case(bool per_slot) {
     const int64_t n_tc = 2;
     const int64_t k = n_tc * 256;          // 512
     const int64_t n_tr = 2;
@@ -76,6 +81,8 @@ int main() {
     const int64_t n_experts = 3;
     const int64_t nselected = 2;
     const int64_t ntokens = 2;
+    const int64_t k_src1 = per_slot ? nselected : 1;
+    const int64_t src1_nb1 = per_slot ? k * 4 : 0;
 
     std::vector<uint8_t> blob(static_cast<size_t>(n_experts * tpe) * kTileBytes, 0);
     for (int64_t e = 0; e < n_experts; ++e) {
@@ -98,10 +105,13 @@ int main() {
         }
     }
 
-    std::vector<float> src1(static_cast<size_t>(k * ntokens));
+    std::vector<float> src1(static_cast<size_t>(k * k_src1 * ntokens));
     for (int64_t i = 0; i < k; ++i) {
-        for (int64_t t = 0; t < ntokens; ++t) {
-            src1[static_cast<size_t>(t * k + i)] = 0.02f * static_cast<float>((i * 5 + t * 17) % 19) - 0.13f;
+        for (int64_t s = 0; s < k_src1; ++s) {
+            for (int64_t t = 0; t < ntokens; ++t) {
+                src1[static_cast<size_t>(i + s * k + t * k * k_src1)] =
+                    0.02f * static_cast<float>((i * 5 + s * 31 + t * 17) % 19) - 0.13f;
+            }
         }
     }
 
@@ -128,6 +138,8 @@ int main() {
         k, rows, tpe, n_tc, nselected, ntokens, n_experts,
         static_cast<long long>(sizeof(int32_t)),                  // ids_nb0
         static_cast<long long>(nselected * sizeof(int32_t)),      // ids_nb1
+        static_cast<long long>(src1_nb1),                         // src1_nb1 (0 = shared)
+        static_cast<long long>(k_src1 * k * sizeof(float)),       // src1_nb2
         static_cast<long long>(rows * sizeof(float)),             // dst_nb1
         static_cast<long long>(rows * nselected * sizeof(float)), // dst_nb2
     };
@@ -146,9 +158,10 @@ int main() {
             const int64_t expert = ids[static_cast<size_t>(s + t * nselected)];
             for (int64_t row = 0; row < rows; ++row) {
                 double ref = 0.0;
+                const int64_t s_ref = (k_src1 == 1) ? 0 : s;   // ggml broadcast: b[:, min(s, ne1-1), t]
                 for (int64_t i = 0; i < k; ++i) {
-                    ref += static_cast<double>(reference_weight(blob, expert, tpe, row, i, n_tc)) *
-                           static_cast<double>(src1[static_cast<size_t>(t * k + i)]);
+                    const double b = src1[static_cast<size_t>(i + s_ref * k + t * k * k_src1)];
+                    ref += static_cast<double>(reference_weight(blob, expert, tpe, row, i, n_tc)) * b;
                 }
                 const double have = got[static_cast<size_t>(row + s * rows + t * rows * nselected)];
                 const double d = std::fabs(ref - have);
@@ -160,7 +173,8 @@ int main() {
         }
     }
 
-    std::printf("hrx_mul_mat_id_q4nx_fused_f32: k=%lld rows=%lld tpe=%lld experts=%lld sel=%lld tok=%lld\n",
+    std::printf("hrx_mul_mat_id_q4nx_fused_f32 [%s]: k=%lld rows=%lld tpe=%lld experts=%lld sel=%lld tok=%lld\n",
+            per_slot ? "per-slot src1" : "shared src1",
             (long long) k, (long long) rows, (long long) tpe, (long long) n_experts,
             (long long) nselected, (long long) ntokens);
     std::printf("max_abs_diff=%.3e max_rel_diff=%.3e mismatches=%lld\n", max_abs, max_rel, (long long) bad);
@@ -175,5 +189,11 @@ int main() {
         return 1;
     }
     std::printf("PASS\n");
+    return 0;
+}
+
+int main() {
+    if (run_case(false) != 0) return 1;
+    if (run_case(true)  != 0) return 1;
     return 0;
 }

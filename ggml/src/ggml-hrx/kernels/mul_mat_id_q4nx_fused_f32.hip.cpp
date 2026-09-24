@@ -23,6 +23,8 @@ struct hrx_mul_mat_id_q4nx_fused_f32_constants {
     long long n_experts;
     long long ids_nb0;
     long long ids_nb1;
+    long long src1_nb1;
+    long long src1_nb2;
     long long dst_nb1;
     long long dst_nb2;
 };
@@ -104,7 +106,12 @@ static __device__ __forceinline__ void hrx_mul_mat_id_q4nx_fused_f32_impl(
     const long long lane_base    = (in_tile_row / 16) * 2048;
     const long long expert_base  = expert * c.tpe * 5120;
 
-    const float * src1_tok = src1 + tok * c.k;
+    // src1 is [k, n_expert_used, ntokens] (ggml ne order). src1_nb1 is 0 when
+    // n_expert_used == 1 (the activation is shared by every selected expert,
+    // matching ggml_mul_mat_id's broadcast rule).
+    const float * src1_tok = src1 +
+        (sel * c.src1_nb1) / static_cast<long long>(sizeof(float)) +
+        (tok * c.src1_nb2) / static_cast<long long>(sizeof(float));
     float sum = 0.0f;
 
     for (long long i = static_cast<long long>(tid); i < c.k; i += WG_SIZE) {

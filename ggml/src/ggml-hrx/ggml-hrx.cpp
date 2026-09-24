@@ -474,10 +474,12 @@ struct ggml_backend_hrx_mul_mat_id_q4nx_constants {
     int64_t n_experts;
     int64_t ids_nb0;
     int64_t ids_nb1;
+    int64_t src1_nb1;
+    int64_t src1_nb2;
     int64_t dst_nb1;
     int64_t dst_nb2;
 };
-static_assert(sizeof(ggml_backend_hrx_mul_mat_id_q4nx_constants) == 88);
+static_assert(sizeof(ggml_backend_hrx_mul_mat_id_q4nx_constants) == 104);
 
 struct ggml_backend_hrx_mul_mat_vec_bf16_set_rows_constants {
     int64_t k;
@@ -8670,10 +8672,11 @@ static bool ggml_backend_hrx_supports_mul_mat_id_q4nx(
            op->ne[2] == ntokens &&
            op->ne[3] == 1 &&
            src0->ne[3] == 1 &&
-           src1->ne[1] == 1 && src1->ne[2] == ntokens && src1->ne[3] == 1 &&
+           (src1->ne[1] == 1 || src1->ne[1] == nselected) &&
+           src1->ne[2] == ntokens && src1->ne[3] == 1 &&
            src2->ne[2] == 1 && src2->ne[3] == 1 &&
            ggml_is_contiguous(src0) &&
-           ggml_is_contiguous(src1) &&
+           src1->nb[0] == ggml_type_size(src1->type) &&
            src2->nb[0] == ggml_type_size(src2->type) &&
            ggml_is_contiguous(op) &&
            ggml_backend_hrx_provider_available(device_context->mul_mat_id_q4nx_provider);
@@ -8698,6 +8701,34 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_id_q4nx(
     const int64_t n_tc  = k / GGML_Q4NX_TILE_COLS;
     const int64_t tpe   = src0->ne[1];
     const int64_t rows  = (tpe / n_tc) * GGML_Q4NX_TILE_ROWS;
+
+    // ggml_mul_mat_id_q4nx takes n_expert from src0->ne[2], so a 2-D
+    // [8192, tpe*n_expert] expert container (the un-repacked store43
+    // re-emission) makes ne[2] == 1 while the router still emits ids up to
+    // n_expert-1. HRX2 rejects those ids loudly; mirror that here instead of
+    // silently zeroing the expert. Only checked when ne[2] == 1 so the normal
+    // path pays no readback.
+    if (src0->ne[2] == 1 && src2->ne[0] > 0 && src2->ne[1] > 0) {
+        const size_t ids_span = static_cast<size_t>(src2->ne[0] - 1) * src2->nb[0] +
+                                static_cast<size_t>(src2->ne[1] - 1) * src2->nb[1] +
+                                sizeof(int32_t);
+        std::vector<uint8_t> ids_host(ids_span);
+        ggml_backend_tensor_get(src2, ids_host.data(), 0, ids_span);
+        for (int64_t s = 0; s < src2->ne[0]; ++s) {
+            for (int64_t t = 0; t < src2->ne[1]; ++t) {
+                int32_t expert_id = 0;
+                std::memcpy(&expert_id, ids_host.data() + static_cast<size_t>(s) * src2->nb[0] +
+                        static_cast<size_t>(t) * src2->nb[1], sizeof(int32_t));
+                if (expert_id != 0) {
+                    GGML_LOG_ERROR(
+                        "%s: MUL_MAT_ID_Q4NX expert id %d out of range: the Q4NX expert "
+                        "tensor is 2-D (ne[2]=1); repack experts to [8192, tpe, n_expert]\n",
+                        __func__, static_cast<int>(expert_id));
+                    return GGML_STATUS_FAILED;
+                }
+            }
+        }
+    }
     ggml_backend_hrx_mul_mat_id_q4nx_constants constants = {
         /* .k           = */ k,
         /* .rows        = */ rows,
@@ -8708,6 +8739,8 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_id_q4nx(
         /* .n_experts   = */ src0->ne[2],
         /* .ids_nb0     = */ static_cast<int64_t>(src2->nb[0]),
         /* .ids_nb1     = */ static_cast<int64_t>(src2->nb[1]),
+        /* .src1_nb1    = */ src1->ne[1] == 1 ? 0 : static_cast<int64_t>(src1->nb[1]),
+        /* .src1_nb2    = */ src1->ne[2] == 1 ? 0 : static_cast<int64_t>(src1->nb[2]),
         /* .dst_nb1     = */ static_cast<int64_t>(dst->nb[1]),
         /* .dst_nb2     = */ static_cast<int64_t>(dst->nb[2]),
     };
