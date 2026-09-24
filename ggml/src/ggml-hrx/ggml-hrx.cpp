@@ -8672,7 +8672,7 @@ static bool ggml_backend_hrx_supports_mul_mat_id_q4nx(
            src2->ne[2] == 1 && src2->ne[3] == 1 &&
            ggml_is_contiguous(src0) &&
            ggml_is_contiguous(src1) &&
-           ggml_is_contiguous(src2) &&
+           src2->nb[0] == ggml_type_size(src2->type) &&
            ggml_is_contiguous(op) &&
            ggml_backend_hrx_provider_available(device_context->mul_mat_id_q4nx_provider);
 }
