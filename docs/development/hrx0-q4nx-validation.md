@@ -27,6 +27,8 @@ Commits:
 - `556b0dec8` task-3 — dense fused matmul + `MUL_MAT_Q4NX` claim
 - `a3d1c0741` task-4 — MoE fused matmul + `MUL_MAT_ID_Q4NX` claim
 - `4f10b0a02` task-5 — accept non-contiguous ids in the MoE support gate
+- `854c01772` task-5 — validation report (this file)
+- `d632ab10c` — register `GGML_TYPE_Q4NX_C43` (type 43) and route it with type 42
 
 ## Build
 
@@ -89,6 +91,18 @@ The model loads, the whole graph is scheduled on HRX0, and decoding runs.
 Output text is repetitive — this is a raw base-model prompt with no chat
 template; it is not by itself a correctness signal.
 
+The **type-43** container (`zaya1-8b-ft-q4nx.gguf`) was rejected at GGUF parse
+before `d632ab10c`. After registering `GGML_TYPE_Q4NX_C43` it loads and decodes
+on HRX0, and produces the **identical 24-token sequence** as the type-42
+container on the same prompt (`... The capital of France is` + 15x `overlaps`):
+
+```
+diff <(llama-simple type-43) <(llama-simple type-42)  ->  identical
+```
+
+That is a cross-check between two independent GGUF encodings of the same
+weights flowing through the same HRX0 kernels.
+
 ## Open gaps (not caused by this change)
 
 1. **No end-to-end numeric reference.** The task contract asks for top-1 /
@@ -111,9 +125,8 @@ template; it is not by itself a correctness signal.
    across runs). This is pre-existing: stashing all Q4NX changes and rebuilding
    reproduces the identical failure, and the Q4NX change is additive
    (119 insertions, 0 deletions at task-3; task-5 relaxes one predicate).
-3. **Type 43 (`Q4NX_C43`) is not registered in ggml.** Branch HEAD `b08d51080`
-   registered it in gguf-py only; `ggml.h` stops at 42 / `GGML_TYPE_COUNT = 43`.
-   `store43/zaya1-8b-ft-q4nx.gguf` (280 type-43 tensors) is therefore still
-   rejected at GGUF parse. The type-42 models (`-c42`, `-repacked`,
-   `zaya-q4nx-gemma4tok`) load. The kernels are type-agnostic; extending the
-   enum is a separate, decision-requiring change.
+3. ~~Type 43 (`Q4NX_C43`) is not registered in ggml~~ — **fixed** in
+   `d632ab10c`: `GGML_TYPE_Q4NX_C43 = 43`, `GGML_TYPE_COUNT = 44`, type traits,
+   the `ggml_mul_mat`/`ggml_mul_mat_id` routing, the loader `check_tensor_dims`
+   exception and the buft probes all accept it. Both the type-42 and type-43
+   containers now load on HRX0.
