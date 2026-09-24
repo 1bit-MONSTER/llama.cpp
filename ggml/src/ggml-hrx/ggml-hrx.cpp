@@ -1025,8 +1025,17 @@ static bool supported_unary_f32_tensor(const ggml_tensor * op) {
 }
 
 static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op) {
-    GGML_UNUSED(device);
     if (op == nullptr) {
+        return false;
+    }
+    // the IQ4_NL / IQ4_XS matmul kernels give wrong results (test-backend-ops MUL_MAT, UD GGUF perplexity)
+    if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_MUL_MAT_ID) && op->src[0] != nullptr &&
+        (op->src[0]->type == GGML_TYPE_IQ4_NL || op->src[0]->type == GGML_TYPE_IQ4_XS)) {
+        return false;
+    }
+    // GET_ROWS gives wrong rows for IQ4_XS sources and for batched IQ3_S sources (test-backend-ops GET_ROWS)
+    if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr &&
+        (op->src[0]->type == GGML_TYPE_IQ4_XS || (op->src[0]->type == GGML_TYPE_IQ3_S && op->src[0]->ne[2] * op->src[0]->ne[3] > 1))) {
         return false;
     }
     if (zero_output_elision_supported(op)) {
@@ -1056,7 +1065,16 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         (op->src[0]->type == GGML_TYPE_IQ3_S || op->src[0]->type == GGML_TYPE_IQ4_NL)) {
         return false;
     }
-    return eager_capability_declared(op->op);
+    if (op->op == GGML_OP_NONE) {
+        return true;
+    }
+    // a node already placed in HRX device memory (for example a KV cache view) cannot move to another backend
+    const ggml_tensor * placed = op->view_src != nullptr ? op->view_src : op;
+    if (placed->buffer != nullptr && ggml_backend_buffer_get_type(placed->buffer) == &device_context(device)->buft) {
+        return eager_capability_declared(op->op);
+    }
+    // otherwise claim only nodes the dispatcher can execute, so the rest falls back to another backend instead of failing the graph
+    return eager_capability_declared(op->op) && ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture);
 }
 
 static bool device_supports_buffer_type(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {

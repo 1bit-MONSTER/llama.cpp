@@ -186,6 +186,11 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
         if (covered_nodes[i]) {
             continue;
         }
+        // leaf nodes (ggml_build_forward_expand emits them) have no producer command: their storage is bound from outside
+        if (node->op == GGML_OP_NONE) {
+            covered_nodes[i] = true;
+            continue;
+        }
         if (can_elide_zero_output_node(graph, *node, covered_nodes)) {
             covered_nodes[i] = true;
             continue;
