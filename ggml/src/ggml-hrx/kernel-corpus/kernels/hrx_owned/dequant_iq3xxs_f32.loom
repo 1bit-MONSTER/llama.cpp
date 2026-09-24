@@ -116,4 +116,4 @@ check.case public @ggml_dequant_iq3xxs_f32_coverage {
   check.return
 }
 
-check.benchmark<@ggml_dequant_iq3xxs_f32_coverage> @ggml_dequant_iq3xxs_f32
+check.benchmark<@ggml_dequant_iq3xxs_f32_coverage> @ggml_dequant_iq3xxs_f32_benchmark

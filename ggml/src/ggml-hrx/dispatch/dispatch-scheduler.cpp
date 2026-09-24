@@ -162,6 +162,14 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
         if (covered_nodes[i]) {
             continue;
         }
+        if (node->op == GGML_OP_NONE) {
+            // Leaf/parameter nodes have no producer command: their storage is bound
+            // from outside the graph and is already available to consumers. Treat them
+            // as covered instead of failing the whole graph with an "unsupported HRX
+            // node" diagnostic (ggml_build_forward_expand emits leaves as nodes).
+            covered_nodes[i] = true;
+            continue;
+        }
         DispatchMatch            match;
         const ValueId            next_plan_value(static_cast<int32_t>(graph.values().size() + plan_.transients.size() +
                                                                       plan_.completion_counter_requests.size()));

@@ -577,77 +577,22 @@ static ggml_backend_buffer_type_t device_host_buffer_type(ggml_backend_dev_t dev
     return &device_context(device)->host_buft;
 }
 
-static bool eager_capability_declared(enum ggml_op op) {
-    switch (op) {
-        // The scheduler probes preallocated weight tensors as NONE operations when deciding whether their buffer type is
-        // usable by this backend. Fused ops are declared here so graph-claim can validate the full dispatch pattern.
-        // TODO: split this into placement capability and exact graph execution capability once graph claiming owns the
-        // full decision.
-        case GGML_OP_NONE:
-        case GGML_OP_ADD:
-        case GGML_OP_ARGSORT:
-        case GGML_OP_CLAMP:
-        case GGML_OP_DIV:
-        case GGML_OP_FLASH_ATTN_EXT:
-        case GGML_OP_GET_ROWS:
-        case GGML_OP_GLU:
-        case GGML_OP_MUL:
-        case GGML_OP_MUL_MAT:
-        case GGML_OP_MUL_MAT_ID:
-        case GGML_OP_PERMUTE:
-        case GGML_OP_RESHAPE:
-        case GGML_OP_RMS_NORM:
-        case GGML_OP_ROPE:
-        case GGML_OP_SET_ROWS:
-        case GGML_OP_SOFT_MAX:
-        case GGML_OP_SUM_ROWS:
-        case GGML_OP_VIEW:
-            return true;
-        default:
-            return false;
-    }
-}
-
-// The Loom-JIT kernel corpus only implements a subset of quant types; the graph
-// scheduler fail-closes when it cannot dispatch a node. hrx_supported_weight_type
-// above is the single source of truth for which weight types are usable.
-
-static bool hrx_supported_weight_type(enum ggml_type type) {
-    switch (type) {
-        case GGML_TYPE_F32:
-        case GGML_TYPE_Q4_K:
-        case GGML_TYPE_Q6_K:
-            return true;
-        default:
-            return false;
-    }
-}
-
-// The Loom-JIT backend is a fused-pattern dispatcher: it fail-closes on any graph
-// node it cannot match, and ggml_backend_sched splits graphs per-op. Rather than
-// hand it a fragment it will reject, decide once per model whether all of its
-// weight types are covered by the corpus; if not, delegate the whole graph to the
-// CPU backend (the default HRX buffer is host-visible, so no copies are needed).
+// The Loom-JIT backend is a fused-pattern dispatcher, and ggml_backend_sched
+// assigns nodes per-op. Claim a node only when the dispatcher can actually execute
+// it: either as a standalone dispatch or as the root of a fused pattern rooted at
+// that node. Anything else is left to the CPU backend; the HRX buffer type is
+// host-visible, so the CPU can read HRX tensors without a copy.
 static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op) {
     if (op == nullptr) {
         return false;
     }
     auto * context = device_context(device);
     if (op->op == GGML_OP_NONE) {
-        // Buffer-placement probe for a model weight. Record whether this model
-        // contains a quant type the Loom corpus has no kernel for.
-        if (!hrx_supported_weight_type(op->type)) {
-            context->unsupported_weight_types.store(true, std::memory_order_relaxed);
-        }
+        // Buffer-placement probe for a model weight or graph input. Any quant type
+        // may live in the host-visible HRX buffers.
         return true;
     }
-    if (context->unsupported_weight_types.load(std::memory_order_relaxed)) {
-        // The model mixes in sub-4-bit (or otherwise unsupported) weights. The HRX
-        // dispatcher is fused-pattern based and fail-closes on fragments it cannot
-        // match, so delegate the whole graph to the CPU backend. Results are exact.
-        return false;
-    }
-    return eager_capability_declared(op->op);
+    return ggml::hrx::can_execute_standalone_op_as_graph(op, context->architecture);
 }
 
 static bool device_supports_buffer_type(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {

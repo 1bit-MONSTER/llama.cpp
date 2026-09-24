@@ -4,14 +4,24 @@
 
 #include <cassert>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace ggml::hrx {
 namespace {
 
-static bool tensor_is_external(const ggml_tensor *                                  tensor,
+// A value crosses the imported graph boundary (and therefore needs an external
+// binding) in two cases: it is not produced by any node in the graph (a leaf such
+// as a weight/token id, or an activation produced by another backend), or it is
+// produced here but never consumed here (a graph output that must be downloaded).
+// Only values produced and consumed inside the graph are true transients.
+static bool tensor_is_external(const ggml_tensor *                             tensor,
+                               const std::unordered_set<const ggml_tensor *> & node_outputs,
                                const std::unordered_map<const ggml_tensor *, int> & use_counts) {
     if (tensor->op == GGML_OP_NONE) {
+        return true;
+    }
+    if (node_outputs.find(tensor) == node_outputs.end()) {
         return true;
     }
     const auto found = use_counts.find(tensor);
@@ -117,7 +127,8 @@ const GraphIndex & Graph::index() const {
 }
 
 GraphImportResult import_ggml_graph(const ggml_cgraph & graph) {
-    GraphImportResult                            result;
+    GraphImportResult                        result;
+    std::unordered_set<const ggml_tensor *>  node_outputs;
     std::unordered_map<const ggml_tensor *, int> use_counts;
     for (int i = 0; i < graph.n_nodes; ++i) {
         const ggml_tensor * node = graph.nodes[i];
@@ -125,6 +136,7 @@ GraphImportResult import_ggml_graph(const ggml_cgraph & graph) {
             result.status.log("ggml graph contains a null node");
             return result;
         }
+        node_outputs.insert(node);
         for (const ggml_tensor * source : node->src) {
             if (source != nullptr) {
                 ++use_counts[source];
@@ -133,6 +145,43 @@ GraphImportResult import_ggml_graph(const ggml_cgraph & graph) {
     }
 
     ValueMap & values = result.graph.values();
+
+    // Views share storage with the tensor they were created from, and the scheduler may
+    // hand the HRX dispatcher a graph whose terminal value is such a view (e.g. a
+    // standalone MUL_MAT followed by a RESHAPE that ggml_backend_sched kept on the same
+    // backend). The classification must be consistent for the whole storage: if any
+    // value in a storage is external (bound across the graph boundary), every value in
+    // that storage is external too. Otherwise the kernel would write its result into a
+    // transient arena slot while the consumer reads the host tensor the view aliases.
+    auto storage_root_of = [](const ggml_tensor * tensor) {
+        const ggml_tensor * root = tensor;
+        while (root->view_src != nullptr) {
+            root = root->view_src;
+        }
+        return root;
+    };
+    std::unordered_map<const ggml_tensor *, bool> storage_is_external;
+    auto note_storage = [&](const ggml_tensor * tensor) {
+        const bool          external = tensor_is_external(tensor, node_outputs, use_counts);
+        const ggml_tensor * root     = storage_root_of(tensor);
+        bool &              flag     = storage_is_external[root];
+        flag                         = flag || external;
+    };
+    for (int i = 0; i < graph.n_nodes; ++i) {
+        const ggml_tensor * node = graph.nodes[i];
+        note_storage(node);
+        for (const ggml_tensor * source : node->src) {
+            if (source != nullptr) {
+                note_storage(source);
+            }
+        }
+    }
+    auto value_kind = [&](const ggml_tensor * tensor) {
+        const bool external =
+            tensor_is_external(tensor, node_outputs, use_counts) || storage_is_external[storage_root_of(tensor)];
+        return external ? ValueKind::External : ValueKind::Transient;
+    };
+
     for (int i = 0; i < graph.n_nodes; ++i) {
         const ggml_tensor *  node = graph.nodes[i];
         std::vector<ValueId> inputs;
@@ -140,11 +189,10 @@ GraphImportResult import_ggml_graph(const ggml_cgraph & graph) {
             if (source == nullptr) {
                 continue;
             }
-            const ValueKind kind = tensor_is_external(source, use_counts) ? ValueKind::External : ValueKind::Transient;
-            inputs.push_back(values.get_or_add_tensor_value(source, kind));
+            inputs.push_back(values.get_or_add_tensor_value(source, value_kind(source)));
         }
 
-        const ValueKind output_kind = tensor_is_external(node, use_counts) ? ValueKind::External : ValueKind::Transient;
+        const ValueKind output_kind = value_kind(node);
         const ValueId   output      = values.get_or_add_tensor_value(node, output_kind);
         GraphNode &     graph_node  = result.graph.add_node(node->op, output, std::move(inputs));
         graph_node.params           = import_op_params(*node);

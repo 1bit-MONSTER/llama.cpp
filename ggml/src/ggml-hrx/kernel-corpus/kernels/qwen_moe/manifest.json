@@ -204,14 +204,14 @@
     },
     {
       "path": "../hrx_owned/dequant_iq3xxs_f32.loom",
-      "sha256": "48818ae68004d8c0930f7af5b140e0532e2b783ae73b3c51dcdb3243d5b32559",
-      "size": 8143,
+      "sha256": "ff44f36666119fe986d4139284f48dbed0d5b317517845aeab16295dc2cd8c14",
+      "size": 8153,
       "owner": "ggml-hrx"
     },
     {
       "path": "../hrx_owned/mul_mat_vec_iq3xxs_f32.loom",
-      "sha256": "ec8f17d634aa737ff16ab4262e65e0122487f5450eb374121f2f2fd8ee5eab1d",
-      "size": 7706,
+      "sha256": "5573391a0232c25635f611b222b5ebf16fb788b291e4bf1a701b9da9a5d912e0",
+      "size": 7716,
       "owner": "ggml-hrx"
     }
   ],
