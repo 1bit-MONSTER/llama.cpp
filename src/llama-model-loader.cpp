@@ -876,7 +876,7 @@ const struct ggml_tensor * llama_model_loader::check_tensor_dims(const std::stri
         // [ne0 = in, ne1 = out] with n_tiles = (out/32)*(in/256). Skip the
         // shape comparison for Q4NX tensors; the graph builder derives the
         // logical dims from the op (ggml_mul_mat_q4nx) using src1->ne[0].
-        if (cur->type != GGML_TYPE_Q4NX) {
+        if (cur->type != GGML_TYPE_Q4NX && cur->type != GGML_TYPE_Q4NX_C43) {
             for (size_t i = 0; i < GGML_MAX_DIMS; ++i) {
                 if ((i < ne.size() && ne[i] != cur->ne[i]) || (i >= ne.size() && cur->ne[i] != 1)) {
                     is_ok = false;
@@ -930,7 +930,7 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 // count divide evenly: use k = 256*n_tiles (n_tc = n_tiles,
                 // rows = 32) so any tile count passes the geometry asserts.
                 int64_t k = w->ne[0];
-                if (w->type == GGML_TYPE_Q4NX) {
+                if (w->type == GGML_TYPE_Q4NX || w->type == GGML_TYPE_Q4NX_C43) {
                     k = 256 * w->ne[1];
                 }
                 ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, k, 512, w->ne[2], w->ne[3]);
@@ -943,7 +943,7 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 // Q4NX experts are 3-D [8192, tpe, n_expert]; use
                 // k = 256*tpe so n_tc = tpe and the assert holds for any tpe.
                 int64_t k = w->ne[0];
-                if (w->type == GGML_TYPE_Q4NX) {
+                if (w->type == GGML_TYPE_Q4NX || w->type == GGML_TYPE_Q4NX_C43) {
                     k = 256 * w->ne[1];
                 }
                 ggml_tensor * b = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, n_expert_used, 512);

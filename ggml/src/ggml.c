@@ -667,6 +667,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_q4nx,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q4nx_ref,
     },
+    [GGML_TYPE_Q4NX_C43] = {
+        .type_name                = "q4nx_c43",
+        .blck_size                = QK4NX,
+        .type_size                = sizeof(block_q4nx),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q4nx,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q4nx_ref,
+    },
     [GGML_TYPE_Q4_0] = {
         .type_name                = "q4_0",
         .blck_size                = QK4_0,
@@ -3241,7 +3249,7 @@ struct ggml_tensor * ggml_mul_mat(
     // 1bit-MONSTER: a Q4NX weight is stored tile-major as [8192, n_tiles]
     // (its ne[0] is the tile block size, not the logical k-dim), so the
     // standard ne[0] equality check does not apply; route to the Q4NX op.
-    if (a->type == GGML_TYPE_Q4NX) {
+    if (a->type == GGML_TYPE_Q4NX || a->type == GGML_TYPE_Q4NX_C43) {
         return ggml_mul_mat_q4nx(ctx, a, b);
     }
     GGML_ASSERT(ggml_can_mul_mat(a, b));
@@ -3292,7 +3300,7 @@ struct ggml_tensor * ggml_mul_mat_q4nx(
     // [in, cols] where in = b->ne[0] (multiple of 256). The dispatch
     // dequantizes the FULL weight (multi column-tile) in one pass and runs
     // the f32 matmul. result F32 [n_tiles/n_tc*32, cols].
-    GGML_ASSERT(a->type == GGML_TYPE_Q4NX);
+    GGML_ASSERT(a->type == GGML_TYPE_Q4NX || a->type == GGML_TYPE_Q4NX_C43);
     GGML_ASSERT(a->ne[0] == GGML_Q4NX_TILE_COLS * GGML_Q4NX_TILE_ROWS); // 8192
     GGML_ASSERT(a->ne[1] >= 1);
     GGML_ASSERT(b->type == GGML_TYPE_F32);
@@ -3332,7 +3340,7 @@ struct ggml_tensor * ggml_mul_mat_id(
     // [8192, tiles_per_expert, n_expert]; as->ne[0] is the tile block size
     // (8192), not the logical k-dim, so the ne[0] equality check does not
     // apply; route to the Q4NX-aware ID op.
-    if (as->type == GGML_TYPE_Q4NX) {
+    if (as->type == GGML_TYPE_Q4NX || as->type == GGML_TYPE_Q4NX_C43) {
         return ggml_mul_mat_id_q4nx(ctx, as, b, ids);
     }
 
@@ -3361,7 +3369,7 @@ struct ggml_tensor * ggml_mul_mat_id_q4nx(
     // per-token expert selection [nselected, ntokens]. The dispatch
     // dequantizes the selected experts and runs the f32 matmul. Result F32
     // [tpe/n_tc*32, nselected, ntokens].
-    GGML_ASSERT(as->type == GGML_TYPE_Q4NX);
+    GGML_ASSERT(as->type == GGML_TYPE_Q4NX || as->type == GGML_TYPE_Q4NX_C43);
     GGML_ASSERT(as->ne[0] == GGML_Q4NX_TILE_COLS * GGML_Q4NX_TILE_ROWS); // 8192
     GGML_ASSERT(b->type == GGML_TYPE_F32);
     GGML_ASSERT(b->ne[0] % GGML_Q4NX_TILE_COLS == 0);

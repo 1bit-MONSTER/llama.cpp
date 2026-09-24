@@ -8556,7 +8556,8 @@ static bool ggml_backend_hrx_supports_mul_mat_q4nx(
     if (!src0 || !src1 || op->view_src != nullptr) {
         return false;
     }
-    if (src0->type != GGML_TYPE_Q4NX || src1->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+    if ((src0->type != GGML_TYPE_Q4NX && src0->type != GGML_TYPE_Q4NX_C43) ||
+        src1->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
         return false;
     }
     if (src0->ne[0] != GGML_Q4NX_TILE_COLS * GGML_Q4NX_TILE_ROWS) {
@@ -8640,7 +8641,8 @@ static bool ggml_backend_hrx_supports_mul_mat_id_q4nx(
     if (!src0 || !src1 || !src2 || op->view_src != nullptr) {
         return false;
     }
-    if (src0->type != GGML_TYPE_Q4NX || src1->type != GGML_TYPE_F32 ||
+    if ((src0->type != GGML_TYPE_Q4NX && src0->type != GGML_TYPE_Q4NX_C43) ||
+        src1->type != GGML_TYPE_F32 ||
         src2->type != GGML_TYPE_I32 || op->type != GGML_TYPE_F32) {
         return false;
     }

@@ -431,7 +431,8 @@ extern "C" {
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q4NX    = 42, // 1bit-MONSTER Q4NX: 5120-byte tile = [32 BF16 rows x 256 cols]
                                 // (256 BF16 scales + 256 BF16 zeros + 4096 B packed int4)
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_Q4NX_C43 = 43, // 1bit-MONSTER Q4NX variant C43 (identical 5120-byte tile layout)
+        GGML_TYPE_COUNT   = 44,
     };
 
     // Q4NX tile geometry (1bit-MONSTER engine format, engine/npu/dequant_q4nx.cpp)

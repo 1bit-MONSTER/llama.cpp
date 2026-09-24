@@ -8532,7 +8532,7 @@ static bool ggml_backend_hrx2_supports_mul_mat_q4nx_route(
     const ggml_tensor * src1 = op->src[1];
     if (op->op != GGML_OP_MUL_MAT_Q4NX ||
         !src0 || !src1 || op->view_src != nullptr ||
-        src0->type != GGML_TYPE_Q4NX ||
+        (src0->type != GGML_TYPE_Q4NX && src0->type != GGML_TYPE_Q4NX_C43) ||
         src1->type != GGML_TYPE_F32 ||
         op->type != GGML_TYPE_F32) {
         return false;
@@ -9420,7 +9420,7 @@ static bool ggml_backend_hrx2_supports_mul_mat_id_q4nx_route(
     if (op->op != GGML_OP_MUL_MAT_ID_Q4NX) fail("op");
     if (!src0 || !src1 || !src2) fail("nullsrc");
     if (op->view_src != nullptr) fail("view_src");
-    if (src0->type != GGML_TYPE_Q4NX) fail("src0type");
+    if (src0->type != GGML_TYPE_Q4NX && src0->type != GGML_TYPE_Q4NX_C43) fail("src0type");
     if (src1->type != GGML_TYPE_F32) fail("src1type");
     if (src2->type != GGML_TYPE_I32) fail("src2type");
     if (op->type != GGML_TYPE_F32) fail("optype");
