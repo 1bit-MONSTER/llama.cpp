@@ -275,7 +275,7 @@ private:
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
     // [1bit] exported regions of this cache's buffers, owner side (llama-kv-share.cpp)
-    std::vector<llama_kv_shared_region> shared_;
+    std::vector<std::vector<llama_kv_shared_region>> shared_; // per buffer: its chunks
     ggml_backend_buffer_t share_alloc(ggml_context * ctx, ggml_backend_buffer_type_t buft);
 
     // ggml contexts for the KV cache along with the allocated backend buffers:

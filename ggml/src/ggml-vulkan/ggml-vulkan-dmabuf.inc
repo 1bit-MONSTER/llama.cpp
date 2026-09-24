@@ -22,7 +22,7 @@ static ggml_backend_buffer_t ggml_backend_vk_dev_buffer_from_dmabuf(ggml_backend
     ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
     vk_device device = ggml_vk_get_device(ctx->device);
     const off_t fd_size = lseek(fd, 0, SEEK_END);
-    if (!device->external_memory_dma_buf || fd_size <= 0 || offset + size > (size_t) fd_size) {
+    if (!device->external_memory_dma_buf || fd_size <= 0 || offset + size > (size_t) fd_size || size > device->max_buffer_size) {
         return nullptr;
     }
 
