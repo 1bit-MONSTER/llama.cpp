@@ -1113,6 +1113,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider quantize_q8_1_x4_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q4_k_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_iq3_xxs_provider;
+    ggml_backend_hrx_op_provider mul_mat_vec_iq3_s_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q4_k_q8_1_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q5_k_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q5_k_wg128_provider;
@@ -1316,6 +1317,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->quantize_q8_1_x4_provider.reset();
     device_context->mul_mat_vec_q4_k_provider.reset();
     device_context->mul_mat_vec_iq3_xxs_provider.reset();
+    device_context->mul_mat_vec_iq3_s_provider.reset();
     device_context->mul_mat_vec_q4_k_q8_1_provider.reset();
     device_context->mul_mat_vec_q5_k_provider.reset();
     device_context->mul_mat_vec_q5_k_wg128_provider.reset();
@@ -2882,6 +2884,8 @@ static bool ggml_backend_hrx_load_mul_mat_vec_providers(ggml_backend_hrx_device_
         device_context, "hrx_mul_mat_vec_q4_k_f32", &device_context->mul_mat_vec_q4_k_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_iq3_xxs_f32", &device_context->mul_mat_vec_iq3_xxs_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_mul_mat_vec_iq3_s_f32", &device_context->mul_mat_vec_iq3_s_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q4_k_q8_1_f32", &device_context->mul_mat_vec_q4_k_q8_1_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
@@ -4455,6 +4459,8 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_mul_mat_vec_provide
             return &device_context->mul_mat_vec_q4_k_provider;
         case GGML_TYPE_IQ3_XXS:
             return &device_context->mul_mat_vec_iq3_xxs_provider;
+        case GGML_TYPE_IQ3_S:
+            return &device_context->mul_mat_vec_iq3_s_provider;
         case GGML_TYPE_Q5_K:
             return &device_context->mul_mat_vec_q5_k_provider;
         case GGML_TYPE_Q6_K:

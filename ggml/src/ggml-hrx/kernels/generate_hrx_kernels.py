@@ -1192,6 +1192,15 @@ KERNELS = [
         "workgroup_size": (256, 1, 1),
     },
     {
+        "name": "hrx_mul_mat_vec_iq3_s_f32",
+        "source": "mul_mat_vec_iq3_s.hip.cpp",
+        "format": None,
+        "binding_count": 3,
+        "parameter_count": 6,
+        "constants_size": 24,
+        "workgroup_size": (256, 1, 1),
+    },
+    {
         "name": "hrx_quantize_q8_1_f32",
         "source": "quantize_q8_1.hip.cpp",
         "format": None,
