@@ -1,3 +1,6 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Dequantize GGML IQ3_XXS weight blocks to F32 (see ggml dequantize_row_iq3_xxs).
 //
 // block_iq3_xxs = 98 bytes / 256 values: f16 d, qs[64] grid indices,

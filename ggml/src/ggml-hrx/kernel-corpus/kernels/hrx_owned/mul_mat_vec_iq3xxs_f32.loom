@@ -1,3 +1,6 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // IQ3_XXS matrix-vector product: out[row] = dot(weight[row,:], activation[:]).
 //
 // One workitem per output row; each row loops over its 256-value IQ3_XXS blocks

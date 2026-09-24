@@ -1,3 +1,6 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
 #include "ggml-hrx.h"
 
 #include "backend-buffer-binding.h"
