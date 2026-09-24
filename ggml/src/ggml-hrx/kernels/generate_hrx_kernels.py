@@ -974,6 +974,15 @@ KERNELS = [
         "workgroup_size": (256, 1, 1),
     },
     {
+        "name": "hrx_q4nx_dequant_f32",
+        "source": "q4nx_dequant_f32.hip.cpp",
+        "format": None,
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constants_size": 24,
+        "workgroup_size": (256, 1, 1),
+    },
+    {
         "name": "hrx_mul_mat_id_q4_k_wg64_f32",
         "source": "mul_mat_id_q4_k.hip.cpp",
         "format": None,

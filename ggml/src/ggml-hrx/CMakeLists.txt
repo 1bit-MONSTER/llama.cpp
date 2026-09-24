@@ -169,6 +169,7 @@ set(GGML_HRX_WAVE32_KERNEL_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q5_k.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_sum8_f32.hip.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/kernels/q4nx_dequant_f32.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/quantize_q8_1.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/rms_norm.hip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/rms_norm_mul_f32.hip.cpp"
