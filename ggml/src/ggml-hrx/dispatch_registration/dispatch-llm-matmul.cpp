@@ -164,6 +164,16 @@ struct LlmDenseMatmulMatch {
     }
 };
 
+// The HRX runtime charges every dispatch against a fixed 262144-entry kernarg ring and
+// aborts the submission (leaving the device stream unusable) when it does not fit.
+// Measured on gfx1151 the graph-replay footprint of the dense wmma route grows with
+// output_size x token_count: with input_size 1024 a 16384x64 tile already needs 284957
+// entries, 8192x512 needs 402833, while everything up to 4096x512 stays inside the ring.
+// The route exists for LLM projections (hidden/ffn sizes), not for the vocab-sized LM
+// head, so cap the claim inside the measured-safe region.
+static constexpr int64_t kLlmDenseMaxOutputSize = 4096;
+static constexpr int64_t kLlmDenseMaxTokenCount = 256;
+
 static LlmDenseMatmulMatch match_llm_dense_matmul(const Graph &       graph,
                                                   const GraphNode *   node,
                                                   LlmDenseMatmulRoute route) {
@@ -186,7 +196,8 @@ static LlmDenseMatmulMatch match_llm_dense_matmul(const Graph &       graph,
     const int64_t token_count = input->ne[1];
     if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
         !is_llm_prefill_query_length(kActiveLlmMoeDispatchProfile, token_count) ||
-        !is_supported_dense_input_size(input_size) || !is_supported_dense_output_size(output_size)) {
+        !is_supported_dense_input_size(input_size) || !is_supported_dense_output_size(output_size) ||
+        output_size > kLlmDenseMaxOutputSize || token_count > kLlmDenseMaxTokenCount) {
         return {};
     }
 

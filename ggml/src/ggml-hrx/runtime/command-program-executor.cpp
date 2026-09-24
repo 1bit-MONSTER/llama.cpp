@@ -330,12 +330,32 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         const auto             found_access = access_by_value.find(binding.value.value);
         const GraphValueAccess access =
             found_access != access_by_value.end() ? found_access->second : GraphValueAccess{};
-        // Weights are staged through the per-execution host staging path rather than
-        // cached as resident device buffers. A prepared command program is reused for
-        // every node of the same shape (e.g. one program serves all layers of a model),
-        // and only host staging is re-bound to the live tensors on each execution. A
-        // resident weight buffer captured at preparation time would therefore keep
-        // serving the first layer's weights for the whole model.
+        if (binding.weight && access.read && !access.write) {
+            HostWeightSource source;
+            source.host_data  = binding.host_data;
+            source.identity   = binding.identity;
+            source.generation = binding.generation;
+            source.capacity   = binding.capacity;
+            source.offset     = binding.offset;
+            source.length     = binding.length;
+            HostWeightAcquireResult resident =
+                context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source);
+            if (!resident.valid()) {
+                status.log("materialize host weight value %d failed", binding.value.value);
+                status.append(resident.status);
+                materialized.push_back(binding);
+                continue;
+            }
+            CommandProgramBinding device_binding = binding;
+            device_binding.buffer                = resident.lease.buffer();
+            device_binding.host_data             = nullptr;
+            device_binding.offset                = 0;
+            device_binding.capacity              = binding.length;
+            materialized.push_back(device_binding);
+            prepared.resident_host_weights.push_back(std::move(resident.lease));
+            continue;
+        }
+
         HostStagingBuffer staging;
         Status            allocation_status = allocate_host_staging_buffer(context.device, binding.length, staging);
         if (!allocation_status.success()) {

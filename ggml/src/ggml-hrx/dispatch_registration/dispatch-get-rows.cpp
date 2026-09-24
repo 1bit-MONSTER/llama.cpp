@@ -82,6 +82,10 @@ static bool supports_get_rows_f32_dispatch(const Graph & graph, const GraphNode 
     const uint64_t width       = static_cast<uint64_t>(output->ne[0]);
     const uint64_t output_rows = static_cast<uint64_t>(output->ne[1]);
     const uint64_t source_rows = static_cast<uint64_t>(source->ne[1]);
+    if (output_rows == 0 || source_rows == 0) {
+        // Degenerate gather (e.g. an empty id list during decode): nothing to dispatch.
+        return false;
+    }
     if (width < kGetRowsMinWidth || width > kGetRowsMaxWidth) {
         return false;
     }

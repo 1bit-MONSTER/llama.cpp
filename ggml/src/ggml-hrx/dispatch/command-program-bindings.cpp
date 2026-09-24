@@ -42,9 +42,9 @@ CommandProgramBindings CommandProgramBindings::from_bindings(std::vector<Command
         if (binding.buffer == nullptr && binding.host_data == nullptr) {
             result.status.log("external value %d has a null binding", binding.value.value);
         }
-        if (binding.length == 0) {
-            result.status.log("external value %d has an empty binding", binding.value.value);
-        }
+        // A zero-byte binding is not an error: ggml legitimately produces empty tensors
+        // (e.g. a GET_ROWS over an empty id list during decode), and a dispatch that only
+        // touches them is a no-op.
     }
     return result;
 }
