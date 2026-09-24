@@ -4,6 +4,9 @@
   "files": [
     {
       "path": "gather_add_f32.loom"
+    },
+    {
+      "path": "mul_mat_vec_iq3xxs_f32.loom"
     }
   ],
   "exports": [
@@ -56,6 +59,61 @@
         "mode": "direct",
         "primary_sources": [
           "gather_add_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": [],
+      "family": "hrx"
+    },
+    {
+      "name": "ggml_mul_mat_vec_iq3xxs_f32",
+      "symbol": "ggml_mul_mat_vec_iq3xxs_f32",
+      "source": "mul_mat_vec_iq3xxs_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        },
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        },
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "activation",
+        "weight",
+        "tables",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "mul_mat_vec_iq3xxs_f32.loom"
         ],
         "library_sources": []
       },
