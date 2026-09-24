@@ -456,6 +456,14 @@ struct ggml_backend_hrx_mul_mat_vec_constants {
 
 static_assert(sizeof(ggml_backend_hrx_mul_mat_vec_constants) == 24);
 
+struct ggml_backend_hrx_mul_mat_q4nx_constants {
+    int64_t k;
+    int64_t rows;
+    int64_t cols;
+    int64_t n_tile_cols;
+};
+static_assert(sizeof(ggml_backend_hrx_mul_mat_q4nx_constants) == 32);
+
 struct ggml_backend_hrx_mul_mat_vec_bf16_set_rows_constants {
     int64_t k;
     int64_t rows;
@@ -1026,6 +1034,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider scale_get_rows_f32_nr1_x4_provider;
     ggml_backend_hrx_op_provider get_rows_q5_k_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_bf16_provider;
+    ggml_backend_hrx_op_provider mul_mat_q4nx_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_bf16_wg128_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_bf16_wg64_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_bf16_cols1_provider;
@@ -2985,6 +2994,11 @@ static bool ggml_backend_hrx_load_mul_mat_vec_providers(ggml_backend_hrx_device_
         device_context, "hrx_mul_mat_vec_q8_0_add_q8_1_x4_mmq128x32_wg256_f32",
         &device_context->mul_mat_vec_q8_0_add_q8_1_x4_mmq128x32_wg256_provider) || ok;
     return ok;
+}
+
+static bool ggml_backend_hrx_load_mul_mat_q4nx_provider(ggml_backend_hrx_device_context * device_context) {
+    return ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_mul_mat_q4nx_fused_f32", &device_context->mul_mat_q4nx_provider);
 }
 
 static bool ggml_backend_hrx_load_mul_mat_id_providers(ggml_backend_hrx_device_context * device_context) {
@@ -8513,6 +8527,89 @@ static ggml_status ggml_backend_hrx_dispatch_scale_get_rows_f32_nr1(
     return GGML_STATUS_SUCCESS;
 }
 
+static bool ggml_backend_hrx_supports_mul_mat_q4nx(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * op) {
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    if (!src0 || !src1 || op->view_src != nullptr) {
+        return false;
+    }
+    if (src0->type != GGML_TYPE_Q4NX || src1->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (src0->ne[0] != GGML_Q4NX_TILE_COLS * GGML_Q4NX_TILE_ROWS) {
+        return false;
+    }
+    const int64_t in = src1->ne[0];
+    if (in <= 0 || in % GGML_Q4NX_TILE_COLS != 0) {
+        return false;
+    }
+    const int64_t n_tc    = in / GGML_Q4NX_TILE_COLS;
+    const int64_t n_tiles = src0->ne[1];
+    if (n_tc <= 0 || n_tiles <= 0 || n_tiles % n_tc != 0) {
+        return false;
+    }
+    const int64_t rows = (n_tiles / n_tc) * GGML_Q4NX_TILE_ROWS;
+    const int64_t cols = src1->ne[1];
+    return op->ne[0] == rows &&
+           op->ne[1] == cols &&
+           src0->ne[2] == 1 && src0->ne[3] == 1 &&
+           src1->ne[2] == 1 && src1->ne[3] == 1 &&
+           op->ne[2] == 1 && op->ne[3] == 1 &&
+           ggml_is_contiguous(src0) &&
+           ggml_is_contiguous(src1) &&
+           ggml_is_contiguous(op) &&
+           rows > 0 && cols > 0 &&
+           ggml_backend_hrx_provider_available(device_context->mul_mat_q4nx_provider);
+}
+
+static ggml_status ggml_backend_hrx_dispatch_mul_mat_q4nx(
+        ggml_backend_hrx_context * context,
+        const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    hrx_buffer_ref_t bindings[3] = {};
+    if (!ggml_backend_hrx_tensor_buffer_ref(src0, &bindings[0]) ||
+        !ggml_backend_hrx_tensor_buffer_ref(src1, &bindings[1]) ||
+        !ggml_backend_hrx_tensor_buffer_ref(dst, &bindings[2])) {
+        GGML_LOG_ERROR("%s: MUL_MAT_Q4NX tensor is not backed by a HRX buffer\n", __func__);
+        return GGML_STATUS_FAILED;
+    }
+
+    const int64_t k     = src1->ne[0];
+    const int64_t n_tc  = k / GGML_Q4NX_TILE_COLS;
+    const int64_t rows  = (src0->ne[1] / n_tc) * GGML_Q4NX_TILE_ROWS;
+    ggml_backend_hrx_mul_mat_q4nx_constants constants = {
+        /* .k           = */ k,
+        /* .rows        = */ rows,
+        /* .cols        = */ src1->ne[1],
+        /* .n_tile_cols = */ n_tc,
+    };
+
+    const ggml_backend_hrx_op_provider * provider = &context->device_context->mul_mat_q4nx_provider;
+    if (!ggml_backend_hrx_provider_available(*provider)) {
+        GGML_LOG_ERROR("%s: MUL_MAT_Q4NX provider is unavailable\n", __func__);
+        return GGML_STATUS_FAILED;
+    }
+
+    const uint32_t workgroup_size = provider->export_info.workgroup_size[0] ?
+        provider->export_info.workgroup_size[0] : 256;
+    hrx_dispatch_config_t config = {
+        /* .workgroup_count = */ { static_cast<uint32_t>(constants.rows), static_cast<uint32_t>(constants.cols), 1 },
+        /* .workgroup_size  = */ { workgroup_size, 1, 1 },
+        /* .subgroup_size   = */ 0,
+    };
+
+    if (!GGML_HRX_CHECK(hrx_stream_dispatch(
+            context->stream, provider->executable, provider->export_ordinal, &config,
+            &constants, sizeof(constants), bindings, 3, HRX_DISPATCH_FLAG_NONE))) {
+        return GGML_STATUS_FAILED;
+    }
+
+    return GGML_STATUS_SUCCESS;
+}
+
 static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec(
         ggml_backend_hrx_context * context,
         const ggml_tensor * dst) {
@@ -12618,6 +12715,15 @@ static ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, ggml_c
                     return GGML_STATUS_FAILED;
                 }
                 break;
+            case GGML_OP_MUL_MAT_Q4NX:
+                if (!ggml_backend_hrx_supports_mul_mat_q4nx(context->device_context, node)) {
+                    GGML_LOG_ERROR("%s: MUL_MAT_Q4NX shape/type/layout is unsupported\n", __func__);
+                    return GGML_STATUS_FAILED;
+                }
+                if (ggml_backend_hrx_dispatch_mul_mat_q4nx(context, node) != GGML_STATUS_SUCCESS) {
+                    return GGML_STATUS_FAILED;
+                }
+                break;
             case GGML_OP_MUL_MAT_ID:
                 if (!ggml_backend_hrx_supports_mul_mat_id_q4_k(context->device_context, node)) {
                     GGML_LOG_ERROR("%s: MUL_MAT_ID shape/type/layout is unsupported\n", __func__);
@@ -12760,6 +12866,8 @@ static bool ggml_backend_hrx_device_supports_op(ggml_backend_dev_t dev, const gg
             return ggml_backend_hrx_supports_get_rows_f32(ggml_backend_hrx_get_device_context(dev), op);
         case GGML_OP_MUL_MAT:
             return ggml_backend_hrx_supports_mul_mat_vec(ggml_backend_hrx_get_device_context(dev), op);
+        case GGML_OP_MUL_MAT_Q4NX:
+            return ggml_backend_hrx_supports_mul_mat_q4nx(ggml_backend_hrx_get_device_context(dev), op);
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_backend_hrx_supports_flash_attn_ext_f32_decode(ggml_backend_hrx_get_device_context(dev), op);
         case GGML_OP_CONCAT:
@@ -12918,6 +13026,7 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> ggml_backend_hrx_create_reg
         (void) ggml_backend_hrx_load_get_rows_f32_provider(device_context.get());
         (void) ggml_backend_hrx_load_get_rows_q5_k_provider(device_context.get());
         (void) ggml_backend_hrx_load_mul_mat_vec_providers(device_context.get());
+        (void) ggml_backend_hrx_load_mul_mat_q4nx_provider(device_context.get());
         (void) ggml_backend_hrx_load_mul_mat_id_providers(device_context.get());
         (void) ggml_backend_hrx_load_flash_attn_ext_providers(device_context.get());
         (void) ggml_backend_hrx_load_concat_f32_provider(device_context.get());
