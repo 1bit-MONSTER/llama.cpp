@@ -760,6 +760,7 @@ struct vk_device_struct {
     uint64_t suballocation_block_size;
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
+    bool external_memory_dma_buf {};   // [1bit] VK_KHR_external_memory_fd + VK_EXT_external_memory_dma_buf (ggml-vulkan-dmabuf.inc)
     bool fp16;
     bool bf16;
     bool pipeline_robustness;
@@ -6101,6 +6102,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->memory_priority = true;
             } else if (strcmp("VK_EXT_external_memory_host", properties.extensionName) == 0) {
                 device->external_memory_host = true;
+            } else if (strcmp("VK_EXT_external_memory_dma_buf", properties.extensionName) == 0) {
+                device->external_memory_dma_buf = true;
 #if defined(VK_EXT_shader_64bit_indexing)
             } else if (strcmp("VK_EXT_shader_64bit_indexing", properties.extensionName) == 0) {
                 device->shader_64b_indexing = true;
@@ -6449,6 +6452,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         if (device->external_memory_host) {
             device_extensions.push_back("VK_EXT_external_memory_host");
+        }
+
+        if (device->external_memory_dma_buf) {
+            device_extensions.push_back("VK_KHR_external_memory_fd");
+            device_extensions.push_back("VK_EXT_external_memory_dma_buf");
         }
 
 #if defined(VK_EXT_shader_64bit_indexing)
@@ -18436,11 +18444,22 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
     return devices[device];
 }
 
+// [1bit] zero-copy sharing with another API over dma-buf
+#include "ggml-vulkan-dmabuf.inc"
+
+static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    UNUSED(reg);
+    if (strcmp(name, "ggml_backend_dev_buffer_from_dmabuf") == 0) {
+        return (void *) ggml_backend_vk_dev_buffer_from_dmabuf;
+    }
+    return NULL;
+}
+
 static const struct ggml_backend_reg_i ggml_backend_vk_reg_i = {
     /* .get_name         = */ ggml_backend_vk_reg_get_name,
     /* .get_device_count = */ ggml_backend_vk_reg_get_device_count,
     /* .get_device       = */ ggml_backend_vk_reg_get_device,
-    /* .get_proc_address = */ NULL,
+    /* .get_proc_address = */ ggml_backend_vk_reg_get_proc_address,
 };
 
 ggml_backend_reg_t ggml_backend_vk_reg() {

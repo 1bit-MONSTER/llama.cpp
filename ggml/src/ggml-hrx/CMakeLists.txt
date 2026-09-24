@@ -255,6 +255,8 @@ ggml_add_backend_library(ggml-hrx
     graph/op-params.cpp
     graph/op-params.h
     ggml-hrx.cpp
+    ggml-hrx-dmabuf.cpp
+    ggml-hrx-dmabuf.h
     loom-jit.cpp
     graph/value-map.cpp
     graph/value-map.h

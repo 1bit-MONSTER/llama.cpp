@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "server-prefill.h"
 #include "server-chat.h"
 #include "server-common.h"
 #include "server-http.h"
@@ -931,6 +932,8 @@ private:
 
     llama_context * ctx_tgt = nullptr;
 
+    server_prefill_device prefill_dev; // [1bit] ONEBIT_PREFILL_DEVICE (server-prefill.h)
+
     server_batch batch;
 
     llama_model   * model_dft = nullptr;
@@ -976,6 +979,8 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+        prefill_dev.reset();
+
         spec.reset();
         spec_init.reset();
 
@@ -1197,6 +1202,10 @@ private:
         if (ctx_tgt == nullptr) {
             SRV_ERR("failed to create_context with model '%s'\n", params_base.model.path.c_str());
             return false;
+        }
+
+        if (const char * pf = getenv("ONEBIT_PREFILL_DEVICE"); pf != nullptr && *pf != '\0') {
+            prefill_dev.load(pf, params_base, ctx_tgt);
         }
 
         vocab = llama_model_get_vocab(model_tgt);
@@ -2856,6 +2865,11 @@ private:
                 // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
 
                 batch_view = batch.get_view(off, n_tokens);
+                // [1bit] the prompt prefix runs on the prefill device, the rest of the view on ctx_tgt
+                if (const int32_t k = spec || mctx != nullptr ? 0 : prefill_dev.prefill(ctx_tgt, batch_view); k > 0) {
+                    off_next = off + k;
+                    continue;
+                }
                 bool ok = decode(n_batch, off, batch_view);
 #ifdef DEBUG_TIMINGS
                 llama_synchronize(ctx_tgt);

@@ -4,6 +4,7 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-kv-share.h"
 
 #include <unordered_map>
 #include <vector>
@@ -115,6 +116,10 @@ public:
         const  layer_share_cb & share);
 
     ~llama_kv_cache() = default;
+
+    // [1bit] zero-copy KV sharing (llama-kv-share.cpp)
+    bool share_from(const llama_kv_cache & src);
+    bool cells_copy_from(const llama_kv_cache & src);
 
     //
     // llama_memory_i
@@ -268,6 +273,10 @@ private:
 
     // this is the SWA type of the cache - not to be confused with the model SWA type
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
+
+    // [1bit] exported regions of this cache's buffers, owner side (llama-kv-share.cpp)
+    std::vector<llama_kv_shared_region> shared_;
+    ggml_backend_buffer_t share_alloc(ggml_context * ctx, ggml_backend_buffer_type_t buft);
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;

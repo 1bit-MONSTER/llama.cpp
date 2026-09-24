@@ -1,4 +1,5 @@
 #include "ggml-hrx.h"
+#include "ggml-hrx-dmabuf.h"
 
 #include "backend-buffer-binding.h"
 #include "backend-context.h"
@@ -1115,7 +1116,18 @@ static ggml_backend_dev_t registry_device(ggml_backend_reg_t registry, size_t in
     return &context->devices[index];
 }
 
+// [1bit] zero-copy sharing: proc "ggml_backend_buffer_export_dmabuf" (ggml-hrx-dmabuf.cpp)
+static bool ggml_backend_hrx_buffer_export_dmabuf(ggml_backend_buffer_t buffer, int * fd, size_t * offset) {
+    void * device_ptr = nullptr;
+    return buffer != nullptr && buffer->iface.get_base == ggml_backend_hrx_buffer_base &&
+           HRX_CHECK(hrx_buffer_get_device_ptr(buffer_context(buffer)->buffer, &device_ptr)) &&
+           ggml::hrx::export_dmabuf(device_ptr, buffer->size, fd, offset);
+}
+
 static void * registry_proc(ggml_backend_reg_t registry, const char * name) {
+    if (std::strcmp(name, "ggml_backend_buffer_export_dmabuf") == 0) {
+        return (void *) ggml_backend_hrx_buffer_export_dmabuf;
+    }
     GGML_UNUSED(registry);
     GGML_UNUSED(name);
     return nullptr;

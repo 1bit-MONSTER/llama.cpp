@@ -16,6 +16,17 @@ LLAMA_API struct ggml_cgraph * llama_graph_reserve(
         uint32_t n_seqs,
         uint32_t n_outputs);
 
+// [1bit] Zero-copy KV sharing between two contexts of one model on two devices of the same GPU (llama-kv-share.cpp).
+// The next llama_init_from_model on this thread allocates its KV cache as one exportable region (dma-buf) with a fixed layout.
+LLAMA_API void llama_kv_share_next(bool enabled);
+
+// [1bit] Put the KV tensors of dst into the region of src (created after llama_kv_share_next), mapped with no copy.
+// Needs the same model and context params. Frees the KV buffer dst had.
+LLAMA_API bool llama_kv_share_from(struct llama_context * dst, struct llama_context * src);
+
+// [1bit] Copy KV cell metadata (positions, sequences) from src to dst after src ran. Tensor data is shared, not copied.
+LLAMA_API bool llama_kv_cells_copy(struct llama_context * dst, const struct llama_context * src);
+
 // Get the default ggml_type for a given ftype.
 LLAMA_API ggml_type llama_ftype_get_default_type(llama_ftype ftype);
 

@@ -10,6 +10,7 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
+#include "llama-kv-share.h"
 #include "llama.h"
 
 #include <cinttypes>
@@ -386,6 +387,12 @@ llama_context::llama_context(
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
+
+        // [1bit] llama_kv_share_next (llama-kv-share.cpp)
+        struct kv_share_scope {
+            explicit kv_share_scope(bool enabled) { llama_kv_share_begin(enabled); }
+            ~kv_share_scope() { llama_kv_share_end(); }
+        } kv_share(llama_kv_share_take_next(hparams.no_alloc));
 
         memory.reset(model.create_memory(params_mem, cparams));
     }
