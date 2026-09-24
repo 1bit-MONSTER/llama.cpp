@@ -650,8 +650,14 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> de
     %query_row1 = index.add %query_row0, %c1 : index
     %query_head0 = index.add %query_head_base, %query_row0 : index
     %query_head1 = index.add %query_head0, %c1 : index
-    %query_head_valid0 = index.cmp ult, %query_head0, %query_head_count : index
-    %query_head_valid1 = index.cmp ult, %query_head1, %query_head_count : index
+    // A KV head owns only its own query rows; rows past that belong to the next
+    // KV head's workgroup, and reducing them here overwrites its output.
+    %query_row_owned0 = index.cmp ult, %query_row0, %query_heads_per_key_value_head : index
+    %query_row_owned1 = index.cmp ult, %query_row1, %query_heads_per_key_value_head : index
+    %query_head_in_range0 = index.cmp ult, %query_head0, %query_head_count : index
+    %query_head_in_range1 = index.cmp ult, %query_head1, %query_head_count : index
+    %query_head_valid0 = scalar.andi %query_row_owned0, %query_head_in_range0 : i1
+    %query_head_valid1 = scalar.andi %query_row_owned1, %query_head_in_range1 : i1
     %safe_query_row0 = scf.select %query_head_valid0, %query_row0, %c0 : index
     %safe_query_row1 = scf.select %query_head_valid1, %query_row1, %c0 : index
     %reducer_active0 = scalar.andi %lane_has_block, %query_head_valid0 : i1
