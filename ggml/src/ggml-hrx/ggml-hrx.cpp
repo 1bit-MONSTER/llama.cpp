@@ -1112,6 +1112,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider quantize_q8_1_provider;
     ggml_backend_hrx_op_provider quantize_q8_1_x4_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q4_k_provider;
+    ggml_backend_hrx_op_provider mul_mat_vec_iq3_xxs_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q4_k_q8_1_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q5_k_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q5_k_wg128_provider;
@@ -1314,6 +1315,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->quantize_q8_1_provider.reset();
     device_context->quantize_q8_1_x4_provider.reset();
     device_context->mul_mat_vec_q4_k_provider.reset();
+    device_context->mul_mat_vec_iq3_xxs_provider.reset();
     device_context->mul_mat_vec_q4_k_q8_1_provider.reset();
     device_context->mul_mat_vec_q5_k_provider.reset();
     device_context->mul_mat_vec_q5_k_wg128_provider.reset();
@@ -2508,7 +2510,7 @@ static bool ggml_backend_hrx_load_catalog_provider(
 
     hrx_executable_t executable = nullptr;
     if (!GGML_HRX_CHECK(hrx_executable_load_data(
-            device_context->device, entry->data, entry->data_size, entry->format, &executable))) {
+            device_context->device, entry->data, entry->data_size, "amdgpu", gfx_target, &executable))) {
         GGML_LOG_WARN("%s: failed to load HRX catalog kernel %s for %s\n", __func__, entry->name, gfx_target);
         return false;
     }
@@ -2878,6 +2880,8 @@ static bool ggml_backend_hrx_load_mul_mat_vec_providers(ggml_backend_hrx_device_
         device_context, "hrx_quantize_q8_1_x4_f32", &device_context->quantize_q8_1_x4_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q4_k_f32", &device_context->mul_mat_vec_q4_k_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_mul_mat_vec_iq3_xxs_f32", &device_context->mul_mat_vec_iq3_xxs_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q4_k_q8_1_f32", &device_context->mul_mat_vec_q4_k_q8_1_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
@@ -4449,6 +4453,8 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_mul_mat_vec_provide
             return &device_context->mul_mat_vec_f32_provider;
         case GGML_TYPE_Q4_K:
             return &device_context->mul_mat_vec_q4_k_provider;
+        case GGML_TYPE_IQ3_XXS:
+            return &device_context->mul_mat_vec_iq3_xxs_provider;
         case GGML_TYPE_Q5_K:
             return &device_context->mul_mat_vec_q5_k_provider;
         case GGML_TYPE_Q6_K:
