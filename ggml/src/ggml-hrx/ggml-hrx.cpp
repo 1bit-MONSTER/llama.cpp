@@ -615,14 +615,10 @@ static bool eager_capability_declared(enum ggml_op op) {
 static bool hrx_supported_weight_type(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_F32:
-        case GGML_TYPE_F16:
-        case GGML_TYPE_BF16:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q6_K:
-        case GGML_TYPE_Q8_0:
             return true;
         default:
-            // Sub-4-bit IQ*, Q2_K/Q3_K, Q5_K, ... have no Loom kernel.
             return false;
     }
 }
@@ -638,17 +634,19 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     }
     auto * context = device_context(device);
     if (op->op == GGML_OP_NONE) {
-        // Buffer-placement probe for a model weight.
+        // Buffer-placement probe for a model weight. Record whether this model
+        // contains a quant type the Loom corpus has no kernel for.
         if (!hrx_supported_weight_type(op->type)) {
             context->unsupported_weight_types.store(true, std::memory_order_relaxed);
         }
         return true;
     }
     if (context->unsupported_weight_types.load(std::memory_order_relaxed)) {
+        // The model mixes in sub-4-bit (or otherwise unsupported) weights. The HRX
+        // dispatcher is fused-pattern based and fail-closes on fragments it cannot
+        // match, so delegate the whole graph to the CPU backend. Results are exact.
         return false;
     }
-    // Model is fully within the supported type set: keep the eager capability
-    // declaration so the fused HRX graph patterns are offered to the scheduler.
     return eager_capability_declared(op->op);
 }
 

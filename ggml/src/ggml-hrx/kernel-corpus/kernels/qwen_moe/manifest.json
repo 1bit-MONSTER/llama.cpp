@@ -201,6 +201,18 @@
       "sha256": "99e092a1b7bc2212995b0881186161a1affe1f1ba0c4060d331b513d117d0e56",
       "size": 6101,
       "owner": "ggml-hrx"
+    },
+    {
+      "path": "../hrx_owned/dequant_iq3xxs_f32.loom",
+      "sha256": "48818ae68004d8c0930f7af5b140e0532e2b783ae73b3c51dcdb3243d5b32559",
+      "size": 8143,
+      "owner": "ggml-hrx"
+    },
+    {
+      "path": "../hrx_owned/mul_mat_vec_iq3xxs_f32.loom",
+      "sha256": "ec8f17d634aa737ff16ab4262e65e0122487f5450eb374121f2f2fd8ee5eab1d",
+      "size": 7706,
+      "owner": "ggml-hrx"
     }
   ],
   "exports": [
@@ -4529,6 +4541,94 @@
         "mode": "direct",
         "primary_sources": [
           "../hrx_owned/get_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_dequant_iq3xxs_f32",
+      "symbol": "ggml_dequant_iq3xxs_f32",
+      "source": "../hrx_owned/dequant_iq3xxs_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "block_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "block_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "../hrx_owned/dequant_iq3xxs_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_mul_mat_vec_iq3xxs_f32",
+      "symbol": "ggml_mul_mat_vec_iq3xxs_f32",
+      "source": "../hrx_owned/mul_mat_vec_iq3xxs_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        },
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        },
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "activation",
+        "weight",
+        "tables",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "../hrx_owned/mul_mat_vec_iq3xxs_f32.loom"
         ],
         "library_sources": []
       },

@@ -1,0 +1,119 @@
+// Dequantize GGML IQ3_XXS weight blocks to F32 (see ggml dequantize_row_iq3_xxs).
+//
+// block_iq3_xxs = 98 bytes / 256 values: f16 d, qs[64] grid indices,
+// scales_and_signs[32] (4 bytes per 32-value ib32: top nibble scale, 4x7-bit signs).
+// One workgroup per block, one workitem per decoded value.
+amdgpu.target<gfx11-generic> @ggml_iq3xxs_dequant_gfx11_wave64 {subgroup_size = 64}
+
+global.rodata.def @iq3xxs_grid = align(16) bytes("0404040414040404240404040c0c04041c0c04043e0c040404140404141404040c1c0404142404041c3e04042c3e04040c040c041c040c04040c0c04140c0c040c140c042c140c04041c0c04141c0c040c240c04242c0c04043e0c040404140414041404240414040c0c140404141404141414040c1c14041c1c14043e1c14040c2c14043e2c14042c3e14040c041c043e041c04040c1c04140c1c042c141c04043e1c041c0c24043e1c2404242424043e2c24041c3e24042c3e24040c042c043e042c04141c2c04142c2c042c1c340424343404040c3e04240c3e04340c3e041c243e040c343e040c04040c1c04040c040c040c140c040c0c14040c1c14040c041c040c141c040c241c040c3e24040c042c040c04040c0c14040c0c0c0c0c0c04140c0c14140c0c0c04140c1c04140c040c140c140c140c0c14140c041c140c143e140c04041c0c14041c0c04141c0c0c1c1c0c34241c0c34341c0c0c04240c2c04240c042c240c04142c0c24142c0c34242c0c0c3e2c0c2c04340c14143e0c04243e0c04040414140404140c0c04141c0c04140414041414140414341404140c1c0414142404140c040c141c040c142c040c14040c0c14140c0c140c140c14041c0c141c340c143e340c14043e0c1404041414140414140c0c14143e0c141404141414141414143e1c1414042414142c2c14140c041c14040c1c14240c1c14043e1c14243e1c142c1c24141c2c24141c042c143e142c140c242c14243e2c140c043e141c043e14340c3e142c243e140c04041c040c041c140c041c0c14041c1c14041c042c041c2c34041c143e041c04040c1c14040c1c04140c1c0c1c0c1c24240c1c34240c1c0c04141c1c04141c040c141c2c14141c142c141c143e141c0c0c1c1c1c1c1c1c041c241c3e24241c143e241c04042c1c34042c1c14142c1c2c2c2c1c240c341c341c341c1c34341c1c1c3e1c04343e1c240404243e0c04242c1c04243e1c04241c2c04243e2c0424243e0c24041414243e1c14240424142404341424343414243e041c242c241c24240424240c2c2424243424242c142c241c242c24043e2c242c043e24040c3e24140c3e24041c3e24140c042c0c24042c043e042c04040c2c34040c2c34140c2c2c2c0c2c240c142c141c142c143e142c14041c2c1c2c1c2c040c242c1c14242c3e14242c143e242c14042c2c0c1c2c2c042c342c24143e2c14243e2c241404342424043434240434243404340c140c340c340c343e0c143424341434041c1c34341c1c34242424342c042c34142c2c341c1c34341c043e340c143e341c04043e2c04043e3e04043e040c043e141c043e142c043e34140c3e04240c3e140c143e2c24143e142c143e04041c3e2c0c1c3e1c1c1c3e04341c3e0c14243e0c24243e04042c3e14042c3e24142c3e041c343e")
+
+global.rodata.def @ksigns_iq2xs = align(16) bytes("008182038405068788090a8b0c8d8e0f901112931495961718999a1b9c1d1e9fa02122a324a5a62728a9aa2bac2d2eaf30b1b233b43536b7b8393abb3cbdbe3fc04142c344c5c64748c9ca4bcc4d4ecf50d1d253d45556d7d8595adb5cddde5f60e1e263e46566e7e8696aeb6cedee6ff07172f374f5f67778f9fa7bfc7d7eff")
+
+global.rodata.def @kmask_iq2xs = align(8) bytes("0102040810204080")
+
+kernel.def target(@ggml_iq3xxs_dequant_gfx11_wave64) export("ggml_dequant_iq3xxs_f32") @ggml_dequant_iq3xxs_f32(%block_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%block_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%block_count: index, %weight: buffer, %output: buffer) {
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c7 = index.constant 7 : index
+  %c32 = index.constant 32 : index
+  %c256 = index.constant 256 : index
+  %o0 = index.constant 0 : offset
+  %o1 = index.constant 1 : offset
+  %o2 = index.constant 2 : offset
+  %o4 = index.constant 4 : offset
+  %o66 = index.constant 66 : offset
+  %o98 = index.constant 98 : offset
+  %c255 = index.constant 255 : index
+  %block = kernel.workgroup.id<x> : index
+  %value = kernel.workitem.id<x> : index
+  %weight_na, %output_na = buffer.assume.noalias %weight, %output : buffer, buffer
+  %block_off = index.scale %block, %o98 : index, offset -> offset
+  %qs_base = index.add %block_off, %o2 : offset
+  %ss_base = index.add %block_off, %o66 : offset
+  %d_view = buffer.view %weight_na[%block_off] : buffer -> view<1xf16>
+  %d_f16 = view.load %d_view[%c0] : view<1xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %ib32 = index.div %value, %c32 : index
+  %rem = index.rem %value, %c32 : index
+  %l = index.div %rem, %c8 : index
+  %p = index.rem %rem, %c8 : index
+  %half = index.div %p, %c4 : index
+  %jj = index.rem %p, %c4 : index
+  %qs_a = index.mul %ib32, %c8 : index
+  %qs_b = index.mul %l, %c2 : index
+  %qs_c = index.add %qs_a, %qs_b : index
+  %qs_index = index.add %qs_c, %half : index
+  %qs_off = index.scale %qs_index, %o1 : index, offset -> offset
+  %qs_ptr = index.add %qs_base, %qs_off : offset
+  %qs_view = buffer.view %weight_na[%qs_ptr] : buffer -> view<1xi8>
+  %grid_idx_i8 = view.load %qs_view[%c0] : view<1xi8> -> i8
+  %grid_idx = index.cast %grid_idx_i8 : i8 to index
+  %g_a = index.mul %grid_idx, %c4 : index
+  %g_off_i = index.add %g_a, %jj : index
+  %g_off = index.scale %g_off_i, %o1 : index, offset -> offset
+  %grid_base = global.load @iq3xxs_grid : buffer
+  %grid_view = buffer.view %grid_base[%g_off] : buffer -> view<1xi8>
+  %grid_byte_i8 = view.load %grid_view[%c0] : view<1xi8> -> i8
+  %grid_byte = scalar.uitofp %grid_byte_i8 : i8 to f32
+  %ss_a = index.mul %ib32, %c4 : index
+  %ss_off = index.scale %ss_a, %o1 : index, offset -> offset
+  %ss_ptr = index.add %ss_base, %ss_off : offset
+  %aux_view = buffer.view %weight_na[%ss_ptr] : buffer -> view<1xi32>
+  %aux32 = vector.load %aux_view[%c0] : view<1xi32> -> vector<1xi32>
+  %c28 = vector.constant 28 : vector<1xi32>
+  %scale_nib = vector.shrui %aux32, %c28 : vector<1xi32>
+  %scale_i32 = vector.extract %scale_nib[0] : vector<1xi32> -> i32
+  %scale_f = scalar.uitofp %scale_i32 : i32 to f32
+  %half_c = scalar.constant 0.5 : f32
+  %scale_plus = scalar.addf %half_c, %scale_f : f32
+  %d_half = scalar.mulf %d, %half_c : f32
+  %db = scalar.mulf %d_half, %scale_plus : f32
+  %sh7 = index.mul %l, %c7 : index
+  %sh7_i32 = index.cast %sh7 : index to i32
+  %sh_v = vector.splat %sh7_i32 : vector<1xi32>
+  %signs_shifted = vector.shrui %aux32, %sh_v : vector<1xi32>
+  %c127 = vector.constant 127 : vector<1xi32>
+  %signs_masked = vector.andi %signs_shifted, %c127 : vector<1xi32>
+  %signs_idx_i32 = vector.extract %signs_masked[0] : vector<1xi32> -> i32
+  %signs_idx = index.cast %signs_idx_i32 : i32 to index
+  %signs_off = index.scale %signs_idx, %o1 : index, offset -> offset
+  %ks_base = global.load @ksigns_iq2xs : buffer
+  %ks_view = buffer.view %ks_base[%signs_off] : buffer -> view<1xi8>
+  %signs_i8 = view.load %ks_view[%c0] : view<1xi8> -> i8
+  %signs_i32 = index.cast %signs_i8 : i8 to index
+  %km_off = index.scale %p, %o1 : index, offset -> offset
+  %km_base = global.load @kmask_iq2xs : buffer
+  %km_view = buffer.view %km_base[%km_off] : buffer -> view<1xi8>
+  %kmask_p_i8 = view.load %km_view[%c0] : view<1xi8> -> i8
+  %kmask_p = index.cast %kmask_p_i8 : i8 to index
+  %and_bits = index.andi %signs_i32, %kmask_p : index
+  %is_neg = index.cmp ne, %and_bits, %c0 : index
+  %neg_one = scalar.constant -1.0 : f32
+  %pos_one = scalar.constant 1.0 : f32
+  %sign_f = scf.select %is_neg, %neg_one, %pos_one : f32
+  %db_g = scalar.mulf %db, %grid_byte : f32
+  %result = scalar.mulf %db_g, %sign_f : f32
+  %out_index = index.mul %block, %c256 : index
+  %out_index2 = index.add %out_index, %value : index
+  %out_off = index.scale %out_index2, %o4 : index, offset -> offset
+  %out_f32 = buffer.view %output_na[%out_off] : buffer -> view<1xf32>
+  view.store %result, %out_f32[%c0] : f32, view<1xf32>
+  kernel.return
+}
+
+check.case public @ggml_dequant_iq3xxs_f32_coverage {
+  %one = check.literal value(1) : index
+  %weight = check.generate.fill value(0) : tensor<1x98xi8>
+  %output = check.generate.fill value(0.0) : tensor<1x256xf32>
+  kernel.launch @ggml_dequant_iq3xxs_f32[%one](%one, %weight, %output) : [index](index, tensor<1x98xi8>, tensor<1x256xf32>)
+  check.expect.close actual(%output) expected(%output) atol(0.0) rtol(0.0) nan(same) : tensor<1x256xf32>
+  check.return
+}
+
+check.benchmark<@ggml_dequant_iq3xxs_f32_coverage> @ggml_dequant_iq3xxs_f32
