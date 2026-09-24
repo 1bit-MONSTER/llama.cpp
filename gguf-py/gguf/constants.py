@@ -3998,6 +3998,7 @@ class GGMLQuantizationType(IntEnum):
     NVFP4   = 40
     Q1_0    = 41
     Q4NX    = 42
+    Q4NX_C43 = 43   # 1bit re-emit: type42 -> slot 43 (36-38 = REMOVED specials)
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -4166,6 +4167,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.NVFP4:   (64, 4 + 32),
     GGMLQuantizationType.Q1_0:    (128, 2 + 16),
     GGMLQuantizationType.Q4NX: (8192, 5120),
+    GGMLQuantizationType.Q4NX_C43: (8192, 5120),
 }
 
 
