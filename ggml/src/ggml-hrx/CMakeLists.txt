@@ -258,6 +258,7 @@ ggml_add_backend_library(ggml-hrx
     ggml-hrx.cpp
     ggml-hrx-dmabuf.cpp
     ggml-hrx-dmabuf.h
+    fused-context-claim.h
     loom-jit.cpp
     graph/value-map.cpp
     graph/value-map.h

@@ -3,6 +3,7 @@
 
 #include "backend-buffer-binding.h"
 #include "backend-context.h"
+#include "fused-context-claim.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "graph/op-params.h"
@@ -1075,7 +1076,10 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         return eager_capability_declared(op->op);
     }
     // otherwise claim only nodes the dispatcher can execute, so the rest falls back to another backend instead of failing the graph
-    return eager_capability_declared(op->op) && ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture);
+    // a node that only a fused dispatch executes keeps the per-op claim inside a model graph (fused-context-claim.h)
+    return eager_capability_declared(op->op) &&
+           (ggml::hrx::fused_context_claim(op) ||
+            ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture));
 }
 
 static bool device_supports_buffer_type(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
