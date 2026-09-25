@@ -23,9 +23,10 @@ config.decl @ggml.flash_attention.query_head_count : %value: index where [range(
 
 config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
 
-config.decl @ggml.flash_attention.qk_head_size : %value: index where [range(%value, 16, 512), mul(%value, 16)]
+config.decl @ggml.flash_attention.qk_head_size : %value: index where [range(%value, 16, 36864), mul(%value, 16)]
 
 config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), mul(%value, 64)]
+config.decl @ggml.flash_attention.value_stride : %value: index where [range(%value, 16, 36864), mul(%value, 16)]
 
 config.decl @ggml.flash_attention.attention_scale : f32
 
@@ -198,11 +199,11 @@ template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_at
 }
 
 template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_prefill_body(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer) {
-  %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
+  %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 262144)] : index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
   %qk_head_size0 = config.get @ggml.flash_attention.qk_head_size : index
-  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 512), mul(%qk_head_size0, 16)] : index
+  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 576), mul(%qk_head_size0, 16)] : index
   %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
   %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
   %query_tile = kernel.workgroup.id<x> : index
@@ -273,7 +274,7 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %query_origin = index.mul %query_tile, %c16 : index
   %full_key_value_block_count = index.div %bounded_key_value_token_count, %c64 : index
   %full_key_value_token_count0 = index.mul %full_key_value_block_count, %c64 : index
-  %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 32768), mul(%full_key_value_token_count0, 64)] : index
+  %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 262144), mul(%full_key_value_token_count0, 64)] : index
   %tail_key_value_token_count = index.sub %bounded_key_value_token_count, %full_key_value_token_count : index
   %has_key_value_tail = index.cmp ne, %tail_key_value_token_count, %c0 : index
   %tail_key_value_stage_bytes = scf.select %has_key_value_tail, %tail_key_value_stage_capacity, %c0_offset : offset
@@ -315,7 +316,9 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_width]xf16>
   %value_layout_tag = config.get @ggml.flash_attention.value_layout : index
   %transposed_value = index.cmp eq, %value_layout_tag, %c1 : index
-  %value_row_stride = scf.select %transposed_value, %c1, %value_width : index
+  %value_stride0 = config.get @ggml.flash_attention.value_stride : index
+  %value_stride = index.assume %value_stride0 [range(%value_stride0, 16, 36864), mul(%value_stride0, 16)] : index
+  %value_row_stride = scf.select %transposed_value, %c1, %value_stride : index
   %value_column_stride = scf.select %transposed_value, %bounded_key_value_token_count, %c1 : index
   %value_layout = encoding.layout.strided [%value_row_stride, %value_column_stride] : encoding<layout>
   %value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout>
@@ -739,7 +742,7 @@ kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_test
 kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_test_extract_row(%query_token_count: index, %context_count: index, %source_row: index) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %qk_head_size0 = config.get @ggml.flash_attention.qk_head_size : index
-  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 512), mul(%qk_head_size0, 16)] : index
+  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 576), mul(%qk_head_size0, 16)] : index
   %context_capacity = config.get @ggml.flash_attention.test.context_capacity : index
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
@@ -755,7 +758,7 @@ kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_test
   %c256 = index.constant 256 : index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %qk_head_size0 = config.get @ggml.flash_attention.qk_head_size : index
-  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 512), mul(%qk_head_size0, 16)] : index
+  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 576), mul(%qk_head_size0, 16)] : index
   %context_capacity = config.get @ggml.flash_attention.test.context_capacity : index
   %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 2048)] : index
   %bounded_context_count = index.assume %context_count [range(%context_count, 1, 32768), le(%context_count, %context_capacity)] : index

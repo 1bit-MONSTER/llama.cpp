@@ -32,6 +32,7 @@ struct MulMatIdSwiGLUMatch {
     int64_t                     output_size        = 0;
     int64_t                     token_count        = 0;
     int64_t                     route_count        = 0;
+    int64_t                     route_stride       = 0;
     int64_t                     input_route_count  = 0;
     int64_t                     expert_count       = 0;
     CommonMulMatWeightFormat    gate_format        = CommonMulMatWeightFormat::Q4K;
@@ -121,6 +122,7 @@ static MulMatIdSwiGLUMatch match_mul_mat_id_swiglu(const DispatchMatchContext & 
     match.output_size        = root.output_size;
     match.token_count        = root.token_count;
     match.route_count        = root.route_count;
+    match.route_stride       = root.route_stride;
     match.input_route_count  = root.input_route_count;
     match.expert_count       = root.expert_count;
     match.gate_format        = root_is_gate ? root.weight_format : peer.weight_format;
@@ -140,6 +142,7 @@ static CommonMulMatIdMatch routing_match_for_swiglu(const MulMatIdSwiGLUMatch & 
     routed.output_size        = match.output_size;
     routed.token_count        = match.token_count;
     routed.route_count        = match.route_count;
+    routed.route_stride       = match.route_stride;
     routed.input_route_count  = match.input_route_count;
     routed.expert_count       = match.expert_count;
     routed.weight_format      = match.gate_format;

@@ -25,8 +25,9 @@ static constexpr int64_t kPrefillQkHeadSizeBlock    = 16;
 static constexpr int64_t kPrefillValueHeadSizeBlock = 64;
 static constexpr int64_t kPrefillMinQkHeadSize      = kPrefillQkHeadSizeBlock;
 static constexpr int64_t kPrefillMinValueHeadSize   = kPrefillValueHeadSizeBlock;
-// Current cap keeps full-head Q/K staging within the kernel's fixed LDS budget.
-static constexpr int64_t kPrefillMaxHeadSize        = 512;
+// Current cap keeps full-head Q/K staging within the kernel's fixed LDS budget
+// (576 = DeepSeek-V2/V3 / GLM-4.7-Flash MLA key_length; 592 is the LDS ceiling).
+static constexpr int64_t kPrefillMaxHeadSize        = 576;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -41,11 +42,11 @@ static bool is_supported_token_count(int64_t token_count) {
 }
 
 static bool is_supported_key_value_token_count(int64_t token_count) {
-    return token_count >= 1 && token_count <= 32768;
+    return token_count >= 1 && token_count <= 262144;
 }
 
 static bool is_supported_decode_key_value_token_count(int64_t token_count) {
-    return token_count >= 1 && token_count <= 2048;
+    return token_count >= 1 && token_count <= 262144;
 }
 
 static bool is_supported_decode_query_length(int64_t query_length) {
@@ -243,7 +244,9 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
 
     if (!has_query_layout(*query, query_head_count, qk_head_size) ||
         !has_key_value_layout(*key, key_value_head_count, qk_head_size) ||
-        !has_key_value_layout(*value, key_value_head_count, value_head_size) ||
+        // MLA (deepseek2/GLM) stores the value with the QK head-size stride (the KV cache row
+        // is padded to key_length), not the value head-size stride, so match the key stride (#95).
+        !has_key_value_layout(*value, key_value_head_count, qk_head_size) ||
         !has_output_layout(*output, query_head_count, value_head_size)) {
         return {};
     }
@@ -372,12 +375,14 @@ static void add_flash_attention_compile_parameters(KernelSpecialization & kernel
                                                    float                  attention_scale,
                                                    bool                   apply_gate,
                                                    int64_t                gate_stride_head,
-                                                   int64_t                gate_stride_token) {
+                                                   int64_t                gate_stride_token,
+                                                   int64_t                value_stride) {
     kernel.compile_parameters.emplace("ggml.flash_attention.query_head_count", to_config_value(query_head_count));
     kernel.compile_parameters.emplace("ggml.flash_attention.key_value_head_count",
                                       to_config_value(key_value_head_count));
     kernel.compile_parameters.emplace("ggml.flash_attention.qk_head_size", to_config_value(qk_head_size));
     kernel.compile_parameters.emplace("ggml.flash_attention.value_head_size", to_config_value(value_head_size));
+    kernel.compile_parameters.emplace("ggml.flash_attention.value_stride", to_config_value(value_stride));
     kernel.compile_parameters.emplace("ggml.flash_attention.attention_scale", to_config_value(attention_scale));
     kernel.compile_parameters.emplace("ggml.flash_attention.apply_gate", apply_gate ? "1" : "0");
     kernel.compile_parameters.emplace("ggml.flash_attention.gate_stride_head", to_config_value(gate_stride_head));
@@ -487,7 +492,8 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
     add_flash_attention_compile_parameters(dispatch.kernel, match.query_head_count, match.key_value_head_count,
                                            match.qk_head_size, match.value_head_size, match.attention_scale, true,
                                            static_cast<int64_t>(raw_gate->nb[1] / sizeof(float)),
-                                           static_cast<int64_t>(raw_gate->nb[2] / sizeof(float)));
+                                           static_cast<int64_t>(raw_gate->nb[2] / sizeof(float)),
+                                           static_cast<int64_t>(match.value->nb[1] / sizeof(ggml_fp16_t)));
     dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.key->id, 0, match.key->byte_count });
     dispatch.bindings.push_back(prepare_flash_attention_value(context, match, dispatch_match, dispatch.kernel));
@@ -511,7 +517,7 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     dispatch.kernel.integer_parameters.emplace("key_value_token_count", match.key_value_token_count);
     add_flash_attention_compile_parameters(dispatch.kernel, match.query_head_count, match.key_value_head_count,
                                            match.qk_head_size, match.value_head_size, match.attention_scale, false, 1,
-                                           1);
+                                           1, static_cast<int64_t>(match.value->nb[1] / sizeof(ggml_fp16_t)));
     dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.key->id, 0, match.key->byte_count });
     dispatch.bindings.push_back(prepare_flash_attention_value(context, match, dispatch_match, dispatch.kernel));
