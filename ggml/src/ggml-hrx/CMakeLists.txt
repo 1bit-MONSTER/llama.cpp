@@ -206,6 +206,7 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-mul-mat-id.cpp
     dispatch_registration/common/dispatch-mul-mat-id-common.h
     dispatch_registration/common/dispatch-mul-mat-id.h
+    dispatch_registration/common/dispatch-moe-routing-layout.h
     dispatch_registration/common/dispatch-mul-mat.cpp
     dispatch_registration/common/dispatch-mul-mat-iq3-xxs.cpp
     dispatch_registration/common/dispatch-mul-mat-iq3-xxs.h
@@ -257,6 +258,7 @@ ggml_add_backend_library(ggml-hrx
     ggml-hrx.cpp
     ggml-hrx-dmabuf.cpp
     ggml-hrx-dmabuf.h
+    fused-context-claim.h
     loom-jit.cpp
     graph/value-map.cpp
     graph/value-map.h
