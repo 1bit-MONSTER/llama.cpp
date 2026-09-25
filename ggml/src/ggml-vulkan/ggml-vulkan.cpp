@@ -18444,14 +18444,20 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
     return devices[device];
 }
 
-// [1bit] zero-copy sharing with another API over dma-buf
+// [1bit] zero-copy sharing with another API over dma-buf (Linux)
+#ifdef __linux__
 #include "ggml-vulkan-dmabuf.inc"
+#endif
 
 static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     UNUSED(reg);
+#ifdef __linux__
     if (strcmp(name, "ggml_backend_dev_buffer_from_dmabuf") == 0) {
         return (void *) ggml_backend_vk_dev_buffer_from_dmabuf;
     }
+#else
+    UNUSED(name);
+#endif
     return NULL;
 }
 
