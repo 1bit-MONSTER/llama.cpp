@@ -25,11 +25,13 @@
 
 #include <algorithm>
 #include <stdexcept>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <vector>
 
 // exported by ggml-base (ggml-backend-impl.h): a buffer made of several, freed together
-extern "C" GGML_API ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers);
+extern "C" { GGML_API ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers); }
 
 namespace {
 
@@ -123,9 +125,11 @@ bool share_each(llama_context * dst, const llama_context * src, F && f) {
 } // namespace
 
 llama_kv_shared_region::~llama_kv_shared_region() {
+#ifndef _WIN32
     if (fd >= 0) {
-        close(fd);
+        close(fd);   // a dma-buf, Linux only
     }
+#endif
 }
 
 bool llama_kv_share_take_next(bool no_alloc) {
