@@ -1,3 +1,8 @@
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <set>
+#include <string>
 #include "dispatch-registry.h"
 
 #include "common/dispatch-common.h"
@@ -51,6 +56,51 @@ static DispatchRegistry build_registry(bool include_qwen) {
 
 }  // namespace
 
+// Debug switches. GGML_HRX_DISABLE_DISPATCH: comma-separated substrings of registration names to
+// skip ("fused" skips every fused registration). GGML_HRX_LOG_DISPATCH=1: print each
+// registration name the first time it matches.
+static bool dispatch_disabled(const DispatchRegistration & registration) {
+    static const std::vector<std::string> patterns = [] {
+        std::vector<std::string> out;
+        const char * env = std::getenv("GGML_HRX_DISABLE_DISPATCH");
+        std::string  list = env != nullptr ? env : "";
+        size_t       start = 0;
+        while (start <= list.size()) {
+            size_t end = list.find(',', start);
+            if (end == std::string::npos) {
+                end = list.size();
+            }
+            if (end > start) {
+                out.push_back(list.substr(start, end - start));
+            }
+            start = end + 1;
+        }
+        return out;
+    }();
+    const std::string name = registration.name != nullptr ? registration.name : "";
+    for (const std::string & p : patterns) {
+        if ((p == "fused" && registration.kind == DispatchMatchKind::Fused) || name.find(p) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void dispatch_log_match(const DispatchRegistration & registration) {
+    static const bool enabled = std::getenv("GGML_HRX_LOG_DISPATCH") != nullptr;
+    if (!enabled) {
+        return;
+    }
+    static std::mutex            mutex;
+    static std::set<std::string> seen;
+    const std::string            name = registration.name != nullptr ? registration.name : "";
+    std::lock_guard<std::mutex>  lock(mutex);
+    if (seen.insert(name).second) {
+        std::fprintf(stderr, "ggml_hrx dispatch: %s (%s)\n", name.c_str(),
+                     registration.kind == DispatchMatchKind::Fused ? "fused" : "single");
+    }
+}
+
 bool DispatchRegistry::match(const DispatchMatchContext & context, DispatchMatch & match) const {
     return this->match(context, match, nullptr);
 }
@@ -68,8 +118,12 @@ bool DispatchRegistry::match(const DispatchMatchContext & context,
     const std::vector<DispatchRegistration> & registrations =
         registrations_by_root_[static_cast<size_t>(context.root_node->op)].ordered;
     for (const DispatchRegistration & registration : registrations) {
+        if (dispatch_disabled(registration)) {
+            continue;
+        }
         DispatchMatch candidate;
         if (registration.matcher != nullptr && registration.matcher(context, candidate)) {
+            dispatch_log_match(registration);
             if (diagnostics != nullptr) {
                 diagnostics->attempts.push_back({
                     registration.name != nullptr ? registration.name : "",
