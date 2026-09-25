@@ -29,7 +29,7 @@
 #include <vector>
 
 // exported by ggml-base (ggml-backend-impl.h): a buffer made of several, freed together
-extern "C" GGML_API ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers);
+extern "C" { GGML_API ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers); }
 
 namespace {
 
