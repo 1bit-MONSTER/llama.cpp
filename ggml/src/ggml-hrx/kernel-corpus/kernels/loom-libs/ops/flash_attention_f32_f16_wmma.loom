@@ -23,10 +23,10 @@ config.decl @ggml.flash_attention.query_head_count : %value: index where [range(
 
 config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
 
-config.decl @ggml.flash_attention.qk_head_size : %value: index where [range(%value, 16, 576), mul(%value, 16)]
+config.decl @ggml.flash_attention.qk_head_size : %value: index where [range(%value, 16, 36864), mul(%value, 16)]
 
 config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), mul(%value, 64)]
-config.decl @ggml.flash_attention.value_stride : %value: index where [range(%value, 16, 576), mul(%value, 16)]
+config.decl @ggml.flash_attention.value_stride : %value: index where [range(%value, 16, 36864), mul(%value, 16)]
 
 config.decl @ggml.flash_attention.attention_scale : f32
 
@@ -317,7 +317,7 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %value_layout_tag = config.get @ggml.flash_attention.value_layout : index
   %transposed_value = index.cmp eq, %value_layout_tag, %c1 : index
   %value_stride0 = config.get @ggml.flash_attention.value_stride : index
-  %value_stride = index.assume %value_stride0 [range(%value_stride0, 16, 576), mul(%value_stride0, 16)] : index
+  %value_stride = index.assume %value_stride0 [range(%value_stride0, 16, 36864), mul(%value_stride0, 16)] : index
   %value_row_stride = scf.select %transposed_value, %c1, %value_stride : index
   %value_column_stride = scf.select %transposed_value, %bounded_key_value_token_count, %c1 : index
   %value_layout = encoding.layout.strided [%value_row_stride, %value_column_stride] : encoding<layout>
