@@ -652,6 +652,11 @@ static bool residual_input_is_safe_for_in_place(const DispatchMatchContext & con
     if (match.residual_input == nullptr || match.residual == nullptr) {
         return false;
     }
+    // In-place reuse overwrites the residual input's storage, which is only safe for a
+    // transient (temporary) value; an external value shares a persistent buffer (#95).
+    if (match.residual_input->kind != ValueKind::Transient) {
+        return false;
+    }
     for (const GraphNode * consumer : context.graph.index().consumers(match.residual_input->id)) {
         if (consumer == match.residual || node_is_covered(context, consumer)) {
             continue;
@@ -1048,6 +1053,9 @@ static DecodeRoutedDownMatch match_decode_routed_ffn_down_next_q8(const Dispatch
     WeightedReduceMatch reduce =
         match_routed_ffn_down_weighted_reduce_topology(context, weighted, root_output, route_weights);
     if (!reduce.topology_matched() || !reduce.next_rmsnorm.matched() ||
+        // The in-place reduce reuses the residual input's storage for the output, which is only safe
+        // when both are transient (an external value shares a persistent buffer) (#95).
+        reduce.output->kind != ValueKind::Transient ||
         !residual_input_is_safe_for_in_place(context, reduce)) {
         return {};
     }

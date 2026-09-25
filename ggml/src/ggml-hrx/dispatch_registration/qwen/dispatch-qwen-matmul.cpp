@@ -313,6 +313,9 @@ static QwenAttentionOutputNextQ8Match match_qwen_attention_output_next_q8(const 
         residual_output->type != GGML_TYPE_F32 || !same_value_layout(*selected_projection, *selected_residual) ||
         !same_value_layout(*selected_projection, *residual_input) ||
         !same_value_layout(*selected_projection, *residual_output) ||
+        // The in-place residual add reuses residual_input's storage for residual_output, which is only
+        // safe when both are transient (an external value shares a persistent buffer) (#95).
+        residual_input->kind != ValueKind::Transient || residual_output->kind != ValueKind::Transient ||
         !value_has_no_uncovered_consumers_except(context, residual_input->id, residual_consumer)) {
         return {};
     }

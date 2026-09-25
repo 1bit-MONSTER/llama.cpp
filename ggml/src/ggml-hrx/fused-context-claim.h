@@ -52,6 +52,22 @@ inline ggml_op fused_context_producer_op(const ggml_tensor * tensor) {
     return tensor->op;
 }
 
+// the tensor that owns a tensor's storage, looking through views and reshapes
+inline const ggml_tensor * fused_context_root(const ggml_tensor * tensor) {
+    while (tensor != nullptr && tensor->view_src != nullptr) {
+        tensor = tensor->view_src;
+    }
+    return tensor;
+}
+
+// true for the router's GET_ROWS: softmax probabilities gathered at the argsort's top-k ids,
+// the chain the top-8 router dispatch starts from (a sigmoid router, as in GLM-4.7-Flash, has none)
+inline bool fused_context_router_get_rows(const ggml_tensor * op) {
+    return op != nullptr && op->op == GGML_OP_GET_ROWS &&
+           fused_context_producer_op(op->src[0]) == GGML_OP_SOFT_MAX &&
+           fused_context_producer_op(op->src[1]) == GGML_OP_ARGSORT;
+}
+
 inline bool fused_context_fed_by_op(const ggml_tensor * op) {
     for (const ggml_tensor * source : op->src) {
         if (source != nullptr && fused_context_producer_op(source) != GGML_OP_NONE) {
@@ -85,9 +101,12 @@ inline bool fused_context_claim(const ggml_tensor * op) {
             return fused_context_producer_op(op->src[0]) == GGML_OP_SOFT_MAX &&
                    fused_context_producer_op(op->src[1]) == GGML_OP_ARGSORT;
         case GGML_OP_SUM_ROWS:
-            return fused_context_producer_op(op->src[0]) == GGML_OP_GET_ROWS;
-        case GGML_OP_CLAMP:
-            return fused_context_producer_op(op->src[0]) == GGML_OP_SUM_ROWS;
+            return fused_context_router_get_rows(fused_context_root(op->src[0]));
+        case GGML_OP_CLAMP: {
+            const ggml_tensor * sum = fused_context_root(op->src[0]);
+            return sum != nullptr && sum->op == GGML_OP_SUM_ROWS &&
+                   fused_context_router_get_rows(fused_context_root(sum->src[0]));
+        }
         // gated delta net
         case GGML_OP_L2_NORM:
         case GGML_OP_GATED_DELTA_NET:

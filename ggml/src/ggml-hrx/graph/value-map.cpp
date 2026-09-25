@@ -28,6 +28,12 @@ static bool tensor_storage_relative_offset(const ggml_tensor * source, const ggm
         return false;
     }
     const size_t relative_offset = tensor_offset - source_offset;
+    if (ggml_nbytes(source) == 0) {
+        // A zero-byte (empty) source can only contain a zero-byte tensor; the byte
+        // offset of a degenerate view into an empty tensor is meaningless (#95).
+        offset = relative_offset;
+        return ggml_nbytes(tensor) == 0;
+    }
     if (relative_offset > ggml_nbytes(source) || ggml_nbytes(tensor) > ggml_nbytes(source) - relative_offset) {
         return false;
     }
