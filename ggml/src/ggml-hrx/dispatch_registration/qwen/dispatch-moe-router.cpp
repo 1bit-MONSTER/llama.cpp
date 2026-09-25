@@ -1,5 +1,7 @@
 #include "dispatch-moe-router.h"
 
+#include "../common/dispatch-moe-routing-layout.h"
+
 #include "dispatch-llm-shapes.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
@@ -368,10 +370,13 @@ static void add_moe_routing_compile_parameters(Dispatch & dispatch, const Router
                                                to_config_value(router_match.route_count));
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.expert_count",
                                                to_config_value(router_match.expert_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_expert_mask", "127");
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_partition_shift", "7");
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_row_count_shift", "13");
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.partition_workgroup_size", "128");
+    // the descriptor layout depends on the expert count (dispatch-moe-routing-layout.h)
+    const MoeRoutingDescriptorLayout layout = moe_router_descriptor_layout(router_match.expert_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_expert_mask", layout.expert_mask);
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_partition_shift", layout.partition_shift);
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_row_count_shift", layout.row_count_shift);
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.partition_workgroup_size",
+                                               layout.partition_workgroup_size);
 }
 
 struct RouterProjectionTop8Match {
