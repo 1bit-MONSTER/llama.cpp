@@ -59,7 +59,14 @@ void llama_model_zaya::load_arch_hparams(llama_model_loader & ml) {
     // ZAYA1-74B: sliding-window attention on the layers the pattern marks, with their own rope base
     if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
+        // the converter writes a per-layer array; a scalar is a period, as the other SWA archs read it.
+        // Without the key (llama_model_saver does not write it) default to ZAYA1-74B's: even layers slide.
+        // Read the scalar first: the array read would take a scalar too, as the raw value in every layer.
+        uint32_t swa_period = 2;
+        if (ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false) ||
+            !ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer(), false)) {
+            hparams.set_swa_pattern(swa_period);
+        }
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
         ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
