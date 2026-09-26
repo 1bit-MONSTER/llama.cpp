@@ -740,3 +740,30 @@ graph tensor or another dispatch's transient, the layout-sensitive, intermittent
 follows exactly. NEXT: audit TransientAllocator::allocate (transient-allocator.cpp:356-447) for
 transient-vs-graph-tensor and transient-vs-transient overlap, and check whether graph tensors live in a
 region disjoint from the transients. (Wave-padding reverted - it costs 2x compute for no benefit.)
+
+## DECISIVE LOCALIZATION: the fault is in `reduce_completed.multipass`; the cooperative reducer is CLEAN
+Valid test: forced the multipass wrapper to apply `reduce_completed.cooperative` instead (widened its
+`1, 32` bound sites to `1, 4096` - 4 text matches; swapped 1 apply site), rebuilt, 5 runs each:
+  d2100 (cap 2112, 33 blocks) -> 0,0,0,0,0 = 0/5 FAULT
+  d3000 (cap 3008, 47 blocks) -> 0,0,0,0,0 = 0/5 FAULT
+=> `reduce_completed.multipass` IS the faulting code. This finally explains why the earlier bisects
+misled me: the first two were SINGLE-RUN verdicts under an intermittent fault, and the later text-based
+`template.return` insertion FAILED TO BUILD ("ninja: build stopped: subcommand failed"), so those 5/5
+numbers came from a stale binary. The reduce had never actually been excluded before.
+NOTE: the cooperative is NOT a valid substitute above 32 blocks (its normalisation scratch is
+`4x32x2xf32` and it assumes `lane < 32`), so this is a diagnostic, not the fix.
+
+THE DIFFERENCE between the two reducers - this is where the bug lives:
+  cooperative (CLEAN): max/sum passes are UNIFORM `scf.for %block = [%c0 to %active_block_count step %c1]`
+    (every lane iterates every block), scale stage in the 4x32x2 f32 workgroup scratch.
+  multipass (FAULTS): max/sum passes are LANE-DEPENDENT `scf.for %block = [%lane to %active_block_count
+    step %c64]` - a dynamic, DIVERGENT lower bound - plus a lane-strided global store of the per-block
+    scale back into partial_max.
+=> prime suspect: the LANE-DEPENDENT (divergent) loop lower bound `%lane`. Not the access bounds (every
+access is in bounds for block < active_block_count), not the trip count (wave-padding to a whole number of
+64-block waves did not help; 64 blocks still faulted 1-2/5), and not the counter or the produce.
+
+NEXT: rewrite `reduce_completed.multipass`'s max/sum passes to avoid the divergent bound - e.g.
+`scf.for %iteration = [%c0 to %iteration_count step %c1]` (uniform) with `%block = %lane + %iteration*64`
+and a SELECTED value (plus a predicated store for the scale), so control flow is uniform across lanes.
+Then re-run 5x at d2100/d3000/d4800 and re-check d1900/d2000 are still 0/5.
