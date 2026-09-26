@@ -537,8 +537,12 @@ static bool match_moe_router_projection_top8_fused_decode_dispatch(const Dispatc
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
                                                to_config_value(match.top8.token_count));
 
+    // The ids view is a graph output when the experts are on another device, and its buffer ends at
+    // (token_count - 1) * route_stride + route_count ids, not token_count * route_stride (#95 uses the same bound
+    // for MUL_MAT_ID's route ids: dispatch-mul-mat-id-common.h).
     const size_t route_id_length =
-        static_cast<size_t>(match.top8.token_count * match.top8.route_stride) * sizeof(int32_t);
+        static_cast<size_t>((match.top8.token_count - 1) * match.top8.route_stride + match.top8.route_count) *
+        sizeof(int32_t);
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     dispatch.bindings.push_back({ match.logits->id, 0, match.logits->byte_count });
@@ -577,8 +581,11 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
                                                to_config_value(router_match.token_count));
 
+    // Same bound as above: a graph-output ids view's buffer ends at (token_count - 1) * route_stride +
+    // route_count, not token_count * route_stride.
     const size_t route_id_length =
-        static_cast<size_t>(router_match.token_count * router_match.route_stride) * sizeof(int32_t);
+        static_cast<size_t>((router_match.token_count - 1) * router_match.route_stride + router_match.route_count) *
+        sizeof(int32_t);
     dispatch.bindings.push_back({ router_match.logits->id, 0, router_match.logits->byte_count });
     dispatch.bindings.push_back({ router_match.route_ids->id, 0, route_id_length });
     dispatch.bindings.push_back({ router_match.route_weights->id, 0, router_match.route_weights->byte_count });
