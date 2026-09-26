@@ -55,7 +55,19 @@ struct CacheStats {
 class ExpertCache {
 public:
     // One expert's parts in its slot, in GgufIndex::experts order.
-    struct Resident { std::vector<const uint8_t*> parts; };
+    struct Resident {
+        std::vector<const uint8_t*> parts;
+        int slot = 0;  // index among the slots of this expert's size class or layer (Layout)
+    };
+    // The slots a layer's experts can occupy: n_slots of slot_bytes from base; part k of the
+    // expert in slot i starts at base + i * slot_bytes + part_off[k].
+    struct Layout {
+        uint8_t* base = nullptr;
+        size_t slot_bytes = 0;
+        int n_slots = 0;
+        std::vector<size_t> part_off;
+    };
+    const Layout& layout(int layer) const { return layouts_.at(lru_of(layer)); }
 
     ExpertCache(const GgufIndex& index, const CacheOptions& opt);
     ~ExpertCache();
@@ -84,10 +96,11 @@ private:
         bool prefetched = false;  // loaded by prefetch() and not acquired since
         std::vector<size_t> part_off;  // byte offset of each part's data inside the slot
         size_t off = 0;           // byte offset of the slot in the pinned region
+        int index = 0;            // position among its list's slots
         std::list<int>::iterator lru_it;
         int lru_list = 0;
     };
-    struct Read { int slot; int fd; uint64_t off, len; uint8_t* dst; };
+    struct Read { int slot; int fd; uint64_t off, len; uint8_t* dst; uint64_t lead, bytes; };
 
     uint64_t key(int layer, int e) const { return (uint64_t(layer) << 32) | uint32_t(e); }
     int lru_of(int layer) const;
@@ -102,7 +115,8 @@ private:
     size_t mem_bytes_ = 0, slot_bytes_ = 0;
     std::vector<Slot> slots_;
     std::unordered_map<uint64_t, int> where_;
-    std::vector<std::list<int>> lru_;         // front = most recent; per layer or one list
+    std::vector<std::list<int>> lru_;         // front = most recent; per layer or per size class
+    std::vector<Layout> layouts_;             // one per list
     std::unordered_map<int, int> layer_lru_;  // MoE layer -> lru_ index
     mutable std::mutex mu_;
     std::condition_variable ready_cv_, work_cv_;

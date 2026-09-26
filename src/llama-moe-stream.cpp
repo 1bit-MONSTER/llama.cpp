@@ -19,6 +19,7 @@
 #include "llama-impl.h"
 #include "moe-expert-cache.h"
 
+#include "ggml-backend.h"
 #include "ggml-cpu.h"
 
 #include <algorithm>
@@ -49,9 +50,18 @@ struct layer_state {
 
 }  // namespace
 
+struct gpu_layer {
+    ggml_backend_buffer_t buf = nullptr;
+    ggml_tensor * gate = nullptr, * up = nullptr, * down = nullptr;
+    bool failed = false;
+};
+
 struct llama_moe_stream {
     onebit::moe::GgufIndex index;
     std::unique_ptr<onebit::moe::ExpertCache> cache;
+    ggml_backend_dev_t gpu = nullptr;          // null: experts compute on the CPU
+    ggml_context * tctx = nullptr;             // the slot tensors
+    std::map<int, gpu_layer> gpu_layers;
     int max_batch = 8;
     std::map<int, layer_state> layers;
     layer_state * last = nullptr;  // the layer whose experts are pinned (layers run in order)
@@ -73,11 +83,29 @@ llama_moe_stream * llama_moe_stream_get() {
             st->index = onebit::moe::GgufIndex::open(file);
             onebit::moe::CacheOptions opt;
             opt.slots = atoi(slots);
+            const char * devname = getenv("ONEBIT_MOE_DEVICE");
+            if (!devname || strcmp(devname, "cpu") != 0) {
+                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                    ggml_backend_dev_t d = ggml_backend_dev_get(i);
+                    const auto t = ggml_backend_dev_type(d);
+                    if (t != GGML_BACKEND_DEVICE_TYPE_GPU && t != GGML_BACKEND_DEVICE_TYPE_IGPU) continue;
+                    if (devname && strcmp(devname, ggml_backend_dev_name(d)) != 0) continue;
+                    st->gpu = d;
+                    break;
+                }
+                if (devname && !st->gpu) LLAMA_LOG_WARN("%s: no device %s; experts compute on the CPU\n", __func__, devname);
+            }
+            opt.per_layer = st->gpu != nullptr;  // one region per layer: one device buffer each
             if (const char * io = getenv("ONEBIT_MOE_IO")) opt.io_threads = atoi(io);
             if (const char * mb = getenv("ONEBIT_MOE_MAX_BATCH")) st->max_batch = atoi(mb);
             st->cache = std::make_unique<onebit::moe::ExpertCache>(st->index, opt);
-            LLAMA_LOG_INFO("%s: streaming routed experts from %s: %d slots, %.1f GiB pinned, batches up to %d\n",
-                           __func__, file, st->cache->slots(), st->cache->pinned_bytes() / double(1u << 30), st->max_batch);
+            if (st->gpu) {
+                ggml_init_params ip = { 3 * 1024 * ggml_tensor_overhead(), nullptr, true };
+                st->tctx = ggml_init(ip);
+            }
+            LLAMA_LOG_INFO("%s: streaming routed experts from %s: %d slots, %.1f GiB pinned, batches up to %d, computed on %s\n",
+                           __func__, file, st->cache->slots(), st->cache->pinned_bytes() / double(1u << 30), st->max_batch,
+                           st->gpu ? ggml_backend_dev_name(st->gpu) : "CPU");
             s = std::move(st);
         } catch (const std::exception & e) {
             LLAMA_LOG_ERROR("%s: expert streaming disabled: %s\n", __func__, e.what());
@@ -196,7 +224,75 @@ void op_down(ggml_tensor * dst, int ith, int nth, void * ud) {
     }
 }
 
+// GPU mode, one thread: pin the batch's experts and write their slot indices
+void op_remap(ggml_tensor * dst, int ith, int nth, void * ud) {
+    (void) nth;
+    if (ith != 0) return;
+    layer_state & L = *(layer_state *) ud;
+    const ggml_tensor * ids = dst->src[0];
+    auto & cache = *L.s->cache;
+    for (layer_state * prev : { L.s->last, &L })  // the GPU has finished the previous layer
+        if (prev && !prev->held.empty()) {
+            cache.release(prev->il, prev->held);
+            prev->held.clear();
+        }
+    L.s->last = &L;
+    L.slot_of.clear();
+    for (int64_t t = 0; t < ids->ne[1]; ++t)
+        for (int64_t k = 0; k < ids->ne[0]; ++k) {
+            const int e = id_at(ids, k, t);
+            if (L.slot_of.emplace(e, (int) L.held.size()).second) L.held.push_back(e);
+        }
+    L.res = cache.acquire(L.il, L.held);
+    for (int64_t t = 0; t < ids->ne[1]; ++t)
+        for (int64_t k = 0; k < ids->ne[0]; ++k)
+            ((int32_t *) dst->data)[t * ids->ne[0] + k] = L.res[L.slot_of.at(id_at(ids, k, t))].slot;
+}
+
 }  // namespace
+
+bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * ids,
+                          ggml_tensor * gate_exps, ggml_tensor * up_exps, ggml_tensor * down_exps,
+                          ggml_tensor ** slot_ids, ggml_tensor ** slot_gate, ggml_tensor ** slot_up,
+                          ggml_tensor ** slot_down) {
+    if (!s->gpu) return false;
+    gpu_layer & G = s->gpu_layers[il];
+    if (G.failed) return false;
+    layer_state & L = s->layers[il];
+    if (!G.buf) {
+        L.s = s;
+        L.il = il;
+        L.part_gate = part_named(s->index, il, "ffn_gate_exps");
+        L.part_up = part_named(s->index, il, "ffn_up_exps");
+        L.part_down = part_named(s->index, il, "ffn_down_exps");
+        const auto & lay = s->cache->layout(il);
+        if (L.part_gate < 0 || L.part_up < 0 || L.part_down < 0) { G.failed = true; return false; }
+        G.buf = ggml_backend_dev_buffer_from_host_ptr(s->gpu, lay.base, lay.slot_bytes * lay.n_slots, lay.slot_bytes * lay.n_slots);
+        if (!G.buf) {
+            LLAMA_LOG_WARN("%s: %s cannot import layer %d's slots; it streams on the CPU\n", __func__, ggml_backend_dev_name(s->gpu), il);
+            G.failed = true;
+            return false;
+        }
+        auto view = [&](const ggml_tensor * like, int part) {
+            ggml_tensor * t = ggml_new_tensor_3d(s->tctx, like->type, like->ne[0], like->ne[1], lay.n_slots);
+            t->nb[2] = lay.slot_bytes;
+            t->nb[3] = lay.slot_bytes * lay.n_slots;
+            ggml_format_name(t, "blk.%d.%s_slots", il, part == L.part_gate ? "ffn_gate_exps" : part == L.part_up ? "ffn_up_exps" : "ffn_down_exps");
+            if (ggml_backend_tensor_alloc(G.buf, t, lay.base + lay.part_off[part]) != GGML_STATUS_SUCCESS) return (ggml_tensor *) nullptr;
+            return t;
+        };
+        G.gate = view(gate_exps, L.part_gate);
+        G.up = view(up_exps, L.part_up);
+        G.down = view(down_exps, L.part_down);
+        if (!G.gate || !G.up || !G.down) { G.failed = true; return false; }
+    }
+    ggml_tensor * args[] = { ids };
+    *slot_ids = ggml_custom_4d(ctx, GGML_TYPE_I32, ids->ne[0], ids->ne[1], 1, 1, args, 1, op_remap, 1, &L);
+    *slot_gate = G.gate;
+    *slot_up = G.up;
+    *slot_down = G.down;
+    return true;
+}
 
 ggml_tensor * llama_moe_stream_build(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * cur,
                                      ggml_tensor * ids, ggml_tensor * gate_exps, ggml_tensor * up_exps,
@@ -228,6 +324,11 @@ ggml_tensor * llama_moe_stream_build(ggml_context * ctx, llama_moe_stream * s, i
 #else  // not built with the expert cache (non-Linux)
 
 llama_moe_stream * llama_moe_stream_get() { return nullptr; }
+
+bool llama_moe_stream_gpu(ggml_context *, llama_moe_stream *, int, ggml_tensor *, ggml_tensor *, ggml_tensor *,
+                          ggml_tensor *, ggml_tensor **, ggml_tensor **, ggml_tensor **, ggml_tensor **) {
+    return false;
+}
 
 bool llama_moe_stream_applies(const llama_moe_stream *, int64_t, const ggml_tensor *, const ggml_tensor *,
                               const ggml_tensor *) {

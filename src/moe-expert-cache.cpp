@@ -38,26 +38,32 @@ ExpertCache::ExpertCache(const GgufIndex& index, const CacheOptions& opt) : inde
     // A slot holds every part's aligned read window, [down(off), up(off + bytes)). Mixed-quant
     // models (Unsloth's UD) use bigger types in some layers, so layers are grouped by that size:
     // each size class has its own slots, and LRU (shared mode) or one per layer.
-    std::map<size_t, std::vector<int>> classes;  // slot size -> layers
+    // Each part has a fixed window, up(bytes) + one alignment unit; after a read the part's data
+    // is moved to the start of its window, so a class's slots share one layout (a device can
+    // view them as a strided tensor per part).
+    std::map<std::vector<size_t>, std::vector<int>> classes;  // part windows -> layers
     for (const auto& [l, parts] : index.experts) {
+        std::vector<size_t> w;
         size_t n = 0;
-        for (const auto& p : parts) n += up(p.bytes) + kAlign;
-        classes[n].push_back(l);
+        for (const auto& p : parts) { w.push_back(up(p.bytes) + kAlign); n += w.back(); }
+        classes[w].push_back(l);
         slot_bytes_ = std::max(slot_bytes_, n);
     }
     // the budget is in experts; every layer keeps the same share of its experts
     const double share = std::min(1.0, double(opt_.slots) / (double(index.experts.size()) * index.n_expert));
-    struct List { size_t bytes; int slots; };
+    struct List { size_t bytes; int slots; std::vector<size_t> windows; };
     std::vector<List> lists;
-    for (const auto& [bytes, layers] : classes) {
+    for (const auto& [windows, layers] : classes) {
+        size_t bytes = 0;
+        for (size_t w : windows) bytes += w;
         if (opt_.per_layer) {
             for (int l : layers) {
                 layer_lru_[l] = (int) lists.size();
-                lists.push_back({bytes, std::max(1, (int) (share * index.n_expert))});
+                lists.push_back({bytes, std::max(1, (int) (share * index.n_expert)), windows});
             }
         } else {
             for (int l : layers) layer_lru_[l] = (int) lists.size();
-            lists.push_back({bytes, std::max(1, (int) (share * index.n_expert * layers.size()))});
+            lists.push_back({bytes, std::max(1, (int) (share * index.n_expert * layers.size())), windows});
         }
     }
     int n_slots = 0;
@@ -77,14 +83,23 @@ ExpertCache::ExpertCache(const GgufIndex& index, const CacheOptions& opt) : inde
     lru_.resize(lists.size());
     size_t off = 0;
     int si = 0;
-    for (int li = 0; li < (int) lists.size(); ++li)
+    for (int li = 0; li < (int) lists.size(); ++li) {
+        Layout lay;
+        lay.base = mem_ + off;
+        lay.slot_bytes = lists[li].bytes;
+        lay.n_slots = lists[li].slots;
+        size_t at = 0;
+        for (size_t w : lists[li].windows) { lay.part_off.push_back(at); at += w; }
+        layouts_.push_back(lay);
         for (int k = 0; k < lists[li].slots; ++k, ++si) {
             slots_[si].lru_list = li;
+            slots_[si].index = k;
             slots_[si].off = off;
             off += lists[li].bytes;
             lru_[li].push_back(si);  // empty slots at the back: taken first
             slots_[si].lru_it = std::prev(lru_[li].end());
         }
+    }
     for (int i = 0; i < std::max(1, opt_.io_threads); ++i) threads_.emplace_back([this] { reader(); });
 }
 
@@ -130,7 +145,7 @@ int ExpertCache::start_load(int layer, int e, bool demand) {
     s.key = key(layer, e);
     s.state = State::Loading;
     s.prefetched = !demand;
-    s.part_off.clear();
+    s.part_off = layouts_[s.lru_list].part_off;
     where_[s.key] = si;
     auto& lru = lru_[s.lru_list];
     lru.splice(lru.begin(), lru, s.lru_it);
@@ -141,10 +156,9 @@ int ExpertCache::start_load(int layer, int e, bool demand) {
     for (const auto& p : parts) {
         const uint64_t off = p.base + uint64_t(e) * p.stride;
         const uint64_t a = down(off), b = up(off + p.bytes);
-        s.part_off.push_back(at + (off - a));
-        Read r{si, fds_[p.file], a, b - a, base + at};
+        Read r{si, fds_[p.file], a, b - a, base + at, off - a, p.bytes};
         (demand ? demand_q_ : prefetch_q_).push_back(r);
-        at += b - a;
+        at += up(p.bytes) + kAlign;  // the part's fixed window
         st_.bytes_read += b - a;
     }
     work_cv_.notify_all();
@@ -173,6 +187,7 @@ void ExpertCache::reader() {
             }
             done += (uint64_t) n;
         }
+        if (r.lead) std::memmove(r.dst, r.dst + r.lead, r.bytes);  // the part at its window's start
         {
             std::lock_guard<std::mutex> lk(mu_);
             Slot& s = slots_[r.slot];
@@ -212,6 +227,7 @@ std::vector<ExpertCache::Resident> ExpertCache::acquire(int layer, const std::ve
         const Slot& s = slots_[si[i]];
         const uint8_t* base = mem_ + s.off;
         for (size_t off : s.part_off) out[i].parts.push_back(base + off);
+        out[i].slot = s.index;
     }
     return out;
 }

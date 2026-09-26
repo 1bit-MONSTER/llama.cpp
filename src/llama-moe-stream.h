@@ -15,13 +15,18 @@
 #pragma once
 
 // Routed experts streamed from the model file (1bit engine, docs/moe-streaming.md): a MoE
-// layer's expert FFN runs on the CPU out of pinned RAM slots that an O_DIRECT reader fills on
-// demand, so a model's experts need not fit in RAM. Enabled by environment:
+// layer's expert FFN runs out of pinned RAM slots that an O_DIRECT reader fills on demand, so a
+// model's experts need not fit in RAM. Enabled by environment:
 //   ONEBIT_MOE_FILE      the GGUF (first shard of a split file) the model was loaded from
 //   ONEBIT_MOE_SLOTS     experts held in RAM, all layers together
 //   ONEBIT_MOE_IO        reads in flight (default 8)
 //   ONEBIT_MOE_MAX_BATCH largest batch that streams (default 8); bigger batches (prompts) use
 //                        the regular path over the mmap-ed expert tensors
+//   ONEBIT_MOE_DEVICE    where streamed experts compute: a GPU device name (default: the first
+//                        GPU that imports host memory) or "cpu"
+// On a GPU (Strix Halo's is unified memory), each layer's pinned slots are imported as a device
+// buffer and viewed as expert tensors; a CPU op maps the routed expert ids to slot indices and
+// the regular MUL_MAT_ID path runs on the GPU over the slots.
 // Load the model with the expert tensors on the CPU and mmap-ed (-ot exps=CPU), so they are
 // never read into memory except by a prompt batch.
 
@@ -37,7 +42,14 @@ llama_moe_stream * llama_moe_stream_get();
 bool llama_moe_stream_applies(const llama_moe_stream * s, int64_t n_tokens, const ggml_tensor * gate_exps,
                               const ggml_tensor * up_exps, const ggml_tensor * down_exps);
 
-// The expert FFN of layer il with SwiGLU, from the streamed slots: returns the per-expert down
+// GPU mode: pins the batch's experts (ids -> slot indices) and returns the slot tensors to use
+// in place of the layer's expert tensors. False when the layer cannot stream on the GPU.
+bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * ids,
+                          ggml_tensor * gate_exps, ggml_tensor * up_exps, ggml_tensor * down_exps,
+                          ggml_tensor ** slot_ids, ggml_tensor ** slot_gate, ggml_tensor ** slot_up,
+                          ggml_tensor ** slot_down);
+
+// CPU mode: the expert FFN of layer il with SwiGLU, from the streamed slots: returns the per-expert down
 // projections [n_embd, n_expert_used, n_tokens], like the down MUL_MAT_ID it replaces.
 // cur: [n_embd, n_tokens] F32; ids: [n_expert_used, n_tokens] I32 (may be a view).
 ggml_tensor * llama_moe_stream_build(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * cur,
