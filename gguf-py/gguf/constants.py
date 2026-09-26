@@ -431,6 +431,7 @@ class MODEL_ARCH(IntEnum):
     GPTJ             = auto()
     GPTNEOX          = auto()
     OPT              = auto()
+    GPTNEO           = auto()
     MPT              = auto()
     STARCODER        = auto()
     REFACT           = auto()
@@ -1059,6 +1060,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GPTJ:             "gptj",
     MODEL_ARCH.GPTNEOX:          "gptneox",
     MODEL_ARCH.OPT:              "opt",
+    MODEL_ARCH.GPTNEO:           "gptneo",
     MODEL_ARCH.MPT:              "mpt",
     MODEL_ARCH.STARCODER:        "starcoder",
     MODEL_ARCH.REFACT:           "refact",
@@ -2139,6 +2141,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
     ],
     MODEL_ARCH.OPT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.POS_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+    ],
+    MODEL_ARCH.GPTNEO: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.POS_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,

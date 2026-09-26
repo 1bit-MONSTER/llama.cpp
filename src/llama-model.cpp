@@ -79,6 +79,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_eurobert(params);
         case LLM_ARCH_BLOOM:
             return new llama_model_bloom(params);
+        case LLM_ARCH_GPTNEO:
+            return new llama_model_gptneo(params);
         case LLM_ARCH_MPT:
             return new llama_model_mpt(params);
         case LLM_ARCH_OPT:
@@ -2498,6 +2500,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         // these models do not use RoPE
         case LLM_ARCH_CLIP:
         case LLM_ARCH_GPT2:
+        case LLM_ARCH_GPTNEO:
         case LLM_ARCH_OPT:
         case LLM_ARCH_MPT:
         case LLM_ARCH_REFACT:

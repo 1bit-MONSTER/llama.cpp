@@ -75,6 +75,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "GPT2LMHeadModel": "gpt2",
     "GPTJForCausalLM": "gptj",
     "GPTBigCodeForCausalLM": "starcoder",
+    "GPTNeoForCausalLM": "gptneo",
     "GPTNeoXForCausalLM": "gptneox",
     "GPTRefactForCausalLM": "refact",
     "Gemma2ForCausalLM": "gemma",

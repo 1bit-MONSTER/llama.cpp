@@ -257,6 +257,7 @@ class TensorNameMap:
 
         # Attention query
         MODEL_TENSOR.ATTN_Q: (
+            "transformer.h.{bid}.attn.attention.q_proj",    # gpt-neo
             "model.decoder.layers.{bid}.self_attn.q_proj",    # opt
             "model.layers.{bid}.self_attn.q_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
             "layers.{bid}.self_attn.q_proj",                             # embeddinggemma
@@ -278,6 +279,7 @@ class TensorNameMap:
 
         # Attention key
         MODEL_TENSOR.ATTN_K: (
+            "transformer.h.{bid}.attn.attention.k_proj",    # gpt-neo
             "model.decoder.layers.{bid}.self_attn.k_proj",    # opt
             "model.layers.{bid}.self_attn.k_proj",                     # llama-hf nemotron olmoe olmo2 phimoe
             "layers.{bid}.self_attn.k_proj",                           # embeddinggemma
@@ -300,6 +302,7 @@ class TensorNameMap:
 
         # Attention value
         MODEL_TENSOR.ATTN_V: (
+            "transformer.h.{bid}.attn.attention.v_proj",    # gpt-neo
             "model.decoder.layers.{bid}.self_attn.v_proj",    # opt
             "model.layers.{bid}.self_attn.v_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
             "layers.{bid}.self_attn.v_proj",                             # embeddinggemma
@@ -321,6 +324,7 @@ class TensorNameMap:
 
         # Attention output
         MODEL_TENSOR.ATTN_OUT: (
+            "transformer.h.{bid}.attn.attention.out_proj",    # gpt-neo
             "model.decoder.layers.{bid}.self_attn.out_proj",    # opt
             "gpt_neox.layers.{bid}.attention.dense",                        # gptneox
             "transformer.h.{bid}.attn.c_proj",                              # gpt2 refact qwen jais
@@ -397,6 +401,7 @@ class TensorNameMap:
 
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
+            "transformer.h.{bid}.ln_2",    # gpt-neo
             "model.decoder.layers.{bid}.final_layer_norm",    # opt
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
             "transformer.h.{bid}.ln_2",                                      # gpt2 refact qwen jais exaone
@@ -493,6 +498,7 @@ class TensorNameMap:
 
         # Feed-forward up
         MODEL_TENSOR.FFN_UP: (
+            "transformer.h.{bid}.mlp.c_fc",    # gpt-neo
             "model.decoder.layers.{bid}.fc1",    # opt
             "gpt_neox.layers.{bid}.mlp.dense_h_to_4h",                # gptneox
             "transformer.h.{bid}.mlp.c_fc",                           # gpt2 jais
@@ -629,6 +635,7 @@ class TensorNameMap:
 
         # Feed-forward down
         MODEL_TENSOR.FFN_DOWN: (
+            "transformer.h.{bid}.mlp.c_proj",    # gpt-neo
             "model.decoder.layers.{bid}.fc2",    # opt
             "gpt_neox.layers.{bid}.mlp.dense_4h_to_h",                # gptneox
             "transformer.h.{bid}.mlp.c_proj",                         # gpt2 refact qwen jais
