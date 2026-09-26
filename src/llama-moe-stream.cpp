@@ -388,11 +388,43 @@ void op_down(ggml_tensor * dst, int ith, int nth, void * ud) {
     }
 }
 
+// Pins the batch's experts in layer L (id(k, t) gives them), releasing the previous layer's, and
+// writes their slot indices to out[t * n_used + k]; then queues the gate-ahead prefetch from cur.
+template <class F>
+void pin_and_map(layer_state & L, int64_t n_used, int64_t n_tok, F id, int32_t * out, const ggml_tensor * cur) {
+    const auto t_in = std::chrono::steady_clock::now();
+    L.s->remap_seq++;
+    if (L.s->remaps) L.s->gap_ms += std::chrono::duration<double, std::milli>(t_in - L.s->last_remap_end).count();
+    auto & cache = *L.s->cache;
+    for (layer_state * prev : { L.s->last, &L })  // the GPU has finished the previous layer
+        if (prev && !prev->held.empty()) {
+            cache.release(prev->il, prev->held);
+            prev->held.clear();
+        }
+    L.s->last = &L;
+    L.slot_of.clear();
+    for (int64_t t = 0; t < n_tok; ++t)
+        for (int64_t k = 0; k < n_used; ++k) {
+            const int e = id(k, t);
+            if (L.slot_of.emplace(e, (int) L.held.size()).second) L.held.push_back(e);
+        }
+    L.res = cache.acquire(L.il, L.held);
+    for (int64_t t = 0; t < n_tok; ++t)
+        for (int64_t k = 0; k < n_used; ++k) out[t * n_used + k] = L.res[L.slot_of.at(id(k, t))].slot;
+    prefetch_next(L, cur, n_used);
+    L.s->last_remap_end = std::chrono::steady_clock::now();
+    L.s->remap_ms += std::chrono::duration<double, std::milli>(L.s->last_remap_end - t_in).count();
+    L.s->remaps++;
+}
+
 // ONEBIT_MOE_SUBST, one thread: top-k of each token's selection scores, where a chosen expert
 // that is not resident gives way to the best resident one among the next k candidates if that
 // one scores at least subst times as much. Scores may be logits or probabilities, so the ratio
 // is taken on softmax-free values only when both are positive; otherwise on exp(difference).
-struct select_args { llama_moe_stream * s; int il; };
+// Output [n_used, n_tokens, planes]: plane 0 the chosen experts; with a second plane (GPU mode)
+// the op also pins them and writes their slot indices there, so the layer syncs with the host
+// once, as with the remap op alone.
+struct select_args { llama_moe_stream * s; int il; layer_state * L; };
 
 void op_select(ggml_tensor * dst, int ith, int nth, void * ud) {
     (void) nth;
@@ -435,46 +467,29 @@ void op_select(ggml_tensor * dst, int ith, int nth, void * ud) {
     }
     s.substituted += n_sub;
     s.selected += (uint64_t) (n_tok * k);
+    if (dst->ne[2] == 2) {
+        const int32_t * ids = (const int32_t *) dst->data;
+        pin_and_map(*a.L, k, n_tok, [&](int64_t i, int64_t t) { return ids[t * k + i]; }, (int32_t *) dst->data + n_tok * k,
+                    dst->src[1]);
+    }
 }
 
 // GPU mode, one thread: pin the batch's experts and write their slot indices
 void op_remap(ggml_tensor * dst, int ith, int nth, void * ud) {
     (void) nth;
     if (ith != 0) return;
-    layer_state & L = *(layer_state *) ud;
-    const auto t_in = std::chrono::steady_clock::now();
-    L.s->remap_seq++;
-    if (L.s->remaps) L.s->gap_ms += std::chrono::duration<double, std::milli>(t_in - L.s->last_remap_end).count();
     const ggml_tensor * ids = dst->src[0];
-    auto & cache = *L.s->cache;
-    for (layer_state * prev : { L.s->last, &L })  // the GPU has finished the previous layer
-        if (prev && !prev->held.empty()) {
-            cache.release(prev->il, prev->held);
-            prev->held.clear();
-        }
-    L.s->last = &L;
-    L.slot_of.clear();
-    for (int64_t t = 0; t < ids->ne[1]; ++t)
-        for (int64_t k = 0; k < ids->ne[0]; ++k) {
-            const int e = id_at(ids, k, t);
-            if (L.slot_of.emplace(e, (int) L.held.size()).second) L.held.push_back(e);
-        }
-    L.res = cache.acquire(L.il, L.held);
-    for (int64_t t = 0; t < ids->ne[1]; ++t)
-        for (int64_t k = 0; k < ids->ne[0]; ++k)
-            ((int32_t *) dst->data)[t * ids->ne[0] + k] = L.res[L.slot_of.at(id_at(ids, k, t))].slot;
-    prefetch_next(L, dst->src[1], ids->ne[0]);
-    L.s->last_remap_end = std::chrono::steady_clock::now();
-    L.s->remap_ms += std::chrono::duration<double, std::milli>(L.s->last_remap_end - t_in).count();
-    L.s->remaps++;
+    pin_and_map(*(layer_state *) ud, ids->ne[0], ids->ne[1], [&](int64_t k, int64_t t) { return id_at(ids, k, t); },
+                (int32_t *) dst->data, dst->src[1]);
 }
 
 }  // namespace
 
-bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * cur, ggml_tensor * ids,
-                          ggml_tensor * gate_exps, ggml_tensor * up_exps, ggml_tensor * down_exps,
-                          ggml_tensor ** slot_ids, ggml_tensor ** slot_gate, ggml_tensor ** slot_up,
-                          ggml_tensor ** slot_down) {
+namespace {
+
+// GPU mode: sets up layer il's slot tensors on first use; false when the layer cannot stream on the GPU
+bool gpu_layer_ready(llama_moe_stream * s, int il, const ggml_tensor * gate_exps, const ggml_tensor * up_exps,
+                     const ggml_tensor * down_exps) {
     if (!s->gpu) return false;
     gpu_layer & G = s->gpu_layers[il];
     if (G.failed) return false;
@@ -509,8 +524,23 @@ bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml
         G.down = view(down_exps, L.part_down);
         if (!G.gate || !G.up || !G.down) { G.failed = true; return false; }
     }
-    ggml_tensor * args[] = { ids, cur };
-    *slot_ids = ggml_custom_4d(ctx, GGML_TYPE_I32, ids->ne[0], ids->ne[1], 1, 1, args, 2, op_remap, 1, &L);
+    return true;
+}
+
+}  // namespace
+
+bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * cur, ggml_tensor * ids,
+                          ggml_tensor * sel, ggml_tensor * gate_exps, ggml_tensor * up_exps, ggml_tensor * down_exps,
+                          ggml_tensor ** slot_ids, ggml_tensor ** slot_gate, ggml_tensor ** slot_up,
+                          ggml_tensor ** slot_down) {
+    if (!gpu_layer_ready(s, il, gate_exps, up_exps, down_exps)) return false;
+    gpu_layer & G = s->gpu_layers[il];
+    if (sel && sel->ne[2] == 2) {  // the select op has pinned the experts already: its second plane
+        *slot_ids = ggml_view_2d(ctx, sel, sel->ne[0], sel->ne[1], sel->nb[1], sel->nb[2]);
+    } else {
+        ggml_tensor * args[] = { ids, cur };
+        *slot_ids = ggml_custom_4d(ctx, GGML_TYPE_I32, ids->ne[0], ids->ne[1], 1, 1, args, 2, op_remap, 1, &s->layers[il]);
+    }
     *slot_gate = G.gate;
     *slot_up = G.up;
     *slot_down = G.down;
@@ -545,12 +575,15 @@ ggml_tensor * llama_moe_stream_build(ggml_context * ctx, llama_moe_stream * s, i
 }
 
 ggml_tensor * llama_moe_stream_select(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * selection_probs,
-                                      int64_t n_expert_used) {
+                                      ggml_tensor * cur, int64_t n_expert_used, const ggml_tensor * gate_exps,
+                                      const ggml_tensor * up_exps, const ggml_tensor * down_exps) {
     if (!s || s->subst <= 0 || selection_probs->type != GGML_TYPE_F32) return nullptr;
     static std::map<int, select_args> args;  // one per layer, alive as long as the graphs
-    args[il] = { s, il };
-    ggml_tensor * src[] = { selection_probs };
-    return ggml_custom_4d(ctx, GGML_TYPE_I32, n_expert_used, selection_probs->ne[1], 1, 1, src, 1, op_select, 1, &args[il]);
+    const bool gpu = gpu_layer_ready(s, il, gate_exps, up_exps, down_exps);
+    args[il] = { s, il, &s->layers[il] };
+    ggml_tensor * src[] = { selection_probs, cur };
+    return ggml_custom_4d(ctx, GGML_TYPE_I32, n_expert_used, selection_probs->ne[1], gpu ? 2 : 1, 1, src, 2, op_select, 1,
+                          &args[il]);
 }
 
 #else  // not built with the expert cache (non-Linux)
@@ -558,7 +591,8 @@ ggml_tensor * llama_moe_stream_select(ggml_context * ctx, llama_moe_stream * s, 
 llama_moe_stream * llama_moe_stream_get() { return nullptr; }
 
 bool llama_moe_stream_gpu(ggml_context *, llama_moe_stream *, int, ggml_tensor *, ggml_tensor *, ggml_tensor *,
-                          ggml_tensor *, ggml_tensor *, ggml_tensor **, ggml_tensor **, ggml_tensor **, ggml_tensor **) {
+                          ggml_tensor *, ggml_tensor *, ggml_tensor *, ggml_tensor **, ggml_tensor **, ggml_tensor **,
+                          ggml_tensor **) {
     return false;
 }
 
@@ -572,7 +606,8 @@ ggml_tensor * llama_moe_stream_build(ggml_context *, llama_moe_stream *, int, gg
     return nullptr;
 }
 
-ggml_tensor * llama_moe_stream_select(ggml_context *, llama_moe_stream *, int, ggml_tensor *, int64_t) {
+ggml_tensor * llama_moe_stream_select(ggml_context *, llama_moe_stream *, int, ggml_tensor *, ggml_tensor *, int64_t,
+                                      const ggml_tensor *, const ggml_tensor *, const ggml_tensor *) {
     return nullptr;
 }
 

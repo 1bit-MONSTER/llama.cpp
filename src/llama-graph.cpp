@@ -2114,9 +2114,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     // select experts
     ggml_tensor * selected_experts = selected_experts_in;
+    ggml_tensor * moe_sel = nullptr;
     if (selected_experts == nullptr && moe_streamed && arch != LLM_ARCH_GROVEMOE && hparams.n_expert_groups <= 1) {
         // prefer resident experts when ONEBIT_MOE_SUBST is set
-        selected_experts = llama_moe_stream_select(ctx0, moe_stream, il, selection_probs, n_expert_used);
+        moe_sel = llama_moe_stream_select(ctx0, moe_stream, il, selection_probs, ggml_reshape_2d(ctx0, cur, n_embd, n_tokens),
+                                          n_expert_used, gate_exps, up_exps, down_exps);
+        if (moe_sel) selected_experts = ggml_view_2d(ctx0, moe_sel, n_expert_used, n_tokens, moe_sel->nb[1], 0);
     }
     if (selected_experts == nullptr) {
         selected_experts = ggml_argsort_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
@@ -2182,7 +2185,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // GPU: the slots are device tensors; the regular path below runs over them with slot ids
     ggml_tensor * slot_ids = nullptr, * slot_gate = nullptr, * slot_up = nullptr, * slot_down = nullptr;
     const bool moe_streamed_gpu = moe_streamed &&
-        llama_moe_stream_gpu(ctx0, moe_stream, il, ggml_reshape_2d(ctx0, cur, n_embd, n_tokens), selected_experts,
+        llama_moe_stream_gpu(ctx0, moe_stream, il, ggml_reshape_2d(ctx0, cur, n_embd, n_tokens), selected_experts, moe_sel,
                              gate_exps, up_exps, down_exps,
                              &slot_ids, &slot_gate, &slot_up, &slot_down);
     if (moe_streamed_gpu) {
