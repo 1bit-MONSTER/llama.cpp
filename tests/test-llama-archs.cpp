@@ -190,6 +190,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             n_ff_per_layer.push_back(il <= 1 ? 0 : n_ff);
         }
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
+    } else if (arch == LLM_ARCH_BLACKMAMBA) {
+        // Mamba-1 layers (n_ff 0) alternate with MoE layers
+        std::vector<uint32_t> n_ff_per_layer;
+        n_ff_per_layer.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            n_ff_per_layer.push_back(il % 2 == 0 ? 0 : n_ff);
+        }
+        ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
     } else {
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff);
     }
@@ -254,6 +262,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     } else if (arch == LLM_ARCH_MINIMAX_M3) {
         // partial rotary: n_rot must not exceed the indexer key length (64)
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
+    } else if (arch == LLM_ARCH_ZAMBA || arch == LLM_ARCH_ZAMBA2) {
+        // the shared attention block runs on concat(hidden, embeddings): 2 * n_embd wide
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   2 * n_embd_head);
+        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, 2 * n_embd_head);
     }
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,          1e-5f);
@@ -531,6 +543,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN4EXP:
+        case LLM_ARCH_BLACKMAMBA:
         case LLM_ARCH_PHIMOE:
         case LLM_ARCH_DBRX:
         case LLM_ARCH_OLMOE:
