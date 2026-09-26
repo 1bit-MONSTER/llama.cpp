@@ -4958,6 +4958,51 @@
       "compile_dependencies": []
     },
     {
+      "name": "ggml_set_rows_scatter",
+      "family": "loom_libs",
+      "symbol": "ggml_set_rows_scatter",
+      "source": "ops/set_rows.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "rows",
+        "indices",
+        "cache"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/set_rows.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
       "name": "ggml_rope_set_rows_f32",
       "family": "loom_libs",
       "symbol": "ggml_rope_set_rows_f32",
