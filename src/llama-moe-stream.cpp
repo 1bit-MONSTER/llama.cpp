@@ -111,6 +111,9 @@ struct llama_moe_stream {
         if (subst > 0)
             fprintf(stderr, "moe-stream: %llu of %llu routed experts replaced by resident ones (ONEBIT_MOE_SUBST %.2f)\n",
                     (unsigned long long) substituted.load(), (unsigned long long) selected.load(), subst);
+        fprintf(stderr, "moe-stream: %llu part reads: %.3f ms in pread, %.3f ms copying out, per read\n",
+                (unsigned long long) st.reads, st.read_ms / std::max<uint64_t>(st.reads, 1),
+                st.copy_ms / std::max<uint64_t>(st.reads, 1));
         fprintf(stderr, "moe-stream: %llu experts used: %.1f%% hits, %.1f%% prefetch hits, %.1f%% misses; %llu prefetched, %llu wasted; %.2f GiB read\n",
                 (unsigned long long) used, 100.0 * st.hits / std::max<uint64_t>(used, 1),
                 100.0 * st.prefetch_hits / std::max<uint64_t>(used, 1), 100.0 * st.misses / std::max<uint64_t>(used, 1),
@@ -220,7 +223,12 @@ llama_moe_stream * llama_moe_stream_get() {
                     };
                 }
             }
+            // 16 reads in flight of 256 KiB each: a layer's misses (a few MiB) then keep the drive's
+            // queue deep; whole-part reads with 8 threads were 14-18% slower on Flash-Next
+            opt.io_threads = 16;
+            opt.read_chunk = 256u << 10;
             if (const char * io = getenv("ONEBIT_MOE_IO")) opt.io_threads = atoi(io);
+            if (const char * ck = getenv("ONEBIT_MOE_CHUNK_KB")) opt.read_chunk = size_t(std::max(0, atoi(ck))) << 10;
             if (const char * mb = getenv("ONEBIT_MOE_MAX_BATCH")) st->max_batch = atoi(mb);
             st->cache = std::make_unique<onebit::moe::ExpertCache>(st->index, opt);
             st->layer_slots = int(double(opt.slots) / st->index.experts.size());

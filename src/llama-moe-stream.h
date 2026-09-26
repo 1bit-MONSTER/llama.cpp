@@ -19,7 +19,8 @@
 // model's experts need not fit in RAM. Enabled by environment:
 //   ONEBIT_MOE_FILE      the GGUF (first shard of a split file) the model was loaded from
 //   ONEBIT_MOE_SLOTS     experts held in RAM, all layers together
-//   ONEBIT_MOE_IO        reads in flight (default 8)
+//   ONEBIT_MOE_IO        reads in flight (default 16)
+//   ONEBIT_MOE_CHUNK_KB  read expert parts in chunks of this many KiB (default 256; 0: whole parts)
 //   ONEBIT_MOE_MAX_BATCH largest batch that streams (default 8); bigger batches (prompts) use
 //                        the regular path over the mmap-ed expert tensors
 //   ONEBIT_MOE_PREFETCH  MoE layers ahead whose experts the gate-ahead prefetch queues
