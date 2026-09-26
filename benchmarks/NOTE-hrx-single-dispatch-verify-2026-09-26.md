@@ -767,3 +767,31 @@ NEXT: rewrite `reduce_completed.multipass`'s max/sum passes to avoid the diverge
 `scf.for %iteration = [%c0 to %iteration_count step %c1]` (uniform) with `%block = %lane + %iteration*64`
 and a SELECTED value (plus a predicated store for the scale), so control flow is uniform across lanes.
 Then re-run 5x at d2100/d3000/d4800 and re-check d1900/d2000 are still 0/5.
+
+## The fault is decisively IN `reduce_completed.multipass`; two structural fixes did NOT remove it
+Localization (valid, 5 runs): forcing the multipass wrapper to apply `reduce_completed.cooperative`
+(widening its `1, 32` bound sites to `1, 4096`) gave 0/5 faults at BOTH d2100 and d3000 - so the fault is
+in my reducer, not in the produce, the wrapper, the counter, or the sizing. CAVEAT: the cooperative is NOT
+valid above 32 blocks (its stage is 32-wide), so that build produced GARBAGE output - and therefore the
+63.93 t/s "no cliff" speed number measured from that build is INVALID.
+
+Fix attempts - both reverted, both ~1/5, i.e. NO better than the PR #13 baseline:
+ (A) uniform loop bounds: `scf.for %block = [%lane to %active_block_count step %c64]` ->
+     `[%c0 to %active_block_count step %c1]` in the max and sum passes, plus a
+     `scf.select %workitem_is_zero` leader so the subgroup add-reduce does not multiply the sum by the
+     lane count  ->  1/5, 1/5, 0/5 at d2100/d3000/d4800.
+ (B) uniform loops + publish `%lane_sum` directly to the reduction stage (dropping the subgroup add-reduce
+     entirely, since every lane then holds the same complete sum)  ->  1/5, 1/5, 0/5.
+=> the divergent lane-dependent loop bound is NOT the cause.
+
+STRUCTURAL DIFFERENCES between the fault-free cooperative and the faulting multipass, NOT yet addressed:
+ 1. the cooperative computes the sum AND the unnormalized output in ONE fused pass; the multipass uses
+    three passes (max, sum, output), and its output pass re-reads the per-block scale that the sum pass
+    wrote back into partial_max;
+ 2. the cooperative is PHASED (`scf.for %phase`) with a 32-lane stage; the multipass is single-shot;
+ 3. the cooperative's loops carry `unroll` / `schedule(interleaved)`; the multipass's do not.
+NEXT: port the cooperative's reduction STRUCTURE (fused sum+output pass, uniform loops, and NO scale
+written back into partial_max) into `reduce_completed.multipass` while keeping the scratch bounded, then
+re-run d2100/d3000/d4800 at 5 runs each AND verify the code word is retrieved EXACTLY - a fault-free but
+wrong reduction is not acceptable, as the forced-cooperative experiment proved.
+Baseline for comparison (PR #13 loom, align-4096 cpp): d2100 1/5, d3000 1/5, d4800 0/5.
