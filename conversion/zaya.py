@@ -113,6 +113,15 @@ class ZayaModel(TextModel):
         self.gguf_writer.add_ssm_conv_kernel(hp.get("cca_time0", 2))
         self.gguf_writer.add_ssm_state_size(2 * n_qk + hp["hidden_size"])
         self.gguf_writer.add_ssm_inner_size(1)
+        # ZAYA1-74B: layer_types alternates hybrid_sliding / hybrid; sliding layers attend to the
+        # last sliding_window positions and use their own rope theta (rope_parameters.hybrid_sliding)
+        layer_types = hp.get("layer_types") or []
+        if hp.get("sliding_window") and "hybrid_sliding" in layer_types:
+            self.gguf_writer.add_sliding_window(int(hp["sliding_window"]))
+            self.gguf_writer.add_sliding_window_pattern([t == "hybrid_sliding" for t in layer_types])
+            swa_rope = hp.get("rope_parameters", {}).get("hybrid_sliding", {})
+            if "rope_theta" in swa_rope:
+                self.gguf_writer.add_rope_freq_base_swa(float(swa_rope["rope_theta"]))
         self.gguf_writer.add_file_type(self.ftype)
         logger.info(f"zaya: {self.block_count} layers, rope theta {rope.get('rope_theta')}, rotary {rotary}")
 
