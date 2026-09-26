@@ -194,6 +194,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Phi3ForCausalLM": "phi",
     "Phi4ForCausalLMV": "phi",
     "PhiForCausalLM": "phi",
+    "PicoDecoderHF": "pico",
     "PhiMoEForCausalLM": "phi",
     "Plamo2ForCausalLM": "plamo",
     "Plamo3ForCausalLM": "plamo",
