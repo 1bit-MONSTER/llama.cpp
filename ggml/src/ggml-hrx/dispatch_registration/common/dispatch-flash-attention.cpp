@@ -17,6 +17,10 @@ static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma");
 static constexpr KernelCatalogRef kFlashAttentionDecodeSplitNextQ8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
+static constexpr KernelCatalogRef kFlashAttentionDecodeSplitProducePartialsKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_produce_partials_f32_f16_wmma");
+static constexpr KernelCatalogRef kFlashAttentionDecodeSplitReduceLongKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_reduce_f32");
 static constexpr KernelCatalogRef kCopyTransposeF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_transpose_f16");
 static constexpr int64_t kDecodeRowCapacity         = 16;
@@ -347,9 +351,6 @@ static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16
     match.query_token_count     = query_token_count;
     match.key_value_token_count = key_value_token_count;
     match.key_value_capacity    = ceil_div(key_value_token_count, kDecodeKvTileSize) * kDecodeKvTileSize;
-    if (match.key_value_capacity > kDecodeSplitMaxKeyValueTokenCapacity) {
-        return {};
-    }
     match.query_head_count      = query_head_count;
     match.key_value_head_count  = key_value_head_count;
     match.qk_head_size          = qk_head_size;
@@ -552,7 +553,7 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
                                                                 DispatchMatch &              dispatch_match) {
     const DecodeSplitFlashAttentionMatch match =
         match_decode_split_flash_attention_f32_f16(context.graph, context.root_node);
-    if (!match.matched()) {
+    if (!match.matched() || match.key_value_capacity > kDecodeSplitMaxKeyValueTokenCapacity) {
         return false;
     }
 
@@ -637,6 +638,88 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
     return true;
 }
 
+
+static bool match_flash_attention_decode_split_long_dispatch(const DispatchMatchContext & context,
+                                                              DispatchMatch &              dispatch_match) {
+    const DecodeSplitFlashAttentionMatch match =
+        match_decode_split_flash_attention_f32_f16(context.graph, context.root_node);
+    if (!match.matched() || match.key_value_capacity <= kDecodeSplitMaxKeyValueTokenCapacity) {
+        return false;
+    }
+
+    const int64_t key_value_block_count = ceil_div(match.key_value_capacity, kDecodeKvTileSize);
+    const size_t  partial_scalar_count  = static_cast<size_t>(match.key_value_head_count) *
+                                        static_cast<size_t>(key_value_block_count) *
+                                        static_cast<size_t>(kDecodeRowCapacity);
+    const size_t partial_value_count  = partial_scalar_count * static_cast<size_t>(match.value_head_size);
+    const size_t partial_scalar_bytes = partial_scalar_count * sizeof(float);
+    const size_t partial_output_bytes = partial_value_count * sizeof(ggml_fp16_t);
+    if (partial_scalar_bytes == 0 || partial_output_bytes == 0) {
+        return false;
+    }
+
+    const ValueId partial_max    = match_value(context, dispatch_match, 0);
+    const ValueId partial_sum    = match_value(context, dispatch_match, 1);
+    const ValueId partial_output = match_value(context, dispatch_match, 2);
+
+    dispatch_match.transients.push_back(
+        { partial_max, "common.decode.flash_attention.long.partial_max", partial_scalar_bytes, 256 });
+    dispatch_match.transients.push_back(
+        { partial_sum, "common.decode.flash_attention.long.partial_sum", partial_scalar_bytes, 256 });
+    dispatch_match.transients.push_back(
+        { partial_output, "common.decode.flash_attention.long.partial_output", partial_output_bytes, 256 });
+
+    const int64_t query_hidden_size  = match.query_head_count * match.qk_head_size;
+    const int64_t output_hidden_size = match.query_head_count * match.value_head_size;
+    const size_t  query_row_bytes    = static_cast<size_t>(query_hidden_size) * sizeof(float);
+    const size_t  mask_row_bytes     = static_cast<size_t>(match.key_value_token_count) * sizeof(ggml_fp16_t);
+    const size_t  output_row_bytes   = static_cast<size_t>(output_hidden_size) * sizeof(float);
+    for (int64_t row = 0; row < match.query_token_count; ++row) {
+        Dispatch producer;
+        producer.kernel = make_kernel_specialization(kFlashAttentionDecodeSplitProducePartialsKernel);
+        producer.kernel.integer_parameters.emplace("key_value_token_count", match.key_value_token_count);
+        add_flash_attention_decode_compile_parameters(producer.kernel, match.query_head_count,
+                                                      match.key_value_head_count, match.qk_head_size,
+                                                      match.value_head_size, match.attention_scale);
+        producer.kernel.compile_parameters.emplace("ggml.flash_attention.decode.key_value_token_capacity",
+                                                   to_config_value(match.key_value_capacity));
+        producer.bindings.push_back(
+            { match.query->id, static_cast<size_t>(row) * match.query->nb[1], query_row_bytes });
+        producer.bindings.push_back({ match.key->id, 0, match.key->byte_count });
+        producer.bindings.push_back({ match.value->id, 0, match.value->byte_count });
+        producer.bindings.push_back(
+            { match.mask->id, static_cast<size_t>(row) * match.mask->nb[1], mask_row_bytes });
+        producer.bindings.push_back({ partial_max, 0, partial_scalar_bytes });
+        producer.bindings.push_back({ partial_sum, 0, partial_scalar_bytes });
+        producer.bindings.push_back({ partial_output, 0, partial_output_bytes });
+        dispatch_match.dispatches.push_back(std::move(producer));
+
+        Dispatch reducer;
+        reducer.kernel = make_kernel_specialization(kFlashAttentionDecodeSplitReduceLongKernel);
+        reducer.kernel.integer_parameters.emplace("key_value_token_count", match.key_value_token_count);
+        add_flash_attention_decode_compile_parameters(reducer.kernel, match.query_head_count,
+                                                      match.key_value_head_count, match.qk_head_size,
+                                                      match.value_head_size, match.attention_scale);
+        reducer.kernel.compile_parameters.emplace("ggml.flash_attention.decode.key_value_token_capacity",
+                                                  to_config_value(match.key_value_capacity));
+        reducer.bindings.push_back({ partial_max, 0, partial_scalar_bytes });
+        reducer.bindings.push_back({ partial_sum, 0, partial_scalar_bytes });
+        reducer.bindings.push_back({ partial_output, 0, partial_output_bytes });
+        reducer.bindings.push_back(
+            { match.output->id, static_cast<size_t>(row) * match.output->nb[2], output_row_bytes });
+        dispatch_match.dispatches.push_back(std::move(reducer));
+    }
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    if (match.output_layout != nullptr) {
+        if (!append_covered_node_index_once(context.graph, context.covered_nodes, match.output_layout,
+                                            dispatch_match.covered_nodes)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
@@ -655,6 +738,14 @@ void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
         75,
         DispatchSource::Common,
         match_flash_attention_decode_split_next_q8_dispatch,
+    });
+    registry.add({
+        "common.flash_attention_decode_split_long",
+        GGML_OP_FLASH_ATTN_EXT,
+        DispatchMatchKind::SingleOp,
+        60,
+        DispatchSource::Common,
+        match_flash_attention_decode_split_long_dispatch,
     });
     registry.add({
         "common.flash_attention_f32_f16_wmma",
