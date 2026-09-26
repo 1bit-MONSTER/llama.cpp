@@ -346,7 +346,16 @@ static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16
     match.output_layout         = find_single_layout_alias_consumer(graph, output->id);
     match.query_token_count     = query_token_count;
     match.key_value_token_count = key_value_token_count;
-    match.key_value_capacity    = ceil_div(key_value_token_count, kDecodeKvTileSize) * kDecodeKvTileSize;
+    // Round the capacity up to a whole number of 64-block waves. The multipass reducer lane-strides
+    // the block dimension (`scf.for %block = [%lane to %active_block_count step %c64]`), which gives
+    // lanes a DIVERGENT trip count whenever the block count is not a multiple of the wave width
+    // (some lanes 0 iterations, some 1). Launching a whole number of waves makes every lane iterate
+    // uniformly; the surplus workgroups fall into the produce's !does_this_block_have_attention path
+    // (they read only beyond bounded_key_value_token_count) and zero their partials, so they
+    // contribute exp(-inf - max) = 0 to the reduction.
+    const int64_t wave_block_count =
+        ceil_div(ceil_div(key_value_token_count, kDecodeKvTileSize), 64) * 64;
+    match.key_value_capacity    = wave_block_count * kDecodeKvTileSize;
     if (match.key_value_capacity > kDecodeSplitMaxKeyValueTokenCapacity) {
         return {};
     }

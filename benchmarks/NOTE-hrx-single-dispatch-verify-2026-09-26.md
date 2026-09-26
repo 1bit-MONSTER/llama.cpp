@@ -714,3 +714,29 @@ NEXT (in priority order):
     do it).
  3. Re-run the -dev HRX0-ALONE 4718-token and ~3587-token repros and record the answers.
  4. Note the PRs are OPEN and unmerged - merging is the maintainer's call, not something the agent can do.
+
+## Wave-padding the block count does NOT fix it - hypothesis FALSIFIED; trigger is layout+token dependent
+Patched the matcher to round the capacity up to a whole number of 64-block waves
+(wave_block_count = ceil_div(ceil_div(kv,64),64)*64) so the reduce's lane-strided loops
+(`scf.for %block = [%lane to %active_block_count step %c64]`) always have a uniform trip count across
+lanes. Result (5 runs each, rebuilt):
+  d2100 cap4096  64 blocks -> 0,0,0,1,0 = 1/5 FAULT
+  d2500 cap4096  64 blocks -> 0,1,0,0,1 = 2/5 FAULT
+  d3000 cap4096  64 blocks -> 0,1,0,1,0 = 2/5 FAULT
+  d4800 cap8192 128 blocks -> 0/5 CLEAN
+  d1900 cap4096  64 blocks -> 0/5 CLEAN
+=> the divergent-trip-count theory is FALSIFIED (a whole number of waves still faults) and 128 blocks is
+clean. The three failing depths now share capacity 4096 AND block count 64 yet fault at DIFFERENT rates
+(1/5, 2/5, 2/5) - the only remaining difference is the KV length (mask->ne[0] = 2108/2508/3008). So the
+fault depends on the transient SIZE (block count), the TOKEN count, AND the arena layout (d2100: align 256
+-> 5/5, align 4096 -> 0/5, align 64K -> 4/5).
+
+REMAINING EXPLANATION, best fit: ALIASING/OVERLAP in the dispatch infrastructure.
+transient-allocator.cpp has overlap logic but only against the COMPLETION COUNTER region
+(`transient_allocation_overlaps_region(allocation, completion_counters.arena_offset, byte_count)`), and the
+arena holds the graph tensors AND the transients. At capacity 4096 the partial_output transient is 1 MB
+(4*64*16*128*2); at the objective's target capacity 32768 it would be 8 MB. If a transient may overlap a
+graph tensor or another dispatch's transient, the layout-sensitive, intermittently-faulting behaviour
+follows exactly. NEXT: audit TransientAllocator::allocate (transient-allocator.cpp:356-447) for
+transient-vs-graph-tensor and transient-vs-transient overlap, and check whether graph tensors live in a
+region disjoint from the transients. (Wave-padding reverted - it costs 2x compute for no benefit.)
