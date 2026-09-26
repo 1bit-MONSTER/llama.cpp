@@ -23,13 +23,18 @@
 #include "ggml-cpu.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -65,14 +70,103 @@ struct llama_moe_stream {
     std::map<uint8_t *, ggml_backend_buffer_t> region_bufs;  // slot regions the device allocated
     int max_batch = 8;
     int layer_slots = 0;  // the fewest slots any one layer can use
-    // Gate-ahead prefetch: layer l+1's router (F32, from the file) applied to layer l's FFN input
-    // while layer l computes; its top-k experts are queued for reading.
-    bool prefetch = true;
+    // Gate-ahead prefetch: the routers of the next `prefetch` MoE layers (F32, from the file)
+    // applied to layer l's FFN input; their top-k experts are queued for reading. A worker thread
+    // scores them, so decode never waits for it.
+    int prefetch = 1;
     std::map<int, std::vector<float>> router;  // MoE layer -> [n_expert][n_embd]
     std::map<int, int> next_layer;             // MoE layer -> the next MoE layer
+    std::thread pf_thread;
+    std::mutex pf_mu;
+    std::condition_variable pf_cv;
+    bool pf_stop = false, pf_has = false;
+    int pf_from = 0, pf_used = 0;              // the job: layer whose FFN input pf_x is, experts per token
+    uint64_t pf_seq = 0;                       // the remap count when it was queued
+    std::vector<float> pf_x;
+    std::atomic<uint64_t> remap_seq{0};        // remaps started (GPU and CPU mode)
     std::map<int, layer_state> layers;
     layer_state * last = nullptr;  // the layer whose experts are pinned (layers run in order)
+    // ONEBIT_MOE_STATS=1: where decode time goes, printed at exit
+    bool report = false;
+    uint64_t remaps = 0;
+    double remap_ms = 0, gap_ms = 0;  // inside the remap op; between one remap's end and the next's start
+    std::chrono::steady_clock::time_point last_remap_end{};
+    ~llama_moe_stream() {
+        if (pf_thread.joinable()) {
+            {
+                std::lock_guard<std::mutex> lk(pf_mu);
+                pf_stop = true;
+            }
+            pf_cv.notify_all();
+            pf_thread.join();
+        }
+        if (!report || !cache) return;
+        const auto st = cache->stats();
+        const uint64_t used = st.hits + st.prefetch_hits + st.misses;
+        fprintf(stderr, "moe-stream: %llu remaps, %.3f ms in remap (%.3f waiting for reads), %.3f ms between remaps (per remap)\n",
+                (unsigned long long) remaps, remap_ms / std::max<uint64_t>(remaps, 1), st.stall_ms / std::max<uint64_t>(remaps, 1),
+                gap_ms / std::max<uint64_t>(remaps, 1));
+        fprintf(stderr, "moe-stream: %llu experts used: %.1f%% hits, %.1f%% prefetch hits, %.1f%% misses; %llu prefetched, %llu wasted; %.2f GiB read\n",
+                (unsigned long long) used, 100.0 * st.hits / std::max<uint64_t>(used, 1),
+                100.0 * st.prefetch_hits / std::max<uint64_t>(used, 1), 100.0 * st.misses / std::max<uint64_t>(used, 1),
+                (unsigned long long) st.prefetches, (unsigned long long) st.prefetch_wasted, st.bytes_read / double(1u << 30));
+    }
 };
+
+namespace {
+
+float dot_f32(const float * a, const float * b, int64_t n) {
+    float acc[8] = {};  // eight lanes, so the compiler vectorizes without reassociating one sum
+    int64_t i = 0;
+    for (; i + 8 <= n; i += 8)
+        for (int j = 0; j < 8; ++j) acc[j] += a[i + j] * b[i + j];
+    float sum = 0;
+    for (float v : acc) sum += v;
+    for (; i < n; ++i) sum += a[i] * b[i];
+    return sum;
+}
+
+// Scores the next layers' routers on a queued FFN input and prefetches their top-k experts,
+// skipping a layer whose remap has already started.
+void prefetch_worker(llama_moe_stream * s) {
+    std::vector<float> x;
+    std::vector<std::pair<float, int>> sc;
+    std::vector<int> want;
+    for (;;) {
+        int from, used;
+        uint64_t seq;
+        {
+            std::unique_lock<std::mutex> lk(s->pf_mu);
+            s->pf_cv.wait(lk, [&] { return s->pf_stop || s->pf_has; });
+            if (s->pf_stop) return;
+            x.swap(s->pf_x);
+            from = s->pf_from;
+            used = s->pf_used;
+            seq = s->pf_seq;
+            s->pf_has = false;
+        }
+        const int64_t n_embd = (int64_t) x.size();
+        int l = from;
+        for (int d = 1; d <= s->prefetch; ++d) {
+            auto nl = s->next_layer.find(l);
+            if (nl == s->next_layer.end()) break;
+            l = nl->second;
+            if (s->remap_seq.load() >= seq + d) continue;  // that layer is already running
+            auto rw = s->router.find(l);
+            if (rw == s->router.end() || rw->second.size() % n_embd) break;
+            const int64_t n_exp = rw->second.size() / n_embd;
+            sc.resize(n_exp);
+            for (int64_t e = 0; e < n_exp; ++e) sc[e] = { -dot_f32(rw->second.data() + e * n_embd, x.data(), n_embd), (int) e };
+            const int64_t k = std::min<int64_t>(used, n_exp);
+            std::partial_sort(sc.begin(), sc.begin() + k, sc.end());
+            want.clear();
+            for (int64_t i = 0; i < k; ++i) want.push_back(sc[i].second);
+            s->cache->prefetch(l, want);
+        }
+    }
+}
+
+}  // namespace
 
 llama_moe_stream * llama_moe_stream_get() {
     static std::once_flag once;
@@ -125,7 +219,8 @@ llama_moe_stream * llama_moe_stream_get() {
             if (const char * mb = getenv("ONEBIT_MOE_MAX_BATCH")) st->max_batch = atoi(mb);
             st->cache = std::make_unique<onebit::moe::ExpertCache>(st->index, opt);
             st->layer_slots = int(double(opt.slots) / st->index.experts.size());
-            if (const char * pf = getenv("ONEBIT_MOE_PREFETCH")) st->prefetch = atoi(pf) != 0;
+            if (const char * pf = getenv("ONEBIT_MOE_PREFETCH")) st->prefetch = std::max(0, atoi(pf));
+            if (const char * r = getenv("ONEBIT_MOE_STATS")) st->report = atoi(r) != 0;
             if (st->prefetch) {  // the routers, read once (F32 only; others skip prefetch)
                 int prev = -1;
                 for (const auto & [l, parts] : st->index.experts) {
@@ -142,6 +237,7 @@ llama_moe_stream * llama_moe_stream_get() {
                     }
                 }
             }
+            if (st->prefetch && !st->router.empty()) st->pf_thread = std::thread(prefetch_worker, st.get());
             if (st->gpu) {
                 ggml_init_params ip = { 3 * 1024 * ggml_tensor_overhead(), nullptr, true };
                 st->tctx = ggml_init(ip);
@@ -177,29 +273,20 @@ int32_t id_at(const ggml_tensor * ids, int64_t k, int64_t t) {
     return *(const int32_t *) ((const char *) ids->data + t * ids->nb[1] + k * ids->nb[0]);
 }
 
-// Gate-ahead: queue the next MoE layer's likely experts, from this layer's FFN input
+// Gate-ahead: hand this layer's FFN input to the prefetch worker (the latest job replaces an
+// unstarted one)
 void prefetch_next(layer_state & L, const ggml_tensor * cur, int64_t n_used) {
     llama_moe_stream & s = *L.s;
-    if (!s.prefetch || !cur || cur->ne[1] != 1) return;  // single-token steps
-    auto nl = s.next_layer.find(L.il);
-    if (nl == s.next_layer.end()) return;
-    auto rw = s.router.find(nl->second);
-    const int64_t n_embd = cur->ne[0];
-    if (rw == s.router.end() || rw->second.size() % n_embd) return;
-    const int64_t n_exp = rw->second.size() / n_embd;
-    const float * x = (const float *) cur->data;
-    std::vector<std::pair<float, int>> sc(n_exp);
-    for (int64_t e = 0; e < n_exp; ++e) {
-        const float * w = rw->second.data() + e * n_embd;
-        float acc = 0;
-        for (int64_t i = 0; i < n_embd; ++i) acc += w[i] * x[i];
-        sc[e] = { -acc, (int) e };
+    if (!s.pf_thread.joinable() || !cur || cur->ne[1] != 1) return;  // single-token steps
+    {
+        std::lock_guard<std::mutex> lk(s.pf_mu);
+        s.pf_x.assign((const float *) cur->data, (const float *) cur->data + cur->ne[0]);
+        s.pf_from = L.il;
+        s.pf_used = (int) n_used;
+        s.pf_seq = s.remap_seq.load();
+        s.pf_has = true;
     }
-    const int64_t k = std::min<int64_t>(n_used, n_exp);
-    std::partial_sort(sc.begin(), sc.begin() + k, sc.end());
-    std::vector<int> want;
-    for (int64_t i = 0; i < k; ++i) want.push_back(sc[i].second);
-    s.cache->prefetch(nl->second, want);
+    s.pf_cv.notify_one();
 }
 
 // op 1, one thread: pin the batch's experts (reading misses) and convert its inputs for vec_dot
@@ -207,6 +294,7 @@ void op_acquire(ggml_tensor * dst, int ith, int nth, void * ud) {
     (void) nth;
     if (ith != 0) return;
     layer_state & L = *(layer_state *) ud;
+    L.s->remap_seq++;
     const ggml_tensor * ids = dst->src[0];
     const ggml_tensor * cur = dst->src[1];
     auto & cache = *L.s->cache;
@@ -299,6 +387,9 @@ void op_remap(ggml_tensor * dst, int ith, int nth, void * ud) {
     (void) nth;
     if (ith != 0) return;
     layer_state & L = *(layer_state *) ud;
+    const auto t_in = std::chrono::steady_clock::now();
+    L.s->remap_seq++;
+    if (L.s->remaps) L.s->gap_ms += std::chrono::duration<double, std::milli>(t_in - L.s->last_remap_end).count();
     const ggml_tensor * ids = dst->src[0];
     auto & cache = *L.s->cache;
     for (layer_state * prev : { L.s->last, &L })  // the GPU has finished the previous layer
@@ -318,6 +409,9 @@ void op_remap(ggml_tensor * dst, int ith, int nth, void * ud) {
         for (int64_t k = 0; k < ids->ne[0]; ++k)
             ((int32_t *) dst->data)[t * ids->ne[0] + k] = L.res[L.slot_of.at(id_at(ids, k, t))].slot;
     prefetch_next(L, dst->src[1], ids->ne[0]);
+    L.s->last_remap_end = std::chrono::steady_clock::now();
+    L.s->remap_ms += std::chrono::duration<double, std::milli>(L.s->last_remap_end - t_in).count();
+    L.s->remaps++;
 }
 
 }  // namespace

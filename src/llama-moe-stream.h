@@ -22,7 +22,9 @@
 //   ONEBIT_MOE_IO        reads in flight (default 8)
 //   ONEBIT_MOE_MAX_BATCH largest batch that streams (default 8); bigger batches (prompts) use
 //                        the regular path over the mmap-ed expert tensors
-//   ONEBIT_MOE_PREFETCH  0 turns off the gate-ahead prefetch of the next layer's experts
+//   ONEBIT_MOE_PREFETCH  MoE layers ahead whose experts the gate-ahead prefetch queues
+//                        (default 1; 0 turns it off)
+//   ONEBIT_MOE_STATS     1 prints where decode time went, at exit
 //   ONEBIT_MOE_DEVICE    where streamed experts compute: a GPU device name (default: the first
 //                        GPU that imports host memory) or "cpu"
 // On a GPU (Strix Halo's is unified memory), each layer's pinned slots are imported as a device
