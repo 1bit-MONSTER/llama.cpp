@@ -1,0 +1,73 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Batched ("grouped") MUL_MAT with F16 weights: for every group g and token m,
+//   output[g][m][n] = sum_k weight[g][n][k] * input[g][m][k]   (F32 accumulation)
+// The weight has one [N x K] matrix per group and no broadcast. ZAYA's CCA grouped
+// convolution is one of these per tap (10 groups of 128 x 128).
+// One workitem computes one output element; workgroups tile (N / 64, M, G).
+
+amdgpu.target<gfx11-generic> @ggml_grouped_mul_mat_f16_f32_gfx11_wave64 {subgroup_size = 64}
+
+kernel.def target(@ggml_grouped_mul_mat_f16_f32_gfx11_wave64) export("ggml_grouped_mul_mat_f16_f32") @ggml_grouped_mul_mat_f16_f32(%input_size: index, %output_size: index, %token_count: index, %group_count: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %rounded = index.add %output_size, %rounding : index
+  %tiles = index.div %rounded, %sixtyfour : index
+  kernel.launch.config workgroups(%tiles, %token_count, %group_count) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%input_size: index, %output_size: index, %token_count: index, %group_count: index, %weight: buffer, %input: buffer, %output: buffer) {
+  %k = index.assume %input_size [range(%input_size, 1, 65536)] : index
+  %n = index.assume %output_size [range(%output_size, 1, 65536)] : index
+  %m = index.assume %token_count [range(%token_count, 1, 65536)] : index
+  %g = index.assume %group_count [range(%group_count, 1, 4096)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %zero_offset = index.constant 0 : offset
+  %tile = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %group0 = kernel.workgroup.id<z> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+  %token = index.assume %token0 [range(%token0, 0, 65535)] : index
+  %group = index.assume %group0 [range(%group0, 0, 4095)] : index
+  %tile_base = index.mul %tile, %c64 : index
+  %column0 = index.add %tile_base, %lane : index
+  %valid = index.cmp ult, %column0, %n : index
+  %column = scf.select %valid, %column0, %c0 : index
+  %weight_rows = index.mul %g, %n : index
+  %input_rows = index.mul %g, %m : index
+  %weight_row_base = index.mul %group, %n : index
+  %weight_row = index.add %weight_row_base, %column : index
+  %input_row_base = index.mul %group, %m : index
+  %input_row = index.add %input_row_base, %token : index
+  %weight_noalias, %input_noalias, %output_noalias = buffer.assume.noalias %weight, %input, %output : buffer, buffer, buffer
+  %weight_view = buffer.view %weight_noalias[%zero_offset] : buffer -> view<[%weight_rows]x[%k]xf16>
+  %input_view = buffer.view %input_noalias[%zero_offset] : buffer -> view<[%input_rows]x[%k]xf32>
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%input_rows]x[%n]xf32>
+  %sum = scf.for %channel = [%c0 to %k step %c1](%accumulator = %c0_f32 : f32) -> (f32) {
+    %weight_f16 = view.load %weight_view[%weight_row, %channel] : view<[%weight_rows]x[%k]xf16> -> f16
+    %weight_value = scalar.extf %weight_f16 : f16 to f32
+    %input_value = view.load %input_view[%input_row, %channel] : view<[%input_rows]x[%k]xf32> -> f32
+    %next_accumulator = scalar.fmaf %weight_value, %input_value, %accumulator : f32
+    scf.yield %next_accumulator : f32
+  }
+  scf.if %valid {
+    view.store %sum, %output_view[%input_row, %column] : f32, view<[%input_rows]x[%n]xf32>
+  }
+  kernel.return
+}

@@ -314,8 +314,12 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         ggml_tensor * QKraw = ggml_concat(ctx0, Qraw, Kraw, 0);
         cb(QKraw, "QKraw", il);
 
-        ggml_tensor * Qpre = ggml_reshape_3d(ctx0, ggml_cont(ctx0, Qraw), n_embd_head, n_head, n_tokens);
-        ggml_tensor * Kpre = ggml_reshape_3d(ctx0, ggml_cont(ctx0, Kraw), n_embd_head, n_head_kv, n_tokens);
+        // Qraw and Kraw are fresh matmul outputs, already contiguous: reshape them in place. A CONT
+        // here copies for nothing, and with this block entirely on HRX the copied K read back wrong
+        // in 512-token batches (wikitext perplexity 71.8 instead of 21.6; right with a CPU split
+        // after the copy, or without the copy). Decode was unaffected.
+        ggml_tensor * Qpre = ggml_reshape_3d(ctx0, ggml_is_contiguous(Qraw) ? Qraw : ggml_cont(ctx0, Qraw), n_embd_head, n_head, n_tokens);
+        ggml_tensor * Kpre = ggml_reshape_3d(ctx0, ggml_is_contiguous(Kraw) ? Kraw : ggml_cont(ctx0, Kraw), n_embd_head, n_head_kv, n_tokens);
 
         ggml_tensor * Kpre_grouped = ggml_reshape_4d(ctx0, Kpre, n_embd_head, 1, n_head_kv, n_tokens);
         Kpre_grouped = ggml_repeat_4d(ctx0, Kpre_grouped, n_embd_head, n_gqa, n_head_kv, n_tokens);
@@ -326,7 +330,7 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         ggml_tensor * Qgroup = ggml_reshape_4d(ctx0, Qpre, n_embd_head, n_gqa, n_head_kv, n_tokens);
         Qgroup = ggml_permute(ctx0, Qgroup, 1, 0, 2, 3);
         Qgroup = ggml_cont(ctx0, Qgroup);
-        ggml_tensor * Qmean = ggml_mean(ctx0, Qgroup);
+        ggml_tensor * Qmean = ggml_scale(ctx0, ggml_sum_rows(ctx0, Qgroup), 1.0f/n_gqa);  // MEAN, as SUM_ROWS + SCALE
         Qmean = ggml_reshape_3d(ctx0, Qmean, n_embd_head, n_head_kv, n_tokens);
         ggml_tensor * qk_mean_k = ggml_scale(ctx0, ggml_add(ctx0, Qmean, Kpre), 0.5f);
         cb(qk_mean_k, "qk_mean_k", il);
@@ -334,7 +338,9 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         // [n_qk, T, S] -> [T, n_qk, S]: split the sequences before transposing, or with more than
         // one sequence in the ubatch a channel's row would run across all of them
         ggml_tensor * QKraw_t = ggml_reshape_3d(ctx0, QKraw, n_qk, n_seq_tokens, n_seqs);
-        QKraw_t = ggml_cont(ctx0, ggml_transpose(ctx0, QKraw_t));
+        // with one token per sequence the transpose moves no data: a reshape does it without a copy
+        QKraw_t = n_seq_tokens == 1 ? ggml_reshape_3d(ctx0, QKraw_t, 1, n_qk, n_seqs)
+                                    : ggml_cont(ctx0, ggml_transpose(ctx0, QKraw_t));
 
         ggml_tensor * conv_input = ggml_concat(ctx0, conv_state, QKraw_t, 0);
         cb(conv_input, "cca_conv_input", il);
