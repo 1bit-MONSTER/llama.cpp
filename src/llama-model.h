@@ -341,6 +341,21 @@ struct llama_layer {
     struct ggml_tensor * zaya_router_mlp4      = nullptr;
     struct ggml_tensor * zaya_router_biases    = nullptr;
     struct ggml_tensor * zaya_router_eda_scale = nullptr;
+    // ZAYA1-VL: vision-only LoRA, A down to the rank and B back up (experts stacked)
+    struct ggml_tensor * zaya_vlora_q_a  = nullptr;
+    struct ggml_tensor * zaya_vlora_q_b  = nullptr;
+    struct ggml_tensor * zaya_vlora_k_a  = nullptr;
+    struct ggml_tensor * zaya_vlora_k_b  = nullptr;
+    struct ggml_tensor * zaya_vlora_v1_a = nullptr;
+    struct ggml_tensor * zaya_vlora_v1_b = nullptr;
+    struct ggml_tensor * zaya_vlora_v2_a = nullptr;
+    struct ggml_tensor * zaya_vlora_v2_b = nullptr;
+    struct ggml_tensor * zaya_vlora_o_a  = nullptr;
+    struct ggml_tensor * zaya_vlora_o_b  = nullptr;
+    struct ggml_tensor * zaya_vlora_up_exps_a   = nullptr;
+    struct ggml_tensor * zaya_vlora_up_exps_b   = nullptr;
+    struct ggml_tensor * zaya_vlora_down_exps_a = nullptr;
+    struct ggml_tensor * zaya_vlora_down_exps_b = nullptr;
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;

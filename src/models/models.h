@@ -1900,6 +1900,10 @@ struct llama_model_zaya : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    // ZAYA1-VL: ranks of the vision-only LoRA (0: none)
+    uint32_t vlora_rank_attn = 0;
+    uint32_t vlora_rank_ffn  = 0;
+
     // iswa: sliding-window layers (ZAYA1-74B), on the hybrid iSWA memory
     template <bool iswa>
     struct graph : public llm_graph_context {

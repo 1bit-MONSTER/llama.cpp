@@ -343,6 +343,7 @@ class Keys:
         USE_GELU              = "clip.use_gelu"
         USE_SILU              = "clip.use_silu"
         N_WA_PATTERN          = "clip.vision.n_wa_pattern"     # used by qwen2.5vl
+        DECODE_NON_CAUSAL     = "clip.vision.decode_non_causal" # used by zaya1-vl
         WA_LAYER_INDEXES      = "clip.vision.wa_layer_indexes" # used by youtuvl
         WA_PATTERN_MODE       = "clip.vision.wa_pattern_mode"  # used by mimovl, per-layer -1/0/1
         IS_DEEPSTACK_LAYERS   = "clip.vision.is_deepstack_layers"
@@ -689,6 +690,20 @@ class MODEL_TENSOR(IntEnum):
     ZAYA_ROUTER_MLP4     = auto() # Zaya
     ZAYA_ROUTER_BIASES   = auto() # Zaya
     ZAYA_ROUTER_EDA_SCALE = auto() # Zaya
+    ZAYA_VLORA_Q_A = auto() # Zaya1-VL
+    ZAYA_VLORA_Q_B = auto() # Zaya1-VL
+    ZAYA_VLORA_K_A = auto() # Zaya1-VL
+    ZAYA_VLORA_K_B = auto() # Zaya1-VL
+    ZAYA_VLORA_V1_A = auto() # Zaya1-VL
+    ZAYA_VLORA_V1_B = auto() # Zaya1-VL
+    ZAYA_VLORA_V2_A = auto() # Zaya1-VL
+    ZAYA_VLORA_V2_B = auto() # Zaya1-VL
+    ZAYA_VLORA_O_A = auto() # Zaya1-VL
+    ZAYA_VLORA_O_B = auto() # Zaya1-VL
+    ZAYA_VLORA_UP_EXPS_A = auto() # Zaya1-VL
+    ZAYA_VLORA_UP_EXPS_B = auto() # Zaya1-VL
+    ZAYA_VLORA_DOWN_EXPS_A = auto() # Zaya1-VL
+    ZAYA_VLORA_DOWN_EXPS_B = auto() # Zaya1-VL
     TIME_MIX_W0          = auto()
     TIME_MIX_W1          = auto()
     TIME_MIX_W2          = auto()
@@ -1318,6 +1333,20 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ZAYA_ROUTER_MLP4:          "blk.{bid}.zaya_router_mlp4",     # Zaya
     MODEL_TENSOR.ZAYA_ROUTER_BIASES:        "blk.{bid}.zaya_router_biases",   # Zaya
     MODEL_TENSOR.ZAYA_ROUTER_EDA_SCALE:     "blk.{bid}.zaya_router_eda",      # Zaya
+    MODEL_TENSOR.ZAYA_VLORA_Q_A: "blk.{bid}.zaya_vlora_q_a", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_Q_B: "blk.{bid}.zaya_vlora_q_b", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_K_A: "blk.{bid}.zaya_vlora_k_a", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_K_B: "blk.{bid}.zaya_vlora_k_b", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_V1_A: "blk.{bid}.zaya_vlora_v1_a", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_V1_B: "blk.{bid}.zaya_vlora_v1_b", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_V2_A: "blk.{bid}.zaya_vlora_v2_a", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_V2_B: "blk.{bid}.zaya_vlora_v2_b", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_O_A: "blk.{bid}.zaya_vlora_o_a", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_O_B: "blk.{bid}.zaya_vlora_o_b", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_UP_EXPS_A: "blk.{bid}.zaya_vlora_gate_up_exps_a", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_UP_EXPS_B: "blk.{bid}.zaya_vlora_gate_up_exps_b", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_DOWN_EXPS_A: "blk.{bid}.zaya_vlora_down_exps_a", # Zaya1-VL
+    MODEL_TENSOR.ZAYA_VLORA_DOWN_EXPS_B: "blk.{bid}.zaya_vlora_down_exps_b", # Zaya1-VL
     MODEL_TENSOR.TIME_MIX_W0:               "blk.{bid}.time_mix_w0",
     MODEL_TENSOR.TIME_MIX_W1:               "blk.{bid}.time_mix_w1",
     MODEL_TENSOR.TIME_MIX_W2:               "blk.{bid}.time_mix_w2",
@@ -4704,6 +4733,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ZAYA_ROUTER_MLP4,
         MODEL_TENSOR.ZAYA_ROUTER_BIASES,
         MODEL_TENSOR.ZAYA_ROUTER_EDA_SCALE,
+        MODEL_TENSOR.ZAYA_VLORA_Q_A,
+        MODEL_TENSOR.ZAYA_VLORA_Q_B,
+        MODEL_TENSOR.ZAYA_VLORA_K_A,
+        MODEL_TENSOR.ZAYA_VLORA_K_B,
+        MODEL_TENSOR.ZAYA_VLORA_V1_A,
+        MODEL_TENSOR.ZAYA_VLORA_V1_B,
+        MODEL_TENSOR.ZAYA_VLORA_V2_A,
+        MODEL_TENSOR.ZAYA_VLORA_V2_B,
+        MODEL_TENSOR.ZAYA_VLORA_O_A,
+        MODEL_TENSOR.ZAYA_VLORA_O_B,
+        MODEL_TENSOR.ZAYA_VLORA_UP_EXPS_A,
+        MODEL_TENSOR.ZAYA_VLORA_UP_EXPS_B,
+        MODEL_TENSOR.ZAYA_VLORA_DOWN_EXPS_A,
+        MODEL_TENSOR.ZAYA_VLORA_DOWN_EXPS_B,
         MODEL_TENSOR.FFN_GATE_UP_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
     ],

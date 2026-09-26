@@ -95,6 +95,9 @@ bool clip_support_batch(const struct clip_ctx * ctx);
 
 int clip_model_n_temporal_merge(const struct clip_ctx * ctx); // TODO @ngxson : remove, refactor this
 
+// the mmproj asks for the text model to attend to its images bidirectionally (clip.vision.decode_non_causal)
+bool clip_decode_non_causal(const struct clip_ctx * ctx);
+
 std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * ctx);
 
 struct clip_cap {

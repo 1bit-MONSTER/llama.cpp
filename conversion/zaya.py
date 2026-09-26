@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
 import torch
 
 from .base import ModelBase, TextModel, gguf, logger
+from .qwenvl import Qwen2VLVisionModel
 
 
 @ModelBase.register("ZayaForCausalLM")
@@ -68,6 +70,21 @@ class ZayaModel(TextModel):
         "post_mlp_residual_scale.hidden_states_bias":            (gguf.MODEL_TENSOR.RES_SCALE_HS_MLP,      ".bias",   False),
         "post_mlp_residual_scale.residual_scale":                (gguf.MODEL_TENSOR.RES_SCALE_RES_MLP,     ".weight", False),
         "post_mlp_residual_scale.residual_bias":                 (gguf.MODEL_TENSOR.RES_SCALE_RES_MLP,     ".bias",   False),
+        # ZAYA1-VL's vision-only LoRA (A: down to the rank, B: back up; experts stacked)
+        "vlora.q_a":             (gguf.MODEL_TENSOR.ZAYA_VLORA_Q_A,         ".weight", False),
+        "vlora.q_b":             (gguf.MODEL_TENSOR.ZAYA_VLORA_Q_B,         ".weight", False),
+        "vlora.k_a":             (gguf.MODEL_TENSOR.ZAYA_VLORA_K_A,         ".weight", False),
+        "vlora.k_b":             (gguf.MODEL_TENSOR.ZAYA_VLORA_K_B,         ".weight", False),
+        "vlora.v1_a":            (gguf.MODEL_TENSOR.ZAYA_VLORA_V1_A,        ".weight", False),
+        "vlora.v1_b":            (gguf.MODEL_TENSOR.ZAYA_VLORA_V1_B,        ".weight", False),
+        "vlora.v2_a":            (gguf.MODEL_TENSOR.ZAYA_VLORA_V2_A,        ".weight", False),
+        "vlora.v2_b":            (gguf.MODEL_TENSOR.ZAYA_VLORA_V2_B,        ".weight", False),
+        "vlora.o_a":             (gguf.MODEL_TENSOR.ZAYA_VLORA_O_A,         ".weight", False),
+        "vlora.o_b":             (gguf.MODEL_TENSOR.ZAYA_VLORA_O_B,         ".weight", False),
+        "vlora.gate_up_exps_a":  (gguf.MODEL_TENSOR.ZAYA_VLORA_UP_EXPS_A,   ".weight", False),
+        "vlora.gate_up_exps_b":  (gguf.MODEL_TENSOR.ZAYA_VLORA_UP_EXPS_B,   ".weight", False),
+        "vlora.down_exps_a":     (gguf.MODEL_TENSOR.ZAYA_VLORA_DOWN_EXPS_A, ".weight", False),
+        "vlora.down_exps_b":     (gguf.MODEL_TENSOR.ZAYA_VLORA_DOWN_EXPS_B, ".weight", False),
     }
 
     def __init__(self, *args, **kwargs):
@@ -104,13 +121,15 @@ class ZayaModel(TextModel):
                 raise ValueError(f"zaya: legacy checkpoint with {flag}={hp[flag]} is not supported")
         zl = hp.get("zaya_layers")
         n_half = len(zl) if zl else hp["num_hidden_layers"]
+        if "vision_config" in hp:
+            n_half = 2 * hp["num_hidden_layers"]  # ZAYA1-VL: layers.{i}.attn / layers.{i}.mlp
         n_block = n_half // 2
         n_head = first(hp["cca_num_q_heads"]) if "cca_num_q_heads" in hp else hp["num_attention_heads"]
         n_head_kv = first(hp["num_query_groups_list"]) if "num_query_groups_list" in hp else hp["num_query_groups"]
         n_expert = max(x for x in zl if isinstance(x, int)) if zl else hp["num_experts"]
         ffn = first(hp["ffn_hidden_size_list"]) if "ffn_hidden_size_list" in hp else hp["ffn_hidden_size"]
-        theta = hp.get("rope_theta", 1e6)
-        rotary = hp.get("partial_rotary_factor", 0.5)
+        theta = hp.get("rope_theta", hp.get("rotary_base", 1e6))
+        rotary = hp.get("partial_rotary_factor", hp.get("rope_pct", 0.5))
         out = dict(hp)
         out.update({
             "num_hidden_layers": n_block,
@@ -139,6 +158,35 @@ class ZayaModel(TextModel):
         if not self._legacy:
             return tensors
         n_block, n_expert = self.hparams["num_hidden_layers"], self.hparams["num_experts"]
+        vl: dict[str, Callable[[], Tensor]] = {}
+        if "vision_config" in self.hparams:
+            # ZAYA1-VL: blocks hold attn. and mlp. sublayers, which are the half-layers 2i and 2i+1;
+            # the vision tower goes to the mmproj
+            renamed: dict[str, Callable[[], Tensor]] = {}
+            for name, gen in tensors.items():
+                if name.startswith("vision_tower."):
+                    continue
+                m = re.match(r"model\.layers\.(\d+)\.(attn|mlp)\.(.*)", name)
+                if m is None:
+                    renamed[name] = gen
+                    continue
+                i, part, rest = int(m.group(1)), m.group(2), m.group(3)
+                lora = re.match(r"self_attn\.(?:qkv\.)?(lora_linear_q|lora_linear_k|lora_val_proj1|lora_val_proj2|lora_linear_o)\.([01])\.weight", rest)
+                if lora:
+                    short = {"lora_linear_q": "q", "lora_linear_k": "k", "lora_val_proj1": "v1",
+                             "lora_val_proj2": "v2", "lora_linear_o": "o"}[lora.group(1)]
+                    vl[f"model.layers.{i}.vlora.{short}_{'ab'[int(lora.group(2))]}"] = gen
+                    continue
+                if ".lora_fc" in rest:
+                    continue  # stacked below
+                renamed[f"model.layers.{2 * i + (part == 'mlp')}.{rest}"] = gen
+            for i in range(n_block):
+                pre = f"model.layers.{i}.mlp.zaya_block.experts.local_experts."
+                for src, dst in (("lora_fc1", "gate_up_exps"), ("lora_fc2", "down_exps")):
+                    for seq, ab in (("0", "a"), ("1", "b")):
+                        gens = [tensors[f"{pre}{e}.{src}.{seq}.weight"] for e in range(n_expert)]
+                        vl[f"model.layers.{i}.vlora.{dst}_{ab}"] = lambda gens=gens: torch.stack([g() for g in gens])
+            tensors = renamed
         out: dict[str, Callable[[], Tensor]] = {}
         rename = {"model.embed_tokens.weight": "model.embed_tokens.weight", "model.final_norm.weight": "model.norm.weight"}
         for k in ("hidden_states_scale", "hidden_states_bias"):
@@ -196,6 +244,7 @@ class ZayaModel(TextModel):
             for src, dst in (("linear_fc1", "gate_up_proj"), ("linear_fc2", "down_proj")):
                 gens = [tensors[f"{pre}{e}.{src}.weight"] for e in range(n_expert)]
                 out[f"model.layers.{i}.mlp.experts.{dst}"] = lambda gens=gens: torch.stack([g() for g in gens])
+        out.update(vl)
         return out
 
     def set_vocab(self):
@@ -283,3 +332,110 @@ class ZayaModel(TextModel):
                 yield self.format_tensor_name(tensor, bid, suffix=tsuffix), data_torch
                 return
         raise ValueError(f"zaya: unmapped tensor {name}")
+
+
+@ModelBase.register("Zaya1VLForConditionalGeneration")
+class ZayaVLModel(ZayaModel):
+    """Zyphra ZAYA1-VL: the ZAYA1 language model (Megatron-style checkpoint) with vision-only LoRA
+    on CCA and on every expert, used on image tokens; the vision tower goes to the mmproj."""
+    model_arch = gguf.MODEL_ARCH.ZAYA
+
+    # Zyphra's template only takes content as a list of image and text parts. llama.cpp passes a
+    # message with media as a string holding a marker, <__media_<id>__> with an id random per server,
+    # where each image was; this one takes both, and puts the images (the markers) in front of the
+    # user turn, as Zyphra's does (mtmd wraps each image in <|vision_start|> ... <|vision_end|>).
+    _CHAT_TEMPLATE = (
+        '{%- for message in messages -%}'
+        "{%- if message['content'] is string -%}"
+        "{%- set ns = namespace(text=message['content'], media='') -%}"
+        '{%- else -%}'
+        "{%- set ns = namespace(text=message['content'] | selectattr('type', 'equalto', 'text') | map(attribute='text') | join(''), media='') -%}"
+        "{%- for c in message['content'] | selectattr('type', 'equalto', 'image') -%}"
+        "{%- set ns.media = ns.media ~ '<|vision_start|><image><|vision_end|>\\n' -%}"
+        '{%- endfor -%}'
+        '{%- endif -%}'
+        "{%- set segs = ns.text.split('<__media_') -%}"
+        '{%- if segs | length > 1 -%}'
+        '{%- set ns.text = segs[0] -%}'
+        '{%- for seg in segs[1:] -%}'
+        "{%- set bits = seg.split('>') -%}"
+        "{%- set ns.media = ns.media ~ '<__media_' ~ bits[0] ~ '>\\n' -%}"
+        "{%- set ns.text = ns.text ~ (bits[1:] | join('>')) -%}"
+        '{%- endfor -%}'
+        '{%- set ns.text = ns.text | trim -%}'
+        '{%- endif -%}'
+        "{%- if message['role'] == 'user' -%}"
+        "{{ ns.media ~ '<|im_start|>user\\n' ~ ns.text ~ '<|im_end|>\\n' }}"
+        '{%- else -%}'
+        "{{ '<|im_start|>' ~ message['role'] ~ '\\n' ~ ns.text ~ '<|im_end|>' }}"
+        '{%- endif -%}'
+        '{%- endfor -%}'
+        '{%- if add_generation_prompt -%}'
+        "{{ '<|im_start|>assistant\\n' }}"
+        '{%- endif -%}'
+    )
+
+    def set_vocab(self):
+        vocab = gguf.LlamaHfVocab(self._tokenizer_dir())
+        tokens, scores, toktypes = [], [], []
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            toktypes.append(toktype)
+
+        self.gguf_writer.add_tokenizer_model("gemma4")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.chat_template = self._CHAT_TEMPLATE
+        special_vocab.add_to_gguf(self.gguf_writer)
+        self.gguf_writer.add_add_space_prefix(False)
+        self.gguf_writer.add_add_bos_token(True)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self.hparams.get("vision_lora"):
+            arch = self.gguf_writer.arch
+            self.gguf_writer.add_uint32(f"{arch}.vision_lora.attention_rank", int(self.hparams["vision_lora_rank_attn"]))
+            self.gguf_writer.add_uint32(f"{arch}.vision_lora.ffn_rank", int(self.hparams["vision_lora_rank_mlp"]))
+
+
+@ModelBase.register("Zaya1VLForConditionalGeneration")
+class ZayaVLVisionModel(Qwen2VLVisionModel):
+    """ZAYA1-VL's vision tower: Qwen2.5-VL's, under vision_tower."""
+
+    def __init__(self, *args, **kwargs):
+        # the checkpoint's vision_config lists only what differs from Qwen2.5-VL's defaults
+        # (no depth, heads, window pattern); fill it as transformers does
+        from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLVisionConfig
+        hparams = kwargs.get("hparams") or ModelBase.load_hparams(args[0], False)
+        vc = Qwen2_5_VLVisionConfig(**hparams["vision_config"]).to_dict()
+        kwargs["hparams"] = {**hparams, "vision_config": {**vc, **hparams["vision_config"]}}
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        # Qwen2VLVisionModel picks the projector from the top-level model_type (zaya1_vl here)
+        self.global_config["model_type"] = self.hparams_vision["model_type"]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # ZAYA1-VL attends to each image bidirectionally (the image tokens are not causal)
+        self.gguf_writer.add_vision_decode_non_causal(True)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if not name.startswith("vision_tower."):
+            return None
+        return super().filter_tensors(("visual." + name.removeprefix("vision_tower."), gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "patch_embed.proj.weight" in name and data_torch.shape[2] == 1:
+            # temporal_patch_size 1: clip's Qwen2-VL graph sums two patch convs over the same
+            # still image (Qwen feeds the frame twice), so the second one is all zeros
+            w = data_torch[:, :, 0, ...]
+            yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight", w)
+            yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", torch.zeros_like(w))
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
