@@ -291,8 +291,10 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         ggml_tensor * qk_mean_k = ggml_scale(ctx0, ggml_add(ctx0, Qmean, Kpre), 0.5f);
         cb(qk_mean_k, "qk_mean_k", il);
 
-        ggml_tensor * QKraw_t = ggml_cont(ctx0, ggml_transpose(ctx0, QKraw));
-        QKraw_t = ggml_reshape_3d(ctx0, QKraw_t, n_seq_tokens, n_qk, n_seqs);
+        // [n_qk, T, S] -> [T, n_qk, S]: split the sequences before transposing, or with more than
+        // one sequence in the ubatch a channel's row would run across all of them
+        ggml_tensor * QKraw_t = ggml_reshape_3d(ctx0, QKraw, n_qk, n_seq_tokens, n_seqs);
+        QKraw_t = ggml_cont(ctx0, ggml_transpose(ctx0, QKraw_t));
 
         ggml_tensor * conv_input = ggml_concat(ctx0, conv_state, QKraw_t, 0);
         cb(conv_input, "cca_conv_input", il);
