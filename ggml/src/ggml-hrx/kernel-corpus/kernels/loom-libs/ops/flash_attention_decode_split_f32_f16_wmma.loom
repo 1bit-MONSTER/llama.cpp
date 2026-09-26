@@ -359,8 +359,11 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
       }
       scf.yield %tail_product_fragment0, %tail_product_fragment1 : vector<8xf16>, vector<8xf16>
     }
-    vector.fragment.store<result> %product_fragment0, %product_stage_view[%c0, %subgroup_output_channel] shape [%m, %n] : vector<8xf16>, view<16x[%output_stage_size]xf16>
-    vector.fragment.store<result> %product_fragment1, %product_stage_view[%c0, %subgroup_output_channel1] shape [%m, %n] : vector<8xf16>, view<16x[%output_stage_size]xf16>
+    // engine#115: stage through the CLAMPED channel so the 16-wide fragment store is
+    // provably within output_stage_size; the raw channel (assumed only up to
+    // output_tile_channel+96) is used solely for the validity check.
+    vector.fragment.store<result> %product_fragment0, %product_stage_view[%c0, %clamped_stage_channel0] shape [%m, %n] : vector<8xf16>, view<16x[%output_stage_size]xf16>
+    vector.fragment.store<result> %product_fragment1, %product_stage_view[%c0, %clamped_stage_channel1] shape [%m, %n] : vector<8xf16>, view<16x[%output_stage_size]xf16>
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
     scf.if %lane_publishes_output {
       %block_output0 = vector.load %product_stage_view[%query_row0, %safe_lane_output_channel] : view<16x[%output_stage_size]xf16> -> vector<4xf16>
@@ -499,18 +502,22 @@ template.def<@ggml.flash_attention.decode_split.produce_partials> device @ggml_f
       %lane_output_channel = index.add %output_tile_channel, %lane_output_base : index
       %lane_output_channel_valid = index.cmp ult, %lane_output_channel, %value_head_size : index
       %lane_publishes_output = scalar.andi %lane_has_output, %lane_output_channel_valid : i1
+      // engine#115: clamp the store channel so the 4-wide store is provably within
+      // value_head_size instead of leaning on the wide  assume.
+      %last_lane_fragment_channel = index.sub %value_head_size, %c4 : index
+      %clamped_lane_output_channel = index.min %lane_output_channel, %last_lane_fragment_channel : index
       scf.if %lane_publishes_output {
         scf.if %query_head_valid0 {
-          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row0, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row0, %clamped_lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
         }
         scf.if %query_head_valid1 {
-          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row1, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row1, %clamped_lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
         }
         scf.if %query_head_valid2 {
-          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row2, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row2, %clamped_lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
         }
         scf.if %query_head_valid3 {
-          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row3, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row3, %clamped_lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
         }
       }
     }
