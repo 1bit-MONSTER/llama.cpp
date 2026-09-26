@@ -44,7 +44,7 @@ class SeedOssModel(TextModel):
 
 
 @ModelBase.register("Olmo2ForCausalLM")
-@ModelBase.register("Olmo3ForCausalLM")
+@ModelBase.register("Olmo3ForCausalLM", "OLMo3ForCausalLM")
 class Olmo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMO2
 
@@ -66,7 +66,7 @@ class Olmo2Model(TextModel):
             self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
 
 
-@ModelBase.register("OlmoeForCausalLM")
+@ModelBase.register("OlmoeForCausalLM", "OlmoeModel")
 class OlmoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMOE
 

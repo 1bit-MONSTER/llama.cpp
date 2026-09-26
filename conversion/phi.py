@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from .base import MmprojModel, ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
 
 
-@ModelBase.register("PhiForCausalLM")
+@ModelBase.register("PhiForCausalLM", "Phi2Model")
 class Phi2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI2
 
@@ -35,7 +35,7 @@ class Phi2Model(TextModel):
         self.gguf_writer.add_add_bos_token(False)
 
 
-@ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV")
+@ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV", "Phi3Model")
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
@@ -335,7 +335,7 @@ class Phi4VisionMmprojModel(MmprojModel):
         return
 
 
-@ModelBase.register("PhiMoEForCausalLM")
+@ModelBase.register("PhiMoEForCausalLM", "PhimoeForCausalLM")
 class PhiMoeModel(Phi3MiniModel):
     model_arch = gguf.MODEL_ARCH.PHIMOE
 

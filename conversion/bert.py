@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
 
 
-@ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification")
+@ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification", "BertLMHeadModel", "BertForCausalLM")
 class BertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -262,7 +262,7 @@ class DistilBertModel(BertModel):
         return super().filter_tensors((name, gen))
 
 
-@ModelBase.register("RobertaModel", "RobertaForSequenceClassification")
+@ModelBase.register("RobertaModel", "RobertaForSequenceClassification", "RobertaForMaskedLM")
 class RobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 

@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf
 
 
-@ModelBase.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")
+@ModelBase.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration", "ChatGlmForCausalLM")
 class ChatGLMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.CHATGLM
 

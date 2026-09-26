@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register("GPT2LMHeadModel")
+@ModelBase.register("GPT2LMHeadModel", "GPT2Model", "GPT2")
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
 

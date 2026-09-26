@@ -3,7 +3,7 @@ from __future__ import annotations
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("GPTBigCodeForCausalLM")
+@ModelBase.register("GPTBigCodeForCausalLM", "GPTBigCodeModel", "GPTBigCodeLMHeadModel")
 class StarCoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER
 
@@ -18,6 +18,6 @@ class StarCoderModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
 
-@ModelBase.register("Starcoder2ForCausalLM")
+@ModelBase.register("Starcoder2ForCausalLM", "Starcoder2Model")
 class StarCoder2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER2

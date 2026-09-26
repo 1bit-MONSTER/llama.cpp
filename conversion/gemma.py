@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from .base import MmprojModel, ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register("GemmaForCausalLM")
+@ModelBase.register("GemmaForCausalLM", "GemmaModel")
 class GemmaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA
 
@@ -67,7 +67,7 @@ class GemmaModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Gemma2ForCausalLM")
+@ModelBase.register("Gemma2ForCausalLM", "Gemma2Model")
 class Gemma2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA2
 
@@ -117,7 +117,7 @@ class Gemma2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Gemma3ForCausalLM", "Gemma3ForConditionalGeneration")
+@ModelBase.register("Gemma3ForCausalLM", "Gemma3ForConditionalGeneration", "Gemma3Model")
 class Gemma3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA3
 
@@ -614,7 +614,7 @@ class Gemma3NModel(Gemma3Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Gemma4ForConditionalGeneration", "Gemma4ForCausalLM")
+@ModelBase.register("Gemma4ForConditionalGeneration", "Gemma4ForCausalLM", "Gemma4UnifiedForCausalLM")
 class Gemma4Model(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4
 

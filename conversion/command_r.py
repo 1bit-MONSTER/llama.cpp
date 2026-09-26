@@ -29,7 +29,7 @@ class CommandR2Model(TextModel):
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
 
 
-@ModelBase.register("Cohere2ForCausalLM")
+@ModelBase.register("Cohere2ForCausalLM", "Cohere2Model")
 class Cohere2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.COHERE2
 

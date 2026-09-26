@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register("QWenLMHeadModel")
+@ModelBase.register("QWenLMHeadModel", "QwenForCausalLM", "QwenLMHeadModel", "QWenForCausalLM")
 class QwenModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN
 
@@ -70,7 +70,7 @@ class Qwen2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen2MoeForCausalLM")
+@ModelBase.register("Qwen2MoeForCausalLM", "Qwen2MoEForCausalLM")
 class Qwen2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
 
@@ -250,7 +250,7 @@ class Qwen3Model(Qwen2Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen3MoeForCausalLM")
+@ModelBase.register("Qwen3MoeForCausalLM", "Qwen3MoeModel")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
 
@@ -620,12 +620,12 @@ class _Qwen35MtpMixin:
         self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
 
-@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
+@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", "Qwen3_5Model", "Qwen35ForCausalLM")
 class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
-@ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
+@ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM", "Qwen3_5MoEForCausalLM")
 class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
