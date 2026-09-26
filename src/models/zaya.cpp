@@ -56,6 +56,22 @@ void llama_model_zaya::load_arch_hparams(llama_model_loader & ml) {
     GGML_ASSERT(hparams.n_embd_r() == 2*n_qk && hparams.n_embd_s() == hparams.n_embd);
     std::fill(hparams.is_recr_impl.begin(), hparams.is_recr_impl.end(), true);
 
+    // ZAYA1-74B: sliding-window attention on the layers the pattern marks, with their own rope base
+    if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
+        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+        // the converter writes a per-layer array; a scalar is a period, as the other SWA archs read it.
+        // Without the key (llama_model_saver does not write it) default to ZAYA1-74B's: even layers slide.
+        // Read the scalar first: the array read would take a scalar too, as the raw value in every layer.
+        uint32_t swa_period = 2;
+        if (ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false) ||
+            !ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer(), false)) {
+            hparams.set_swa_pattern(swa_period);
+        }
+        hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+        hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+        ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+    }
+
     switch (hparams.n_layer()) {
         case 40: type = LLM_TYPE_8B; break;
         default: type = LLM_TYPE_UNKNOWN;
@@ -136,10 +152,14 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_zaya::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
+        return std::make_unique<graph<true>>(*this, params);
+    }
+    return std::make_unique<graph<false>>(*this, params);
 }
 
-llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+template <bool iswa>
+llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_k();
     const int64_t n_expert    = hparams.n_expert;
     const int64_t n_seqs      = ubatch.n_seqs;
@@ -163,7 +183,13 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
         cb(inpL, "input_hs_scaled", -1);
     }
 
-    auto * inp = build_inp_mem_hybrid();
+    auto * inp = [&] {
+        if constexpr (iswa) {
+            return build_inp_mem_hybrid_iswa();
+        } else {
+            return build_inp_mem_hybrid();
+        }
+    }();
     auto * inp_recr = inp->get_recr();
 
     ggml_tensor * inp_pos     = build_inp_pos();
@@ -341,11 +367,14 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
         cb(Kcur, "Kcur_pre_rope", il);
 
         ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+        // sliding layers (ZAYA1-74B) have their own base; for other models this is freq_base
+        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
+        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
         Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                 ext_factor, attn_factor, beta_fast, beta_slow);
         Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                 ext_factor, attn_factor, beta_fast, beta_slow);
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
@@ -491,3 +520,6 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
 
     ggml_build_forward_expand(gf, cur);
 }
+
+template struct llama_model_zaya::graph<false>;
+template struct llama_model_zaya::graph<true>;
