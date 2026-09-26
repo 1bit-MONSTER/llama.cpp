@@ -16,6 +16,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GPTJ,             "gptj"             },
     { LLM_ARCH_GPTNEOX,          "gptneox"          },
     { LLM_ARCH_OPT,              "opt"              },
+    { LLM_ARCH_CODEGEN,          "codegen"          },
     { LLM_ARCH_GPTNEO,           "gptneo"           },
     { LLM_ARCH_MPT,              "mpt"              },
     { LLM_ARCH_BAICHUAN,         "baichuan"         },

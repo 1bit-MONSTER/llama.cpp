@@ -81,6 +81,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_bloom(params);
         case LLM_ARCH_GPTNEO:
             return new llama_model_gptneo(params);
+        case LLM_ARCH_CODEGEN:
+            return new llama_model_codegen(params);
         case LLM_ARCH_MPT:
             return new llama_model_mpt(params);
         case LLM_ARCH_OPT:
@@ -2523,6 +2525,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
+        case LLM_ARCH_CODEGEN:
         case LLM_ARCH_GPTJ:
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_LLADA:

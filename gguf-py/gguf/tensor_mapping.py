@@ -233,6 +233,7 @@ class TensorNameMap:
 
         # Attention query-key-value
         MODEL_TENSOR.ATTN_QKV: (
+            "transformer.h.{bid}.attn.qkv_proj",    # codegen
             "gpt_neox.layers.{bid}.attention.query_key_value",                     # gptneox
             "transformer.h.{bid}.attn.c_attn",                                     # gpt2 qwen jais
             "transformer.blocks.{bid}.attn.Wqkv",                                  # mpt
