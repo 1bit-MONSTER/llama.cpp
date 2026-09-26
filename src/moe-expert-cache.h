@@ -84,6 +84,8 @@ public:
     void release(int layer, const std::vector<int>& experts);
     // Queues reads for the experts not resident yet; returns at once.
     void prefetch(int layer, const std::vector<int>& experts);
+    // Whether the expert is in a slot, or being read into one.
+    bool resident(int layer, int expert) const;
 
     CacheStats stats() const;
     void reset_stats();

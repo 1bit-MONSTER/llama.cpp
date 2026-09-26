@@ -2104,8 +2104,23 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(selection_probs, "ffn_moe_probs_masked", il);
     }
 
+    // 1bit: routed experts streamed from the model file into pinned slots (llama-moe-stream.h)
+    llama_moe_stream * moe_stream = llama_moe_stream_get();
+    const bool moe_streamed = moe_stream && !gate_up_exps && !up_exps_b && !gate_exps_b && !down_exps_b &&
+                              !up_exps_s && !gate_exps_s && !down_exps_s && type_op == LLM_FFN_SILU &&
+                              !weight_before_ffn && arch != LLM_ARCH_MISTRAL4 &&
+                              (il < 0 || hparams.swiglu_clamp_exp[il] <= 1e-6f) &&
+                              llama_moe_stream_applies(moe_stream, n_tokens, n_expert_used, gate_exps, up_exps, down_exps);
+
     // select experts
     ggml_tensor * selected_experts = selected_experts_in;
+    ggml_tensor * moe_sel = nullptr;
+    if (selected_experts == nullptr && moe_streamed && arch != LLM_ARCH_GROVEMOE && hparams.n_expert_groups <= 1) {
+        // prefer resident experts when ONEBIT_MOE_SUBST is set
+        moe_sel = llama_moe_stream_select(ctx0, moe_stream, il, selection_probs, ggml_reshape_2d(ctx0, cur, n_embd, n_tokens),
+                                          n_expert_used, gate_exps, up_exps, down_exps);
+        if (moe_sel) selected_experts = ggml_view_2d(ctx0, moe_sel, n_expert_used, n_tokens, moe_sel->nb[1], 0);
+    }
     if (selected_experts == nullptr) {
         selected_experts = ggml_argsort_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
         cb(selected_experts->src[0], "ffn_moe_argsort", il);
@@ -2167,17 +2182,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
 
-    // 1bit: routed experts streamed from the model file into pinned slots (llama-moe-stream.h)
-    llama_moe_stream * moe_stream = llama_moe_stream_get();
-    const bool moe_streamed = moe_stream && !gate_up_exps && !up_exps_b && !gate_exps_b && !down_exps_b &&
-                              !up_exps_s && !gate_exps_s && !down_exps_s && type_op == LLM_FFN_SILU &&
-                              !weight_before_ffn && arch != LLM_ARCH_MISTRAL4 &&
-                              (il < 0 || hparams.swiglu_clamp_exp[il] <= 1e-6f) &&
-                              llama_moe_stream_applies(moe_stream, n_tokens, n_expert_used, gate_exps, up_exps, down_exps);
     // GPU: the slots are device tensors; the regular path below runs over them with slot ids
     ggml_tensor * slot_ids = nullptr, * slot_gate = nullptr, * slot_up = nullptr, * slot_down = nullptr;
     const bool moe_streamed_gpu = moe_streamed &&
-        llama_moe_stream_gpu(ctx0, moe_stream, il, ggml_reshape_2d(ctx0, cur, n_embd, n_tokens), selected_experts,
+        llama_moe_stream_gpu(ctx0, moe_stream, il, ggml_reshape_2d(ctx0, cur, n_embd, n_tokens), selected_experts, moe_sel,
                              gate_exps, up_exps, down_exps,
                              &slot_ids, &slot_gate, &slot_up, &slot_down);
     if (moe_streamed_gpu) {
