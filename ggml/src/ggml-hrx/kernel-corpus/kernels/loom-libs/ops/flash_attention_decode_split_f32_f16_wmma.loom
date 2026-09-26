@@ -829,8 +829,8 @@ template.def<@ggml.flash_attention.decode_split.pack_completed_q8> device @ggml_
 // Multi-pass reducer for > 32 producer blocks (capacity > 2048). Same
 // reduction as @..reduce_completed.cooperative, but the block dimension is
 // lane-strided instead of one-block-per-lane, so any producer block count
-// works; the per-block normalization scale is written back into partial_max
-// (the reduce_f32 trick), which removes the 32-block scale_stage.
+// works; the per-block normalization scale is recomputed from the intact
+// partial_max in the output pass, avoiding a global-memory round-trip.
 template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> device @ggml_flash_attention_decode_split_reduce_completed_multipass_f32(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer) where [range(%partial_block_capacity0, 33, 4096), range(%active_block_count0, 33, 4096)] {
   %partial_block_capacity, %active_block_count = index.assume %partial_block_capacity0, %active_block_count0 [range(%partial_block_capacity0, 33, 4096), range(%active_block_count0, 33, 4096), le(%active_block_count0, %partial_block_capacity0)] : index, index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
@@ -844,6 +844,7 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
   %lane = kernel.subgroup.lane.id : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
   %c64 = index.constant 64 : index
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
@@ -892,7 +893,6 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
         %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
         %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
         %scale = scalar.expf<afn> %delta : f32
-        view.store %scale, %partial_max_view[%key_value_head, %block, %query_row] : f32, view<[%key_value_head_count]x[%partial_block_capacity]x16xf32>
         %block_sum = view.load %partial_sum_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
         %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
         %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %scaled_sum : f32
@@ -913,15 +913,17 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
       %output_channel = index.add %tile_channel, %workitem : index
       %output_channel_valid = index.cmp ult, %output_channel, %value_head_size : index
       scf.if %output_channel_valid {
-        %unnormalized_output = scf.for %block = [%c0 to %active_block_count step %c1](%running_output = %c0_f32 : f32) -> (f32) {
-          %scale = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+        %unnormalized_output = scf.for %block = [%c0 to %active_block_count step %c1](%running_output = %c0_f32 : f32) -> (f32) unroll(%c4) schedule(interleaved) {
+          %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+          %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
+          %scale = scalar.expf<afn> %delta : f32
           %block_output_f16 = view.load %partial_output_view[%key_value_head, %block, %query_row, %output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> f16
           %block_output = scalar.extf %block_output_f16 : f16 to f32
           %scaled_output = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %scale, %block_output : f32
           %next_output = scalar.addf<reassoc|nnan|ninf|nsz> %running_output, %scaled_output : f32
           scf.yield %next_output : f32
         }
-        %normalized_output = scalar.divf %unnormalized_output, %sum : f32
+        %normalized_output = scalar.divf<nnan|ninf|nsz|arcp> %unnormalized_output, %sum : f32
         view.store %normalized_output, %output_view[%query_head, %output_channel] : f32, view<[%query_head_count]x[%value_head_size]xf32>
       }
     }
