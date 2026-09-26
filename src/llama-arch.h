@@ -21,6 +21,7 @@ enum llm_arch {
     LLM_ARCH_GPT2,
     LLM_ARCH_GPTJ,
     LLM_ARCH_GPTNEOX,
+    LLM_ARCH_OPT,
     LLM_ARCH_MPT,
     LLM_ARCH_STARCODER,
     LLM_ARCH_REFACT,

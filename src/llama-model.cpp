@@ -81,6 +81,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_bloom(params);
         case LLM_ARCH_MPT:
             return new llama_model_mpt(params);
+        case LLM_ARCH_OPT:
+            return new llama_model_opt(params);
         case LLM_ARCH_STABLELM:
             return new llama_model_stablelm(params);
         case LLM_ARCH_MELLUM:
@@ -2496,6 +2498,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         // these models do not use RoPE
         case LLM_ARCH_CLIP:
         case LLM_ARCH_GPT2:
+        case LLM_ARCH_OPT:
         case LLM_ARCH_MPT:
         case LLM_ARCH_REFACT:
         case LLM_ARCH_BLOOM:
