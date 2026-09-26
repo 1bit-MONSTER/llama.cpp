@@ -64,6 +64,11 @@ struct llama_moe_stream {
     std::map<int, gpu_layer> gpu_layers;
     int max_batch = 8;
     int layer_slots = 0;  // the fewest slots any one layer can use
+    // Gate-ahead prefetch: layer l+1's router (F32, from the file) applied to layer l's FFN input
+    // while layer l computes; its top-k experts are queued for reading.
+    bool prefetch = true;
+    std::map<int, std::vector<float>> router;  // MoE layer -> [n_expert][n_embd]
+    std::map<int, int> next_layer;             // MoE layer -> the next MoE layer
     std::map<int, layer_state> layers;
     layer_state * last = nullptr;  // the layer whose experts are pinned (layers run in order)
 };
@@ -101,6 +106,23 @@ llama_moe_stream * llama_moe_stream_get() {
             if (const char * mb = getenv("ONEBIT_MOE_MAX_BATCH")) st->max_batch = atoi(mb);
             st->cache = std::make_unique<onebit::moe::ExpertCache>(st->index, opt);
             st->layer_slots = int(double(opt.slots) / st->index.experts.size());
+            if (const char * pf = getenv("ONEBIT_MOE_PREFETCH")) st->prefetch = atoi(pf) != 0;
+            if (st->prefetch) {  // the routers, read once (F32 only; others skip prefetch)
+                int prev = -1;
+                for (const auto & [l, parts] : st->index.experts) {
+                    if (prev >= 0) st->next_layer[prev] = l;
+                    prev = l;
+                    const std::string name = "blk." + std::to_string(l) + ".ffn_gate_inp.weight";
+                    for (const auto & t : st->index.tensors) {
+                        if (t.name != name || t.type != 0 /* F32 */) continue;
+                        std::vector<float> w(t.bytes / 4);
+                        FILE * f = fopen(st->index.files[t.file].c_str(), "rb");
+                        if (f && fseeko(f, (off_t) t.offset, SEEK_SET) == 0 && fread(w.data(), 4, w.size(), f) == w.size())
+                            st->router[l] = std::move(w);
+                        if (f) fclose(f);
+                    }
+                }
+            }
             if (st->gpu) {
                 ggml_init_params ip = { 3 * 1024 * ggml_tensor_overhead(), nullptr, true };
                 st->tctx = ggml_init(ip);
@@ -134,6 +156,31 @@ int part_named(const onebit::moe::GgufIndex & idx, int il, const char * suffix) 
 
 int32_t id_at(const ggml_tensor * ids, int64_t k, int64_t t) {
     return *(const int32_t *) ((const char *) ids->data + t * ids->nb[1] + k * ids->nb[0]);
+}
+
+// Gate-ahead: queue the next MoE layer's likely experts, from this layer's FFN input
+void prefetch_next(layer_state & L, const ggml_tensor * cur, int64_t n_used) {
+    llama_moe_stream & s = *L.s;
+    if (!s.prefetch || !cur || cur->ne[1] != 1) return;  // single-token steps
+    auto nl = s.next_layer.find(L.il);
+    if (nl == s.next_layer.end()) return;
+    auto rw = s.router.find(nl->second);
+    const int64_t n_embd = cur->ne[0];
+    if (rw == s.router.end() || rw->second.size() % n_embd) return;
+    const int64_t n_exp = rw->second.size() / n_embd;
+    const float * x = (const float *) cur->data;
+    std::vector<std::pair<float, int>> sc(n_exp);
+    for (int64_t e = 0; e < n_exp; ++e) {
+        const float * w = rw->second.data() + e * n_embd;
+        float acc = 0;
+        for (int64_t i = 0; i < n_embd; ++i) acc += w[i] * x[i];
+        sc[e] = { -acc, (int) e };
+    }
+    const int64_t k = std::min<int64_t>(n_used, n_exp);
+    std::partial_sort(sc.begin(), sc.begin() + k, sc.end());
+    std::vector<int> want;
+    for (int64_t i = 0; i < k; ++i) want.push_back(sc[i].second);
+    s.cache->prefetch(nl->second, want);
 }
 
 // op 1, one thread: pin the batch's experts (reading misses) and convert its inputs for vec_dot
@@ -170,6 +217,7 @@ void op_acquire(ggml_tensor * dst, int ith, int nth, void * ud) {
             else vtr->from_float(x, buf.data() + i * row, L.n_embd);
         }
     };
+    prefetch_next(L, cur, ids->ne[0]);
     convert(L.t_gate, L.qx_gate);
     if (L.t_up == L.t_gate) L.qx_up = L.qx_gate;
     else convert(L.t_up, L.qx_up);
@@ -250,11 +298,12 @@ void op_remap(ggml_tensor * dst, int ith, int nth, void * ud) {
     for (int64_t t = 0; t < ids->ne[1]; ++t)
         for (int64_t k = 0; k < ids->ne[0]; ++k)
             ((int32_t *) dst->data)[t * ids->ne[0] + k] = L.res[L.slot_of.at(id_at(ids, k, t))].slot;
+    prefetch_next(L, dst->src[1], ids->ne[0]);
 }
 
 }  // namespace
 
-bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * ids,
+bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * cur, ggml_tensor * ids,
                           ggml_tensor * gate_exps, ggml_tensor * up_exps, ggml_tensor * down_exps,
                           ggml_tensor ** slot_ids, ggml_tensor ** slot_gate, ggml_tensor ** slot_up,
                           ggml_tensor ** slot_down) {
@@ -290,8 +339,8 @@ bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml
         G.down = view(down_exps, L.part_down);
         if (!G.gate || !G.up || !G.down) { G.failed = true; return false; }
     }
-    ggml_tensor * args[] = { ids };
-    *slot_ids = ggml_custom_4d(ctx, GGML_TYPE_I32, ids->ne[0], ids->ne[1], 1, 1, args, 1, op_remap, 1, &L);
+    ggml_tensor * args[] = { ids, cur };
+    *slot_ids = ggml_custom_4d(ctx, GGML_TYPE_I32, ids->ne[0], ids->ne[1], 1, 1, args, 2, op_remap, 1, &L);
     *slot_gate = G.gate;
     *slot_up = G.up;
     *slot_down = G.down;
@@ -330,7 +379,7 @@ ggml_tensor * llama_moe_stream_build(ggml_context * ctx, llama_moe_stream * s, i
 llama_moe_stream * llama_moe_stream_get() { return nullptr; }
 
 bool llama_moe_stream_gpu(ggml_context *, llama_moe_stream *, int, ggml_tensor *, ggml_tensor *, ggml_tensor *,
-                          ggml_tensor *, ggml_tensor **, ggml_tensor **, ggml_tensor **, ggml_tensor **) {
+                          ggml_tensor *, ggml_tensor *, ggml_tensor **, ggml_tensor **, ggml_tensor **, ggml_tensor **) {
     return false;
 }
 

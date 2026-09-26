@@ -2177,7 +2177,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // GPU: the slots are device tensors; the regular path below runs over them with slot ids
     ggml_tensor * slot_ids = nullptr, * slot_gate = nullptr, * slot_up = nullptr, * slot_down = nullptr;
     const bool moe_streamed_gpu = moe_streamed &&
-        llama_moe_stream_gpu(ctx0, moe_stream, il, selected_experts, gate_exps, up_exps, down_exps,
+        llama_moe_stream_gpu(ctx0, moe_stream, il, ggml_reshape_2d(ctx0, cur, n_embd, n_tokens), selected_experts,
+                             gate_exps, up_exps, down_exps,
                              &slot_ids, &slot_gate, &slot_up, &slot_down);
     if (moe_streamed_gpu) {
         selected_experts = slot_ids;  // the routing weights were taken above; from here on ids index slots

@@ -22,6 +22,7 @@
 //   ONEBIT_MOE_IO        reads in flight (default 8)
 //   ONEBIT_MOE_MAX_BATCH largest batch that streams (default 8); bigger batches (prompts) use
 //                        the regular path over the mmap-ed expert tensors
+//   ONEBIT_MOE_PREFETCH  0 turns off the gate-ahead prefetch of the next layer's experts
 //   ONEBIT_MOE_DEVICE    where streamed experts compute: a GPU device name (default: the first
 //                        GPU that imports host memory) or "cpu"
 // On a GPU (Strix Halo's is unified memory), each layer's pinned slots are imported as a device
@@ -45,7 +46,8 @@ bool llama_moe_stream_applies(const llama_moe_stream * s, int64_t n_tokens, int6
 
 // GPU mode: pins the batch's experts (ids -> slot indices) and returns the slot tensors to use
 // in place of the layer's expert tensors. False when the layer cannot stream on the GPU.
-bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * ids,
+// cur: the layer's FFN input [n_embd, n_tokens], for the next layer's gate-ahead prefetch.
+bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * cur, ggml_tensor * ids,
                           ggml_tensor * gate_exps, ggml_tensor * up_exps, ggml_tensor * down_exps,
                           ggml_tensor ** slot_ids, ggml_tensor ** slot_gate, ggml_tensor ** slot_up,
                           ggml_tensor ** slot_down);
