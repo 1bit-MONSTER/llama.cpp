@@ -278,7 +278,9 @@ bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml
             t->nb[2] = lay.slot_bytes;
             t->nb[3] = lay.slot_bytes * lay.n_slots;
             ggml_format_name(t, "blk.%d.%s_slots", il, part == L.part_gate ? "ffn_gate_exps" : part == L.part_up ? "ffn_up_exps" : "ffn_down_exps");
-            if (ggml_backend_tensor_alloc(G.buf, t, lay.base + lay.part_off[part]) != GGML_STATUS_SUCCESS) return (ggml_tensor *) nullptr;
+            // a device buffer's addresses are its own (Vulkan's base is not the host pointer)
+            char * at = (char *) ggml_backend_buffer_get_base(G.buf) + lay.part_off[part];
+            if (ggml_backend_tensor_alloc(G.buf, t, at) != GGML_STATUS_SUCCESS) return (ggml_tensor *) nullptr;
             return t;
         };
         G.gate = view(gate_exps, L.part_gate);
