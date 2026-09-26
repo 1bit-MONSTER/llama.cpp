@@ -2839,6 +2839,9 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     elif "ssm_cfg" in hparams:
         # For non-hf Mamba and Mamba2 models
         arch = hparams["ssm_cfg"].get("layer", "Mamba") + "ForCausalLM"
+    elif "mamba_moe_layers" in hparams:
+        # Zyphra BlackMamba ships a Megatron-style config.json with no architectures
+        arch = "BlackMambaForCausalLM"
 
     # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
     # For text conversion we route to a dedicated text-only class.

@@ -170,6 +170,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_zamba2(params);
         case LLM_ARCH_ZAMBA:
             return new llama_model_zamba(params);
+        case LLM_ARCH_BLACKMAMBA:
+            return new llama_model_blackmamba(params);
         case LLM_ARCH_XVERSE:
             return new llama_model_xverse(params);
         case LLM_ARCH_COMMAND_R:
@@ -2918,6 +2920,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_MAMBA:
         case LLM_ARCH_MAMBA2:
         case LLM_ARCH_ZAMBA:
+        case LLM_ARCH_BLACKMAMBA:
         case LLM_ARCH_JAMBA:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_T5:

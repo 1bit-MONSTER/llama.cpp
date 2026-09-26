@@ -283,6 +283,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "YoutuForCausalLM": "deepseek",
     "Zamba2ForCausalLM": "zamba2",
     "ZambaForCausalLM": "zamba",
+    "BlackMambaForCausalLM": "blackmamba",
     "YoutuVLForConditionalGeneration": "deepseek",
     "modeling_grove_moe.GroveMoeForCausalLM": "grovemoe",
     "modeling_sarvam_moe.SarvamMoEForCausalLM": "bailingmoe",
