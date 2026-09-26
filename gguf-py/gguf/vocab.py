@@ -587,6 +587,14 @@ class LlamaHfVocab(Vocab):
         )
         assert self.tokenizer.is_fast  # assume tokenizer.json is used  # ty: ignore[unresolved-attribute]
 
+        # llama.cpp's SPM tokenizer merges the adjacent pair whose result has the highest score;
+        # HF's BPE merges the pair with the lowest rank. Score each merge result -rank (as a
+        # SentencePiece BPE model does), so both pick the same merges.
+        self.merge_scores: dict[str, float] = {}
+        for rank, merge in enumerate(tokenizer_model.get('merges', [])):
+            a, b = merge.split(' ', 1) if isinstance(merge, str) else merge
+            self.merge_scores.setdefault(a + b, -float(rank))
+
         # Initialize lists and dictionaries for added tokens
         self.added_tokens_list = []
         self.added_tokens_dict = dict()
@@ -642,9 +650,12 @@ class LlamaHfVocab(Vocab):
         return gguf.TokenType.CONTROL if token_id in special_ids else gguf.TokenType.NORMAL
 
     def get_token_score(self, token_id: int) -> float:
-        # Placeholder for actual logic to determine the token's score
-        # This needs to be implemented based on specific requirements
-        return -1000.0  # Default score
+        # the merge rank that produces the token (see __init__); tokens no merge makes rank below
+        # every merge result, so they never win a merge
+        piece = self.tokenizer.convert_ids_to_tokens(token_id)  # ty: ignore[unresolved-attribute]
+        if piece in self.merge_scores:
+            return self.merge_scores[piece]
+        return -1000.0 if not self.merge_scores else -float(len(self.merge_scores) + 1000)
 
     def added_tokens(self) -> Iterable[tuple[bytes, float, gguf.TokenType]]:
         for text in self.added_tokens_list:
