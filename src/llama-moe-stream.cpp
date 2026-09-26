@@ -62,6 +62,7 @@ struct llama_moe_stream {
     ggml_backend_dev_t gpu = nullptr;          // null: experts compute on the CPU
     ggml_context * tctx = nullptr;             // the slot tensors
     std::map<int, gpu_layer> gpu_layers;
+    std::map<uint8_t *, ggml_backend_buffer_t> region_bufs;  // slot regions the device allocated
     int max_batch = 8;
     int layer_slots = 0;  // the fewest slots any one layer can use
     // Gate-ahead prefetch: layer l+1's router (F32, from the file) applied to layer l's FFN input
@@ -102,6 +103,24 @@ llama_moe_stream * llama_moe_stream_get() {
                 if (devname && !st->gpu) LLAMA_LOG_WARN("%s: no device %s; experts compute on the CPU\n", __func__, devname);
             }
             opt.per_layer = st->gpu != nullptr;  // one region per layer: one device buffer each
+            if (st->gpu) {
+                // The slots live in device buffers the host can map (UMA): the GPU reads them at
+                // full speed, where imported host memory runs about 100x slower.
+                using get_host_ptr_t = void * (*)(ggml_backend_buffer_t);
+                auto get_ptr = (get_host_ptr_t) ggml_backend_reg_get_proc_address(
+                    ggml_backend_dev_backend_reg(st->gpu), "ggml_backend_vk_buffer_get_host_ptr");
+                if (get_ptr) {
+                    llama_moe_stream * raw = st.get();
+                    opt.region = [raw, get_ptr](int, size_t bytes) -> uint8_t * {
+                        ggml_backend_buffer_t b = ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(raw->gpu), bytes);
+                        if (!b) return nullptr;
+                        uint8_t * p = (uint8_t *) get_ptr(b);
+                        if (!p) { ggml_backend_buffer_free(b); return nullptr; }
+                        raw->region_bufs[p] = b;
+                        return p;
+                    };
+                }
+            }
             if (const char * io = getenv("ONEBIT_MOE_IO")) opt.io_threads = atoi(io);
             if (const char * mb = getenv("ONEBIT_MOE_MAX_BATCH")) st->max_batch = atoi(mb);
             st->cache = std::make_unique<onebit::moe::ExpertCache>(st->index, opt);
@@ -319,7 +338,9 @@ bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml
         L.part_down = part_named(s->index, il, "ffn_down_exps");
         const auto & lay = s->cache->layout(il);
         if (L.part_gate < 0 || L.part_up < 0 || L.part_down < 0) { G.failed = true; return false; }
-        G.buf = ggml_backend_dev_buffer_from_host_ptr(s->gpu, lay.base, lay.region_bytes, lay.region_bytes);
+        auto own = s->region_bufs.find(lay.base);
+        G.buf = own != s->region_bufs.end() ? own->second
+                                            : ggml_backend_dev_buffer_from_host_ptr(s->gpu, lay.base, lay.region_bytes, lay.region_bytes);
         if (!G.buf) {
             LLAMA_LOG_WARN("%s: %s cannot import layer %d's slots; it streams on the CPU\n", __func__, ggml_backend_dev_name(s->gpu), il);
             G.failed = true;

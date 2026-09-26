@@ -27,6 +27,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <list>
 #include <mutex>
 #include <thread>
@@ -40,6 +41,9 @@ struct CacheOptions {
     bool per_layer = false;   // false: one LRU over all layers (it hit more in replays); true: slots / layers each
     int io_threads = 8;       // reads in flight
     bool pin = true;          // mlock the slots
+    // Memory for each list's slots, owned by the caller (for example a GPU buffer the host can
+    // map); null: the cache maps and pins its own. Called once per list with its byte size.
+    std::function<uint8_t*(int list, size_t bytes)> region;
 };
 
 struct CacheStats {

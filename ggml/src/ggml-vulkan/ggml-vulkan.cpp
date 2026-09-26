@@ -15874,11 +15874,32 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
     return devices[device];
 }
 
+// 1bit: the host mapping of a Vulkan buffer (UMA device buffers are host-visible), or NULL.
+// libllama's expert streaming fills slots it allocated here (llama-moe-stream.cpp).
+static void * ggml_backend_vk_buffer_get_host_ptr(ggml_backend_buffer_t buffer) {
+    if (buffer == nullptr || buffer->iface.free_buffer != ggml_backend_vk_buffer_interface.free_buffer) {
+        return nullptr;
+    }
+    ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *) buffer->context;
+    if (!ctx->dev_buffer || !(ctx->dev_buffer->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+        return nullptr;
+    }
+    return ctx->dev_buffer->ptr;
+}
+
+static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    GGML_UNUSED(reg);
+    if (strcmp(name, "ggml_backend_vk_buffer_get_host_ptr") == 0) {
+        return (void *) ggml_backend_vk_buffer_get_host_ptr;
+    }
+    return nullptr;
+}
+
 static const struct ggml_backend_reg_i ggml_backend_vk_reg_i = {
     /* .get_name         = */ ggml_backend_vk_reg_get_name,
     /* .get_device_count = */ ggml_backend_vk_reg_get_device_count,
     /* .get_device       = */ ggml_backend_vk_reg_get_device,
-    /* .get_proc_address = */ NULL,
+    /* .get_proc_address = */ ggml_backend_vk_reg_get_proc_address,
 };
 
 ggml_backend_reg_t ggml_backend_vk_reg() {

@@ -79,13 +79,20 @@ ExpertCache::ExpertCache(const GgufIndex& index, const CacheOptions& opt) : inde
         layouts_.push_back(lay);
         n_slots += li.slots;
     }
-    void* p = ::mmap(nullptr, mem_bytes_, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) throw std::runtime_error("cannot map " + std::to_string(mem_bytes_ >> 20) + " MiB of expert slots");
-    mem_ = static_cast<uint8_t*>(p);
-    ::madvise(mem_, mem_bytes_, MADV_HUGEPAGE);
-    if (opt_.pin && ::mlock(mem_, mem_bytes_) != 0)
-        throw std::runtime_error(std::string("mlock of the expert slots failed: ") + std::strerror(errno));
-    for (auto& lay : layouts_) lay.base = mem_ + lay.region_off;
+    if (opt_.region) {  // caller-owned memory, one region per list
+        for (size_t li = 0; li < layouts_.size(); ++li) {
+            layouts_[li].base = opt_.region((int) li, layouts_[li].region_bytes);
+            if (!layouts_[li].base) throw std::runtime_error("no memory for expert slot list " + std::to_string(li));
+        }
+    } else {
+        void* p = ::mmap(nullptr, mem_bytes_, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) throw std::runtime_error("cannot map " + std::to_string(mem_bytes_ >> 20) + " MiB of expert slots");
+        mem_ = static_cast<uint8_t*>(p);
+        ::madvise(mem_, mem_bytes_, MADV_HUGEPAGE);
+        if (opt_.pin && ::mlock(mem_, mem_bytes_) != 0)
+            throw std::runtime_error(std::string("mlock of the expert slots failed: ") + std::strerror(errno));
+        for (auto& lay : layouts_) lay.base = mem_ + lay.region_off;
+    }
     for (const auto& f : index.files) {
         const int fd = ::open(f.c_str(), O_RDONLY | O_DIRECT);
         if (fd < 0) throw std::runtime_error("cannot open " + f + " with O_DIRECT: " + std::strerror(errno));
