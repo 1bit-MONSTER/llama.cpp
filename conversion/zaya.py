@@ -15,10 +15,16 @@
 
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+import shutil
+import tempfile
+
+from pathlib import Path
+from typing import Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
+
+import torch
 
 from .base import ModelBase, TextModel, gguf, logger
 
@@ -65,14 +71,137 @@ class ZayaModel(TextModel):
     }
 
     def __init__(self, *args, **kwargs):
+        # ZAYA1-base, ZAYA1-reasoning-base and the *-legacy repos keep Zyphra's Megatron-style
+        # checkpoint: attention and MoE are separate "layers", with per-layer config lists.
+        # Normalize the config here, and the tensors in index_tensors, to the transformers layout.
+        hparams = kwargs.get("hparams") or ModelBase.load_hparams(args[0], False)
+        self._legacy = "zaya_layers" in hparams or "cca" in hparams
+        if self._legacy:
+            hparams = self._legacy_hparams(hparams)
+        kwargs["hparams"] = hparams
         super().__init__(*args, **kwargs)
         # tensors are prepared before set_vocab(), and the embedding is trimmed to this
-        self._n_vocab = gguf.LlamaHfVocab(self.dir_model).vocab_size
+        self._n_vocab = gguf.LlamaHfVocab(self._tokenizer_dir()).vocab_size
+
+    def _tokenizer_dir(self) -> Path:
+        # transformers' AutoTokenizer reads config.json, and its ZayaConfig rejects the legacy
+        # config (rope_scaling: false); load the tokenizer from its files alone
+        if not self._legacy:
+            return self.dir_model
+        if not hasattr(self, "_tok_tmp"):
+            self._tok_tmp = tempfile.TemporaryDirectory(prefix="zaya-tok-")
+            for f in ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "chat_template.jinja", "generation_config.json"):
+                if (self.dir_model / f).is_file():
+                    shutil.copy(self.dir_model / f, self._tok_tmp.name)
+        return Path(self._tok_tmp.name)
+
+    @staticmethod
+    def _legacy_hparams(hp: dict) -> dict:
+        def first(v):  # per-layer lists hold 0 on the layers the value does not apply to
+            return max(v) if isinstance(v, list) else v
+        for flag in ("zaya_use_eda", "zaya_use_mod", "scale_residual_merge", "cca", "gated_linear_unit"):
+            if hp.get(flag, True) is not True:
+                raise ValueError(f"zaya: legacy checkpoint with {flag}={hp[flag]} is not supported")
+        zl = hp.get("zaya_layers")
+        n_half = len(zl) if zl else hp["num_hidden_layers"]
+        n_block = n_half // 2
+        n_head = first(hp["cca_num_q_heads"]) if "cca_num_q_heads" in hp else hp["num_attention_heads"]
+        n_head_kv = first(hp["num_query_groups_list"]) if "num_query_groups_list" in hp else hp["num_query_groups"]
+        n_expert = max(x for x in zl if isinstance(x, int)) if zl else hp["num_experts"]
+        ffn = first(hp["ffn_hidden_size_list"]) if "ffn_hidden_size_list" in hp else hp["ffn_hidden_size"]
+        theta = hp.get("rope_theta", 1e6)
+        rotary = hp.get("partial_rotary_factor", 0.5)
+        out = dict(hp)
+        out.update({
+            "num_hidden_layers": n_block,
+            "num_attention_heads": n_head,
+            "num_key_value_heads": n_head_kv,
+            "head_dim": hp.get("head_dim") or hp["kv_channels"],
+            "num_experts": n_expert,
+            "num_experts_per_tok": hp.get("moe_router_topk", 1),
+            "moe_intermediate_size": ffn // 2,  # fc1 holds gate and up
+            "router_hidden_size": first(hp["zaya_mlp_expansion"]),
+            "rms_norm_eps": hp.get("norm_epsilon", 1e-5),
+            "layer_types": ["hybrid"] * n_block,
+            "rope_parameters": {"hybrid": {"rope_theta": theta, "partial_rotary_factor": rotary}},
+        })
+        swa = hp.get("swa_layers")
+        if swa and any(swa):
+            # per half-layer window on the attention layers; Megatron's window excludes the query
+            # position, transformers' sliding_window includes it (ZAYA1-74B-preview: 4096 -> 4097)
+            out["layer_types"] = ["hybrid_sliding" if swa[2 * i] else "hybrid" for i in range(n_block)]
+            out["sliding_window"] = max(swa) + 1
+            out["rope_parameters"]["hybrid_sliding"] = {"rope_theta": hp.get("swa_rotary_base", theta), "partial_rotary_factor": rotary}
+        return out
+
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+        if not self._legacy:
+            return tensors
+        n_block, n_expert = self.hparams["num_hidden_layers"], self.hparams["num_experts"]
+        out: dict[str, Callable[[], Tensor]] = {}
+        rename = {"model.embed_tokens.weight": "model.embed_tokens.weight", "model.final_norm.weight": "model.norm.weight"}
+        for k in ("hidden_states_scale", "hidden_states_bias"):
+            rename[f"model.layers.0.res_scale.{k}"] = f"model.input_{k}"
+        for k in ("hidden_states_scale", "hidden_states_bias", "residual_scale", "residual_bias"):
+            rename[f"model.res_scale.{k}"] = f"model.layers.{n_block - 1}.post_mlp_residual_scale.{k}"
+        attn = {
+            "input_norm.weight": "input_layernorm.weight",
+            "self_attn.o_proj.weight": "self_attn.o_proj.weight",
+            "self_attn.qkv.temp": "self_attn.qk_norm.temp",
+            "self_attn.qkv.linear_q.weight": "self_attn.qkv_proj.q_proj.weight",
+            "self_attn.qkv.linear_k.weight": "self_attn.qkv_proj.k_proj.weight",
+            "self_attn.qkv.val_proj1.weight": "self_attn.qkv_proj.v_proj_current.weight",
+            "self_attn.qkv.val_proj2.weight": "self_attn.qkv_proj.v_proj_delayed.weight",
+            "self_attn.qkv.conv_qk.0.weight": "self_attn.qkv_proj.conv_qk_depthwise.weight",
+            "self_attn.qkv.conv_qk.0.bias": "self_attn.qkv_proj.conv_qk_depthwise.bias",
+            "self_attn.qkv.conv_qk.1.weight": "self_attn.qkv_proj.conv_qk_grouped.weight",
+            "self_attn.qkv.conv_qk.1.bias": "self_attn.qkv_proj.conv_qk_grouped.bias",
+        }
+        moe = {
+            "input_norm.weight": "post_attention_layernorm.weight",
+            "zaya_block.router.balancing_biases": "mlp.gate.balancing_biases",
+            "zaya_block.router.down_proj.weight": "mlp.gate.down_proj.weight",
+            "zaya_block.router.down_proj.bias": "mlp.gate.down_proj.bias",
+            "zaya_block.router.router_states_scale": "mlp.gate.router_states_scale",
+            "zaya_block.router.rmsnorm_eda.weight": "mlp.gate.router_mlp.norm.weight",
+            "zaya_block.router.router_mlp.0.weight": "mlp.gate.router_mlp.fc1.weight",
+            "zaya_block.router.router_mlp.0.bias": "mlp.gate.router_mlp.fc1.bias",
+            "zaya_block.router.router_mlp.2.weight": "mlp.gate.router_mlp.fc2.weight",
+            "zaya_block.router.router_mlp.2.bias": "mlp.gate.router_mlp.fc2.bias",
+            "zaya_block.router.router_mlp.4.weight": "mlp.gate.router_mlp.out_proj.weight",
+        }
+        res = ("hidden_states_scale", "hidden_states_bias", "residual_scale", "residual_bias")
+        for i in range(n_block):
+            a, m = f"model.layers.{2 * i}.", f"model.layers.{2 * i + 1}."
+            b = f"model.layers.{i}."
+            rename.update({a + k: b + v for k, v in attn.items()})
+            rename.update({m + k: b + v for k, v in moe.items()})
+            # a half-layer's res_scale merges the residual in front of it: the MoE half-layer's is
+            # the block's post-attention scale, the next attention half-layer's its post-MLP scale
+            rename.update({f"{m}res_scale.{k}": f"{b}post_attention_residual_scale.{k}" for k in res})
+            if i + 1 < n_block:
+                rename.update({f"model.layers.{2 * i + 2}.res_scale.{k}": f"{b}post_mlp_residual_scale.{k}" for k in res})
+        for name, gen in tensors.items():
+            if ".local_experts." in name:
+                continue
+            if name == "lm_head.weight":
+                out[name] = gen
+                continue
+            if name not in rename:
+                raise ValueError(f"zaya: unmapped legacy tensor {name}")
+            out[rename[name]] = gen
+        for i in range(n_block):
+            pre = f"model.layers.{2 * i + 1}.zaya_block.experts.local_experts."
+            for src, dst in (("linear_fc1", "gate_up_proj"), ("linear_fc2", "down_proj")):
+                gens = [tensors[f"{pre}{e}.{src}.weight"] for e in range(n_expert)]
+                out[f"model.layers.{i}.mlp.experts.{dst}"] = lambda gens=gens: torch.stack([g() for g in gens])
+        return out
 
     def set_vocab(self):
         # the Gemma 3/4 BPE tokenizer; added tokens that are not special (such as "\n") stay
         # USER_DEFINED so they are matched in prompts and rendered in output
-        vocab = gguf.LlamaHfVocab(self.dir_model)
+        vocab = gguf.LlamaHfVocab(self._tokenizer_dir())
         tokens, scores, toktypes = [], [], []
         for text, score, toktype in vocab.all_tokens():
             tokens.append(text)
