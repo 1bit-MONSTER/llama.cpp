@@ -158,14 +158,23 @@ int ExpertCache::start_load(int layer, int e, bool demand) {
     auto& lru = lru_[s.lru_list];
     lru.splice(lru.begin(), lru, s.lru_it);
     const auto& parts = index_.experts.at(layer);
-    s.pending = (int) parts.size();
+    s.pending = 0;
+    const uint64_t chunk = opt_.read_chunk ? up(opt_.read_chunk) : 0;
     for (size_t k = 0; k < parts.size(); ++k) {
         const auto& p = parts[k];
         const uint64_t off = p.base + uint64_t(e) * p.stride;
         const uint64_t a = down(off), b = up(off + p.bytes);
         uint8_t* dst = lay.base + lay.part_off[k] + size_t(s.index) * lay.part_bytes[k];
-        Read r{si, fds_[p.file], a, b - a, dst, off - a, p.bytes};
-        (demand ? demand_q_ : prefetch_q_).push_back(r);
+        // [a, b) aligned for O_DIRECT, in chunks; each copies its overlap with [off, off + bytes)
+        const uint64_t step = chunk ? chunk : b - a;
+        for (uint64_t c0 = a; c0 < b; c0 += step) {
+            const uint64_t c1 = std::min(b, c0 + step);
+            const uint64_t lo = std::max(c0, off), hi = std::min(c1, off + p.bytes);
+            if (lo >= hi) continue;
+            Read r{si, fds_[p.file], c0, c1 - c0, dst + (lo - off), lo - c0, hi - lo};
+            (demand ? demand_q_ : prefetch_q_).push_back(r);
+            s.pending++;
+        }
         st_.bytes_read += b - a;
     }
     work_cv_.notify_all();
@@ -190,6 +199,7 @@ void ExpertCache::reader() {
             bounce_bytes = r.len;
             if (posix_memalign((void**) &bounce, kAlign, bounce_bytes) != 0) throw std::runtime_error("out of memory");
         }
+        const auto t0 = std::chrono::steady_clock::now();
         uint64_t done = 0;
         while (done < r.len) {
             const ssize_t n = ::pread(r.fd, bounce + done, r.len - done, (off_t) (r.off + done));
@@ -201,9 +211,14 @@ void ExpertCache::reader() {
             }
             done += (uint64_t) n;
         }
+        const auto t1 = std::chrono::steady_clock::now();
         std::memcpy(r.dst, bounce + r.lead, r.bytes);
+        const auto t2 = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lk(mu_);
+            st_.read_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+            st_.copy_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
+            st_.reads++;
             Slot& s = slots_[r.slot];
             if (--s.pending == 0) s.state = State::Ready;
         }

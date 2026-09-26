@@ -40,6 +40,9 @@ struct CacheOptions {
     int slots = 1024;         // experts held in RAM, all layers together (each layer keeps the same share)
     bool per_layer = false;   // false: one LRU over all layers (it hit more in replays); true: slots / layers each
     int io_threads = 8;       // reads in flight
+    // Parts larger than this are read in chunks of this size (a multiple of 4 KiB), so one
+    // expert's miss keeps several reads in flight; 0 reads each part whole.
+    size_t read_chunk = 0;
     bool pin = true;          // mlock the slots
     // Memory for each list's slots, owned by the caller (for example a GPU buffer the host can
     // map); null: the cache maps and pins its own. Called once per list with its byte size.
@@ -54,6 +57,9 @@ struct CacheStats {
     uint64_t prefetch_wasted = 0;   // prefetched, then evicted before any use
     uint64_t bytes_read = 0;
     double stall_ms = 0;            // time acquire() waited for reads
+    double read_ms = 0;             // reader threads: time in pread, summed over threads
+    double copy_ms = 0;             // reader threads: time copying out of the bounce buffer
+    uint64_t reads = 0;             // part reads done
 };
 
 class ExpertCache {
