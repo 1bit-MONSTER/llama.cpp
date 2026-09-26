@@ -268,6 +268,11 @@ void ExpertCache::prefetch(int layer, const std::vector<int>& experts) {
     }
 }
 
+bool ExpertCache::resident(int layer, int expert) const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return where_.count(key(layer, expert)) != 0;
+}
+
 CacheStats ExpertCache::stats() const {
     std::lock_guard<std::mutex> lk(mu_);
     return st_;

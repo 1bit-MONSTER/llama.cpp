@@ -88,6 +88,8 @@ struct llama_moe_stream {
     layer_state * last = nullptr;  // the layer whose experts are pinned (layers run in order)
     // ONEBIT_MOE_STATS=1: where decode time goes, printed at exit
     bool report = false;
+    float subst = 0;           // ONEBIT_MOE_SUBST
+    std::atomic<uint64_t> substituted{0}, selected{0};
     uint64_t remaps = 0;
     double remap_ms = 0, gap_ms = 0;  // inside the remap op; between one remap's end and the next's start
     std::chrono::steady_clock::time_point last_remap_end{};
@@ -106,6 +108,9 @@ struct llama_moe_stream {
         fprintf(stderr, "moe-stream: %llu remaps, %.3f ms in remap (%.3f waiting for reads), %.3f ms between remaps (per remap)\n",
                 (unsigned long long) remaps, remap_ms / std::max<uint64_t>(remaps, 1), st.stall_ms / std::max<uint64_t>(remaps, 1),
                 gap_ms / std::max<uint64_t>(remaps, 1));
+        if (subst > 0)
+            fprintf(stderr, "moe-stream: %llu of %llu routed experts replaced by resident ones (ONEBIT_MOE_SUBST %.2f)\n",
+                    (unsigned long long) substituted.load(), (unsigned long long) selected.load(), subst);
         fprintf(stderr, "moe-stream: %llu experts used: %.1f%% hits, %.1f%% prefetch hits, %.1f%% misses; %llu prefetched, %llu wasted; %.2f GiB read\n",
                 (unsigned long long) used, 100.0 * st.hits / std::max<uint64_t>(used, 1),
                 100.0 * st.prefetch_hits / std::max<uint64_t>(used, 1), 100.0 * st.misses / std::max<uint64_t>(used, 1),
@@ -221,6 +226,7 @@ llama_moe_stream * llama_moe_stream_get() {
             st->layer_slots = int(double(opt.slots) / st->index.experts.size());
             if (const char * pf = getenv("ONEBIT_MOE_PREFETCH")) st->prefetch = std::max(0, atoi(pf));
             if (const char * r = getenv("ONEBIT_MOE_STATS")) st->report = atoi(r) != 0;
+            if (const char * r = getenv("ONEBIT_MOE_SUBST")) st->subst = std::max(0.0f, (float) atof(r));
             if (st->prefetch) {  // the routers, read once (F32 only; others skip prefetch)
                 int prev = -1;
                 for (const auto & [l, parts] : st->index.experts) {
@@ -382,6 +388,55 @@ void op_down(ggml_tensor * dst, int ith, int nth, void * ud) {
     }
 }
 
+// ONEBIT_MOE_SUBST, one thread: top-k of each token's selection scores, where a chosen expert
+// that is not resident gives way to the best resident one among the next k candidates if that
+// one scores at least subst times as much. Scores may be logits or probabilities, so the ratio
+// is taken on softmax-free values only when both are positive; otherwise on exp(difference).
+struct select_args { llama_moe_stream * s; int il; };
+
+void op_select(ggml_tensor * dst, int ith, int nth, void * ud) {
+    (void) nth;
+    if (ith != 0) return;
+    const auto & a = *(const select_args *) ud;
+    llama_moe_stream & s = *a.s;
+    const ggml_tensor * sp = dst->src[0];
+    const int64_t n_exp = sp->ne[0], n_tok = sp->ne[1], k = dst->ne[0];
+    const int64_t n_cand = std::min<int64_t>(2 * k, n_exp);
+    std::vector<std::pair<float, int>> sc(n_exp);
+    std::vector<char> taken(n_exp);
+    uint64_t n_sub = 0;
+    for (int64_t t = 0; t < n_tok; ++t) {
+        const float * row = (const float *) ((const char *) sp->data + t * sp->nb[1]);
+        for (int64_t e = 0; e < n_exp; ++e) sc[e] = { -row[e], (int) e };
+        std::partial_sort(sc.begin(), sc.begin() + n_cand, sc.end());
+        std::fill(taken.begin(), taken.end(), 0);
+        std::vector<char> res(n_cand);
+        for (int64_t i = 0; i < n_cand; ++i) res[i] = s.cache->resident(a.il, sc[i].second);
+        for (int64_t i = 0; i < k; ++i) taken[sc[i].second] = 1;
+        int32_t * out = (int32_t *) ((char *) dst->data + t * dst->nb[1]);
+        for (int64_t i = 0; i < k; ++i) {
+            int e = sc[i].second;
+            if (!res[i]) {
+                const float pe = -sc[i].first;
+                for (int64_t j = k; j < n_cand; ++j) {
+                    const int c = sc[j].second;
+                    if (!res[j] || taken[c]) continue;
+                    const float pc = -sc[j].first;
+                    const float ratio = pe > 0 && pc >= 0 ? pc / pe : std::exp(pc - pe);
+                    if (ratio < s.subst) break;  // candidates only get worse
+                    taken[c] = 1;
+                    e = c;
+                    ++n_sub;
+                    break;
+                }
+            }
+            out[i] = e;
+        }
+    }
+    s.substituted += n_sub;
+    s.selected += (uint64_t) (n_tok * k);
+}
+
 // GPU mode, one thread: pin the batch's experts and write their slot indices
 void op_remap(ggml_tensor * dst, int ith, int nth, void * ud) {
     (void) nth;
@@ -489,6 +544,15 @@ ggml_tensor * llama_moe_stream_build(ggml_context * ctx, llama_moe_stream * s, i
     return ggml_custom_4d(ctx, GGML_TYPE_F32, L.n_embd, n_used, n_tok, 1, args3, 2, op_down, GGML_N_TASKS_MAX, &L);
 }
 
+ggml_tensor * llama_moe_stream_select(ggml_context * ctx, llama_moe_stream * s, int il, ggml_tensor * selection_probs,
+                                      int64_t n_expert_used) {
+    if (!s || s->subst <= 0 || selection_probs->type != GGML_TYPE_F32) return nullptr;
+    static std::map<int, select_args> args;  // one per layer, alive as long as the graphs
+    args[il] = { s, il };
+    ggml_tensor * src[] = { selection_probs };
+    return ggml_custom_4d(ctx, GGML_TYPE_I32, n_expert_used, selection_probs->ne[1], 1, 1, src, 1, op_select, 1, &args[il]);
+}
+
 #else  // not built with the expert cache (non-Linux)
 
 llama_moe_stream * llama_moe_stream_get() { return nullptr; }
@@ -505,6 +569,10 @@ bool llama_moe_stream_applies(const llama_moe_stream *, int64_t, int64_t, const 
 
 ggml_tensor * llama_moe_stream_build(ggml_context *, llama_moe_stream *, int, ggml_tensor *, ggml_tensor *,
                                      ggml_tensor *, ggml_tensor *, ggml_tensor *) {
+    return nullptr;
+}
+
+ggml_tensor * llama_moe_stream_select(ggml_context *, llama_moe_stream *, int, ggml_tensor *, int64_t) {
     return nullptr;
 }
 
