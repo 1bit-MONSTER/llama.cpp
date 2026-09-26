@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("StableLmForCausalLM", "StableLMEpochForCausalLM", "LlavaStableLMEpochForCausalLM")
+@ModelBase.register("StableLmForCausalLM", "StableLMEpochForCausalLM", "LlavaStableLMEpochForCausalLM", "StableLMForCausalLM")
 class StableLMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.STABLELM
 

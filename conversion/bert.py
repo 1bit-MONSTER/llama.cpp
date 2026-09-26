@@ -262,7 +262,7 @@ class DistilBertModel(BertModel):
         return super().filter_tensors((name, gen))
 
 
-@ModelBase.register("RobertaModel", "RobertaForSequenceClassification")
+@ModelBase.register("RobertaModel", "RobertaForSequenceClassification", "RobertaForMaskedLM")
 class RobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 

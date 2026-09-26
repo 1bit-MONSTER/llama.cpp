@@ -9,6 +9,8 @@ class TensorNameMap:
     mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
         # Token embeddings
         MODEL_TENSOR.TOKEN_EMBD: (
+            "embedding_proj",    # pico_decoder
+            "model.decoder.embed_tokens",    # opt
             "gpt_neox.embed_in",                         # gptneox
             "transformer.wte",                           # gpt2 gpt-j mpt refact qwen dbrx jais exaone
             "transformer.word_embeddings",               # falcon
@@ -67,6 +69,7 @@ class TensorNameMap:
 
         # Position embeddings
         MODEL_TENSOR.POS_EMBD: (
+            "model.decoder.embed_positions",    # opt
             "transformer.wpe",                 # gpt2
             "embeddings.position_embeddings",  # bert
             "wpe",                             # gpt2
@@ -75,6 +78,7 @@ class TensorNameMap:
 
         # Output
         MODEL_TENSOR.OUTPUT: (
+            "de_embedding_proj",    # pico_decoder
             "embed_out",                 # gptneox
             "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe plamo2
             "output",                    # llama-pth bloom internlm2
@@ -95,6 +99,8 @@ class TensorNameMap:
         ),
         # Output norm
         MODEL_TENSOR.OUTPUT_NORM: (
+            "output_norm",    # pico_decoder
+            "model.decoder.final_layer_norm",    # opt
             "gpt_neox.final_layer_norm",               # gptneox
             "transformer.ln_f",                        # gpt2 gpt-j falcon jais exaone
             "model.norm",                              # llama-hf baichuan internlm2 olmoe olmo2 phimoe plamo2
@@ -184,6 +190,8 @@ class TensorNameMap:
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
+            "layers.{bid}.attention_norm",    # pico_decoder
+            "model.decoder.layers.{bid}.self_attn_layer_norm",    # opt
             "gpt_neox.layers.{bid}.input_layernorm",                # gptneox
             "transformer.h.{bid}.ln_1",                             # gpt2 gpt-j refact qwen jais exaone
             "transformer.blocks.{bid}.norm_1",                      # mpt
@@ -229,6 +237,7 @@ class TensorNameMap:
 
         # Attention query-key-value
         MODEL_TENSOR.ATTN_QKV: (
+            "transformer.h.{bid}.attn.qkv_proj",    # codegen
             "gpt_neox.layers.{bid}.attention.query_key_value",                     # gptneox
             "transformer.h.{bid}.attn.c_attn",                                     # gpt2 qwen jais
             "transformer.blocks.{bid}.attn.Wqkv",                                  # mpt
@@ -253,6 +262,9 @@ class TensorNameMap:
 
         # Attention query
         MODEL_TENSOR.ATTN_Q: (
+            "layers.{bid}.attention.q_proj",    # pico_decoder
+            "transformer.h.{bid}.attn.attention.q_proj",    # gpt-neo
+            "model.decoder.layers.{bid}.self_attn.q_proj",    # opt
             "model.layers.{bid}.self_attn.q_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
             "layers.{bid}.self_attn.q_proj",                             # embeddinggemma
             "model.layers.{bid}.self_attn.q_proj_no_perm",               # llama-custom
@@ -273,6 +285,9 @@ class TensorNameMap:
 
         # Attention key
         MODEL_TENSOR.ATTN_K: (
+            "layers.{bid}.attention.k_proj",    # pico_decoder
+            "transformer.h.{bid}.attn.attention.k_proj",    # gpt-neo
+            "model.decoder.layers.{bid}.self_attn.k_proj",    # opt
             "model.layers.{bid}.self_attn.k_proj",                     # llama-hf nemotron olmoe olmo2 phimoe
             "layers.{bid}.self_attn.k_proj",                           # embeddinggemma
             "model.layers.{bid}.self_attn.k_proj_no_perm",             # llama-custom
@@ -294,6 +309,9 @@ class TensorNameMap:
 
         # Attention value
         MODEL_TENSOR.ATTN_V: (
+            "layers.{bid}.attention.v_proj",    # pico_decoder
+            "transformer.h.{bid}.attn.attention.v_proj",    # gpt-neo
+            "model.decoder.layers.{bid}.self_attn.v_proj",    # opt
             "model.layers.{bid}.self_attn.v_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
             "layers.{bid}.self_attn.v_proj",                             # embeddinggemma
             "layers.{bid}.attention.wv",                                 # llama-pth
@@ -314,6 +332,9 @@ class TensorNameMap:
 
         # Attention output
         MODEL_TENSOR.ATTN_OUT: (
+            "layers.{bid}.attention.o_proj",    # pico_decoder
+            "transformer.h.{bid}.attn.attention.out_proj",    # gpt-neo
+            "model.decoder.layers.{bid}.self_attn.out_proj",    # opt
             "gpt_neox.layers.{bid}.attention.dense",                        # gptneox
             "transformer.h.{bid}.attn.c_proj",                              # gpt2 refact qwen jais
             "transformer.blocks.{bid}.attn.out_proj",                       # mpt
@@ -389,6 +410,9 @@ class TensorNameMap:
 
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
+            "layers.{bid}.swiglu_norm",    # pico_decoder
+            "transformer.h.{bid}.ln_2",    # gpt-neo
+            "model.decoder.layers.{bid}.final_layer_norm",    # opt
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
             "transformer.h.{bid}.ln_2",                                      # gpt2 refact qwen jais exaone
             "h.{bid}.post_attention_layernorm",                              # bloom
@@ -484,6 +508,9 @@ class TensorNameMap:
 
         # Feed-forward up
         MODEL_TENSOR.FFN_UP: (
+            "layers.{bid}.swiglu.w_1",    # pico_decoder
+            "transformer.h.{bid}.mlp.c_fc",    # gpt-neo
+            "model.decoder.layers.{bid}.fc1",    # opt
             "gpt_neox.layers.{bid}.mlp.dense_h_to_4h",                # gptneox
             "transformer.h.{bid}.mlp.c_fc",                           # gpt2 jais
             "transformer.blocks.{bid}.ffn.up_proj",                   # mpt
@@ -560,6 +587,7 @@ class TensorNameMap:
 
         # Feed-forward gate
         MODEL_TENSOR.FFN_GATE: (
+            "layers.{bid}.swiglu.w_0",    # pico_decoder
             "model.layers.{bid}.mlp.gate_proj",               # llama-hf refact olmo2
             "layers.{bid}.mlp.gate_proj",                     # embeddinggemma
             "layers.{bid}.feed_forward.w1",                   # llama-pth
@@ -619,6 +647,9 @@ class TensorNameMap:
 
         # Feed-forward down
         MODEL_TENSOR.FFN_DOWN: (
+            "layers.{bid}.swiglu.w_2",    # pico_decoder
+            "transformer.h.{bid}.mlp.c_proj",    # gpt-neo
+            "model.decoder.layers.{bid}.fc2",    # opt
             "gpt_neox.layers.{bid}.mlp.dense_4h_to_h",                # gptneox
             "transformer.h.{bid}.mlp.c_proj",                         # gpt2 refact qwen jais
             "transformer.blocks.{bid}.ffn.down_proj",                 # mpt

@@ -64,7 +64,7 @@ class LFM2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel")
+@ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel", "Lfm2BidirectionalForMaskedLM")
 class LFM2ColBertModel(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
     dense_tensor_name = "dense_2"
@@ -92,7 +92,7 @@ class LFM2ColBertModel(LFM2Model):
         yield f"{self.dense_tensor_name}.weight", tensor.clone()
 
 
-@ModelBase.register("Lfm2MoeForCausalLM")
+@ModelBase.register("Lfm2MoeForCausalLM", "Lfm2MoEForCausalLM")
 class LFM2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2MOE
 

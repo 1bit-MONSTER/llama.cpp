@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("Rwkv6ForCausalLM")
+@ModelBase.register("Rwkv6ForCausalLM", "RWKV6ForCausalLM")
 class Rwkv6Model(TextModel):
     model_arch = gguf.MODEL_ARCH.RWKV6
 

@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("LLaDAModelLM")
+@ModelBase.register("LLaDAModelLM", "LLaDAForCausalLM")
 class LLaDAModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLADA
     undo_permute = True

@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register("GptOssForCausalLM")
+@ModelBase.register("GptOssForCausalLM", "GPTOSSForCausalLM")
 class GptOssModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT_OSS
 

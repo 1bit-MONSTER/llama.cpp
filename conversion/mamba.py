@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register("MambaForCausalLM", "MambaLMHeadModel", "FalconMambaForCausalLM")
+@ModelBase.register("MambaForCausalLM", "MambaLMHeadModel", "FalconMambaForCausalLM", "MambaModel")
 class MambaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MAMBA
 

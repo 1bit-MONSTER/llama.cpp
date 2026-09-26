@@ -27,7 +27,15 @@ from .base import ModelBase, TextModel, gguf, logger
     "Eagle3Speculator",
     "Eagle3DraftModel",
     "IQuestCoderForCausalLM",
-    "LlamaModel")
+    "LlamaModel",
+    "MistralModel",
+    "MixtralModel",
+    "LLaMA",
+    "LLAMA",
+    "LLaMAModel",
+    "LlaMAForCausalLM",
+    "llamaForCausalLM",
+    "LlamaForConditionalGeneration")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     undo_permute = True

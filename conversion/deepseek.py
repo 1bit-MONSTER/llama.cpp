@@ -17,7 +17,7 @@ from .base import LazyTorchTensor, MmprojModel, ModelBase, TextModel, gguf, logg
 from .qwen import QwenModel
 
 
-@ModelBase.register("DeepseekOCRForCausalLM", "UnlimitedOCRForCausalLM")
+@ModelBase.register("DeepseekOCRForCausalLM", "UnlimitedOCRForCausalLM", "DeepseekOcrForConditionalGeneration")
 class DeepseekOCRVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -472,7 +472,7 @@ class DeepseekV32Model(DeepseekV2Model):
         self.gguf_writer.add_indexer_top_k(self.hparams["index_topk"])
 
 
-@ModelBase.register("DeepseekV4ForCausalLM")
+@ModelBase.register("DeepseekV4ForCausalLM", "DeepSeekV4")
 class DeepseekV4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK4
     _skipped_mtp_tensors = 0

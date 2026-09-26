@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("FalconForCausalLM", "RWForCausalLM")
+@ModelBase.register("FalconForCausalLM", "RWForCausalLM", "RWModel")
 class FalconModel(TextModel):
     model_arch = gguf.MODEL_ARCH.FALCON
 

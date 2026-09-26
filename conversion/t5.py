@@ -12,8 +12,8 @@ from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
 
 
 @ModelBase.register("T5WithLMHeadModel")
-@ModelBase.register("T5ForConditionalGeneration")
-@ModelBase.register("MT5ForConditionalGeneration")
+@ModelBase.register("T5ForConditionalGeneration", "T5Model")
+@ModelBase.register("MT5ForConditionalGeneration", "MT5Model")
 @ModelBase.register("UMT5ForConditionalGeneration")
 @ModelBase.register("UMT5Model")
 class T5Model(TextModel):
