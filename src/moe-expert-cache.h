@@ -59,13 +59,14 @@ public:
         std::vector<const uint8_t*> parts;
         int slot = 0;  // index among the slots of this expert's size class or layer (Layout)
     };
-    // The slots a layer's experts can occupy: n_slots of slot_bytes from base; part k of the
-    // expert in slot i starts at base + i * slot_bytes + part_off[k].
+    // The slots a layer's experts can occupy: one packed array per part in a region from base;
+    // part k of the expert in slot i is at base + part_off[k] + i * part_bytes[k] (a ggml expert
+    // tensor's layout with n_slots experts).
     struct Layout {
         uint8_t* base = nullptr;
-        size_t slot_bytes = 0;
+        size_t region_off = 0, region_bytes = 0, slot_bytes = 0;
         int n_slots = 0;
-        std::vector<size_t> part_off;
+        std::vector<size_t> part_off, part_bytes;
     };
     const Layout& layout(int layer) const { return layouts_.at(lru_of(layer)); }
 
@@ -94,8 +95,6 @@ private:
         int refs = 0;
         int pending = 0;          // reads not finished
         bool prefetched = false;  // loaded by prefetch() and not acquired since
-        std::vector<size_t> part_off;  // byte offset of each part's data inside the slot
-        size_t off = 0;           // byte offset of the slot in the pinned region
         int index = 0;            // position among its list's slots
         std::list<int>::iterator lru_it;
         int lru_list = 0;

@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <map>
@@ -35,45 +36,56 @@ uint64_t up(uint64_t v) { return (v + kAlign - 1) / kAlign * kAlign; }
 
 ExpertCache::ExpertCache(const GgufIndex& index, const CacheOptions& opt) : index_(index), opt_(opt) {
     if (index.experts.empty()) throw std::runtime_error("the model has no routed expert tensors");
-    // A slot holds every part's aligned read window, [down(off), up(off + bytes)). Mixed-quant
-    // models (Unsloth's UD) use bigger types in some layers, so layers are grouped by that size:
-    // each size class has its own slots, and LRU (shared mode) or one per layer.
-    // Each part has a fixed window, up(bytes) + one alignment unit; after a read the part's data
-    // is moved to the start of its window, so a class's slots share one layout (a device can
-    // view them as a strided tensor per part).
-    std::map<std::vector<size_t>, std::vector<int>> classes;  // part windows -> layers
+    // Layers are grouped by the byte sizes of their experts' parts (mixed-quant models, like
+    // Unsloth's UD, use bigger types in some layers). Each group ("list") has its slots and an
+    // LRU, one per layer with per_layer. A list's memory is one packed array per part: part k
+    // of slot i sits at part_base[k] + i * part_bytes[k], the layout of a ggml expert tensor, so
+    // a device can compute on the slots directly. Reads go through each reader's aligned bounce
+    // buffer (O_DIRECT) and are copied into place.
+    std::map<std::vector<size_t>, std::vector<int>> classes;  // part bytes -> layers
     for (const auto& [l, parts] : index.experts) {
-        std::vector<size_t> w;
+        std::vector<size_t> b;
         size_t n = 0;
-        for (const auto& p : parts) { w.push_back(up(p.bytes) + kAlign); n += w.back(); }
-        classes[w].push_back(l);
+        for (const auto& p : parts) { b.push_back(p.bytes); n += p.bytes; }
+        classes[b].push_back(l);
         slot_bytes_ = std::max(slot_bytes_, n);
     }
     // the budget is in experts; every layer keeps the same share of its experts
     const double share = std::min(1.0, double(opt_.slots) / (double(index.experts.size()) * index.n_expert));
-    struct List { size_t bytes; int slots; std::vector<size_t> windows; };
+    struct List { int slots; std::vector<size_t> part_bytes; };
     std::vector<List> lists;
-    for (const auto& [windows, layers] : classes) {
-        size_t bytes = 0;
-        for (size_t w : windows) bytes += w;
+    for (const auto& [part_bytes, layers] : classes) {
         if (opt_.per_layer) {
             for (int l : layers) {
                 layer_lru_[l] = (int) lists.size();
-                lists.push_back({bytes, std::max(1, (int) (share * index.n_expert)), windows});
+                lists.push_back({std::max(1, (int) (share * index.n_expert)), part_bytes});
             }
         } else {
             for (int l : layers) layer_lru_[l] = (int) lists.size();
-            lists.push_back({bytes, std::max(1, (int) (share * index.n_expert * layers.size())), windows});
+            lists.push_back({std::max(1, (int) (share * index.n_expert * layers.size())), part_bytes});
         }
     }
     int n_slots = 0;
-    for (const auto& li : lists) { n_slots += li.slots; mem_bytes_ += size_t(li.slots) * li.bytes; }
+    for (const auto& li : lists) {
+        Layout lay;
+        lay.n_slots = li.slots;
+        lay.part_bytes = li.part_bytes;
+        size_t at = 0;
+        for (size_t b : li.part_bytes) { lay.part_off.push_back(at); at = up(at + b * li.slots); }
+        lay.region_bytes = at;
+        for (size_t b : li.part_bytes) lay.slot_bytes += b;
+        lay.region_off = mem_bytes_;
+        mem_bytes_ += at;
+        layouts_.push_back(lay);
+        n_slots += li.slots;
+    }
     void* p = ::mmap(nullptr, mem_bytes_, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) throw std::runtime_error("cannot map " + std::to_string(mem_bytes_ >> 20) + " MiB of expert slots");
     mem_ = static_cast<uint8_t*>(p);
     ::madvise(mem_, mem_bytes_, MADV_HUGEPAGE);
     if (opt_.pin && ::mlock(mem_, mem_bytes_) != 0)
         throw std::runtime_error(std::string("mlock of the expert slots failed: ") + std::strerror(errno));
+    for (auto& lay : layouts_) lay.base = mem_ + lay.region_off;
     for (const auto& f : index.files) {
         const int fd = ::open(f.c_str(), O_RDONLY | O_DIRECT);
         if (fd < 0) throw std::runtime_error("cannot open " + f + " with O_DIRECT: " + std::strerror(errno));
@@ -81,25 +93,14 @@ ExpertCache::ExpertCache(const GgufIndex& index, const CacheOptions& opt) : inde
     }
     slots_.resize(n_slots);
     lru_.resize(lists.size());
-    size_t off = 0;
     int si = 0;
-    for (int li = 0; li < (int) lists.size(); ++li) {
-        Layout lay;
-        lay.base = mem_ + off;
-        lay.slot_bytes = lists[li].bytes;
-        lay.n_slots = lists[li].slots;
-        size_t at = 0;
-        for (size_t w : lists[li].windows) { lay.part_off.push_back(at); at += w; }
-        layouts_.push_back(lay);
+    for (int li = 0; li < (int) lists.size(); ++li)
         for (int k = 0; k < lists[li].slots; ++k, ++si) {
             slots_[si].lru_list = li;
             slots_[si].index = k;
-            slots_[si].off = off;
-            off += lists[li].bytes;
             lru_[li].push_back(si);  // empty slots at the back: taken first
             slots_[si].lru_it = std::prev(lru_[li].end());
         }
-    }
     for (int i = 0; i < std::max(1, opt_.io_threads); ++i) threads_.emplace_back([this] { reader(); });
 }
 
@@ -145,20 +146,19 @@ int ExpertCache::start_load(int layer, int e, bool demand) {
     s.key = key(layer, e);
     s.state = State::Loading;
     s.prefetched = !demand;
-    s.part_off = layouts_[s.lru_list].part_off;
+    const Layout& lay = layouts_[s.lru_list];
     where_[s.key] = si;
     auto& lru = lru_[s.lru_list];
     lru.splice(lru.begin(), lru, s.lru_it);
-    uint8_t* base = mem_ + s.off;
-    size_t at = 0;
     const auto& parts = index_.experts.at(layer);
     s.pending = (int) parts.size();
-    for (const auto& p : parts) {
+    for (size_t k = 0; k < parts.size(); ++k) {
+        const auto& p = parts[k];
         const uint64_t off = p.base + uint64_t(e) * p.stride;
         const uint64_t a = down(off), b = up(off + p.bytes);
-        Read r{si, fds_[p.file], a, b - a, base + at, off - a, p.bytes};
+        uint8_t* dst = lay.base + lay.part_off[k] + size_t(s.index) * lay.part_bytes[k];
+        Read r{si, fds_[p.file], a, b - a, dst, off - a, p.bytes};
         (demand ? demand_q_ : prefetch_q_).push_back(r);
-        at += up(p.bytes) + kAlign;  // the part's fixed window
         st_.bytes_read += b - a;
     }
     work_cv_.notify_all();
@@ -166,28 +166,35 @@ int ExpertCache::start_load(int layer, int e, bool demand) {
 }
 
 void ExpertCache::reader() {
+    uint8_t* bounce = nullptr;  // aligned for O_DIRECT; the part is copied out of it
+    size_t bounce_bytes = 0;
     for (;;) {
         Read r;
         {
             std::unique_lock<std::mutex> lk(mu_);
             work_cv_.wait(lk, [&] { return stop_ || !demand_q_.empty() || !prefetch_q_.empty(); });
-            if (stop_) return;
+            if (stop_) { std::free(bounce); return; }
             auto& q = demand_q_.empty() ? prefetch_q_ : demand_q_;
             r = q.front();
             q.pop_front();
         }
+        if (bounce_bytes < r.len) {
+            std::free(bounce);
+            bounce_bytes = r.len;
+            if (posix_memalign((void**) &bounce, kAlign, bounce_bytes) != 0) throw std::runtime_error("out of memory");
+        }
         uint64_t done = 0;
         while (done < r.len) {
-            const ssize_t n = ::pread(r.fd, r.dst + done, r.len - done, (off_t) (r.off + done));
+            const ssize_t n = ::pread(r.fd, bounce + done, r.len - done, (off_t) (r.off + done));
             if (n <= 0) {
                 if (n < 0 && errno == EINTR) continue;
                 // short read at the end of the file: the window's tail past EOF is padding
-                std::memset(r.dst + done, 0, r.len - done);
+                std::memset(bounce + done, 0, r.len - done);
                 break;
             }
             done += (uint64_t) n;
         }
-        if (r.lead) std::memmove(r.dst, r.dst + r.lead, r.bytes);  // the part at its window's start
+        std::memcpy(r.dst, bounce + r.lead, r.bytes);
         {
             std::lock_guard<std::mutex> lk(mu_);
             Slot& s = slots_[r.slot];
@@ -225,8 +232,9 @@ std::vector<ExpertCache::Resident> ExpertCache::acquire(int layer, const std::ve
     std::vector<Resident> out(experts.size());
     for (size_t i = 0; i < experts.size(); ++i) {
         const Slot& s = slots_[si[i]];
-        const uint8_t* base = mem_ + s.off;
-        for (size_t off : s.part_off) out[i].parts.push_back(base + off);
+        const Layout& lay = layouts_[s.lru_list];
+        for (size_t k = 0; k < lay.part_off.size(); ++k)
+            out[i].parts.push_back(lay.base + lay.part_off[k] + size_t(s.index) * lay.part_bytes[k]);
         out[i].slot = s.index;
     }
     return out;

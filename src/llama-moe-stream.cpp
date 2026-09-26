@@ -270,7 +270,7 @@ bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml
         L.part_down = part_named(s->index, il, "ffn_down_exps");
         const auto & lay = s->cache->layout(il);
         if (L.part_gate < 0 || L.part_up < 0 || L.part_down < 0) { G.failed = true; return false; }
-        G.buf = ggml_backend_dev_buffer_from_host_ptr(s->gpu, lay.base, lay.slot_bytes * lay.n_slots, lay.slot_bytes * lay.n_slots);
+        G.buf = ggml_backend_dev_buffer_from_host_ptr(s->gpu, lay.base, lay.region_bytes, lay.region_bytes);
         if (!G.buf) {
             LLAMA_LOG_WARN("%s: %s cannot import layer %d's slots; it streams on the CPU\n", __func__, ggml_backend_dev_name(s->gpu), il);
             G.failed = true;
@@ -278,8 +278,7 @@ bool llama_moe_stream_gpu(ggml_context * ctx, llama_moe_stream * s, int il, ggml
         }
         auto view = [&](const ggml_tensor * like, int part) {
             ggml_tensor * t = ggml_new_tensor_3d(s->tctx, like->type, like->ne[0], like->ne[1], lay.n_slots);
-            t->nb[2] = lay.slot_bytes;
-            t->nb[3] = lay.slot_bytes * lay.n_slots;
+            GGML_ASSERT(ggml_nbytes(t) == lay.part_bytes[part] * lay.n_slots);  // the cache packs parts like ggml
             ggml_format_name(t, "blk.%d.%s_slots", il, part == L.part_gate ? "ffn_gate_exps" : part == L.part_up ? "ffn_up_exps" : "ffn_down_exps");
             // a device buffer's addresses are its own (Vulkan's base is not the host pointer)
             char * at = (char *) ggml_backend_buffer_get_base(G.buf) + lay.part_off[part];
