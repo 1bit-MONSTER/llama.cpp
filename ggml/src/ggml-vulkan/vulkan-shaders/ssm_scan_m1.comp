@@ -1,0 +1,93 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#version 450
+
+// Mamba-1 selective scan (src3 = A is {d_state, n_head}: an element-wise decay per state).
+// One invocation per channel (head_dim == 1); the d_state-long state stays in registers.
+// Matches ggml_compute_forward_ssm_scan_f32's Mamba-1 branch.
+
+#extension GL_EXT_control_flow_attributes : require
+
+#include "types.glsl"
+
+layout(constant_id = 0) const uint D_STATE = 16;
+layout(constant_id = 1) const uint BLOCK_SIZE = 128;
+
+layout(local_size_x_id = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer Src0 { float s0[]; };
+layout(binding = 1) readonly buffer Src1 { float x[]; };
+layout(binding = 2) readonly buffer Src2 { float dt[]; };
+layout(binding = 3) readonly buffer Src3 { float A[]; };
+layout(binding = 4) readonly buffer Src4 { float B[]; };
+layout(binding = 5) readonly buffer Src5 { float C[]; };
+layout(binding = 6) readonly buffer Src6 { int ids[]; };
+layout(binding = 7) buffer Dst { float d[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint nb02; uint nb03; uint nb12; uint nb13;
+    uint nb21; uint nb22; uint nb31;
+    uint nb42; uint nb43; uint nb52; uint nb53;
+    uint s_off;
+    uint n_head;
+    uint d_head;
+    uint n_group;
+    uint n_tok;
+    uint n_seq;
+    uint K;
+};
+
+float softplus(float v) {
+    return v <= 20.0 ? log(1.0 + exp(v)) : v;
+}
+
+void main() {
+    const uint h   = gl_GlobalInvocationID.x;
+    const uint seq = gl_WorkGroupID.y;
+    if (h >= n_head) {
+        return;
+    }
+    const uint g = h / (n_head / n_group);
+
+    const uint s0_base = (uint(ids[seq]) * nb03 + h * nb02) / 4;
+    const uint s_base  = (s_off + seq * nb03 + h * nb02) / 4;
+    const uint A_base  = (h * nb31) / 4;
+
+    float state[D_STATE];
+    float a[D_STATE];
+    [[unroll]] for (uint i = 0; i < D_STATE; i++) {
+        state[i] = s0[s0_base + i];
+        a[i]     = A[A_base + i];
+    }
+
+    for (uint t = 0; t < n_tok; t++) {
+        const float dt_sp = softplus(dt[(seq * nb22 + t * nb21) / 4 + h]);
+        const float x_dt  = x[(seq * nb13 + t * nb12) / 4 + h] * dt_sp;
+        const uint B_base = (seq * nb43 + t * nb42) / 4 + g * D_STATE;
+        const uint C_base = (seq * nb53 + t * nb52) / 4 + g * D_STATE;
+
+        float sum = 0.0;
+        [[unroll]] for (uint i = 0; i < D_STATE; i++) {
+            state[i] = state[i] * exp(dt_sp * a[i]) + B[B_base + i] * x_dt;
+            sum += state[i] * C[C_base + i];
+        }
+        d[seq * n_tok * n_head + t * n_head + h] = sum;
+    }
+
+    [[unroll]] for (uint i = 0; i < D_STATE; i++) {
+        d[s_base + i] = state[i];
+    }
+}

@@ -9844,6 +9844,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 16, 1, 1024, 1, 32, 4)); // Mamba-1
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 16, 1, 7424, 2,  1, 1)); // Zamba v1: two-head Mamba-1, decode
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 16, 1, 1536, 1,  7, 3)); // Mamba-1, odd token count, 3 seqs
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 32, 4)); // Mamba-2
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 256, 64,  8, 2, 32, 4)); // Falcon-H1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 64, 64,  80, 1, 32, 2)); // Zamba2-2.7B (d_state 64)
