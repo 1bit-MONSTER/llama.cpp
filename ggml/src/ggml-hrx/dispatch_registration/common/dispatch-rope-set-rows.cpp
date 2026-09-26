@@ -19,6 +19,7 @@ namespace {
 
 static constexpr KernelCatalogRef kRopeF32Kernel        = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_f32");
 static constexpr KernelCatalogRef kSetRowsKernel        = GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows");
+static constexpr KernelCatalogRef kSetRowsScatterKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows_scatter");
 static constexpr KernelCatalogRef kRopeSetRowsF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_set_rows_f32");
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
@@ -612,6 +613,56 @@ static bool match_rope_f32_dispatch(const DispatchMatchContext & context, Dispat
     return true;
 }
 
+static SetRowsMatch match_set_rows_scatter(const Graph & graph, const GraphNode * node) {
+    SetRowsMatch match;
+    if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->inputs.size() != 3) {
+        return match;
+    }
+    const Value * rows    = graph_value(graph, node->inputs[0]);
+    const Value * indices = graph_value(graph, node->inputs[1]);
+    const Value * cache   = graph_value(graph, node->inputs[2]);
+    const Value * output  = graph_value(graph, node->output);
+    // Element-wise scatter: the non-FA path flattens the K/V rows, so hidden_size == 1 and each
+    // value is written to its own cache row.
+    if (rows == nullptr || indices == nullptr || cache == nullptr || output == nullptr || !rows->contiguous ||
+        !indices->contiguous || !cache->contiguous || rows->type != GGML_TYPE_F32 ||
+        output->type != GGML_TYPE_F16 || indices->type != GGML_TYPE_I64 || rows->ne[0] != 1 || cache->ne[0] != 1 ||
+        !same_shape(*cache, *output) || !graph.values().same_storage(cache->id, output->id) ||
+        rows->ne[1] != indices->ne[0] || rows->ne[1] < 1 || rows->ne[1] > 1048576 || cache->ne[1] < 1 ||
+        cache->ne[1] > 134217728) {
+        return {};
+    }
+    match.node            = node;
+    match.rows            = rows;
+    match.indices         = indices;
+    match.cache           = cache;
+    match.output          = output;
+    match.rows_span_bytes = rows->byte_count;
+    match.token_count     = rows->ne[1];
+    match.cache_row_count = cache->ne[1];
+    match.hidden_size     = 1;
+    return match;
+}
+
+static bool match_set_rows_scatter_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    const SetRowsMatch match = match_set_rows_scatter(context.graph, context.root_node);
+    if (!match.matched()) {
+        return false;
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kSetRowsScatterKernel);
+    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
+    dispatch.kernel.integer_parameters.emplace("cache_row_count", match.cache_row_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.set_rows_scatter.token_capacity",
+                                               to_config_value(match.token_count));
+    dispatch.bindings.push_back({ match.rows->storage_root, match.rows->storage_offset, match.rows_span_bytes });
+    dispatch.bindings.push_back({ match.indices->id, 0, match.indices->byte_count });
+    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool match_set_rows_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const SetRowsMatch match = match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status);
     if (!match.matched()) {
@@ -641,6 +692,14 @@ void register_rope_set_rows_dispatches(DispatchRegistryBuilder & registry) {
         100,
         DispatchSource::Common,
         match_rope_f32_dispatch,
+    });
+    registry.add({
+        "common.set_rows_scatter",
+        GGML_OP_SET_ROWS,
+        DispatchMatchKind::SingleOp,
+        200,
+        DispatchSource::Common,
+        match_set_rows_scatter_dispatch,
     });
     registry.add({
         "common.set_rows",
