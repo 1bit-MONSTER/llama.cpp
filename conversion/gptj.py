@@ -34,11 +34,14 @@ class GPTJModel(TextModel):
     def set_vocab(self):
         self._set_vocab_gpt2()
 
+    def get_vocab_base_pre(self, tokenizer) -> str:
+        # GPT-J's tokenizer is GPT-2's byte-level BPE; its checksum is just not in the list
+        return "gpt-2"
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # HF keeps the projections as nn.Linear (no Conv1D permute); the tensor map
         # already knows the GPT-J names, and biases ride the usual suffix path.
         if name.endswith((".attn.bias", ".attn.masked_bias")):
-            yield from super().modify_tensors(data_torch, name, bid)
-            return
+            return  # causal-mask buffers older checkpoints carry, not weights
 
         yield from super().modify_tensors(data_torch, self.map_tensor_name(name), bid)

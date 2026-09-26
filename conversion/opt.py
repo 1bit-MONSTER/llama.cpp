@@ -27,6 +27,11 @@ class OPTModel(TextModel):
     def set_vocab(self):
         self._set_vocab_gpt2()
 
+    def get_vocab_base_pre(self, tokenizer) -> str:
+        # OPT's tokenizer is GPT-2's byte-level BPE (same pre-tokenizer); its checksum is just
+        # not in the list
+        return "gpt-2"
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # OPT's learned positions carry two padding rows (offset=2); drop them so the
         # runtime's 0-based positions line up with the GGUF rows.

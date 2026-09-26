@@ -34,6 +34,13 @@ class CodeGenModel(TextModel):
         self._set_vocab_gpt2()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.endswith((".attn.bias", ".attn.masked_bias")):
+        if name.endswith((".attn.bias", ".attn.masked_bias", ".attn.causal_mask")):  # mask buffers
             return
+        if name.endswith(".attn.qkv_proj.weight"):
+            # HF splits qkv_proj into mp_num = 4 blocks, each ordered (query, value, key)
+            # (CodeGenAttention.forward); the fused-QKV graph wants all of q, then k, then v
+            n_embd = self.hparams["n_embd"]
+            w = data_torch.reshape(4, 3, n_embd // 4, n_embd)
+            q, v, k = w[:, 0], w[:, 1], w[:, 2]
+            data_torch = torch.cat([t.reshape(n_embd, n_embd) for t in (q, k, v)], dim=0)
         yield from super().modify_tensors(data_torch, name, bid)
