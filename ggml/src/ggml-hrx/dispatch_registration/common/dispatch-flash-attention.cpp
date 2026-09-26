@@ -29,7 +29,7 @@ static constexpr int64_t kDecodeKvTileSize          = 64;
 // selector reject every candidate ("all_rejected") and the whole decode fail; match this bound so
 // the scheduler falls through to the general flash_attention_f32_f16_wmma dispatch instead (lower
 // priority, still correct here, just not split-parallelized for very long decode contexts).
-static constexpr int64_t kDecodeSplitMaxKeyValueTokenCapacity = 2048;
+static constexpr int64_t kDecodeSplitMaxKeyValueTokenCapacity = 32768;
 static constexpr int64_t kPrefillQkHeadSizeBlock    = 16;
 static constexpr int64_t kPrefillValueHeadSizeBlock = 64;
 static constexpr int64_t kPrefillMinQkHeadSize      = kPrefillQkHeadSizeBlock;
@@ -578,13 +578,13 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
     const ValueId q8_output          = match_value(context, dispatch_match, 4);
 
     dispatch_match.transients.push_back(
-        { partial_max, "common.decode.flash_attention.partial_max", partial_scalar_bytes, 256 });
+        { partial_max, "common.decode.flash_attention.partial_max", partial_scalar_bytes, 4096 });
     dispatch_match.transients.push_back(
-        { partial_sum, "common.decode.flash_attention.partial_sum", partial_scalar_bytes, 256 });
+        { partial_sum, "common.decode.flash_attention.partial_sum", partial_scalar_bytes, 4096 });
     dispatch_match.transients.push_back(
-        { partial_output, "common.decode.flash_attention.partial_output", partial_output_bytes, 256 });
+        { partial_output, "common.decode.flash_attention.partial_output", partial_output_bytes, 4096 });
     dispatch_match.transients.push_back(
-        { q8_output, "common.decode.flash_attention.next_q8_output", q8_output_bytes, 256 });
+        { q8_output, "common.decode.flash_attention.next_q8_output", q8_output_bytes, 4096 });
     dispatch_match.completion_counter_requests.push_back({
         completion_counter,
         "common.decode.flash_attention.completion_counter",
