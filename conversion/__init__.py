@@ -39,6 +39,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "ChameleonForCausalLM": "chameleon",
     "ChameleonForConditionalGeneration": "chameleon",
     "ChatGLMForConditionalGeneration": "chatglm",
+    "CambrianQwenForCausalLM": "cambrian",
     "ChatGLMModel": "chatglm",
     "CodeShellForCausalLM": "codeshell",
     "CogVLMForCausalLM": "cogvlm",
