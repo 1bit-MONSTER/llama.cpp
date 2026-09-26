@@ -1,4 +1,5 @@
 #include "llama-graph.h"
+#include "llama-moe-stream.h"
 
 #include "llama-impl.h"
 #include "llama-model.h"
@@ -2166,6 +2167,30 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
 
+    // 1bit: routed experts streamed from the model file into pinned slots (llama-moe-stream.h)
+    llama_moe_stream * moe_stream = llama_moe_stream_get();
+    const bool moe_streamed = moe_stream && !gate_up_exps && !up_exps_b && !gate_exps_b && !down_exps_b &&
+                              !up_exps_s && !gate_exps_s && !down_exps_s && type_op == LLM_FFN_SILU &&
+                              !weight_before_ffn && arch != LLM_ARCH_MISTRAL4 &&
+                              (il < 0 || hparams.swiglu_clamp_exp[il] <= 1e-6f) &&
+                              llama_moe_stream_applies(moe_stream, n_tokens, n_expert_used, gate_exps, up_exps, down_exps);
+    // GPU: the slots are device tensors; the regular path below runs over them with slot ids
+    ggml_tensor * slot_ids = nullptr, * slot_gate = nullptr, * slot_up = nullptr, * slot_down = nullptr;
+    const bool moe_streamed_gpu = moe_streamed &&
+        llama_moe_stream_gpu(ctx0, moe_stream, il, ggml_reshape_2d(ctx0, cur, n_embd, n_tokens), selected_experts,
+                             gate_exps, up_exps, down_exps,
+                             &slot_ids, &slot_gate, &slot_up, &slot_down);
+    if (moe_streamed_gpu) {
+        selected_experts = slot_ids;  // the routing weights were taken above; from here on ids index slots
+        gate_exps = slot_gate;
+        up_exps = slot_up;
+        down_exps = slot_down;
+    }
+    if (moe_streamed && !moe_streamed_gpu) {
+        experts = llama_moe_stream_build(ctx0, moe_stream, il, ggml_reshape_2d(ctx0, cur, n_embd, n_tokens),
+                                         selected_experts, gate_exps, up_exps, down_exps);
+        cb(experts, "ffn_moe_down", il);
+    } else {
     if (gate_up_exps) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views
         ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
@@ -2316,6 +2341,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         experts = ggml_add_id(ctx0, experts, down_exps_b, selected_experts);
         cb(experts, "ffn_moe_down_biased", il);
     }
+    }  // !moe_streamed
 
     if (!weight_before_ffn) {
         experts = ggml_mul(ctx0, experts, weights);

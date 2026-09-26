@@ -33,6 +33,7 @@ set(LLAMA_CORE_SOURCES
     llama-memory-hybrid-idx.cpp
     llama-memory-recurrent.cpp
     llama-mmap.cpp
+    llama-moe-stream.cpp
     llama-model-loader.cpp
     llama-model-saver.cpp
     llama-model.cpp
@@ -69,6 +70,13 @@ target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
+# 1bit: routed experts streamed from the model file (llama-moe-stream.h), Linux only (O_DIRECT,
+# mlock); the streamed experts run on the CPU backend's vec_dot kernels
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET ggml-cpu)
+    target_sources(llama PRIVATE moe-expert-cache.cpp moe-gguf-index.cpp)
+    target_compile_definitions(llama PRIVATE LLAMA_MOE_STREAM)
+    target_link_libraries(llama PRIVATE ggml-cpu)
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
