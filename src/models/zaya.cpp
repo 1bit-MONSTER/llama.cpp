@@ -377,16 +377,21 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         const int64_t ic_g = n_qk / n_groups;
         ggml_tensor * w_grp = layer.cca_conv_grp;
         ggml_tensor * grp = nullptr;
+        // The sequences fold into the token dimension, so the batched matmul broadcasts the
+        // weight over dim 2 (the groups) only: backends such as Vulkan cannot broadcast src0
+        // over dim 3, and with several sequences reserved the op would fall back to the CPU.
         for (int tap = 0; tap < 2; ++tap) {
             ggml_tensor * x = ggml_view_4d(ctx0, QK, ic_g, n_groups, n_seq_tokens, n_seqs,
                     ic_g*ggml_element_size(QK), QK->nb[1], QK->nb[2], tap*QK->nb[1]);
-            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 2, 1, 3));              // [IC_G, T, G, S]
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 3, 1, 2));              // [IC_G, T, S, G]
+            x = ggml_reshape_3d(ctx0, x, ic_g, n_seq_tokens*n_seqs, n_groups);   // [IC_G, T*S, G]
             ggml_tensor * w = ggml_view_3d(ctx0, w_grp, ic_g, ic_g, n_groups,
                     w_grp->nb[1], ic_g*w_grp->nb[1], tap*w_grp->nb[2]);         // [IC_G, OC_G, G]
-            ggml_tensor * y = ggml_mul_mat(ctx0, w, x);                          // [OC_G, T, G, S]
+            ggml_tensor * y = ggml_mul_mat(ctx0, w, x);                          // [OC_G, T*S, G]
             grp = grp ? ggml_add(ctx0, grp, y) : y;
         }
-        QK = ggml_cont(ctx0, ggml_permute(ctx0, grp, 0, 2, 1, 3));               // [OC_G, G, T, S]
+        grp = ggml_reshape_4d(ctx0, grp, ic_g, n_seq_tokens, n_seqs, n_groups);  // [OC_G, T, S, G]
+        QK = ggml_cont(ctx0, ggml_permute(ctx0, grp, 0, 2, 3, 1));               // [OC_G, G, T, S]
         QK = ggml_reshape_2d(ctx0, QK, n_qk, n_tokens);
         QK = ggml_add(ctx0, QK, layer.cca_conv_grp_b);
         cb(QK, "QK_grp", il);
