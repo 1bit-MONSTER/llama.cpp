@@ -2173,7 +2173,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                               !up_exps_s && !gate_exps_s && !down_exps_s && type_op == LLM_FFN_SILU &&
                               !weight_before_ffn && arch != LLM_ARCH_MISTRAL4 &&
                               (il < 0 || hparams.swiglu_clamp_exp[il] <= 1e-6f) &&
-                              llama_moe_stream_applies(moe_stream, n_tokens, gate_exps, up_exps, down_exps);
+                              llama_moe_stream_applies(moe_stream, n_tokens, n_expert_used, gate_exps, up_exps, down_exps);
     // GPU: the slots are device tensors; the regular path below runs over them with slot ids
     ggml_tensor * slot_ids = nullptr, * slot_gate = nullptr, * slot_up = nullptr, * slot_down = nullptr;
     const bool moe_streamed_gpu = moe_streamed &&

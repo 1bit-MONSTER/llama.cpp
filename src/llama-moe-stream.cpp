@@ -63,6 +63,7 @@ struct llama_moe_stream {
     ggml_context * tctx = nullptr;             // the slot tensors
     std::map<int, gpu_layer> gpu_layers;
     int max_batch = 8;
+    int layer_slots = 0;  // the fewest slots any one layer can use
     std::map<int, layer_state> layers;
     layer_state * last = nullptr;  // the layer whose experts are pinned (layers run in order)
 };
@@ -99,6 +100,7 @@ llama_moe_stream * llama_moe_stream_get() {
             if (const char * io = getenv("ONEBIT_MOE_IO")) opt.io_threads = atoi(io);
             if (const char * mb = getenv("ONEBIT_MOE_MAX_BATCH")) st->max_batch = atoi(mb);
             st->cache = std::make_unique<onebit::moe::ExpertCache>(st->index, opt);
+            st->layer_slots = int(double(opt.slots) / st->index.experts.size());
             if (st->gpu) {
                 ggml_init_params ip = { 3 * 1024 * ggml_tensor_overhead(), nullptr, true };
                 st->tctx = ggml_init(ip);
@@ -114,9 +116,10 @@ llama_moe_stream * llama_moe_stream_get() {
     return s.get();
 }
 
-bool llama_moe_stream_applies(const llama_moe_stream * s, int64_t n_tokens, const ggml_tensor * gate_exps,
-                              const ggml_tensor * up_exps, const ggml_tensor * down_exps) {
-    return s && n_tokens <= s->max_batch && gate_exps && up_exps && down_exps;
+bool llama_moe_stream_applies(const llama_moe_stream * s, int64_t n_tokens, int64_t n_expert_used,
+                              const ggml_tensor * gate_exps, const ggml_tensor * up_exps, const ggml_tensor * down_exps) {
+    return s && n_tokens <= s->max_batch && n_tokens * n_expert_used <= s->layer_slots && gate_exps && up_exps &&
+           down_exps;
 }
 
 namespace {
@@ -332,7 +335,7 @@ bool llama_moe_stream_gpu(ggml_context *, llama_moe_stream *, int, ggml_tensor *
     return false;
 }
 
-bool llama_moe_stream_applies(const llama_moe_stream *, int64_t, const ggml_tensor *, const ggml_tensor *,
+bool llama_moe_stream_applies(const llama_moe_stream *, int64_t, int64_t, const ggml_tensor *, const ggml_tensor *,
                               const ggml_tensor *) {
     return false;
 }

@@ -39,8 +39,9 @@ llama_moe_stream * llama_moe_stream_get();
 
 // Whether a batch of n_tokens streams, and whether these tensors can (separate gate and up,
 // no biases or per-expert scales).
-bool llama_moe_stream_applies(const llama_moe_stream * s, int64_t n_tokens, const ggml_tensor * gate_exps,
-                              const ggml_tensor * up_exps, const ggml_tensor * down_exps);
+// A batch streams only when all of its routed experts fit in one layer's slots at once.
+bool llama_moe_stream_applies(const llama_moe_stream * s, int64_t n_tokens, int64_t n_expert_used,
+                              const ggml_tensor * gate_exps, const ggml_tensor * up_exps, const ggml_tensor * down_exps);
 
 // GPU mode: pins the batch's experts (ids -> slot indices) and returns the slot tensors to use
 // in place of the layer's expert tensors. False when the layer cannot stream on the GPU.
