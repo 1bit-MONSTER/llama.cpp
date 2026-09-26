@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from typing import Iterable, TYPE_CHECKING
 
-import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("GPTNeoForCausalLM")

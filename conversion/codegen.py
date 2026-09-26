@@ -7,7 +7,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("CodeGenForCausalLM")
