@@ -370,7 +370,12 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_SSM_CONV_KERNEL,                   hparams.ssm_d_conv);
     add_kv(LLM_KV_SSM_STATE_SIZE,                    hparams.ssm_d_state);
     add_kv(LLM_KV_SSM_TIME_STEP_RANK,                hparams.ssm_dt_rank);
-    add_kv(LLM_KV_SSM_GROUP_COUNT,                   hparams.ssm_n_group);
+    if (model->arch == LLM_ARCH_ZAMBA && !model->layers.empty() && model->layers[0].ssm_x) {
+        // Zamba v1 keeps ssm_n_group at 0; its Mamba-1 head count is ssm_x's third dimension
+        add_kv(LLM_KV_SSM_GROUP_COUNT,               uint32_t(model->layers[0].ssm_x->ne[2]));
+    } else {
+        add_kv(LLM_KV_SSM_GROUP_COUNT,               hparams.ssm_n_group);
+    }
     add_kv(LLM_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
 
     add_kv(LLM_KV_KDA_HEAD_DIM,                      hparams.n_embd_head_kda);
