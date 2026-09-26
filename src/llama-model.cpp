@@ -175,6 +175,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_openelm(params);
         case LLM_ARCH_GPTNEOX:
             return new llama_model_gptneox(params);
+        case LLM_ARCH_GPTJ:
+            return new llama_model_gptj(params);
         case LLM_ARCH_ARCTIC:
             return new llama_model_arctic(params);
         case LLM_ARCH_DEEPSEEK:
@@ -2494,7 +2496,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         // these models do not use RoPE
         case LLM_ARCH_CLIP:
         case LLM_ARCH_GPT2:
-        case LLM_ARCH_GPTJ:
         case LLM_ARCH_MPT:
         case LLM_ARCH_REFACT:
         case LLM_ARCH_BLOOM:
@@ -2516,6 +2517,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
+        case LLM_ARCH_GPTJ:
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLAMA4:
