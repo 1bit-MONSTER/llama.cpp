@@ -621,6 +621,7 @@ static bool eager_capability_declared(enum ggml_op op) {
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_PERMUTE:
+        case GGML_OP_REPEAT:  // broadcast-only, through the strided copy (dispatch-small-rows.cpp)
         case GGML_OP_RESHAPE:
         case GGML_OP_RMS_NORM:
         case GGML_OP_ROPE:

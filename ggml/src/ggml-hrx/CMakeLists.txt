@@ -202,6 +202,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-get-rows.cpp
     dispatch_registration/common/dispatch-get-rows.h
     dispatch_registration/common/dispatch-glu.cpp
+    dispatch_registration/common/dispatch-grouped-mul-mat.cpp
+    dispatch_registration/common/dispatch-grouped-mul-mat.h
     dispatch_registration/common/dispatch-glu.h
     dispatch_registration/common/dispatch-mul-mat-id.cpp
     dispatch_registration/common/dispatch-mul-mat-id-common.h
@@ -219,6 +221,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-rmsnorm.cpp
     dispatch_registration/common/dispatch-rmsnorm.h
     dispatch_registration/common/dispatch-scale.cpp
+    dispatch_registration/common/dispatch-small-rows.cpp
+    dispatch_registration/common/dispatch-small-rows.h
     dispatch_registration/common/dispatch-scale.h
     dispatch_registration/common/dispatch-unary.cpp
     dispatch_registration/common/dispatch-unary.h
