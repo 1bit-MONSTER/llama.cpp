@@ -67,27 +67,39 @@ class Zamba2VLTextModel(Zamba2Model):
         special_vocab.chat_template = self._CHAT_TEMPLATE
         special_vocab.add_to_gguf(self.gguf_writer)
 
-    # Zyphra's template only takes content as a list of parts. llama.cpp passes a string, with a
-    # media marker where each image was; this one takes both, and puts the images in front of the
-    # user turn as Zyphra's does (mtmd wraps each in <|vision_start|> ... <|vision_end|>).
+    # Zyphra's template only takes content as a list of image and text parts. llama.cpp passes a
+    # message with media as a string holding a marker, <__media_<id>__> with an id random per server,
+    # where each image was; this one takes both, and puts the images (the markers) in front of the
+    # user turn, as Zyphra's does (mtmd wraps each image in <|vision_start|> ... <|vision_end|>).
     _CHAT_TEMPLATE = (
-        "{%- for message in messages -%}"
+        '{%- for message in messages -%}'
         "{%- if message['content'] is string -%}"
-        "{%- set text = message['content'] -%}"
-        "{%- set n_img = (text.split('<__media__>') | length) - 1 -%}"
-        "{%- set text = text.replace('<__media__>', '') | trim -%}"
-        "{%- else -%}"
-        "{%- set text = message['content'] | selectattr('type', 'equalto', 'text') | map(attribute='text') | join('') -%}"
-        "{%- set n_img = message['content'] | selectattr('type', 'equalto', 'image') | list | length -%}"
-        "{%- endif -%}"
+        "{%- set ns = namespace(text=message['content'], media='') -%}"
+        '{%- else -%}'
+        "{%- set ns = namespace(text=message['content'] | selectattr('type', 'equalto', 'text') | map(attribute='text') | join(''), media='') -%}"
+        "{%- for c in message['content'] | selectattr('type', 'equalto', 'image') -%}"
+        "{%- set ns.media = ns.media ~ '<|vision_start|><image><|vision_end|>\\n' -%}"
+        '{%- endfor -%}'
+        '{%- endif -%}'
+        "{%- set segs = ns.text.split('<__media_') -%}"
+        '{%- if segs | length > 1 -%}'
+        '{%- set ns.text = segs[0] -%}'
+        '{%- for seg in segs[1:] -%}'
+        "{%- set bits = seg.split('>') -%}"
+        "{%- set ns.media = ns.media ~ '<__media_' ~ bits[0] ~ '>\\n' -%}"
+        "{%- set ns.text = ns.text ~ (bits[1:] | join('>')) -%}"
+        '{%- endfor -%}'
+        '{%- set ns.text = ns.text | trim -%}'
+        '{%- endif -%}'
         "{%- if message['role'] == 'user' -%}"
-        "{%- for i in range(n_img) -%}{{ '<__media__>\\n' }}{%- endfor -%}"
-        "{{ '<s>user\\n' ~ text ~ '</s>\\n' }}"
-        "{%- else -%}"
-        "{{ '<s>' ~ message['role'] ~ '\\n' ~ text ~ '</s>' }}"
-        "{%- endif -%}"
-        "{%- endfor -%}"
-        "{%- if add_generation_prompt -%}{{ '<s>assistant\\n' }}{%- endif -%}"
+        "{{ ns.media ~ '<s>user\\n' ~ ns.text ~ '</s>\\n' }}"
+        '{%- else -%}'
+        "{{ '<s>' ~ message['role'] ~ '\\n' ~ ns.text ~ '</s>' }}"
+        '{%- endif -%}'
+        '{%- endfor -%}'
+        '{%- if add_generation_prompt -%}'
+        "{{ '<s>assistant\\n' }}"
+        '{%- endif -%}'
     )
 
 
