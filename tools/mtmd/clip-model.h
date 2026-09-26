@@ -96,6 +96,7 @@ struct clip_hparams {
     std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
+    bool decode_non_causal = false; // KEY_DECODE_NON_CAUSAL
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
     std::vector<int32_t> wa_pattern_mode; // mimovl: per-layer window-attention mode
 

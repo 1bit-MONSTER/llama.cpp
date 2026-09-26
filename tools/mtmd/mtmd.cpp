@@ -1692,7 +1692,8 @@ bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk
         case PROJECTOR_TYPE_GEMMA4UV:
             return true;
         default:
-            return false;
+            // any vision projector can ask for it (ZAYA1-VL: a Qwen2.5-VL tower)
+            return chunk && chunk->type == MTMD_INPUT_CHUNK_TYPE_IMAGE && ctx->ctx_v && clip_decode_non_causal(ctx->ctx_v);
     }
 }
 

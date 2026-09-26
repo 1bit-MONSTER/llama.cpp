@@ -260,6 +260,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "YoutuForCausalLM": "deepseek",
     "YoutuVLForConditionalGeneration": "deepseek",
     "ZayaForCausalLM": "zaya",
+    "Zaya1VLForConditionalGeneration": "zaya",
     "modeling_grove_moe.GroveMoeForCausalLM": "grovemoe",
     "modeling_sarvam_moe.SarvamMoEForCausalLM": "bailingmoe",
 }
@@ -307,6 +308,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "Qwen2VLForConditionalGeneration": "qwenvl",
     "Qwen2VLModel": "qwenvl",
     "Qwen2_5OmniModel": "qwenvl",
+    "Zaya1VLForConditionalGeneration": "zaya",
     "Qwen2_5_VLForConditionalGeneration": "qwenvl",
     "Qwen3ASRForConditionalGeneration": "qwen3vl",
     "Qwen3OmniMoeForConditionalGeneration": "qwen3vl",

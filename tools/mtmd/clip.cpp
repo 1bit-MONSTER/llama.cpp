@@ -1250,6 +1250,8 @@ struct clip_model_loader {
             // default warmup value
             hparams.warmup_image_size = hparams.image_size;
 
+            get_bool(KEY_DECODE_NON_CAUSAL, hparams.decode_non_causal, false);
+
             {
                 bool use_gelu = false;
                 bool use_silu = false;
@@ -5073,6 +5075,10 @@ bool clip_support_batch(const struct clip_ctx * ctx) {
 // TODO @ngxson : this is no longer correct with mtmd_batch API
 // this was only meant to be used by qwen-vl-based models, to fuse 2 input images into one (qwen-vl video support)
 // this logic should be refactored in near future to distinctly handle "merge frames" and "batching"
+bool clip_decode_non_causal(const struct clip_ctx * ctx) {
+    return ctx->model.hparams.decode_non_causal;
+}
+
 int clip_model_n_temporal_merge(const struct clip_ctx * ctx) {
     switch (ctx->proj_type()) {
         case PROJECTOR_TYPE_QWEN2VL:

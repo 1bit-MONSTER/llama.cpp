@@ -72,6 +72,9 @@ void llama_model_zaya::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
     }
 
+    ml.get_key(LLM_KV_ZAYA_VLORA_RANK_ATTN, vlora_rank_attn, false);
+    ml.get_key(LLM_KV_ZAYA_VLORA_RANK_FFN,  vlora_rank_ffn,  false);
+
     switch (hparams.n_layer()) {
         case 40: type = LLM_TYPE_8B; break;
         default: type = LLM_TYPE_UNKNOWN;
@@ -148,6 +151,27 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
         layer.res_scale_hs_mlp_b  = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS_MLP,  "bias",   i), {n_embd}, TENSOR_NOT_REQUIRED);
         layer.res_scale_res_mlp   = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES_MLP, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
         layer.res_scale_res_mlp_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES_MLP, "bias",   i), {n_embd}, TENSOR_NOT_REQUIRED);
+
+        if (vlora_rank_attn > 0) {
+            const int64_t r = vlora_rank_attn;
+            layer.zaya_vlora_q_a  = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_Q_A,  "weight", i), {n_embd, r}, 0);
+            layer.zaya_vlora_q_b  = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_Q_B,  "weight", i), {r, n_embd_q}, 0);
+            layer.zaya_vlora_k_a  = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_K_A,  "weight", i), {n_embd, r}, 0);
+            layer.zaya_vlora_k_b  = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_K_B,  "weight", i), {r, n_embd_k}, 0);
+            layer.zaya_vlora_v1_a = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_V1_A, "weight", i), {n_embd, r}, 0);
+            layer.zaya_vlora_v1_b = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_V1_B, "weight", i), {r, n_embd_k / 2}, 0);
+            layer.zaya_vlora_v2_a = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_V2_A, "weight", i), {n_embd, r}, 0);
+            layer.zaya_vlora_v2_b = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_V2_B, "weight", i), {r, n_embd_k / 2}, 0);
+            layer.zaya_vlora_o_a  = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_O_A,  "weight", i), {n_embd_q, r}, 0);
+            layer.zaya_vlora_o_b  = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_O_B,  "weight", i), {r, n_embd}, 0);
+        }
+        if (vlora_rank_ffn > 0) {
+            const int64_t r = vlora_rank_ffn;
+            layer.zaya_vlora_up_exps_a   = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_UP_EXPS_A,   "weight", i), {n_embd, r, n_expert}, 0);
+            layer.zaya_vlora_up_exps_b   = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_UP_EXPS_B,   "weight", i), {r, n_ff_l * 2, n_expert}, 0);
+            layer.zaya_vlora_down_exps_a = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_DOWN_EXPS_A, "weight", i), {n_ff_l, r, n_expert}, 0);
+            layer.zaya_vlora_down_exps_b = create_tensor(tn(LLM_TENSOR_ZAYA_VLORA_DOWN_EXPS_B, "weight", i), {r, n_embd, n_expert}, 0);
+        }
     }
 }
 
@@ -245,9 +269,20 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         ggml_tensor * prev_hs = build_rs(inp_recr, hs_states_all, hparams.n_embd_s(), n_seqs);
         cb(prev_hs, "cca_prev_hs", il);
 
+        // ZAYA1-VL: the vision-only LoRA runs on image tokens, which mtmd decodes as their own
+        // embedding ubatches, so a ubatch of embeddings takes it for every token
+        const bool vlora = ubatch.embd != nullptr && layer.zaya_vlora_q_a != nullptr;
+        auto lora = [&](ggml_tensor * a, ggml_tensor * b, ggml_tensor * x) {
+            return ggml_mul_mat(ctx0, b, ggml_mul_mat(ctx0, a, x));
+        };
+
         ggml_tensor * Qraw = ggml_mul_mat(ctx0, layer.wq, cur);
-        cb(Qraw, "Qraw", il);
         ggml_tensor * Kraw = ggml_mul_mat(ctx0, layer.wk, cur);
+        if (vlora) {
+            Qraw = ggml_add(ctx0, Qraw, lora(layer.zaya_vlora_q_a, layer.zaya_vlora_q_b, cur));
+            Kraw = ggml_add(ctx0, Kraw, lora(layer.zaya_vlora_k_a, layer.zaya_vlora_k_b, cur));
+        }
+        cb(Qraw, "Qraw", il);
         cb(Kraw, "Kraw", il);
 
         ggml_tensor * cur_state_src = ggml_cont(ctx0, cur);
@@ -265,8 +300,13 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         cb(hs_d, "cca_hs_d", il);
 
         ggml_tensor * V1 = ggml_mul_mat(ctx0, layer.cca_val_proj1, cur);
-        cb(V1, "V1", il);
         ggml_tensor * V2 = ggml_mul_mat(ctx0, layer.cca_val_proj2, hs_d);
+        if (vlora) {
+            // V2's LoRA reads the previous token's state but follows the current token's mask
+            V1 = ggml_add(ctx0, V1, lora(layer.zaya_vlora_v1_a, layer.zaya_vlora_v1_b, cur));
+            V2 = ggml_add(ctx0, V2, lora(layer.zaya_vlora_v2_a, layer.zaya_vlora_v2_b, hs_d));
+        }
+        cb(V1, "V1", il);
         cb(V2, "V2", il);
         ggml_tensor * Vcur = ggml_concat(ctx0, V1, V2, 0);
         cb(Vcur, "Vcur", il);
@@ -383,9 +423,12 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
 
         Vcur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, Vcur), n_embd_head, n_head_kv, n_tokens);
 
-        cur = build_attn(inp->get_attn(), layer.wo, nullptr, nullptr,
+        cur = build_attn(inp->get_attn(), vlora ? nullptr : layer.wo, nullptr, nullptr,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
             1.0f / sqrtf((float) n_embd_head), il);
+        if (vlora) {
+            cur = ggml_add(ctx0, ggml_mul_mat(ctx0, layer.wo, cur), lora(layer.zaya_vlora_o_a, layer.zaya_vlora_o_b, cur));
+        }
         cb(cur, "attn_out", il);
 
         // ---- post-attention residual scale ----
@@ -453,29 +496,51 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
             expert_biases = ggml_view_1d(ctx0, layer.zaya_router_biases, n_expert, 0);
         }
 
-        cur = build_moe_ffn(cur,
-            /* gate_inp */        nullptr,
-            /* gate_inp_b */      nullptr,
-            /* up_exps */         nullptr,
-            /* up_exps_b */       nullptr,
-            /* gate_exps */       nullptr,
-            /* gate_exps_b */     nullptr,
-            /* down_exps */       layer.ffn_down_exps,
-            /* down_exps_b */     nullptr,
-            /* exp_probs_b */     expert_biases,
-            /* n_expert */        n_expert,
-            /* n_expert_used */   hparams.n_expert_used,
-            /* type_op */         LLM_FFN_SILU,
-            /* norm_w */          false,
-            /* w_scale */         1.0f,
-            /* gating_op */       LLAMA_EXPERT_GATING_FUNC_TYPE_NONE,
-            /* il */              il,
-            /* probs_in */        gate_probs,
-            /* gate_up_exps */    layer.ffn_gate_up_exps,
-            /* gate_up_exps_b */  nullptr,
-            /* up_exps_s */       nullptr,
-            /* gate_exps_s */     nullptr,
-            /* down_exps_s */     nullptr);
+        if (ubatch.embd != nullptr && layer.zaya_vlora_up_exps_a != nullptr) {
+            // the experts with their vision LoRA (fc1 before the SwiGLU, fc2 after it): the same
+            // top-1 choice and weight as build_moe_ffn below
+            ggml_tensor * probs = gate_probs;
+            if (expert_biases != nullptr) {
+                probs = ggml_add(ctx0, gate_probs, expert_biases);
+            }
+            ggml_tensor * sel = ggml_argsort_top_k(ctx0, probs, hparams.n_expert_used);            // [k, T]
+            ggml_tensor * w   = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, gate_probs, 1, n_expert, n_tokens), sel);  // [1, k, T]
+            ggml_tensor * x   = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
+            ggml_tensor * up  = ggml_mul_mat_id(ctx0, layer.ffn_gate_up_exps, x, sel);            // [2 n_ff, k, T]
+            up = ggml_add(ctx0, up, ggml_mul_mat_id(ctx0, layer.zaya_vlora_up_exps_b,
+                    ggml_mul_mat_id(ctx0, layer.zaya_vlora_up_exps_a, x, sel), sel));
+            ggml_tensor * act = ggml_swiglu(ctx0, up);                                           // [n_ff, k, T]
+            ggml_tensor * dn  = ggml_mul_mat_id(ctx0, layer.ffn_down_exps, act, sel);            // [n_embd, k, T]
+            dn = ggml_add(ctx0, dn, ggml_mul_mat_id(ctx0, layer.zaya_vlora_down_exps_b,
+                    ggml_mul_mat_id(ctx0, layer.zaya_vlora_down_exps_a, act, sel), sel));
+            dn  = ggml_mul(ctx0, dn, w);
+            cur = ggml_sum_rows(ctx0, ggml_cont(ctx0, ggml_permute(ctx0, dn, 1, 0, 2, 3)));      // [1, n_embd, T]
+            cur = ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
+        } else {
+            cur = build_moe_ffn(cur,
+                /* gate_inp */        nullptr,
+                /* gate_inp_b */      nullptr,
+                /* up_exps */         nullptr,
+                /* up_exps_b */       nullptr,
+                /* gate_exps */       nullptr,
+                /* gate_exps_b */     nullptr,
+                /* down_exps */       layer.ffn_down_exps,
+                /* down_exps_b */     nullptr,
+                /* exp_probs_b */     expert_biases,
+                /* n_expert */        n_expert,
+                /* n_expert_used */   hparams.n_expert_used,
+                /* type_op */         LLM_FFN_SILU,
+                /* norm_w */          false,
+                /* w_scale */         1.0f,
+                /* gating_op */       LLAMA_EXPERT_GATING_FUNC_TYPE_NONE,
+                /* il */              il,
+                /* probs_in */        gate_probs,
+                /* gate_up_exps */    layer.ffn_gate_up_exps,
+                /* gate_up_exps_b */  nullptr,
+                /* up_exps_s */       nullptr,
+                /* gate_exps_s */     nullptr,
+                /* down_exps_s */     nullptr);
+        }
         cb(cur, "moe_out", il);
 
         // The router picks top-1 over n_expert + 1 slots; the last is a skip expert whose
