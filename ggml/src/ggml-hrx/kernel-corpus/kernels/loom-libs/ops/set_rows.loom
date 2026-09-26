@@ -137,3 +137,48 @@ kernel.def target(@ggml_set_rows_gfx11_wave64) @ggml_set_rows(%token_count: inde
   template.apply<@ggml.set_rows.body>(%token_count, %cache_row_count, %hidden_size, %rows, %indices, %cache) : (index, index, index, buffer, buffer, buffer)
   kernel.return
 }
+
+// Scalar SET_ROWS for element-wise KV-cache scatter. The non-FA attention path flattens
+// the K/V rows, so hidden_size == 1 and each value is written to its own cache row.
+config.decl @ggml.set_rows_scatter.token_capacity : %value: index where [range(%value, 1, 1048576)]
+
+kernel.def target(@ggml_set_rows_gfx11_wave64) @ggml_set_rows_scatter(%token_count: index, %cache_row_count: index) {
+  %token_capacity = config.get @ggml.set_rows_scatter.token_capacity : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %c1 = index.constant 1 : index
+  %padded = index.add %token_capacity, %c255 : index
+  %workgroups = index.div %padded, %c256 : index
+  kernel.launch.config workgroups(%workgroups, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %cache_row_count: index, %rows: buffer, %indices: buffer, %cache: buffer) where [range(%token_count, 1, 1048576)] {
+  %token_capacity = config.get @ggml.set_rows_scatter.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1048576), le(%token_count, %token_capacity)] : index
+  %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 134217728)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %c256 = index.constant 256 : index
+  %c0 = index.constant 0 : index
+  %c0_offset = index.constant 0 : offset
+  %i0 = index.mul %workgroup, %c256 : index
+  %i = index.add %i0, %workitem : index
+  %valid = index.cmp ult, %i, %bounded_token_count : index
+  %safe_i = scf.select %valid, %i, %c0 : index
+  %rows_view = buffer.view %rows[%c0_offset] : buffer -> view<[%bounded_token_count]xf32>
+  %indices_view = buffer.view %indices[%c0_offset] : buffer -> view<[%bounded_token_count]xi64>
+  %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%bounded_cache_row_count]xf16>
+  %value = view.load %rows_view[%safe_i] : view<[%bounded_token_count]xf32> -> f32
+  %idx_i64 = view.load %indices_view[%safe_i] : view<[%bounded_token_count]xi64> -> i64
+  %c0_i64 = scalar.constant 0 : i64
+  %idx_nonneg = scalar.cmpi sge, %idx_i64, %c0_i64 : i64
+  %safe_idx0_i64 = scf.select %idx_nonneg, %idx_i64, %c0_i64 : i64
+  %safe_idx_i64 = scalar.assume %safe_idx0_i64 [range(%safe_idx0_i64, 0, 134217727)] : i64
+  %idx = index.cast %safe_idx_i64 : i64 to index
+  %idx_in_range = index.cmp ult, %idx, %bounded_cache_row_count : index
+  %publish0 = scalar.andi %valid, %idx_nonneg : i1
+  %publish = scalar.andi %publish0, %idx_in_range : i1
+  %f16 = scalar.fptrunc %value : f32 to f16
+  scf.if %publish {
+    view.store %f16, %cache_view[%idx] : f16, view<[%bounded_cache_row_count]xf16>
+  }
+  kernel.return
+}
