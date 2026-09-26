@@ -26,9 +26,10 @@
 // ZAYA1 (Zyphra). Every layer runs CCA attention and then a MoE, each followed by a
 // learned residual scale:
 //   - CCA: q and k go through a 2-tap depthwise conv (ssm_conv1d) and a grouped conv
-//     (cca_conv_grp) over time, so each sequence carries a recurrent row of
-//     n_embd_s = 2*n_qk + n_embd (conv state | previous hidden state); v is two
-//     projections, of the current and of the previous hidden state.
+//     (cca_conv_grp) over time, so each sequence carries two recurrent rows: the
+//     conv state of q|k (n_embd_r = 2*n_qk) and the previous hidden state
+//     (n_embd_s = n_embd); v is two projections, of the current and of the
+//     previous hidden state.
 //   - MoE router: down_proj -> EDA (adds the previous layer's router state) -> RMSNorm
 //     -> MLP (GELU) x2 -> softmax -> top-1 over n_expert + 1 slots, the last being a
 //     skip expert with zero output. Experts are pre-stacked (ffn_gate_up_exps).
@@ -44,11 +45,15 @@ void llama_model_zaya::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
     hparams.n_rot_full = hparams.n_embd_head_k() / 2;
     hparams.n_rot_swa  = hparams.n_embd_head_k() / 2;
-    // recurrent row per sequence: the 2-tap conv state of q|k plus the previous hidden state
+    // two recurrent rows per sequence, written whole (as the gated-delta-net models do):
+    // r = the 2-tap conv state of q|k, 2*n_qk; s = the previous hidden state, n_embd.
+    // With d_conv = 2 and d_state = 1, n_embd_r() = d_inner + 2*n_group and n_embd_s() = d_inner.
     const uint32_t n_qk = (hparams.n_head() + hparams.n_head_kv()) * hparams.n_embd_head_k();
-    hparams.ssm_d_inner = 2*n_qk + hparams.n_embd;
+    GGML_ASSERT(2*n_qk > hparams.n_embd && (2*n_qk - hparams.n_embd) % 2 == 0);
+    hparams.ssm_d_inner = hparams.n_embd;
     hparams.ssm_d_state = 1;
-    hparams.ssm_n_group = 0;
+    hparams.ssm_n_group = (2*n_qk - hparams.n_embd) / 2;
+    GGML_ASSERT(hparams.n_embd_r() == 2*n_qk && hparams.n_embd_s() == hparams.n_embd);
     std::fill(hparams.is_recr_impl.begin(), hparams.is_recr_impl.end(), true);
 
     switch (hparams.n_layer()) {
@@ -102,7 +107,7 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_q, n_embd}, 0);
         layer.ssm_conv1d     = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,   "weight", i), {d_conv, n_qk}, 0);
         layer.ssm_conv1d_b   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,   "bias",   i), {n_qk}, TENSOR_NOT_REQUIRED);
-        layer.cca_conv_grp   = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "weight", i), {d_conv, n_qk / n_groups, n_qk}, 0);
+        layer.cca_conv_grp   = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "weight", i), {n_qk / n_groups, n_qk, d_conv}, 0);  // tap-major
         layer.cca_conv_grp_b = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "bias",   i), {n_qk}, 0);
         layer.cca_k_scale    = create_tensor(tn(LLM_TENSOR_CCA_K_SCALE,  "weight", i), {n_head_kv_l}, 0);
 
@@ -204,22 +209,14 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
         // ===== CCA attention (every layer) =====
 
         const int64_t conv_state_size = 2*n_qk;
-        const int64_t cca_state_size  = conv_state_size + n_embd;
-        GGML_ASSERT((int64_t) hparams.n_embd_s() == cca_state_size);
 
-        ggml_tensor * cca_state_all = inp_recr->mctx->get_s_l(il);
-        ggml_tensor * cca_state     = build_rs(inp_recr, cca_state_all, hparams.n_embd_s(), n_seqs);
-        cb(cca_state, "cca_state", il);
-
-        ggml_tensor * conv_state = ggml_view_3d(ctx0, cca_state, 2, n_qk, n_seqs,
-                2*ggml_element_size(cca_state),
-                cca_state->nb[1],
-                0);
+        ggml_tensor * conv_states_all = inp_recr->mctx->get_r_l(il);
+        ggml_tensor * conv_state = build_rs(inp_recr, conv_states_all, hparams.n_embd_r(), n_seqs);
+        conv_state = ggml_reshape_3d(ctx0, conv_state, 2, n_qk, n_seqs);
         cb(conv_state, "cca_conv_state", il);
 
-        ggml_tensor * prev_hs = ggml_view_2d(ctx0, cca_state, n_embd, n_seqs,
-                cca_state->nb[1],
-                conv_state_size*ggml_element_size(cca_state));
+        ggml_tensor * hs_states_all = inp_recr->mctx->get_s_l(il);
+        ggml_tensor * prev_hs = build_rs(inp_recr, hs_states_all, hparams.n_embd_s(), n_seqs);
         cb(prev_hs, "cca_prev_hs", il);
 
         ggml_tensor * Qraw = ggml_mul_mat(ctx0, layer.wq, cur);
@@ -281,43 +278,47 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
         cb(last_conv_states, "cca_last_conv_states", il);
 
         const auto kv_head = inp_recr->mctx->get_head();
-        ggml_tensor * conv_state_update_target = ggml_view_2d(ctx0, cca_state_all, conv_state_size, n_seqs,
-                cca_state_all->nb[1],
-                kv_head*cca_state_size*ggml_element_size(cca_state_all));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_conv_states, conv_state_update_target));
+        ggml_tensor * conv_state_update_target = ggml_view_2d(ctx0, conv_states_all, conv_state_size, n_seqs,
+                conv_states_all->nb[1],
+                kv_head*conv_states_all->nb[1]);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0,
+                ggml_reshape_2d(ctx0, ggml_cont(ctx0, last_conv_states), conv_state_size, n_seqs),
+                conv_state_update_target));
 
         ggml_tensor * last_hs = ggml_view_2d(ctx0, cur_seq, n_embd, n_seqs,
                 cur_seq->nb[2],
                 (n_seq_tokens - 1)*cur_seq->nb[1]);
-        ggml_tensor * prev_hs_update_target = ggml_view_2d(ctx0, cca_state_all, n_embd, n_seqs,
-                cca_state_all->nb[1],
-                (kv_head*cca_state_size + conv_state_size)*ggml_element_size(cca_state_all));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_hs, prev_hs_update_target));
+        ggml_tensor * prev_hs_update_target = ggml_view_2d(ctx0, hs_states_all, n_embd, n_seqs,
+                hs_states_all->nb[1],
+                kv_head*hs_states_all->nb[1]);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_cont(ctx0, last_hs), prev_hs_update_target));
 
         ggml_tensor * conv_dw = layer.ssm_conv1d;
         if (conv_dw->type != GGML_TYPE_F32) {
             conv_dw = ggml_cont(ctx0, ggml_cast(ctx0, conv_dw, GGML_TYPE_F32));
         }
         ggml_tensor * QK = ggml_ssm_conv(ctx0, conv_input, conv_dw);
-        // Grouped conv (2 taps, no padding) as one batched matmul: the weights are
-        // [2*IC_G, OC_G, groups] as stored, and the input stacks the two time taps of
-        // each group's channels into K, so every token of every group is one dot
-        // product of length 2*IC_G. QK is the depthwise output, [n_qk, T + 1, S].
+        // Grouped conv (2 taps, no padding) as one batched matmul per tap: the weights are
+        // stored tap-major, {IC_G, n_qk, 2}, so tap k is the contiguous block
+        // [IC_G, OC_G, groups], applied to the depthwise output shifted by k steps.
+        // QK is the depthwise output, [n_qk, T + 1, S].
         if (layer.ssm_conv1d_b) {
             QK = ggml_add(ctx0, QK, ggml_reshape_2d(ctx0, layer.ssm_conv1d_b, n_qk, 1));
         }
         cb(QK, "QK_dw", il);
         const int64_t ic_g = n_qk / n_groups;
-        ggml_tensor * tap0 = ggml_view_4d(ctx0, QK, 1, n_qk, n_seq_tokens, n_seqs,
-                QK->nb[0], QK->nb[1], QK->nb[2], 0);
-        ggml_tensor * tap1 = ggml_view_4d(ctx0, QK, 1, n_qk, n_seq_tokens, n_seqs,
-                QK->nb[0], QK->nb[1], QK->nb[2], QK->nb[1]);
-        ggml_tensor * x = ggml_concat(ctx0, tap0, tap1, 0);                  // [2, n_qk, T, S]
-        x = ggml_reshape_4d(ctx0, x, 2*ic_g, n_groups, n_seq_tokens, n_seqs);
-        x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 2, 1, 3));              // [2*IC_G, T, G, S]
-        ggml_tensor * w = ggml_reshape_3d(ctx0, layer.cca_conv_grp, 2*ic_g, n_qk/n_groups, n_groups);
-        QK = ggml_mul_mat(ctx0, w, x);                                       // [OC_G, T, G, S]
-        QK = ggml_cont(ctx0, ggml_permute(ctx0, QK, 0, 2, 1, 3));            // [OC_G, G, T, S]
+        ggml_tensor * w_grp = layer.cca_conv_grp;
+        ggml_tensor * grp = nullptr;
+        for (int tap = 0; tap < 2; ++tap) {
+            ggml_tensor * x = ggml_view_4d(ctx0, QK, ic_g, n_groups, n_seq_tokens, n_seqs,
+                    ic_g*ggml_element_size(QK), QK->nb[1], QK->nb[2], tap*QK->nb[1]);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 2, 1, 3));              // [IC_G, T, G, S]
+            ggml_tensor * w = ggml_view_3d(ctx0, w_grp, ic_g, ic_g, n_groups,
+                    w_grp->nb[1], ic_g*w_grp->nb[1], tap*w_grp->nb[2]);         // [IC_G, OC_G, G]
+            ggml_tensor * y = ggml_mul_mat(ctx0, w, x);                          // [OC_G, T, G, S]
+            grp = grp ? ggml_add(ctx0, grp, y) : y;
+        }
+        QK = ggml_cont(ctx0, ggml_permute(ctx0, grp, 0, 2, 1, 3));               // [OC_G, G, T, S]
         QK = ggml_reshape_2d(ctx0, QK, n_qk, n_tokens);
         QK = ggml_add(ctx0, QK, layer.cca_conv_grp_b);
         cb(QK, "QK_grp", il);
@@ -331,8 +332,10 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
         Qcur = ggml_add(ctx0, Qcur, qk_mean_q);
         Kcur = ggml_add(ctx0, Kcur, qk_mean_k);
 
-        Qcur = ggml_scale(ctx0, ggml_l2_norm(ctx0, Qcur, 1e-12f), sqrtf((float) n_embd_head));
-        Kcur = ggml_scale(ctx0, ggml_l2_norm(ctx0, Kcur, 1e-12f), sqrtf((float) n_embd_head));
+        // l2_norm(x) * sqrt(head_dim) is rms_norm(x): one op, and one every backend has.
+        // eps 1e-24 matches the reference clamping |x| at 1e-12.
+        Qcur = ggml_rms_norm(ctx0, Qcur, 1e-24f);
+        Kcur = ggml_rms_norm(ctx0, Kcur, 1e-24f);
         Kcur = ggml_mul(ctx0, Kcur, ggml_reshape_3d(ctx0, layer.cca_k_scale, 1, n_head_kv, 1));
         cb(Qcur, "Qcur_pre_rope", il);
         cb(Kcur, "Kcur_pre_rope", il);
@@ -366,14 +369,22 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
 
         // ===== MoE (every layer) =====
 
+        // EDA: the previous layer's router state, scaled. Built before the down projection so
+        // it is written before HRX's fused matmul + bias + add kernel reads it.
+        ggml_tensor * eda = nullptr;
+        if (prev_router != nullptr && layer.zaya_router_eda_scale != nullptr) {
+            eda = ggml_mul(ctx0, prev_router, layer.zaya_router_eda_scale);
+            ggml_build_forward_expand(gf, eda);
+        }
+
         ggml_tensor * router_h = ggml_mul_mat(ctx0, layer.ffn_gate_inp, cur);
         if (layer.ffn_gate_inp_b) {
             router_h = ggml_add(ctx0, router_h, layer.ffn_gate_inp_b);
         }
         cb(router_h, "router_down", il);
 
-        if (prev_router != nullptr && layer.zaya_router_eda_scale != nullptr) {
-            router_h = ggml_add(ctx0, router_h, ggml_mul(ctx0, prev_router, layer.zaya_router_eda_scale));
+        if (eda != nullptr) {
+            router_h = ggml_add(ctx0, router_h, eda);
             cb(router_h, "router_eda", il);
         }
 
@@ -441,10 +452,10 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
         // experts; keep its output only where that expert's biased score beats the skip slot's.
         if (layer.zaya_router_biases != nullptr) {
             ggml_tensor * biased = ggml_add(ctx0, router_h, layer.zaya_router_biases);      // [n_expert + 1, T]
-            ggml_tensor * biased_e = ggml_view_2d(ctx0, biased, n_expert, n_tokens, biased->nb[1], 0);
+            ggml_tensor * biased_e = ggml_cont(ctx0, ggml_view_2d(ctx0, biased, n_expert, n_tokens, biased->nb[1], 0));
             ggml_tensor * best = ggml_argsort_top_k(ctx0, biased_e, 1);                    // [1, T]
             ggml_tensor * best_v = ggml_get_rows(ctx0,
-                    ggml_reshape_3d(ctx0, ggml_cont(ctx0, biased_e), 1, n_expert, n_tokens), best);  // [1, 1, T]
+                    ggml_reshape_3d(ctx0, biased_e, 1, n_expert, n_tokens), best);  // [1, 1, T]
             ggml_tensor * skip_v = ggml_view_2d(ctx0, biased, 1, n_tokens, biased->nb[1],
                     n_expert*ggml_element_size(biased));
             ggml_tensor * keep = ggml_step(ctx0, ggml_sub(ctx0,

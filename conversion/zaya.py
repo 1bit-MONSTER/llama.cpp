@@ -138,6 +138,10 @@ class ZayaModel(TextModel):
                 tensor, tsuffix, squeeze = self._LAYER_MAP[suffix]
                 if squeeze:
                     data_torch = data_torch.squeeze(1)
+                if tensor == gguf.MODEL_TENSOR.CCA_CONV_GRP and tsuffix == ".weight":
+                    # (OC, IC_G, taps) -> tap-major (taps, OC, IC_G): each tap's weights are one
+                    # contiguous [IC_G, OC] block, which the graph applies as one batched matmul
+                    data_torch = data_torch.permute(2, 0, 1).contiguous()
                 yield self.format_tensor_name(tensor, bid, suffix=tsuffix), data_torch
                 return
         raise ValueError(f"zaya: unmapped tensor {name}")
