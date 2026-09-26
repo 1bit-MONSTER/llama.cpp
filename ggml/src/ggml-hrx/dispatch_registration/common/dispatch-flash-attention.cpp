@@ -21,6 +21,15 @@ static constexpr KernelCatalogRef kCopyTransposeF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_transpose_f16");
 static constexpr int64_t kDecodeRowCapacity         = 16;
 static constexpr int64_t kDecodeKvTileSize          = 64;
+// The decode-split reduce kernel (ggml.flash_attention.decode_split.reduce_fused, in the loom-libs
+// kernel corpus) has exactly two template.def implementations: one for key_value_token_capacity
+// 64-256, one for 257-2048. Nothing covers above 2048 - its cooperative reducer gives each
+// subgroup lane one partial KV block (capped at 32) and its per-workgroup scratch buffer is sized
+// for exactly 32 blocks x 64 tokens. Offering this dispatch above the ceiling makes the kernel
+// selector reject every candidate ("all_rejected") and the whole decode fail; match this bound so
+// the scheduler falls through to the general flash_attention_f32_f16_wmma dispatch instead (lower
+// priority, still correct here, just not split-parallelized for very long decode contexts).
+static constexpr int64_t kDecodeSplitMaxKeyValueTokenCapacity = 2048;
 static constexpr int64_t kPrefillQkHeadSizeBlock    = 16;
 static constexpr int64_t kPrefillValueHeadSizeBlock = 64;
 static constexpr int64_t kPrefillMinQkHeadSize      = kPrefillQkHeadSizeBlock;
@@ -338,6 +347,9 @@ static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16
     match.query_token_count     = query_token_count;
     match.key_value_token_count = key_value_token_count;
     match.key_value_capacity    = ceil_div(key_value_token_count, kDecodeKvTileSize) * kDecodeKvTileSize;
+    if (match.key_value_capacity > kDecodeSplitMaxKeyValueTokenCapacity) {
+        return {};
+    }
     match.query_head_count      = query_head_count;
     match.key_value_head_count  = key_value_head_count;
     match.qk_head_size          = qk_head_size;
