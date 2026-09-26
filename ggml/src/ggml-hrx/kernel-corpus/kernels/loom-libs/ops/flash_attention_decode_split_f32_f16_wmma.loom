@@ -846,6 +846,7 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
   %c1 = index.constant 1 : index
   %c4 = index.constant 4 : index
   %c64 = index.constant 64 : index
+  %c63 = index.constant 63 : index
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
@@ -857,6 +858,8 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
   %query_head_base = index.mul %key_value_head, %query_heads_per_key_value_head : index
   %padded_value_head_size = index.add %value_head_size, %c255 : index
   %output_tile_count = index.div %padded_value_head_size, %c256 : index
+  %padded_active_block_count = index.add %active_block_count, %c63 : index
+  %reduction_iteration_count = index.div %padded_active_block_count, %c64 : index
   %is_first_subgroup = index.cmp eq, %subgroup, %c0 : index
   %workitem_is_zero = index.cmp eq, %workitem, %c0 : index
   %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias = buffer.assume.noalias %partial_max, %partial_sum, %partial_output, %output : buffer, buffer, buffer, buffer
@@ -870,39 +873,62 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
   %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x[%value_head_size]xf32>
   %reduction_stage = buffer.alloca<workgroup> align(8) %reduction_stage_bytes : buffer
   %reduction_stage_view = buffer.view %reduction_stage[%c0_offset] : buffer -> view<2xf32>
+  %f32_bytes = index.constant 4 : offset
+  %scale_stage_bytes = index.scale %active_block_count, %f32_bytes : index, offset -> offset
+  %scale_stage = buffer.alloca<workgroup> align(16) %scale_stage_bytes : buffer
+  %scale_stage_view = buffer.view %scale_stage[%c0_offset] : buffer -> view<[%active_block_count]xf32>
   scf.for %query_row = [%c0 to %query_heads_per_key_value_head step %c1] {
     %query_head = index.add %query_head_base, %query_row : index
     %lane_maximum = scf.if %is_first_subgroup -> (f32) {
-      %maximum = scf.for %block = [%c0 to %active_block_count step %c1](%running_maximum = %negative_large : f32) -> (f32) {
-        %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
-        %next_maximum = scalar.maxnumf %running_maximum, %block_maximum : f32
+      %maximum = scf.for %iteration = [%c0 to %reduction_iteration_count step %c1](%running_maximum = %negative_large : f32) -> (f32) {
+        %iteration_stride = index.mul %iteration, %c64 : index
+        %iteration_block = index.add %lane, %iteration_stride : index
+        %iteration_block_valid = index.cmp ult, %iteration_block, %active_block_count : index
+        %next_maximum = scf.if %iteration_block_valid -> (f32) {
+          %block_maximum = view.load %partial_max_view[%key_value_head, %iteration_block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+          %updated_maximum = scalar.maxnumf %running_maximum, %block_maximum : f32
+          scf.yield %updated_maximum : f32
+        } else {
+          scf.yield %running_maximum : f32
+        }
         scf.yield %next_maximum : f32
       }
       scf.yield %maximum : f32
     } else {
       scf.yield %negative_large : f32
     }
+    %subgroup_maximum = kernel.subgroup.reduce<maxnumf> %lane_maximum : f32
     scf.if %workitem_is_zero {
-      view.store %lane_maximum, %reduction_stage_view[%c0] : f32, view<2xf32>
+      view.store %subgroup_maximum, %reduction_stage_view[%c0] : f32, view<2xf32>
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
     %maximum = view.load %reduction_stage_view[%c0] : view<2xf32> -> f32
     %lane_sum = scf.if %is_first_subgroup -> (f32) {
-      %sum = scf.for %block = [%c0 to %active_block_count step %c1](%running_sum = %c0_f32 : f32) -> (f32) {
-        %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
-        %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
-        %scale = scalar.expf<afn> %delta : f32
-        %block_sum = view.load %partial_sum_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
-        %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
-        %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %scaled_sum : f32
+      %sum = scf.for %iteration = [%c0 to %reduction_iteration_count step %c1](%running_sum = %c0_f32 : f32) -> (f32) {
+        %iteration_stride = index.mul %iteration, %c64 : index
+        %iteration_block = index.add %lane, %iteration_stride : index
+        %iteration_block_valid = index.cmp ult, %iteration_block, %active_block_count : index
+        %next_sum = scf.if %iteration_block_valid -> (f32) {
+          %block_maximum = view.load %partial_max_view[%key_value_head, %iteration_block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+          %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
+          %scale = scalar.expf<afn> %delta : f32
+          view.store %scale, %scale_stage_view[%iteration_block] : f32, view<[%active_block_count]xf32>
+          %block_sum = view.load %partial_sum_view[%key_value_head, %iteration_block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
+          %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
+          %updated_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %scaled_sum : f32
+          scf.yield %updated_sum : f32
+        } else {
+          scf.yield %running_sum : f32
+        }
         scf.yield %next_sum : f32
       }
       scf.yield %sum : f32
     } else {
       scf.yield %c0_f32 : f32
     }
+    %subgroup_sum = kernel.subgroup.reduce<addf> %lane_sum : f32
     scf.if %workitem_is_zero {
-      view.store %lane_sum, %reduction_stage_view[%c1] : f32, view<2xf32>
+      view.store %subgroup_sum, %reduction_stage_view[%c1] : f32, view<2xf32>
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
     %sum = view.load %reduction_stage_view[%c1] : view<2xf32> -> f32
@@ -912,9 +938,7 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
       %output_channel_valid = index.cmp ult, %output_channel, %value_head_size : index
       scf.if %output_channel_valid {
         %unnormalized_output = scf.for %block = [%c0 to %active_block_count step %c1](%running_output = %c0_f32 : f32) -> (f32) unroll(%c4) schedule(interleaved) {
-          %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
-          %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
-          %scale = scalar.expf<afn> %delta : f32
+          %scale = view.load %scale_stage_view[%block] : view<[%active_block_count]xf32> -> f32
           %block_output_f16 = view.load %partial_output_view[%key_value_head, %block, %query_row, %output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> f16
           %block_output = scalar.extf %block_output_f16 : f16 to f32
           %scaled_output = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %scale, %block_output : f32
