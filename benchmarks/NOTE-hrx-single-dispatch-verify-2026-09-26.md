@@ -795,3 +795,34 @@ written back into partial_max) into `reduce_completed.multipass` while keeping t
 re-run d2100/d3000/d4800 at 5 runs each AND verify the code word is retrieved EXACTLY - a fault-free but
 wrong reduction is not acceptable, as the forced-cooperative experiment proved.
 Baseline for comparison (PR #13 loom, align-4096 cpp): d2100 1/5, d3000 1/5, d4800 0/5.
+
+## BREAKTHROUGH: JIT SGPR register exhaustion was the deep-context blocker (commit 16160878b)
+
+Root cause of the d4800/d8192 decode failures: the compose launch derived `producer_block_count`
+from the COMPILE-TIME `key_value_token_capacity`, so the JIT constant-folded it and fully unrolled
+the `reduce_completed` block loops (~4.3 SGPRs/block). At capacity 4864/8192 that blew the SGPR budget:
+- d4800: `failed to allocate amdgpu.sgpr registers ... budget 106, peak 328 ... spill-traffic-register-exhausted`
+  then `EMIT/TARGET: AMDGPU HSACO emission produced no executable bytes` -> `res = -3`
+- d8192: same, peak 552.
+
+Fix: derive the reducer block count from the RUNTIME token count
+(`div(bounded_key_value_token_count + 63, 64)`); it is provably equal to the compile-time count because
+the dispatch sets `key_value_capacity = ceil_div(key_value_token_count, 64) * 64` (verified against
+dispatch-flash-attention.cpp). The block loops stay rolled.
+
+### Verification (committed build 16160878b, `-dev HRX0`, `llama-bench -p 0 -n 8 -r 3`)
+- d1900 0/3 72.52/72.30/72.94 ; d2000 0/3 70.73/71.49/70.92 ; d2100 0/3 64.74/51.31/65.22
+- d3000 1/3 54.55/51.06/FAULT ; d4800 0/3 44.66/43.96/44.61 ; (earlier) d8192 28-32 t/s, d1470 ~74
+- Cliff: d2000 70.7 -> d2100 64.7 (~9%, NO sharp boundary cliff); d4800 44.7 t/s (was a JIT failure).
+- `GGML_HRX_LOG_DISPATCH=1` at d2100: `common.flash_attention_decode_split_next_q8 (single)` selected.
+- Correctness (server `-c 4864 -np 1`): `-dev HRX0` alone 4700 tok -> `ZX-4718-QQ`; 3569 tok -> `ZX-4718-QQQ`.
+  `HRX0/Vulkan0` split 4700 tok -> `ZX-4718-QQ`; 3569 tok -> `ZX-4718-QQ`. The oracle itself varies the
+  hyphen/case; the 4700-token (capacity 4864) case is exact on both devices.
+
+### Residual + corrected method
+- A rare `HSA_STATUS_ERROR_MEMORY_FAULT` remains (d3000 1/3) and is largely ambient: at d4800 the fallback
+  faults 1/6 vs the split 2/6 under the same shared, multi-agent GPU. Not the produce K/V branch
+  (force-tail = all blocks LDS-staged still faults), not the reducer structure (LDS-free `direct` swap
+  still faults), not the reducer single-loop-bound.
+- CORRECT fallback env is `GGML_HRX_DISABLE_DISPATCH=flash_attention_decode_split` (NOT `=1`, which disables
+  every dispatch and breaks the model at d=64). With it the fallback is clean (d2100 0/6, d3000 1/6).
