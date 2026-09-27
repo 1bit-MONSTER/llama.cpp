@@ -855,8 +855,10 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
   %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
   %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
   %query_head_base = index.mul %key_value_head, %query_heads_per_key_value_head : index
-  %padded_value_head_size = index.add %value_head_size, %c255 : index
-  %output_tile_count = index.div %padded_value_head_size, %c256 : index
+  %quads_per_row = index.div %value_head_size, %c4 : index
+  %total_quad_count = index.mul %query_heads_per_key_value_head, %quads_per_row : index
+  %padded_quad_count = index.add %total_quad_count, %c255 : index
+  %output_tile_count = index.div %padded_quad_count, %c256 : index
   %is_first_subgroup = index.cmp eq, %subgroup, %c0 : index
   %workitem_is_zero = index.cmp eq, %workitem, %c0 : index
   %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias = buffer.assume.noalias %partial_max, %partial_sum, %partial_output, %output : buffer, buffer, buffer, buffer
@@ -870,6 +872,18 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
   %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x[%value_head_size]xf32>
   %reduction_stage = buffer.alloca<workgroup> align(8) %reduction_stage_bytes : buffer
   %reduction_stage_view = buffer.view %reduction_stage[%c0_offset] : buffer -> view<2xf32>
+  // Per-row, per-block normalisation scales and per-row sums, computed once by
+  // the lane-strided max/sum passes and reused by the vectorised output pass,
+  // so expf runs once per (row, block) instead of once per output element. The
+  // per-element accumulation order over blocks is unchanged.
+  %f32_bytes = index.constant 4 : offset
+  %scale_stage_elements = index.mul %query_heads_per_key_value_head, %active_block_count : index
+  %scale_stage_bytes = index.scale %scale_stage_elements, %f32_bytes : index, offset -> offset
+  %scale_stage = buffer.alloca<workgroup> align(16) %scale_stage_bytes : buffer
+  %scale_stage_view = buffer.view %scale_stage[%c0_offset] : buffer -> view<[%query_heads_per_key_value_head]x[%active_block_count]xf32>
+  %sum_stage_bytes = index.scale %query_heads_per_key_value_head, %f32_bytes : index, offset -> offset
+  %sum_stage = buffer.alloca<workgroup> align(16) %sum_stage_bytes : buffer
+  %sum_stage_view = buffer.view %sum_stage[%c0_offset] : buffer -> view<[%query_heads_per_key_value_head]xf32>
   scf.for %query_row = [%c0 to %query_heads_per_key_value_head step %c1] {
     %query_head = index.add %query_head_base, %query_row : index
     %lane_maximum = scf.if %is_first_subgroup -> (f32) {
@@ -893,6 +907,7 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
         %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
         %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
         %scale = scalar.expf<afn> %delta : f32
+        view.store %scale, %scale_stage_view[%query_row, %block] : f32, view<[%query_heads_per_key_value_head]x[%active_block_count]xf32>
         %block_sum = view.load %partial_sum_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
         %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
         %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %scaled_sum : f32
@@ -908,26 +923,39 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
     %sum = view.load %reduction_stage_view[%c1] : view<2xf32> -> f32
-    scf.for %output_tile = [%c0 to %output_tile_count step %c1] {
-      %tile_channel = index.mul %output_tile, %c256 : index
-      %output_channel = index.add %tile_channel, %workitem : index
-      %output_channel_valid = index.cmp ult, %output_channel, %value_head_size : index
-      scf.if %output_channel_valid {
-        %unnormalized_output = scf.for %block = [%c0 to %active_block_count step %c1](%running_output = %c0_f32 : f32) -> (f32) unroll(%c4) schedule(interleaved) {
-          %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
-          %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
-          %scale = scalar.expf<afn> %delta : f32
-          %block_output_f16 = view.load %partial_output_view[%key_value_head, %block, %query_row, %output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> f16
-          %block_output = scalar.extf %block_output_f16 : f16 to f32
-          %scaled_output = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %scale, %block_output : f32
-          %next_output = scalar.addf<reassoc|nnan|ninf|nsz> %running_output, %scaled_output : f32
-          scf.yield %next_output : f32
-        }
-        %normalized_output = scalar.divf<nnan|ninf|nsz|arcp> %unnormalized_output, %sum : f32
-        view.store %normalized_output, %output_view[%query_head, %output_channel] : f32, view<[%query_head_count]x[%value_head_size]xf32>
-      }
-    }
+    view.store %sum, %sum_stage_view[%query_row] : f32, view<[%query_heads_per_key_value_head]xf32>
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  }
+  // Vectorised output pass: one 4-channel quad per workitem, spanning every
+  // query row so all four subgroups stay busy. Each channel accumulates its
+  // blocks in the same order as the scalar pass, so the values are identical.
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  scf.for %output_tile = [%c0 to %output_tile_count step %c1] {
+    %output_tile_base = index.mul %output_tile, %c256 : index
+    %quad = index.add %output_tile_base, %workitem : index
+    %quad_valid = index.cmp ult, %quad, %total_quad_count : index
+    scf.if %quad_valid {
+      %output_row0 = index.div %quad, %quads_per_row : index
+      %output_row = index.assume %output_row0 [range(%output_row0, 0, 16)] : index
+      %output_row_base = index.mul %output_row, %quads_per_row : index
+      %quad_in_row = index.sub %quad, %output_row_base : index
+      %output_channel0 = index.mul %quad_in_row, %c4 : index
+      %output_channel = index.assume %output_channel0 [range(%output_channel0, 0, 512)] : index
+      %query_head = index.add %query_head_base, %output_row : index
+      %row_sum = view.load %sum_stage_view[%output_row] : view<[%query_heads_per_key_value_head]xf32> -> f32
+      %row_sum_vector = vector.splat %row_sum : vector<4xf32>
+      %unnormalized_output = scf.for %block = [%c0 to %active_block_count step %c1](%running_output = %c0_f32x4 : vector<4xf32>) -> (vector<4xf32>) unroll(%c4) schedule(interleaved) {
+        %scale = view.load %scale_stage_view[%output_row, %block] : view<[%query_heads_per_key_value_head]x[%active_block_count]xf32> -> f32
+        %scale_vector = vector.splat %scale : vector<4xf32>
+        %block_output_f16 = vector.load %partial_output_view[%key_value_head, %block, %output_row, %output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> vector<4xf16>
+        %block_output = vector.extf %block_output_f16 : vector<4xf16> to vector<4xf32>
+        %scaled_output = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scale_vector, %block_output : vector<4xf32>
+        %next_output = vector.addf<reassoc|nnan|ninf|nsz> %running_output, %scaled_output : vector<4xf32>
+        scf.yield %next_output : vector<4xf32>
+      }
+      %normalized_output = vector.divf<nnan|ninf|nsz|arcp> %unnormalized_output, %row_sum_vector : vector<4xf32>
+      vector.store %normalized_output, %output_view[%query_head, %output_channel] : vector<4xf32>, view<[%query_head_count]x[%value_head_size]xf32>
+    }
   }
   template.return
 }
