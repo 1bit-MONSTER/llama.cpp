@@ -829,14 +829,28 @@ dispatch-flash-attention.cpp). The block loops stay rolled.
 
 ## FINAL FIX: residual fault was a RUNTIME partial-view stride (commit b26f194e3)
 
-The SGPR fix (16160878b) derived the reducer block count from the runtime token count, which also
-made the partial-view STRIDE runtime. That introduced a residual >2048 fault. Separating the two -
-partial views keep the compile-time capacity-derived block count (constant addressing) while only
-the reduce LOOP BOUND is the runtime count - removes it (commit b26f194e3).
+## RETRACTED: "residual fault was a RUNTIME partial-view stride" (b26f194e3 reverted)
 
-Controlled split-vs-fallback comparison (llama-bench -p 0 -n 8 -r 3 -dev HRX0, 3 pairs per depth):
-  d=2100 split 0/3 fallback 0/3 ; d=3000 0/3 0/3 ; d=4800 0/3 0/3 ; d=8192 0/3 0/3
-=> the split path fails NO MORE than the fallback oracle.
+This conclusion is wrong, and the code settles it without a GPU: dispatch-flash-attention.cpp:349
+computes `key_value_capacity = ceil_div(key_value_token_count, 64) * 64`, so `partial_block_capacity`
+and `producer_block_count` are the SAME integer by construction. The view stride the patch forced to
+be compile-time was therefore already numerically identical at runtime - nothing about addressing
+changed, so the patch cannot have removed an addressing fault. Its revert is behaviour-neutral by the
+same argument. The comparison below cannot support the claim either: 0/3 and 0/2 samples taken while
+another process was loading HRX0 cannot distinguish "fixed" from "the rate moved".
+
+What was measured instead, against an oracle whose fault rate was high enough to iterate on:
+  - every source-level `partial_max` index held constant -> still faults (all 9 reduce reads pinned
+    to block 0: 3/3 runs; all 8 stores pinned: 2/3). So it is not an out-of-range index.
+  - a +4096 B guard band on the transient arena -> still faults (4/5). The dumped program shows the
+    arena was already sized flush (last allocation ends at 217600, arena_size 217600, slack 0), so
+    "add padding" is not the fix either.
+  - any single transient raised to alignment 4096, others left at 256 -> still faults (1/2 each).
+Remaining characterisation: a layout-sensitive wrong ADDRESS of order a few hundred bytes inside the
+transient arena, dependent on buffer addresses/alignment and on device contention, guards intact.
+See 1bit-MONSTER/engine#123 comments 11-18; the multipass feature itself is untouched.
+
+The numbers below are kept as measurements, but they are conditioned on the concurrent HRX0 load:
 
 Depth sweep, committed b26f194e3: d1470 74.2/75.2/75.1, d1900 73.4/68.2/72.8, d2000 66.9/62.5/67.1,
 d2100 F/64.8/65.0, d3000 55.2/F/56.3, d4800 46.0/45.5/44.8, d8192 30.6/31.9/31.9 t/s (0-1 faults).

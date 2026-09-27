@@ -1126,13 +1126,9 @@ kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_a
   // 4864/8192, failure code spill-traffic-register-exhausted).
   %padded_bounded_key_value_token_count = index.add %bounded_key_value_token_count, %c63 : index
   %producer_block_count = index.div %padded_bounded_key_value_token_count, %c64 : index
-  // engine#115: the partial-view STRIDE stays compile-time (constant addressing) while the reduce
-  // LOOP BOUND is the runtime count (so the block loops are not fully unrolled).
-  %padded_ct_block_count = index.add %launch_key_value_token_capacity, %c63 : index
-  %partial_block_capacity_ct = index.div %padded_ct_block_count, %c64 : index
   %publish_q8 = scalar.constant false : i1
   template.apply<@ggml.flash_attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
-  template.apply<@ggml.flash_attention.decode_split.reduce_fused>(%launch_key_value_token_capacity, %partial_block_capacity_ct, %producer_block_count, %publish_q8, %partial_max, %partial_sum, %partial_output, %completion_counter, %output, %partial_output) : (index, index, index, i1, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@ggml.flash_attention.decode_split.reduce_fused>(%launch_key_value_token_capacity, %producer_block_count, %producer_block_count, %publish_q8, %partial_max, %partial_sum, %partial_output, %completion_counter, %output, %partial_output) : (index, index, index, i1, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -1160,13 +1156,9 @@ kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_a
   // 4864/8192, failure code spill-traffic-register-exhausted).
   %padded_bounded_key_value_token_count = index.add %bounded_key_value_token_count, %c63 : index
   %producer_block_count = index.div %padded_bounded_key_value_token_count, %c64 : index
-  // engine#115: the partial-view STRIDE stays compile-time (constant addressing) while the reduce
-  // LOOP BOUND is the runtime count (so the block loops are not fully unrolled).
-  %padded_ct_block_count = index.add %launch_key_value_token_capacity, %c63 : index
-  %partial_block_capacity_ct = index.div %padded_ct_block_count, %c64 : index
   %publish_q8 = scalar.constant true : i1
   template.apply<@ggml.flash_attention.decode_split.produce_partials>(%bounded_key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : (index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
-  template.apply<@ggml.flash_attention.decode_split.reduce_fused>(%launch_key_value_token_capacity, %partial_block_capacity_ct, %producer_block_count, %publish_q8, %partial_max, %partial_sum, %partial_output, %completion_counter, %output, %next_q8_output) : (index, index, index, i1, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@ggml.flash_attention.decode_split.reduce_fused>(%launch_key_value_token_capacity, %producer_block_count, %producer_block_count, %publish_q8, %partial_max, %partial_sum, %partial_output, %completion_counter, %output, %next_q8_output) : (index, index, index, i1, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
