@@ -52,8 +52,14 @@ template.def<@qwen3_moe.router.top8.row> device requires [#target.subgroup.size<
   %route_ids_view = buffer.view %route_ids_noalias[%c0_offset] : buffer -> view<[%route_id_storage_count]xi32>
   %route_weights_view = buffer.view %route_weights_noalias[%c0_offset] : buffer -> view<[%route_weight_storage_count]xf32>
   %initial_logits = vector.load %logits_view[%safe_token, %lane_expert_base] : view<[%launch_token_count]x[%expert_count]xf32> -> vector<[%experts_per_lane]xf32>
+  // Seed the per-lane argmax with this lane's first expert id instead of the
+  // 0x7FFFFFFF sentinel. If every candidate is unordered (NaN) or below
+  // -FLT_MAX, `ogt`/`oeq` never fire and the old seed was published verbatim
+  // into route_ids, where the consumer turned it into a wild weight address
+  // (engine#123). lane_expert_base is always < expert_count for a real lane.
+  %lane_expert_base_i32 = index.cast %lane_expert_base : index to i32
   %remaining_final, %selected_logit = scf.for %route = [%c0 to %route_count step %c1](%remaining_logits = %initial_logits : vector<[%experts_per_lane]xf32>, %lane_selected_logit = %negative_large : f32) -> (vector<[%experts_per_lane]xf32>, f32) {
-    %local_value, %local_id = scf.for %slot = [%c0 to %experts_per_lane step %c1](%best_value = %negative_large : f32, %best_id = %largest_i32 : i32) -> (f32, i32) unroll {
+    %local_value, %local_id = scf.for %slot = [%c0 to %experts_per_lane step %c1](%best_value = %negative_large : f32, %best_id = %lane_expert_base_i32 : i32) -> (f32, i32) unroll {
       %candidate_value = vector.extract %remaining_logits[%slot] : vector<[%experts_per_lane]xf32> -> f32
       %candidate_expert = index.add %lane_expert_base, %slot : index
       %candidate_id = index.cast %candidate_expert : index to i32
