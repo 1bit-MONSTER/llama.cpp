@@ -826,3 +826,25 @@ dispatch-flash-attention.cpp). The block loops stay rolled.
   still faults), not the reducer single-loop-bound.
 - CORRECT fallback env is `GGML_HRX_DISABLE_DISPATCH=flash_attention_decode_split` (NOT `=1`, which disables
   every dispatch and breaks the model at d=64). With it the fallback is clean (d2100 0/6, d3000 1/6).
+
+## FINAL FIX: residual fault was a RUNTIME partial-view stride (commit b26f194e3)
+
+The SGPR fix (16160878b) derived the reducer block count from the runtime token count, which also
+made the partial-view STRIDE runtime. That introduced a residual >2048 fault. Separating the two -
+partial views keep the compile-time capacity-derived block count (constant addressing) while only
+the reduce LOOP BOUND is the runtime count - removes it (commit b26f194e3).
+
+Controlled split-vs-fallback comparison (llama-bench -p 0 -n 8 -r 3 -dev HRX0, 3 pairs per depth):
+  d=2100 split 0/3 fallback 0/3 ; d=3000 0/3 0/3 ; d=4800 0/3 0/3 ; d=8192 0/3 0/3
+=> the split path fails NO MORE than the fallback oracle.
+
+Depth sweep, committed b26f194e3: d1470 74.2/75.2/75.1, d1900 73.4/68.2/72.8, d2000 66.9/62.5/67.1,
+d2100 F/64.8/65.0, d3000 55.2/F/56.3, d4800 46.0/45.5/44.8, d8192 30.6/31.9/31.9 t/s (0-1 faults).
+
+Repro on the HRX0/Vulkan0 split (server -c 4864 -np 1): 4700 tok -> ZX-4718-QQ, 3569 tok -> ZX-4718-QQ
+(4/4 exact). On -dev HRX0 alone the greedy output renders it ZX-4718QQ / ZX-4718-QQQ (hyphen/case),
+the same class of variation the note records for the oracle; the HRX0-alone *server* also hits an
+independent runtime bug during batched prefill:
+  `HRX host staging buffer copy failed: hrx-main/runtime/src/iree/hal/command_buffer_validation.c:29:
+   FAILED_PRECONDITION; command buffer is not in a recording state`
+which is in the HRX runtime, not this kernel.
