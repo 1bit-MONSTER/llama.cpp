@@ -1046,6 +1046,15 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     }
     hrx_status = ggml_hrx_loom_jit_copy_artifact_bytes(hsaco, &out_result->hsaco_data, &out_result->hsaco_size, false);
     if (hrx_status_is_ok(hrx_status)) {
+        if (const char * dump_dir = std::getenv("GGML_HRX_DUMP_HSACO_DIR")) {
+            static int dump_seq = 0;
+            char dfn[1024];
+            std::snprintf(dfn, sizeof dfn, "%s/hsaco-%04d.bin", dump_dir, dump_seq++);
+            if (FILE * df = std::fopen(dfn, "wb")) {
+                std::fwrite(out_result->hsaco_data, 1, out_result->hsaco_size, df);
+                std::fclose(df);
+            }
+        }
         const loomc_artifact_t * report =
             ggml_hrx_loom_jit_find_artifact(result.get(), GGML_HRX_LOOM_ARTIFACT_COMPILE_REPORT,
                                             loomc_make_cstring_view(LOOMC_ARTIFACT_FORMAT_COMPILE_REPORT_JSON));

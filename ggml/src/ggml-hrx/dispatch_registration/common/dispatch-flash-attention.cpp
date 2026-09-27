@@ -578,11 +578,11 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
     const ValueId q8_output          = match_value(context, dispatch_match, 4);
 
     dispatch_match.transients.push_back(
-        { partial_max, "common.decode.flash_attention.partial_max", partial_scalar_bytes, 4096 });
+        { partial_max, "common.decode.flash_attention.partial_max", partial_scalar_bytes, 256 });
     dispatch_match.transients.push_back(
-        { partial_sum, "common.decode.flash_attention.partial_sum", partial_scalar_bytes, 4096 });
+        { partial_sum, "common.decode.flash_attention.partial_sum", partial_scalar_bytes, 256 });
     dispatch_match.transients.push_back(
-        { partial_output, "common.decode.flash_attention.partial_output", partial_output_bytes, 4096 });
+        { partial_output, "common.decode.flash_attention.partial_output", partial_output_bytes, 256 });
     dispatch_match.transients.push_back(
         { q8_output, "common.decode.flash_attention.next_q8_output", q8_output_bytes, 4096 });
     dispatch_match.completion_counter_requests.push_back({
