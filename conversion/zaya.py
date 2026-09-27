@@ -31,6 +31,24 @@ from .base import ModelBase, TextModel, gguf, logger
 from .qwenvl import Qwen2VLVisionModel
 
 
+
+def _special_tokens_as_control(tokenizer_dir, toktypes):
+    """Mark every token tokenizer.json lists as special: true as CONTROL.
+
+    LlamaHfVocab leaves some of them NORMAL (ZAYA1's <|im_start|> and <eos>, which are also in the
+    base vocab), and llama.cpp matches special-token text in prompts only for CONTROL and
+    USER_DEFINED tokens, so the chat template's <|im_start|> reached the model spelled out as text."""
+    import json
+    from pathlib import Path
+    path = Path(tokenizer_dir) / "tokenizer.json"
+    if not path.is_file():
+        return toktypes
+    for added in json.loads(path.read_text(encoding="utf-8")).get("added_tokens", []):
+        tid = added.get("id")
+        if added.get("special") and isinstance(tid, int) and 0 <= tid < len(toktypes):
+            toktypes[tid] = gguf.TokenType.CONTROL
+    return toktypes
+
 @ModelBase.register("ZayaForCausalLM")
 class ZayaModel(TextModel):
     """Zyphra ZAYA1 (transformers naming): every layer is CCA attention + a top-1 MoE."""
@@ -260,7 +278,7 @@ class ZayaModel(TextModel):
         self.gguf_writer.add_tokenizer_model("gemma4")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_scores(scores)
-        self.gguf_writer.add_token_types(toktypes)
+        self.gguf_writer.add_token_types(_special_tokens_as_control(self._tokenizer_dir(), toktypes))
 
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
@@ -386,7 +404,7 @@ class ZayaVLModel(ZayaModel):
         self.gguf_writer.add_tokenizer_model("gemma4")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_scores(scores)
-        self.gguf_writer.add_token_types(toktypes)
+        self.gguf_writer.add_token_types(_special_tokens_as_control(self._tokenizer_dir(), toktypes))
 
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.chat_template = self._CHAT_TEMPLATE
