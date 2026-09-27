@@ -112,12 +112,20 @@ template.def<@qwen3_moe.router.top8.row> device requires [#target.subgroup.size<
   %unnormalized_weight = scalar.expf<afn> %selected_delta : f32
   %selected_sum = kernel.subgroup.reduce<addf> %unnormalized_weight : f32
   %route_weight = scalar.divf<reassoc|nnan|ninf|nsz|afn> %unnormalized_weight, %selected_sum : f32
+  // engine#123: when no lane of the row found an ordered candidate, the row's router logits
+  // are entirely NaN. The argmax seed is a finite -FLT_MAX, so the softmax below still
+  // produces a plausible uniform 1/route_count, which routes the token to a wrong-but-valid
+  // expert and hides the corruption completely. Publish the row's own NaN instead, so the
+  // corruption reaches the host logits and is caught loudly rather than silently.
+  %row_had_ordered = scalar.cmpf ogt, %selected_max, %negative_large : f32
+  %raw_candidate = vector.extract %initial_logits[%c0] : vector<[%experts_per_lane]xf32> -> f32
+  %published_weight = scf.select %row_had_ordered, %route_weight, %raw_candidate : f32
   %lane_publishes_weight = index.cmp ult, %lane, %route_count : index
   %publishes_weight = scalar.andi %valid_token, %lane_publishes_weight : i1
   scf.if %publishes_weight {
     %route_weight_token_base = index.mul %safe_token, %route_count : index
     %route_weight_index = index.add %route_weight_token_base, %lane : index
-    view.store %route_weight, %route_weights_view[%route_weight_index] : f32, view<[%route_weight_storage_count]xf32>
+    view.store %published_weight, %route_weights_view[%route_weight_index] : f32, view<[%route_weight_storage_count]xf32>
   }
   template.return
 }
