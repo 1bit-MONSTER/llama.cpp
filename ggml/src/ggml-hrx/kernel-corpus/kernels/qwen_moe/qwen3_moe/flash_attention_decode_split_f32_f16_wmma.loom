@@ -829,7 +829,7 @@ template.def<@qwen3_moe.attention.decode_split.reduce_fused> device priority(20)
     kernel.barrier<global> scope(workgroup) ordering(acquire)
     template.apply<@qwen3_moe.attention.decode_split.reduce_completed.direct>(%partial_block_capacity, %producer_block_count, %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias) : (index, index, buffer, buffer, buffer, buffer)
     scf.if %publish_q8 {
-      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      kernel.barrier<global> scope(workgroup) ordering(acq_rel)
       template.apply<@qwen3_moe.attention.decode_split.pack_completed_q8>(%key_value_head, %output_noalias, %q8_output) : (index, buffer, buffer)
     }
     // Do not expose the reset until every final F32 and Q8 store completes.
@@ -877,7 +877,7 @@ template.def<@qwen3_moe.attention.decode_split.reduce_fused> device priority(10)
     kernel.barrier<global> scope(workgroup) ordering(acquire)
     template.apply<@qwen3_moe.attention.decode_split.reduce_completed.cooperative>(%partial_block_capacity, %producer_block_count, %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias) : (index, index, buffer, buffer, buffer, buffer)
     scf.if %publish_q8 {
-      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      kernel.barrier<global> scope(workgroup) ordering(acq_rel)
       template.apply<@qwen3_moe.attention.decode_split.pack_completed_q8>(%key_value_head, %output_noalias, %q8_output) : (index, buffer, buffer)
     }
     // Do not expose the reset until every final F32 and Q8 store completes.
