@@ -6,12 +6,32 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <sstream>
 #include <string>
 #include <utility>
 
 namespace ggml::hrx {
 namespace {
+
+// Test knob for the decode-split partial transients' alignment. Production is 4096;
+// the engine#123/#140 rig oracle used 256, a layout that exposes the divergence.
+// Defaults to 4096 so production behaviour is unchanged unless explicitly requested.
+static size_t decode_split_partial_alignment() {
+    static const size_t value = []() -> size_t {
+        const char * env = std::getenv("GGML_HRX_FA_PARTIAL_ALIGN");
+        if (env == nullptr || *env == '\0') {
+            return 4096u;
+        }
+        char *     end    = nullptr;
+        const long parsed = std::strtol(env, &end, 10);
+        if (end == env || parsed <= 0 || parsed > (1 << 20)) {
+            return 4096u;
+        }
+        return static_cast<size_t>(parsed);
+    }();
+    return value;
+}
 
 static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma");
@@ -578,11 +598,11 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
     const ValueId q8_output          = match_value(context, dispatch_match, 4);
 
     dispatch_match.transients.push_back(
-        { partial_max, "common.decode.flash_attention.partial_max", partial_scalar_bytes, 4096 });
+        { partial_max, "common.decode.flash_attention.partial_max", partial_scalar_bytes, decode_split_partial_alignment() });
     dispatch_match.transients.push_back(
-        { partial_sum, "common.decode.flash_attention.partial_sum", partial_scalar_bytes, 4096 });
+        { partial_sum, "common.decode.flash_attention.partial_sum", partial_scalar_bytes, decode_split_partial_alignment() });
     dispatch_match.transients.push_back(
-        { partial_output, "common.decode.flash_attention.partial_output", partial_output_bytes, 4096 });
+        { partial_output, "common.decode.flash_attention.partial_output", partial_output_bytes, decode_split_partial_alignment() });
     dispatch_match.transients.push_back(
         { q8_output, "common.decode.flash_attention.next_q8_output", q8_output_bytes, 4096 });
     dispatch_match.completion_counter_requests.push_back({

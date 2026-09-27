@@ -574,6 +574,23 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     gsmpl->set_logits(ctx, idx);
 
+    // engine#123: HRX can hand back all-NaN router logits when the driver migrates a page
+    // behind in-flight work (the engine#140-class nondeterminism). NaN is never a legitimate
+    // logit - unlike -inf, which masking legitimately uses - so refuse to sample from it
+    // instead of silently decoding a wrong-but-plausible token.
+    {
+        const float * logits = llama_get_logits_ith(ctx, idx);
+        if (logits != nullptr) {
+            const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+            for (int32_t i = 0; i < n_vocab; ++i) {
+                if (std::isnan(logits[i])) {
+                    LOG_ERR("%s: HRX returned NaN logits at vocab index %d - refusing to sample a silently wrong token (engine#123)\n", __func__, (int) i);
+                    GGML_ABORT("HRX: NaN logits (engine#123)");
+                }
+            }
+        }
+    }
+
     // Check if a backend sampler has already sampled a token in which case we
     // return that token id directly.
     {
