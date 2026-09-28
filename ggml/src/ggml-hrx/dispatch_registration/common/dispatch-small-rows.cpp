@@ -15,9 +15,13 @@
 #include "dispatch-small-rows.h"
 
 #include "ggml.h"
+#include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cstdint>
+#include <cstdlib>
+#include <sstream>
+#include <string>
 #include <utility>
 
 namespace ggml::hrx {
@@ -28,6 +32,19 @@ static constexpr KernelCatalogRef kSumRowsKernel     = GGML_HRX_KERNEL_REF("loom
 static constexpr KernelCatalogRef kArgsortRowsKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_argsort_rows_f32");
 static constexpr KernelCatalogRef kGetRowsSmallKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_small_f32");
 static constexpr KernelCatalogRef kCopyStridedKernel  = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_strided_f32");
+static constexpr KernelCatalogRef kNormRowsKernel     = GGML_HRX_KERNEL_REF("loom_libs", "ggml_norm_rows_f32");
+static constexpr KernelCatalogRef kBinaryStridedKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_binary_strided_f32");
+static constexpr KernelCatalogRef kClampKernel         = GGML_HRX_KERNEL_REF("loom_libs", "ggml_clamp_f32");
+static constexpr KernelCatalogRef kClampInplaceKernel  = GGML_HRX_KERNEL_REF("loom_libs", "ggml_clamp_inplace_f32");
+static constexpr KernelCatalogRef kCopyF32F16Kernel    = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_strided_f32_f16");
+static constexpr KernelCatalogRef kAttentionStridedKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_attention_strided_f32_f16");
+static constexpr KernelCatalogRef kAttentionRowsKernel    = GGML_HRX_KERNEL_REF("loom_libs", "ggml_attention_rows_f32_f16");
+static constexpr KernelCatalogRef kRopeRotateHalfKernel   = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_rotate_half_f32");
+static constexpr KernelCatalogRef kGegluStridedKernel     = GGML_HRX_KERNEL_REF("loom_libs", "ggml_geglu_strided_f32");
+static constexpr KernelCatalogRef kMulMatSmallF16Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_f16_f32");
+static constexpr KernelCatalogRef kMulMatSmallF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_f32_f32");
+static constexpr KernelCatalogRef kMulMatSmallQ8Kernel  = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_q8_0_f32");
+static constexpr KernelCatalogRef kMulMatRowsQ8Kernel   = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_rows_q8_0_f32");
 
 static bool packed(const Value & value, size_t element_size) {
     size_t stride = element_size;
@@ -127,6 +144,32 @@ static bool match_argsort_rows(const DispatchMatchContext & context, DispatchMat
     dispatch.kernel.integer_parameters.emplace("column_count", input->ne[0]);
     dispatch.kernel.integer_parameters.emplace("row_count", rows_of(*input));
     dispatch.kernel.integer_parameters.emplace("descending", params->order == GGML_SORT_ORDER_DESC ? 1 : 0);
+    dispatch.bindings.push_back({ input->id, 0, input->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    finish(context, match, std::move(dispatch));
+    return true;
+}
+
+// NORM (LayerNorm without affine; its weight and bias are separate MUL/ADD nodes) on packed F32 rows
+static bool match_norm_rows(const DispatchMatchContext & context, DispatchMatch & match) {
+    const Value * input  = nullptr;
+    const Value * output = nullptr;
+    if (!row_op_values(context, GGML_OP_NORM, GGML_TYPE_F32, input, output) || !same_shape(*input, *output) ||
+        input->ne[0] > 65536) {
+        return false;
+    }
+    const RmsNormParams * params = op_params_as<RmsNormParams>(context.root_node->params);
+    if (params == nullptr) {
+        return false;
+    }
+    std::ostringstream eps;
+    eps.precision(9);
+    eps << params->eps;
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kNormRowsKernel);
+    dispatch.kernel.integer_parameters.emplace("column_count", input->ne[0]);
+    dispatch.kernel.integer_parameters.emplace("row_count", rows_of(*input));
+    dispatch.kernel.compile_parameters.emplace("ggml.norm_rows_f32.epsilon", eps.str());
     dispatch.bindings.push_back({ input->id, 0, input->byte_count });
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
     finish(context, match, std::move(dispatch));
@@ -255,11 +298,425 @@ static bool match_repeat_broadcast(const DispatchMatchContext & context, Dispatc
     return true;
 }
 
+// ADD / SUB / MUL / DIV of F32 values with any element strides, broadcasting either input (ggml's
+// rule: an input dim of 1 against a larger output dim), into a packed output. Registered below the
+// packed binary kernels (priority -10), so it only takes what they refuse: strided views mostly.
+static bool match_binary_strided(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->inputs.size() != 2) {
+        return false;
+    }
+    int64_t op = -1;
+    switch (node->op) {
+        case GGML_OP_ADD: op = 0; break;
+        case GGML_OP_SUB: op = 1; break;
+        case GGML_OP_MUL: op = 2; break;
+        case GGML_OP_DIV: op = 3; break;
+        default: return false;
+    }
+    const Value * lhs    = context.graph.values().find(node->inputs[0]);
+    const Value * rhs    = context.graph.values().find(node->inputs[1]);
+    const Value * output = context.graph.values().find(node->output);
+    if (lhs == nullptr || rhs == nullptr || output == nullptr || lhs->type != GGML_TYPE_F32 || rhs->type != GGML_TYPE_F32 ||
+        output->type != GGML_TYPE_F32 || !packed(*output, sizeof(float)) || output->alias_source.value >= 0 ||
+        lhs->storage == output->storage || rhs->storage == output->storage || output->element_count > 268435456) {
+        return false;
+    }
+    int64_t a[GGML_MAX_DIMS], b[GGML_MAX_DIMS];
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        for (const Value * v : { lhs, rhs }) {
+            if (v->nb[i] % sizeof(float) != 0 || (v->ne[i] != 1 && v->ne[i] != output->ne[i])) {
+                return false;
+            }
+        }
+        a[i] = lhs->ne[i] == 1 ? 0 : static_cast<int64_t>(lhs->nb[i] / sizeof(float));
+        b[i] = rhs->ne[i] == 1 ? 0 : static_cast<int64_t>(rhs->nb[i] / sizeof(float));
+    }
+    const int64_t a_extent = static_cast<int64_t>(lhs->byte_count / sizeof(float));
+    const int64_t b_extent = static_cast<int64_t>(rhs->byte_count / sizeof(float));
+    if (a_extent < 1 || b_extent < 1 || a_extent > 268435456 || b_extent > 268435456) {
+        return false;
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kBinaryStridedKernel);
+    static const char * const ne_names[] = { "ne0", "ne1", "ne2", "ne3" };
+    static const char * const a_names[]  = { "a0", "a1", "a2", "a3" };
+    static const char * const b_names[]  = { "b0", "b1", "b2", "b3" };
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        dispatch.kernel.integer_parameters.emplace(ne_names[i], output->ne[i]);
+        dispatch.kernel.integer_parameters.emplace(a_names[i], a[i]);
+        dispatch.kernel.integer_parameters.emplace(b_names[i], b[i]);
+    }
+    dispatch.kernel.integer_parameters.emplace("a_extent", a_extent);
+    dispatch.kernel.integer_parameters.emplace("b_extent", b_extent);
+    dispatch.kernel.integer_parameters.emplace("op", op);
+    dispatch.bindings.push_back({ lhs->id, 0, lhs->byte_count });
+    dispatch.bindings.push_back({ rhs->id, 0, rhs->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    finish(context, match, std::move(dispatch));
+    return true;
+}
+
+static std::string f32_config(float value) {
+    std::ostringstream out;
+    out.precision(9);
+    out << value;
+    return out.str();
+}
+
+// CLAMP of a packed F32 tensor on its own (fused router clamps match first, at their own priority)
+static bool match_clamp(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_CLAMP || node->inputs.size() != 1) {
+        return false;
+    }
+    const Value * input  = context.graph.values().find(node->inputs[0]);
+    const Value * output = context.graph.values().find(node->output);
+    const ClampParams * params = op_params_as<ClampParams>(node->params);
+    if (input == nullptr || output == nullptr || params == nullptr || input->type != GGML_TYPE_F32 ||
+        output->type != GGML_TYPE_F32 || !packed(*input, sizeof(float)) || !packed(*output, sizeof(float)) ||
+        !same_shape(*input, *output) || output->element_count > 268435456) {
+        return false;
+    }
+    // ggml_clamp is in place: the output is a view of the input, same layout
+    const bool in_place = output->alias_source.value >= 0;
+    if (in_place ? (output->storage != input->storage || output->storage_offset != input->storage_offset)
+                 : input->storage == output->storage) {
+        return false;
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(in_place ? kClampInplaceKernel : kClampKernel);
+    dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.clamp_f32.min", f32_config(params->min));
+    dispatch.kernel.compile_parameters.emplace("ggml.clamp_f32.max", f32_config(params->max));
+    if (!in_place) {
+        dispatch.bindings.push_back({ input->id, 0, input->byte_count });
+    }
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    finish(context, match, std::move(dispatch));
+    return true;
+}
+
+// CPY F32 (any element strides) -> packed F16: ggml_cpy(src, dst) returns a view of dst, so the
+// output aliases the second input, which only gives the destination's layout
+static bool match_copy_f32_f16(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_CPY || node->inputs.empty() || node->inputs.size() > 2) {
+        return false;
+    }
+    const Value * input  = context.graph.values().find(node->inputs[0]);
+    const Value * output = context.graph.values().find(node->output);
+    if (input == nullptr || output == nullptr || input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F16 ||
+        !packed(*output, ggml_type_size(GGML_TYPE_F16)) || input->storage == output->storage ||
+        input->element_count != output->element_count || output->element_count > 268435456) {
+        return false;
+    }
+    int64_t strides[GGML_MAX_DIMS];
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (input->nb[i] % sizeof(float) != 0 || input->ne[i] != output->ne[i]) {
+            return false;
+        }
+        strides[i] = static_cast<int64_t>(input->nb[i] / sizeof(float));
+    }
+    const int64_t extent = static_cast<int64_t>(input->byte_count / sizeof(float));
+    if (extent < 1 || extent > 268435456) {
+        return false;
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kCopyF32F16Kernel);
+    static const char * const ne_names[] = { "ne0", "ne1", "ne2", "ne3" };
+    static const char * const s_names[]  = { "s0", "s1", "s2", "s3" };
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        dispatch.kernel.integer_parameters.emplace(ne_names[i], output->ne[i]);
+        dispatch.kernel.integer_parameters.emplace(s_names[i], strides[i]);
+    }
+    dispatch.kernel.integer_parameters.emplace("source_extent", extent);
+    dispatch.bindings.push_back({ input->id, 0, input->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    finish(context, match, std::move(dispatch));
+    return true;
+}
+
+// FLASH_ATTN_EXT with the layouts the flash-attention kernels refuse (one contiguous block per head,
+// as encoders lay them out): F32 query [d, n_q, h], F16 key/value [d, n_kv, h_kv], F16 mask
+// [n_kv, >= n_q], output [dv, h, n_q] packed; no ALiBi, no softcap. Registered below them.
+static bool match_attention_strided(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_FLASH_ATTN_EXT || node->inputs.size() != 4) {
+        return false;
+    }
+    const Value * q    = context.graph.values().find(node->inputs[0]);
+    const Value * k    = context.graph.values().find(node->inputs[1]);
+    const Value * v    = context.graph.values().find(node->inputs[2]);
+    const Value * mask = context.graph.values().find(node->inputs[3]);
+    const Value * out  = context.graph.values().find(node->output);
+    const FlashAttnExtParams * params = op_params_as<FlashAttnExtParams>(node->params);
+    if (q == nullptr || k == nullptr || v == nullptr || mask == nullptr || out == nullptr || params == nullptr ||
+        q->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F16 || v->type != GGML_TYPE_F16 || mask->type != GGML_TYPE_F16 ||
+        out->type != GGML_TYPE_F32 || params->max_bias != 0.0f || params->logit_softcap != 0.0f) {
+        return false;
+    }
+    const int64_t d = q->ne[0], dv = v->ne[0], nq = q->ne[1], nkv = k->ne[1], nh = q->ne[2], nhkv = k->ne[2];
+    if (k->ne[0] != d || v->ne[1] != nkv || v->ne[2] != nhkv || nhkv < 1 || nh % nhkv != 0 || d > 1024 || dv > 1024 ||
+        dv > 1024 || q->ne[3] != 1 || k->ne[3] != 1 || v->ne[3] != 1 || mask->ne[0] < nkv || mask->ne[1] < nq ||
+        mask->ne[2] != 1 || mask->ne[3] != 1 || out->ne[0] != dv || out->ne[1] != nh || out->ne[2] != nq ||
+        out->ne[3] != 1 || !packed(*out, sizeof(float)) || q->nb[0] != sizeof(float) || k->nb[0] != 2 || v->nb[0] != 2 ||
+        mask->nb[0] != 2 || q->nb[1] % 4 || q->nb[2] % 4 || k->nb[1] % 2 || k->nb[2] % 2 || v->nb[1] % 2 || v->nb[2] % 2 ||
+        mask->nb[1] % 2 || nq > 65536 || nkv > 65536 || nh > 1024 || dv < 1 || dv > 1024 || (dv % 32) != 0) {
+        return false;
+    }
+    Dispatch dispatch;
+    // scores once per (query, head) in workgroup memory when they fit (ONEBIT_HRX_ATTN_PER_LANE=1: the old way)
+    const bool rows = nkv <= 2048 && d <= 256 && dv <= 256 && std::getenv("ONEBIT_HRX_ATTN_PER_LANE") == nullptr;
+    dispatch.kernel = make_kernel_specialization(rows ? kAttentionRowsKernel : kAttentionStridedKernel);
+    auto & ip = dispatch.kernel.integer_parameters;
+    ip.emplace("qk_size", d);
+    ip.emplace("v_size", dv);
+    ip.emplace("q_count", nq);
+    ip.emplace("kv_count", nkv);
+    ip.emplace("head_count", nh);
+    ip.emplace("kv_head_count", nhkv);
+    ip.emplace("q_s1", static_cast<int64_t>(q->nb[1] / 4));
+    ip.emplace("q_s2", static_cast<int64_t>(q->nb[2] / 4));
+    ip.emplace("k_s1", static_cast<int64_t>(k->nb[1] / 2));
+    ip.emplace("k_s2", static_cast<int64_t>(k->nb[2] / 2));
+    ip.emplace("v_s1", static_cast<int64_t>(v->nb[1] / 2));
+    ip.emplace("v_s2", static_cast<int64_t>(v->nb[2] / 2));
+    ip.emplace("m_s1", static_cast<int64_t>(mask->nb[1] / 2));
+    ip.emplace("q_extent", static_cast<int64_t>(q->byte_count / 4));
+    ip.emplace("k_extent", static_cast<int64_t>(k->byte_count / 2));
+    ip.emplace("v_extent", static_cast<int64_t>(v->byte_count / 2));
+    ip.emplace("m_extent", static_cast<int64_t>(mask->byte_count / 2));
+    dispatch.kernel.compile_parameters.emplace("ggml.attention_strided.scale", f32_config(params->scale));
+    for (const Value * b : { q, k, v, mask, out }) {
+        dispatch.bindings.push_back({ b->id, 0, b->byte_count });
+    }
+    finish(context, match, std::move(dispatch));
+    return true;
+}
+
+// MUL_MAT of a small F16/F32 weight [K, N] (rows packed, any K) or Q8_0 weight (K a multiple of 32) with F32 columns [K, T] into a
+// packed [N, T]: heads and projections the tiled matmul kernels refuse (K not a multiple of 256).
+// Registered below them; one workitem per output, so it is for small N x T only.
+static bool match_mul_mat_small(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
+        return false;
+    }
+    const Value * w   = context.graph.values().find(node->inputs[0]);
+    const Value * x   = context.graph.values().find(node->inputs[1]);
+    const Value * out = context.graph.values().find(node->output);
+    const bool q8 = w != nullptr && w->type == GGML_TYPE_Q8_0;
+    if (w == nullptr || x == nullptr || out == nullptr ||
+        (w->type != GGML_TYPE_F16 && w->type != GGML_TYPE_F32 && !q8) || x->type != GGML_TYPE_F32 ||
+        out->type != GGML_TYPE_F32 || !packed(*out, sizeof(float))) {
+        return false;
+    }
+    // element size, or for Q8_0 the block size (w_s1 then counts blocks)
+    const size_t  wsz = q8 ? ggml_type_size(GGML_TYPE_Q8_0) : ggml_type_size(w->type);
+    const int64_t k = w->ne[0], n = w->ne[1], t = x->ne[1];
+    if (x->ne[0] != k || w->ne[2] != 1 || w->ne[3] != 1 || x->ne[2] != 1 || x->ne[3] != 1 || out->ne[0] != n ||
+        out->ne[1] != t || out->ne[2] != 1 || out->ne[3] != 1 || (!q8 && w->nb[0] != wsz) || w->nb[1] % wsz != 0 ||
+        (q8 && k % 32 != 0) || x->nb[0] != sizeof(float) || x->nb[1] % sizeof(float) != 0 || n * t > (1 << 22) ||
+        k > 1048576) {
+        return false;
+    }
+    Dispatch dispatch;
+    // Q8_0 with enough K: a workgroup per output, lanes over the blocks (ONEBIT_HRX_Q8_PER_OUTPUT=1: the old way)
+    const bool rows = q8 && k >= 32 * 64 && std::getenv("ONEBIT_HRX_Q8_PER_OUTPUT") == nullptr;
+    dispatch.kernel = make_kernel_specialization(rows ? kMulMatRowsQ8Kernel
+                                                 : q8 ? kMulMatSmallQ8Kernel
+                                                 : w->type == GGML_TYPE_F16 ? kMulMatSmallF16Kernel : kMulMatSmallF32Kernel);
+    auto & ip = dispatch.kernel.integer_parameters;
+    ip.emplace("k_size", k);
+    ip.emplace("n_size", n);
+    ip.emplace("t_count", t);
+    ip.emplace("w_s1", static_cast<int64_t>(w->nb[1] / wsz));
+    ip.emplace("x_s1", static_cast<int64_t>(x->nb[1] / sizeof(float)));
+    ip.emplace("w_extent", static_cast<int64_t>(w->byte_count / wsz));
+    ip.emplace("x_extent", static_cast<int64_t>(x->byte_count / sizeof(float)));
+    for (const Value * b : { w, x, out }) {
+        dispatch.bindings.push_back({ b->id, 0, b->byte_count });
+    }
+    finish(context, match, std::move(dispatch));
+    return true;
+}
+
+// the node producing `value` when it is `op` and `value` has no other consumer
+static const GraphNode * sole_producer(const Graph & graph, ValueId value, ggml_op op) {
+    const GraphNode * node = graph.index().producer(value);
+    return node != nullptr && node->op == op && graph.index().has_single_consumer(value) ? node : nullptr;
+}
+
+// Rotate-half RoPE lowered to eight nodes (ModernBERT through ggmlc):
+//   out = ADD(MUL(x, cos), MUL(CONT(CONCAT(NEG(CONT(x[half:])), CONT(x[:half]))), sin))
+// with x packed F32 [d, T, H] and cos/sin [d, T] broadcast over heads: one kernel for all eight.
+static bool match_rope_rotate_half(const DispatchMatchContext & context, DispatchMatch & match) {
+    // rooted at x * cos, the chain's first node in graph order (a fused match covers later nodes only)
+    const Graph &     graph   = context.graph;
+    const GraphNode * mul_cos = context.root_node;
+    if (mul_cos == nullptr || mul_cos->op != GGML_OP_MUL || mul_cos->inputs.size() != 2 || !graph.has_index() ||
+        !graph.index().has_single_consumer(mul_cos->output)) {
+        return false;
+    }
+    const GraphNode * add = graph.index().consumers(mul_cos->output).front();
+    if (add == nullptr || add->op != GGML_OP_ADD || add->inputs.size() != 2) {
+        return false;
+    }
+    for (int order = 0; order < 2; ++order) {
+        if (add->inputs[order] != mul_cos->output) {
+            continue;
+        }
+        const GraphNode * mul_sin = sole_producer(graph, add->inputs[1 - order], GGML_OP_MUL);
+        if (mul_sin == nullptr || mul_sin->inputs.size() != 2) {
+            continue;
+        }
+        const GraphNode * cat_cont = sole_producer(graph, mul_sin->inputs[0], GGML_OP_CONT);
+        if (cat_cont == nullptr) {
+            continue;
+        }
+        const GraphNode * concat = sole_producer(graph, cat_cont->inputs[0], GGML_OP_CONCAT);
+        if (concat == nullptr || concat->inputs.size() != 2) {
+            continue;
+        }
+        const GraphNode * neg     = sole_producer(graph, concat->inputs[0], GGML_OP_UNARY);
+        const GraphNode * lo_cont = sole_producer(graph, concat->inputs[1], GGML_OP_CONT);
+        if (neg == nullptr || lo_cont == nullptr || neg->inputs.size() != 1) {
+            continue;
+        }
+        const UnaryParams * neg_params = op_params_as<UnaryParams>(neg->params);
+        const GraphNode *   hi_cont    = sole_producer(graph, neg->inputs[0], GGML_OP_CONT);
+        if (neg_params == nullptr || neg_params->op != UnaryKind::Neg || hi_cont == nullptr) {
+            continue;
+        }
+        const Value * x   = graph.values().find(mul_cos->inputs[0]);
+        const Value * cs  = graph.values().find(mul_cos->inputs[1]);
+        const Value * sn  = graph.values().find(mul_sin->inputs[1]);
+        const Value * hi  = graph.values().find(hi_cont->inputs[0]);
+        const Value * lo  = graph.values().find(lo_cont->inputs[0]);
+        const Value * out = graph.values().find(add->output);
+        if (x == nullptr || cs == nullptr || sn == nullptr || hi == nullptr || lo == nullptr || out == nullptr) {
+            continue;
+        }
+        const int64_t d = x->ne[0], t = x->ne[1], h = x->ne[2], half = d / 2;
+        bool ok = x->type == GGML_TYPE_F32 && cs->type == GGML_TYPE_F32 && sn->type == GGML_TYPE_F32 &&
+                  out->type == GGML_TYPE_F32 && packed(*x, sizeof(float)) && packed(*out, sizeof(float)) &&
+                  same_shape(*x, *out) && x->ne[3] == 1 && d % 2 == 0 && d <= 4096 && h <= 4096 &&
+                  out->storage != x->storage && out->alias_source.value < 0;
+        // the two halves are views of x at its offset and half a row further, with x's strides
+        ok = ok && hi->storage == x->storage && lo->storage == x->storage && hi->ne[0] == half && lo->ne[0] == half &&
+             lo->storage_offset == x->storage_offset && hi->storage_offset == x->storage_offset + half * sizeof(float) &&
+             hi->nb == x->nb && lo->nb == x->nb && hi->ne[1] == t && hi->ne[2] == h && lo->ne[1] == t && lo->ne[2] == h;
+        // cos and sin: [d, T], rows possibly strided, broadcast over heads
+        for (const Value * v : { cs, sn }) {
+            ok = ok && v->ne[0] == d && v->ne[1] == t && v->ne[2] == 1 && v->ne[3] == 1 && v->nb[0] == sizeof(float) &&
+                 v->nb[1] % sizeof(float) == 0 && v->storage != out->storage;
+        }
+        if (!ok) {
+            continue;
+        }
+        Dispatch dispatch;
+        dispatch.kernel = make_kernel_specialization(kRopeRotateHalfKernel);
+        auto & ip = dispatch.kernel.integer_parameters;
+        ip.emplace("ne0", d);
+        ip.emplace("ne1", t);
+        ip.emplace("ne2", h);
+        ip.emplace("cos_s1", static_cast<int64_t>(cs->nb[1] / sizeof(float)));
+        ip.emplace("sin_s1", static_cast<int64_t>(sn->nb[1] / sizeof(float)));
+        ip.emplace("cos_extent", static_cast<int64_t>(cs->byte_count / sizeof(float)));
+        ip.emplace("sin_extent", static_cast<int64_t>(sn->byte_count / sizeof(float)));
+        for (const Value * b : { x, cs, sn, out }) {
+            dispatch.bindings.push_back({ b->id, 0, b->byte_count });
+        }
+        match.covered_nodes.push_back(context.root_index);
+        for (const GraphNode * n : { hi_cont, neg, lo_cont, concat, cat_cont, mul_sin, add }) {
+            if (!append_covered_node_index_once(graph, context.covered_nodes, n, match.covered_nodes)) {
+                return false;
+            }
+        }
+        match.dispatches.push_back(std::move(dispatch));
+        return true;
+    }
+    return false;
+}
+
+// GEGLU lowered to CONT(gate view) -> GELU -> MUL(., up view), rooted at the CONT: one kernel
+// reads both strided halves and writes gelu(gate) * up.
+static bool match_geglu_strided(const DispatchMatchContext & context, DispatchMatch & match) {
+    const Graph &     graph = context.graph;
+    const GraphNode * cont  = context.root_node;
+    if (cont == nullptr || cont->op != GGML_OP_CONT || cont->inputs.size() != 1 || !graph.has_index() ||
+        !graph.index().has_single_consumer(cont->output)) {
+        return false;
+    }
+    const GraphNode * gelu = graph.index().consumers(cont->output).front();
+    const UnaryParams * gp = gelu != nullptr && gelu->op == GGML_OP_UNARY ? op_params_as<UnaryParams>(gelu->params) : nullptr;
+    if (gp == nullptr || gp->op != UnaryKind::Gelu || !graph.index().has_single_consumer(gelu->output)) {
+        return false;
+    }
+    const GraphNode * mul = graph.index().consumers(gelu->output).front();
+    if (mul == nullptr || mul->op != GGML_OP_MUL || mul->inputs.size() != 2 || mul->inputs[0] != gelu->output) {
+        return false;
+    }
+    const Value * a   = graph.values().find(cont->inputs[0]);
+    const Value * b   = graph.values().find(mul->inputs[1]);
+    const Value * out = graph.values().find(mul->output);
+    if (a == nullptr || b == nullptr || out == nullptr || a->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32 ||
+        out->type != GGML_TYPE_F32 || !packed(*out, sizeof(float)) || !same_shape(*a, *out) || !same_shape(*b, *out) ||
+        out->ne[2] != 1 || out->ne[3] != 1 || a->nb[0] != sizeof(float) || b->nb[0] != sizeof(float) ||
+        a->nb[1] % sizeof(float) != 0 || b->nb[1] % sizeof(float) != 0 || out->storage == a->storage ||
+        out->storage == b->storage || out->alias_source.value >= 0) {
+        return false;
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kGegluStridedKernel);
+    auto & ip = dispatch.kernel.integer_parameters;
+    ip.emplace("n_size", out->ne[0]);
+    ip.emplace("t_count", out->ne[1]);
+    ip.emplace("a_s1", static_cast<int64_t>(a->nb[1] / sizeof(float)));
+    ip.emplace("b_s1", static_cast<int64_t>(b->nb[1] / sizeof(float)));
+    ip.emplace("a_extent", static_cast<int64_t>(a->byte_count / sizeof(float)));
+    ip.emplace("b_extent", static_cast<int64_t>(b->byte_count / sizeof(float)));
+    for (const Value * v : { a, b, out }) {
+        dispatch.bindings.push_back({ v->id, 0, v->byte_count });
+    }
+    match.covered_nodes.push_back(context.root_index);
+    for (const GraphNode * n : { gelu, mul }) {
+        if (!append_covered_node_index_once(graph, context.covered_nodes, n, match.covered_nodes)) {
+            return false;
+        }
+    }
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 }  // namespace
 
 void register_small_rows_dispatches(DispatchRegistryBuilder & registry) {
     registry.add({ "common.softmax_rows_f32", GGML_OP_SOFT_MAX, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
                    match_softmax_rows });
+    registry.add({ "common.binary_strided_f32.add", GGML_OP_ADD, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
+                   match_binary_strided });
+    registry.add({ "common.binary_strided_f32.sub", GGML_OP_SUB, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
+                   match_binary_strided });
+    registry.add({ "common.binary_strided_f32.mul", GGML_OP_MUL, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
+                   match_binary_strided });
+    registry.add({ "common.binary_strided_f32.div", GGML_OP_DIV, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
+                   match_binary_strided });
+    registry.add({ "common.geglu_strided_f32", GGML_OP_CONT, DispatchMatchKind::Fused, 300, DispatchSource::Common,
+                   match_geglu_strided });
+    registry.add({ "common.rope_rotate_half_f32", GGML_OP_MUL, DispatchMatchKind::Fused, 300, DispatchSource::Common,
+                   match_rope_rotate_half });
+    registry.add({ "common.mul_mat_small_f32", GGML_OP_MUL_MAT, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
+                   match_mul_mat_small });
+    registry.add({ "common.attention_strided_f32_f16", GGML_OP_FLASH_ATTN_EXT, DispatchMatchKind::SingleOp, -10,
+                   DispatchSource::Common, match_attention_strided });
+    registry.add({ "common.copy_strided_f32_f16", GGML_OP_CPY, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
+                   match_copy_f32_f16 });
+    registry.add({ "common.clamp_f32", GGML_OP_CLAMP, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
+                   match_clamp });
+    registry.add({ "common.norm_rows_f32", GGML_OP_NORM, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
+                   match_norm_rows });
     registry.add({ "common.sum_rows_f32", GGML_OP_SUM_ROWS, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
                    match_sum_rows });
     registry.add({ "common.argsort_rows_f32", GGML_OP_ARGSORT, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,

@@ -258,6 +258,7 @@ OpParams import_op_params(const ggml_tensor & tensor) {
     switch (tensor.op) {
         case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
+        case GGML_OP_NORM:
             return RmsNormParams{ ggml_get_op_params_f32(&tensor, 0) };
         case GGML_OP_SOFT_MAX:
             return SoftMaxParams{
@@ -312,6 +313,7 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
     switch (op) {
         case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
+        case GGML_OP_NORM:
             return rms_norm_params_equivalent(lhs, rhs);
         case GGML_OP_SOFT_MAX:
             return soft_max_params_equivalent(lhs, rhs);
