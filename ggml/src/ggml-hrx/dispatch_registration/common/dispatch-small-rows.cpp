@@ -18,6 +18,7 @@
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -36,9 +37,11 @@ static constexpr KernelCatalogRef kClampKernel         = GGML_HRX_KERNEL_REF("lo
 static constexpr KernelCatalogRef kClampInplaceKernel  = GGML_HRX_KERNEL_REF("loom_libs", "ggml_clamp_inplace_f32");
 static constexpr KernelCatalogRef kCopyF32F16Kernel    = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_strided_f32_f16");
 static constexpr KernelCatalogRef kAttentionStridedKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_attention_strided_f32_f16");
+static constexpr KernelCatalogRef kAttentionRowsKernel    = GGML_HRX_KERNEL_REF("loom_libs", "ggml_attention_rows_f32_f16");
 static constexpr KernelCatalogRef kMulMatSmallF16Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_f16_f32");
 static constexpr KernelCatalogRef kMulMatSmallF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_f32_f32");
 static constexpr KernelCatalogRef kMulMatSmallQ8Kernel  = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_q8_0_f32");
+static constexpr KernelCatalogRef kMulMatRowsQ8Kernel   = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_rows_q8_0_f32");
 
 static bool packed(const Value & value, size_t element_size) {
     size_t stride = element_size;
@@ -460,7 +463,9 @@ static bool match_attention_strided(const DispatchMatchContext & context, Dispat
         return false;
     }
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kAttentionStridedKernel);
+    // scores once per (query, head) in workgroup memory when they fit (ONEBIT_HRX_ATTN_PER_LANE=1: the old way)
+    const bool rows = nkv <= 2048 && d <= 256 && dv <= 256 && std::getenv("ONEBIT_HRX_ATTN_PER_LANE") == nullptr;
+    dispatch.kernel = make_kernel_specialization(rows ? kAttentionRowsKernel : kAttentionStridedKernel);
     auto & ip = dispatch.kernel.integer_parameters;
     ip.emplace("qk_size", d);
     ip.emplace("v_size", dv);
@@ -514,8 +519,11 @@ static bool match_mul_mat_small(const DispatchMatchContext & context, DispatchMa
         return false;
     }
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(q8 ? kMulMatSmallQ8Kernel
-                                                    : w->type == GGML_TYPE_F16 ? kMulMatSmallF16Kernel : kMulMatSmallF32Kernel);
+    // Q8_0 with enough K: a workgroup per output, lanes over the blocks (ONEBIT_HRX_Q8_PER_OUTPUT=1: the old way)
+    const bool rows = q8 && k >= 32 * 64 && std::getenv("ONEBIT_HRX_Q8_PER_OUTPUT") == nullptr;
+    dispatch.kernel = make_kernel_specialization(rows ? kMulMatRowsQ8Kernel
+                                                 : q8 ? kMulMatSmallQ8Kernel
+                                                 : w->type == GGML_TYPE_F16 ? kMulMatSmallF16Kernel : kMulMatSmallF32Kernel);
     auto & ip = dispatch.kernel.integer_parameters;
     ip.emplace("k_size", k);
     ip.emplace("n_size", n);

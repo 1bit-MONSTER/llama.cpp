@@ -788,3 +788,184 @@ kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_mul_mat_small_
   }
   kernel.return
 }
+
+// Q8_0 MUL_MAT, one 64-lane workgroup per output: the lanes split the K blocks (reads along each
+// weight row stay together), then one workgroup reduction. For K = 2624 (ModernBERT's FFN down
+// projection) the per-output kernel above reads 64 different rows per wave.
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_mul_mat_rows_q8_0_f32") @ggml_mul_mat_rows_q8_0_f32(%k_size: index, %n_size: index, %t_count: index, %w_s1: index, %x_s1: index, %w_extent: index, %x_extent: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %outputs = index.mul %n_size, %t_count : index
+  kernel.launch.config workgroups(%outputs, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%k_size: index, %n_size: index, %t_count: index, %w_s1: index, %x_s1: index, %w_extent: index, %x_extent: index, %weight: buffer, %input: buffer, %output: buffer) {
+  %k = index.assume %k_size [range(%k_size, 32, 1048576)] : index
+  %n = index.assume %n_size [range(%n_size, 1, 1048576)] : index
+  %t = index.assume %t_count [range(%t_count, 1, 1048576)] : index
+  %xe = index.assume %x_extent [range(%x_extent, 1, 268435456)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %f0 = scalar.constant 0.0 : f32
+  %zero_offset = index.constant 0 : offset
+  %block_bytes = index.constant 34 : offset
+  %code_offset = index.constant 2 : offset
+  %o = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %col = index.rem %o, %n : index
+  %tok = index.div %o, %n : index
+  %x_na, %out_na = buffer.assume.noalias %input, %output : buffer, buffer
+  %x_view = buffer.view %x_na[%zero_offset] : buffer -> view<[%xe]xf32>
+  %outputs = index.mul %n, %t : index
+  %out_view = buffer.view %out_na[%zero_offset] : buffer -> view<[%outputs]xf32>
+  %blocks = index.div %k, %c32 : index
+  %row_block = index.mul %col, %w_s1 : index
+  %x_base = index.mul %tok, %x_s1 : index
+  %mine = scf.for %b = [%lane to %blocks step %c64](%sum = %f0 : f32) -> (f32) {
+    %gb = index.add %row_block, %b : index
+    %block_base = index.scale %gb, %block_bytes : index, offset -> offset
+    %code_base = index.add %block_base, %code_offset : offset
+    %d_view = buffer.view %weight[%block_base] : buffer -> view<1xf16>
+    %code_view = buffer.view %weight[%code_base] : buffer -> view<32xi8>
+    %d16 = view.load %d_view[%c0] : view<1xf16> -> f16
+    %d = scalar.extf %d16 : f16 to f32
+    %xb = index.mul %b, %c32 : index
+    %xrow = index.add %x_base, %xb : index
+    %partial = scf.for %i = [%c0 to %c32 step %c1](%acc = %f0 : f32) -> (f32) {
+      %code = view.load %code_view[%i] : view<32xi8> -> i8
+      %q = scalar.sitofp %code : i8 to f32
+      %xi0 = index.add %xrow, %i : index
+      %xi = index.assume %xi0 [range(%xi0, 0, 268435455)] : index
+      %x = view.load %x_view[%xi] : view<[%xe]xf32> -> f32
+      %next = scalar.fmaf %q, %x, %acc : f32
+      scf.yield %next : f32
+    }
+    %next_sum = scalar.fmaf %d, %partial, %sum : f32
+    scf.yield %next_sum : f32
+  }
+  %total = kernel.workgroup.reduce<addf> %mine : f32
+  %first = index.cmp eq, %lane, %c0 : index
+  scf.if %first {
+    view.store %total, %out_view[%o] : f32, view<[%outputs]xf32>
+  }
+  kernel.return
+}
+
+// The same attention with each score computed once: one 64-lane workgroup per (query token, head)
+// stages the query row in workgroup memory, each lane scores its keys (j = lane, lane + 64, ...)
+// into a workgroup score row, workgroup max and sum reductions give the softmax, and the lanes
+// then take the value dimensions (reads along each value row). Up to 2048 keys, head sizes <= 256.
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_attention_rows_f32_f16") @ggml_attention_rows_f32_f16(%qk_size: index, %v_size: index, %q_count: index, %kv_count: index, %head_count: index, %kv_head_count: index, %q_s1: index, %q_s2: index, %k_s1: index, %k_s2: index, %v_s1: index, %v_s2: index, %m_s1: index, %q_extent: index, %k_extent: index, %v_extent: index, %m_extent: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %groups = index.mul %q_count, %head_count : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%qk_size: index, %v_size: index, %q_count: index, %kv_count: index, %head_count: index, %kv_head_count: index, %q_s1: index, %q_s2: index, %k_s1: index, %k_s2: index, %v_s1: index, %v_s2: index, %m_s1: index, %q_extent: index, %k_extent: index, %v_extent: index, %m_extent: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %output: buffer) {
+  %d = index.assume %qk_size [range(%qk_size, 1, 256)] : index
+  %dv = index.assume %v_size [range(%v_size, 1, 256)] : index
+  %nq = index.assume %q_count [range(%q_count, 1, 65536)] : index
+  %nkv = index.assume %kv_count [range(%kv_count, 1, 2048)] : index
+  %nh = index.assume %head_count [range(%head_count, 1, 1024)] : index
+  %nhkv = index.assume %kv_head_count [range(%kv_head_count, 1, 1024)] : index
+  %qe = index.assume %q_extent [range(%q_extent, 1, 268435456)] : index
+  %ke = index.assume %k_extent [range(%k_extent, 1, 268435456)] : index
+  %ve = index.assume %v_extent [range(%v_extent, 1, 268435456)] : index
+  %me = index.assume %m_extent [range(%m_extent, 1, 268435456)] : index
+  %scale = config.get @ggml.attention_strided.scale : f32
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  %zero = index.constant 0 : offset
+  %f0 = scalar.constant 0.0 : f32
+  %lowest = scalar.constant -3.40282347e+38 : f32
+  %q_bytes = index.constant 1024 : offset
+  %s_bytes = index.constant 8192 : offset
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %qi = index.div %group, %nh : index
+  %h = index.rem %group, %nh : index
+  %ratio = index.div %nh, %nhkv : index
+  %hkv = index.div %h, %ratio : index
+  %q_na, %k_na, %v_na, %m_na, %o_na = buffer.assume.noalias %query, %key, %value, %mask, %output : buffer, buffer, buffer, buffer, buffer
+  %q_view = buffer.view %q_na[%zero] : buffer -> view<[%qe]xf32>
+  %k_view = buffer.view %k_na[%zero] : buffer -> view<[%ke]xf16>
+  %v_view = buffer.view %v_na[%zero] : buffer -> view<[%ve]xf16>
+  %m_view = buffer.view %m_na[%zero] : buffer -> view<[%me]xf16>
+  %out_count0 = index.mul %dv, %nh : index
+  %out_count = index.mul %out_count0, %nq : index
+  %o_view = buffer.view %o_na[%zero] : buffer -> view<[%out_count]xf32>
+  %q_shared = buffer.alloca<workgroup> align(16) %q_bytes : buffer
+  %q_row = buffer.view %q_shared[%zero] : buffer -> view<256xf32>
+  %s_shared = buffer.alloca<workgroup> align(16) %s_bytes : buffer
+  %s_row = buffer.view %s_shared[%zero] : buffer -> view<2048xf32>
+  %qa = index.mul %qi, %q_s1 : index
+  %qb = index.mul %h, %q_s2 : index
+  %q_base = index.add %qa, %qb : index
+  %u0 = scf.for %t = [%lane to %d step %c64](%carry0 = %f0 : f32) -> (f32) {
+    %qt0 = index.add %q_base, %t : index
+    %qt = index.assume %qt0 [range(%qt0, 0, 268435455)] : index
+    %qv = view.load %q_view[%qt] : view<[%qe]xf32> -> f32
+    view.store %qv, %q_row[%t] : f32, view<256xf32>
+    scf.yield %carry0 : f32
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %kb = index.mul %hkv, %k_s2 : index
+  %m_base = index.mul %qi, %m_s1 : index
+  %lane_max = scf.for %j = [%lane to %nkv step %c64](%mx = %lowest : f32) -> (f32) {
+    %kj = index.mul %j, %k_s1 : index
+    %k_base = index.add %kj, %kb : index
+    %dot = scf.for %t = [%c0 to %d step %c1](%sum = %f0 : f32) -> (f32) {
+      %kt0 = index.add %k_base, %t : index
+      %kt = index.assume %kt0 [range(%kt0, 0, 268435455)] : index
+      %qv = view.load %q_row[%t] : view<256xf32> -> f32
+      %kv16 = view.load %k_view[%kt] : view<[%ke]xf16> -> f16
+      %kv = scalar.extf %kv16 : f16 to f32
+      %next = scalar.fmaf %qv, %kv, %sum : f32
+      scf.yield %next : f32
+    }
+    %mi0 = index.add %m_base, %j : index
+    %mi = index.assume %mi0 [range(%mi0, 0, 268435455)] : index
+    %mask16 = view.load %m_view[%mi] : view<[%me]xf16> -> f16
+    %maskv = scalar.extf %mask16 : f16 to f32
+    %scaled = scalar.mulf %dot, %scale : f32
+    %score = scalar.addf %scaled, %maskv : f32
+    view.store %score, %s_row[%j] : f32, view<2048xf32>
+    %next_max = scalar.maxnumf %mx, %score : f32
+    scf.yield %next_max : f32
+  }
+  %row_max = kernel.workgroup.reduce<maxnumf> %lane_max : f32
+  %lane_sum = scf.for %j = [%lane to %nkv step %c64](%acc = %f0 : f32) -> (f32) {
+    %score = view.load %s_row[%j] : view<2048xf32> -> f32
+    %shifted = scalar.subf %score, %row_max : f32
+    %p = scalar.expf<afn> %shifted : f32
+    view.store %p, %s_row[%j] : f32, view<2048xf32>
+    %next = scalar.addf %acc, %p : f32
+    scf.yield %next : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %lane_sum : f32
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %vb = index.mul %hkv, %v_s2 : index
+  %oh = index.mul %h, %dv : index
+  %oq0 = index.mul %qi, %nh : index
+  %oq = index.mul %oq0, %dv : index
+  %o_base = index.add %oq, %oh : index
+  %u1 = scf.for %c = [%lane to %dv step %c64](%carry1 = %f0 : f32) -> (f32) {
+    %acc_v = scf.for %j = [%c0 to %nkv step %c1](%acc = %f0 : f32) -> (f32) {
+      %p = view.load %s_row[%j] : view<2048xf32> -> f32
+      %vj = index.mul %j, %v_s1 : index
+      %v_row = index.add %vj, %vb : index
+      %vi0 = index.add %v_row, %c : index
+      %vi = index.assume %vi0 [range(%vi0, 0, 268435455)] : index
+      %v16 = view.load %v_view[%vi] : view<[%ve]xf16> -> f16
+      %vv = scalar.extf %v16 : f16 to f32
+      %next = scalar.fmaf %p, %vv, %acc : f32
+      scf.yield %next : f32
+    }
+    %result = scalar.divf %acc_v, %row_sum : f32
+    %oi0 = index.add %o_base, %c : index
+    %oi = index.assume %oi0 [range(%oi0, 0, 268435455)] : index
+    view.store %result, %o_view[%oi] : f32, view<[%out_count]xf32>
+    scf.yield %carry1 : f32
+  }
+  kernel.return
+}
