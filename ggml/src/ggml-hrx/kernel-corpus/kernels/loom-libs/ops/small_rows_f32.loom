@@ -969,3 +969,137 @@ kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_attention_rows
   }
   kernel.return
 }
+
+// Rotate-half RoPE as graph compilers lower it (x * cos + concat(-x[half:], x[:half]) * sin, eight
+// nodes), in one pass: x packed [d, T, H], cos and sin [d, T] (row strides given), broadcast over
+// heads. One workitem per element.
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_rope_rotate_half_f32") @ggml_rope_rotate_half_f32(%ne0: index, %ne1: index, %ne2: index, %cos_s1: index, %sin_s1: index, %cos_extent: index, %sin_extent: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %e01 = index.mul %ne0, %ne1 : index
+  %elements = index.mul %e01, %ne2 : index
+  %rounded = index.add %elements, %rounding : index
+  %groups = index.div %rounded, %sixtyfour : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%ne0: index, %ne1: index, %ne2: index, %cos_s1: index, %sin_s1: index, %cos_extent: index, %sin_extent: index, %input: buffer, %cos: buffer, %sin: buffer, %output: buffer) {
+  %d = index.assume %ne0 [range(%ne0, 2, 4096)] : index
+  %t = index.assume %ne1 [range(%ne1, 1, 1048576)] : index
+  %h = index.assume %ne2 [range(%ne2, 1, 4096)] : index
+  %ce = index.assume %cos_extent [range(%cos_extent, 1, 268435456)] : index
+  %se = index.assume %sin_extent [range(%sin_extent, 1, 268435456)] : index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c64 = index.constant 64 : index
+  %zero = index.constant 0 : offset
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %base = index.mul %group, %c64 : index
+  %lin0 = index.add %base, %lane : index
+  %e01 = index.mul %d, %t : index
+  %elements = index.mul %e01, %h : index
+  %valid = index.cmp ult, %lin0, %elements : index
+  %lin = scf.select %valid, %lin0, %c0 : index
+  %i0 = index.rem %lin, %d : index
+  %q0 = index.div %lin, %d : index
+  %ti = index.rem %q0, %t : index
+  %half = index.div %d, %c2 : index
+  %low = index.cmp ult, %i0, %half : index
+  %up = index.add %lin, %half : index
+  %down0 = index.sub %lin, %half : index
+  %down = scf.select %low, %lin, %down0 : index
+  %partner0 = scf.select %low, %up, %down : index
+  %partner_in = index.cmp ult, %partner0, %elements : index
+  %partner = scf.select %partner_in, %partner0, %c0 : index
+  %x_na, %c_na, %s_na, %o_na = buffer.assume.noalias %input, %cos, %sin, %output : buffer, buffer, buffer, buffer
+  %x_view = buffer.view %x_na[%zero] : buffer -> view<[%elements]xf32>
+  %c_view = buffer.view %c_na[%zero] : buffer -> view<[%ce]xf32>
+  %s_view = buffer.view %s_na[%zero] : buffer -> view<[%se]xf32>
+  %o_view = buffer.view %o_na[%zero] : buffer -> view<[%elements]xf32>
+  %x = view.load %x_view[%lin] : view<[%elements]xf32> -> f32
+  %other = view.load %x_view[%partner] : view<[%elements]xf32> -> f32
+  %neg_other = scalar.negf %other : f32
+  %rot = scf.select %low, %neg_other, %other : f32
+  %cr = index.mul %ti, %cos_s1 : index
+  %ci0 = index.add %cr, %i0 : index
+  %ci_in = index.cmp ult, %ci0, %ce : index
+  %ci = scf.select %ci_in, %ci0, %c0 : index
+  %sr = index.mul %ti, %sin_s1 : index
+  %si0 = index.add %sr, %i0 : index
+  %si_in = index.cmp ult, %si0, %se : index
+  %si = scf.select %si_in, %si0, %c0 : index
+  %cv = view.load %c_view[%ci] : view<[%ce]xf32> -> f32
+  %sv = view.load %s_view[%si] : view<[%se]xf32> -> f32
+  %xc = scalar.mulf %x, %cv : f32
+  %result = scalar.fmaf %rot, %sv, %xc : f32
+  scf.if %valid {
+    view.store %result, %o_view[%lin] : f32, view<[%elements]xf32>
+  }
+  kernel.return
+}
+
+// GEGLU lowered to three nodes (CONT of the gate half, GELU, MUL by the up half): gelu(a) * b with
+// a and b strided F32 views [n, T] (rows a_s1 / b_s1 apart), into a packed [n, T]. GELU in ggml's
+// tanh form, 0.5 x (1 + tanh(sqrt(2/pi) x (1 + 0.044715 x^2))), tanh(z) = 1 - 2 / (exp(2z) + 1).
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_geglu_strided_f32") @ggml_geglu_strided_f32(%n_size: index, %t_count: index, %a_s1: index, %b_s1: index, %a_extent: index, %b_extent: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %elements = index.mul %n_size, %t_count : index
+  %rounded = index.add %elements, %rounding : index
+  %groups = index.div %rounded, %sixtyfour : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%n_size: index, %t_count: index, %a_s1: index, %b_s1: index, %a_extent: index, %b_extent: index, %gate: buffer, %up: buffer, %output: buffer) {
+  %n = index.assume %n_size [range(%n_size, 1, 1048576)] : index
+  %t = index.assume %t_count [range(%t_count, 1, 1048576)] : index
+  %ae = index.assume %a_extent [range(%a_extent, 1, 268435456)] : index
+  %be = index.assume %b_extent [range(%b_extent, 1, 268435456)] : index
+  %c0 = index.constant 0 : index
+  %c64 = index.constant 64 : index
+  %zero = index.constant 0 : offset
+  %half = scalar.constant 0.5 : f32
+  %one_f = scalar.constant 1.0 : f32
+  %two = scalar.constant 2.0 : f32
+  %k0 = scalar.constant 0.7978845608 : f32
+  %k1 = scalar.constant 0.044715 : f32
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %base = index.mul %group, %c64 : index
+  %lin0 = index.add %base, %lane : index
+  %elements = index.mul %n, %t : index
+  %valid = index.cmp ult, %lin0, %elements : index
+  %lin = scf.select %valid, %lin0, %c0 : index
+  %i = index.rem %lin, %n : index
+  %row = index.div %lin, %n : index
+  %ar = index.mul %row, %a_s1 : index
+  %ai0 = index.add %ar, %i : index
+  %ai_in = index.cmp ult, %ai0, %ae : index
+  %ai = scf.select %ai_in, %ai0, %c0 : index
+  %br = index.mul %row, %b_s1 : index
+  %bi0 = index.add %br, %i : index
+  %bi_in = index.cmp ult, %bi0, %be : index
+  %bi = scf.select %bi_in, %bi0, %c0 : index
+  %a_na, %b_na, %o_na = buffer.assume.noalias %gate, %up, %output : buffer, buffer, buffer
+  %a_view = buffer.view %a_na[%zero] : buffer -> view<[%ae]xf32>
+  %b_view = buffer.view %b_na[%zero] : buffer -> view<[%be]xf32>
+  %o_view = buffer.view %o_na[%zero] : buffer -> view<[%elements]xf32>
+  %x = view.load %a_view[%ai] : view<[%ae]xf32> -> f32
+  %u = view.load %b_view[%bi] : view<[%be]xf32> -> f32
+  %x2 = scalar.mulf %x, %x : f32
+  %poly = scalar.fmaf %k1, %x2, %one_f : f32
+  %inner0 = scalar.mulf %x, %poly : f32
+  %inner = scalar.mulf %k0, %inner0 : f32
+  %twice = scalar.mulf %inner, %two : f32
+  %e = scalar.expf<afn> %twice : f32
+  %e1 = scalar.addf %e, %one_f : f32
+  %frac = scalar.divf %two, %e1 : f32
+  %tanh = scalar.subf %one_f, %frac : f32
+  %onep = scalar.addf %one_f, %tanh : f32
+  %hx = scalar.mulf %half, %x : f32
+  %g = scalar.mulf %hx, %onep : f32
+  %result = scalar.mulf %g, %u : f32
+  scf.if %valid {
+    view.store %result, %o_view[%lin] : f32, view<[%elements]xf32>
+  }
+  kernel.return
+}

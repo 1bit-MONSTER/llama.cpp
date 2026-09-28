@@ -15,6 +15,7 @@
 #include "dispatch-small-rows.h"
 
 #include "ggml.h"
+#include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cstdint>
@@ -38,6 +39,8 @@ static constexpr KernelCatalogRef kClampInplaceKernel  = GGML_HRX_KERNEL_REF("lo
 static constexpr KernelCatalogRef kCopyF32F16Kernel    = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_strided_f32_f16");
 static constexpr KernelCatalogRef kAttentionStridedKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_attention_strided_f32_f16");
 static constexpr KernelCatalogRef kAttentionRowsKernel    = GGML_HRX_KERNEL_REF("loom_libs", "ggml_attention_rows_f32_f16");
+static constexpr KernelCatalogRef kRopeRotateHalfKernel   = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_rotate_half_f32");
+static constexpr KernelCatalogRef kGegluStridedKernel     = GGML_HRX_KERNEL_REF("loom_libs", "ggml_geglu_strided_f32");
 static constexpr KernelCatalogRef kMulMatSmallF16Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_f16_f32");
 static constexpr KernelCatalogRef kMulMatSmallF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_f32_f32");
 static constexpr KernelCatalogRef kMulMatSmallQ8Kernel  = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_q8_0_f32");
@@ -539,6 +542,154 @@ static bool match_mul_mat_small(const DispatchMatchContext & context, DispatchMa
     return true;
 }
 
+// the node producing `value` when it is `op` and `value` has no other consumer
+static const GraphNode * sole_producer(const Graph & graph, ValueId value, ggml_op op) {
+    const GraphNode * node = graph.index().producer(value);
+    return node != nullptr && node->op == op && graph.index().has_single_consumer(value) ? node : nullptr;
+}
+
+// Rotate-half RoPE lowered to eight nodes (ModernBERT through ggmlc):
+//   out = ADD(MUL(x, cos), MUL(CONT(CONCAT(NEG(CONT(x[half:])), CONT(x[:half]))), sin))
+// with x packed F32 [d, T, H] and cos/sin [d, T] broadcast over heads: one kernel for all eight.
+static bool match_rope_rotate_half(const DispatchMatchContext & context, DispatchMatch & match) {
+    // rooted at x * cos, the chain's first node in graph order (a fused match covers later nodes only)
+    const Graph &     graph   = context.graph;
+    const GraphNode * mul_cos = context.root_node;
+    if (mul_cos == nullptr || mul_cos->op != GGML_OP_MUL || mul_cos->inputs.size() != 2 || !graph.has_index() ||
+        !graph.index().has_single_consumer(mul_cos->output)) {
+        return false;
+    }
+    const GraphNode * add = graph.index().consumers(mul_cos->output).front();
+    if (add == nullptr || add->op != GGML_OP_ADD || add->inputs.size() != 2) {
+        return false;
+    }
+    for (int order = 0; order < 2; ++order) {
+        if (add->inputs[order] != mul_cos->output) {
+            continue;
+        }
+        const GraphNode * mul_sin = sole_producer(graph, add->inputs[1 - order], GGML_OP_MUL);
+        if (mul_sin == nullptr || mul_sin->inputs.size() != 2) {
+            continue;
+        }
+        const GraphNode * cat_cont = sole_producer(graph, mul_sin->inputs[0], GGML_OP_CONT);
+        if (cat_cont == nullptr) {
+            continue;
+        }
+        const GraphNode * concat = sole_producer(graph, cat_cont->inputs[0], GGML_OP_CONCAT);
+        if (concat == nullptr || concat->inputs.size() != 2) {
+            continue;
+        }
+        const GraphNode * neg     = sole_producer(graph, concat->inputs[0], GGML_OP_UNARY);
+        const GraphNode * lo_cont = sole_producer(graph, concat->inputs[1], GGML_OP_CONT);
+        if (neg == nullptr || lo_cont == nullptr || neg->inputs.size() != 1) {
+            continue;
+        }
+        const UnaryParams * neg_params = op_params_as<UnaryParams>(neg->params);
+        const GraphNode *   hi_cont    = sole_producer(graph, neg->inputs[0], GGML_OP_CONT);
+        if (neg_params == nullptr || neg_params->op != UnaryKind::Neg || hi_cont == nullptr) {
+            continue;
+        }
+        const Value * x   = graph.values().find(mul_cos->inputs[0]);
+        const Value * cs  = graph.values().find(mul_cos->inputs[1]);
+        const Value * sn  = graph.values().find(mul_sin->inputs[1]);
+        const Value * hi  = graph.values().find(hi_cont->inputs[0]);
+        const Value * lo  = graph.values().find(lo_cont->inputs[0]);
+        const Value * out = graph.values().find(add->output);
+        if (x == nullptr || cs == nullptr || sn == nullptr || hi == nullptr || lo == nullptr || out == nullptr) {
+            continue;
+        }
+        const int64_t d = x->ne[0], t = x->ne[1], h = x->ne[2], half = d / 2;
+        bool ok = x->type == GGML_TYPE_F32 && cs->type == GGML_TYPE_F32 && sn->type == GGML_TYPE_F32 &&
+                  out->type == GGML_TYPE_F32 && packed(*x, sizeof(float)) && packed(*out, sizeof(float)) &&
+                  same_shape(*x, *out) && x->ne[3] == 1 && d % 2 == 0 && d <= 4096 && h <= 4096 &&
+                  out->storage != x->storage && out->alias_source.value < 0;
+        // the two halves are views of x at its offset and half a row further, with x's strides
+        ok = ok && hi->storage == x->storage && lo->storage == x->storage && hi->ne[0] == half && lo->ne[0] == half &&
+             lo->storage_offset == x->storage_offset && hi->storage_offset == x->storage_offset + half * sizeof(float) &&
+             hi->nb == x->nb && lo->nb == x->nb && hi->ne[1] == t && hi->ne[2] == h && lo->ne[1] == t && lo->ne[2] == h;
+        // cos and sin: [d, T], rows possibly strided, broadcast over heads
+        for (const Value * v : { cs, sn }) {
+            ok = ok && v->ne[0] == d && v->ne[1] == t && v->ne[2] == 1 && v->ne[3] == 1 && v->nb[0] == sizeof(float) &&
+                 v->nb[1] % sizeof(float) == 0 && v->storage != out->storage;
+        }
+        if (!ok) {
+            continue;
+        }
+        Dispatch dispatch;
+        dispatch.kernel = make_kernel_specialization(kRopeRotateHalfKernel);
+        auto & ip = dispatch.kernel.integer_parameters;
+        ip.emplace("ne0", d);
+        ip.emplace("ne1", t);
+        ip.emplace("ne2", h);
+        ip.emplace("cos_s1", static_cast<int64_t>(cs->nb[1] / sizeof(float)));
+        ip.emplace("sin_s1", static_cast<int64_t>(sn->nb[1] / sizeof(float)));
+        ip.emplace("cos_extent", static_cast<int64_t>(cs->byte_count / sizeof(float)));
+        ip.emplace("sin_extent", static_cast<int64_t>(sn->byte_count / sizeof(float)));
+        for (const Value * b : { x, cs, sn, out }) {
+            dispatch.bindings.push_back({ b->id, 0, b->byte_count });
+        }
+        match.covered_nodes.push_back(context.root_index);
+        for (const GraphNode * n : { hi_cont, neg, lo_cont, concat, cat_cont, mul_sin, add }) {
+            if (!append_covered_node_index_once(graph, context.covered_nodes, n, match.covered_nodes)) {
+                return false;
+            }
+        }
+        match.dispatches.push_back(std::move(dispatch));
+        return true;
+    }
+    return false;
+}
+
+// GEGLU lowered to CONT(gate view) -> GELU -> MUL(., up view), rooted at the CONT: one kernel
+// reads both strided halves and writes gelu(gate) * up.
+static bool match_geglu_strided(const DispatchMatchContext & context, DispatchMatch & match) {
+    const Graph &     graph = context.graph;
+    const GraphNode * cont  = context.root_node;
+    if (cont == nullptr || cont->op != GGML_OP_CONT || cont->inputs.size() != 1 || !graph.has_index() ||
+        !graph.index().has_single_consumer(cont->output)) {
+        return false;
+    }
+    const GraphNode * gelu = graph.index().consumers(cont->output).front();
+    const UnaryParams * gp = gelu != nullptr && gelu->op == GGML_OP_UNARY ? op_params_as<UnaryParams>(gelu->params) : nullptr;
+    if (gp == nullptr || gp->op != UnaryKind::Gelu || !graph.index().has_single_consumer(gelu->output)) {
+        return false;
+    }
+    const GraphNode * mul = graph.index().consumers(gelu->output).front();
+    if (mul == nullptr || mul->op != GGML_OP_MUL || mul->inputs.size() != 2 || mul->inputs[0] != gelu->output) {
+        return false;
+    }
+    const Value * a   = graph.values().find(cont->inputs[0]);
+    const Value * b   = graph.values().find(mul->inputs[1]);
+    const Value * out = graph.values().find(mul->output);
+    if (a == nullptr || b == nullptr || out == nullptr || a->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32 ||
+        out->type != GGML_TYPE_F32 || !packed(*out, sizeof(float)) || !same_shape(*a, *out) || !same_shape(*b, *out) ||
+        out->ne[2] != 1 || out->ne[3] != 1 || a->nb[0] != sizeof(float) || b->nb[0] != sizeof(float) ||
+        a->nb[1] % sizeof(float) != 0 || b->nb[1] % sizeof(float) != 0 || out->storage == a->storage ||
+        out->storage == b->storage || out->alias_source.value >= 0) {
+        return false;
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kGegluStridedKernel);
+    auto & ip = dispatch.kernel.integer_parameters;
+    ip.emplace("n_size", out->ne[0]);
+    ip.emplace("t_count", out->ne[1]);
+    ip.emplace("a_s1", static_cast<int64_t>(a->nb[1] / sizeof(float)));
+    ip.emplace("b_s1", static_cast<int64_t>(b->nb[1] / sizeof(float)));
+    ip.emplace("a_extent", static_cast<int64_t>(a->byte_count / sizeof(float)));
+    ip.emplace("b_extent", static_cast<int64_t>(b->byte_count / sizeof(float)));
+    for (const Value * v : { a, b, out }) {
+        dispatch.bindings.push_back({ v->id, 0, v->byte_count });
+    }
+    match.covered_nodes.push_back(context.root_index);
+    for (const GraphNode * n : { gelu, mul }) {
+        if (!append_covered_node_index_once(graph, context.covered_nodes, n, match.covered_nodes)) {
+            return false;
+        }
+    }
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 }  // namespace
 
 void register_small_rows_dispatches(DispatchRegistryBuilder & registry) {
@@ -552,6 +703,10 @@ void register_small_rows_dispatches(DispatchRegistryBuilder & registry) {
                    match_binary_strided });
     registry.add({ "common.binary_strided_f32.div", GGML_OP_DIV, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
                    match_binary_strided });
+    registry.add({ "common.geglu_strided_f32", GGML_OP_CONT, DispatchMatchKind::Fused, 300, DispatchSource::Common,
+                   match_geglu_strided });
+    registry.add({ "common.rope_rotate_half_f32", GGML_OP_MUL, DispatchMatchKind::Fused, 300, DispatchSource::Common,
+                   match_rope_rotate_half });
     registry.add({ "common.mul_mat_small_f32", GGML_OP_MUL_MAT, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
                    match_mul_mat_small });
     registry.add({ "common.attention_strided_f32_f16", GGML_OP_FLASH_ATTN_EXT, DispatchMatchKind::SingleOp, -10,

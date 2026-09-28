@@ -7172,6 +7172,170 @@
         "library_sources": []
       },
       "compile_dependencies": []
+    },
+    {
+      "name": "ggml_rope_rotate_half_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_rope_rotate_half_f32",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "ne0",
+          "type": "index"
+        },
+        {
+          "name": "ne1",
+          "type": "index"
+        },
+        {
+          "name": "ne2",
+          "type": "index"
+        },
+        {
+          "name": "cos_s1",
+          "type": "index"
+        },
+        {
+          "name": "sin_s1",
+          "type": "index"
+        },
+        {
+          "name": "cos_extent",
+          "type": "index"
+        },
+        {
+          "name": "sin_extent",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "ne0",
+          "type": "index"
+        },
+        {
+          "name": "ne1",
+          "type": "index"
+        },
+        {
+          "name": "ne2",
+          "type": "index"
+        },
+        {
+          "name": "cos_s1",
+          "type": "index"
+        },
+        {
+          "name": "sin_s1",
+          "type": "index"
+        },
+        {
+          "name": "cos_extent",
+          "type": "index"
+        },
+        {
+          "name": "sin_extent",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "cos",
+        "sin",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_geglu_strided_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_geglu_strided_f32",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "n_size",
+          "type": "index"
+        },
+        {
+          "name": "t_count",
+          "type": "index"
+        },
+        {
+          "name": "a_s1",
+          "type": "index"
+        },
+        {
+          "name": "b_s1",
+          "type": "index"
+        },
+        {
+          "name": "a_extent",
+          "type": "index"
+        },
+        {
+          "name": "b_extent",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "n_size",
+          "type": "index"
+        },
+        {
+          "name": "t_count",
+          "type": "index"
+        },
+        {
+          "name": "a_s1",
+          "type": "index"
+        },
+        {
+          "name": "b_s1",
+          "type": "index"
+        },
+        {
+          "name": "a_extent",
+          "type": "index"
+        },
+        {
+          "name": "b_extent",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "gate",
+        "up",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
     }
   ],
   "link_modules": [],
