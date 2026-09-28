@@ -6135,6 +6135,789 @@
         "library_sources": []
       },
       "compile_dependencies": []
+    },
+    {
+      "name": "ggml_norm_rows_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_norm_rows_f32",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "column_count",
+          "type": "index"
+        },
+        {
+          "name": "row_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "column_count",
+          "type": "index"
+        },
+        {
+          "name": "row_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_binary_strided_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_binary_strided_f32",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "ne0",
+          "type": "index"
+        },
+        {
+          "name": "ne1",
+          "type": "index"
+        },
+        {
+          "name": "ne2",
+          "type": "index"
+        },
+        {
+          "name": "ne3",
+          "type": "index"
+        },
+        {
+          "name": "a0",
+          "type": "index"
+        },
+        {
+          "name": "a1",
+          "type": "index"
+        },
+        {
+          "name": "a2",
+          "type": "index"
+        },
+        {
+          "name": "a3",
+          "type": "index"
+        },
+        {
+          "name": "b0",
+          "type": "index"
+        },
+        {
+          "name": "b1",
+          "type": "index"
+        },
+        {
+          "name": "b2",
+          "type": "index"
+        },
+        {
+          "name": "b3",
+          "type": "index"
+        },
+        {
+          "name": "a_extent",
+          "type": "index"
+        },
+        {
+          "name": "b_extent",
+          "type": "index"
+        },
+        {
+          "name": "op",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "ne0",
+          "type": "index"
+        },
+        {
+          "name": "ne1",
+          "type": "index"
+        },
+        {
+          "name": "ne2",
+          "type": "index"
+        },
+        {
+          "name": "ne3",
+          "type": "index"
+        },
+        {
+          "name": "a0",
+          "type": "index"
+        },
+        {
+          "name": "a1",
+          "type": "index"
+        },
+        {
+          "name": "a2",
+          "type": "index"
+        },
+        {
+          "name": "a3",
+          "type": "index"
+        },
+        {
+          "name": "b0",
+          "type": "index"
+        },
+        {
+          "name": "b1",
+          "type": "index"
+        },
+        {
+          "name": "b2",
+          "type": "index"
+        },
+        {
+          "name": "b3",
+          "type": "index"
+        },
+        {
+          "name": "a_extent",
+          "type": "index"
+        },
+        {
+          "name": "b_extent",
+          "type": "index"
+        },
+        {
+          "name": "op",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "lhs",
+        "rhs",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_clamp_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_clamp_f32",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_clamp_inplace_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_clamp_inplace_f32",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "data"
+      ],
+      "binding_access": [
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_copy_strided_f32_f16",
+      "family": "loom_libs",
+      "symbol": "ggml_copy_strided_f32_f16",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "ne0",
+          "type": "index"
+        },
+        {
+          "name": "ne1",
+          "type": "index"
+        },
+        {
+          "name": "ne2",
+          "type": "index"
+        },
+        {
+          "name": "ne3",
+          "type": "index"
+        },
+        {
+          "name": "s0",
+          "type": "index"
+        },
+        {
+          "name": "s1",
+          "type": "index"
+        },
+        {
+          "name": "s2",
+          "type": "index"
+        },
+        {
+          "name": "s3",
+          "type": "index"
+        },
+        {
+          "name": "source_extent",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "ne0",
+          "type": "index"
+        },
+        {
+          "name": "ne1",
+          "type": "index"
+        },
+        {
+          "name": "ne2",
+          "type": "index"
+        },
+        {
+          "name": "ne3",
+          "type": "index"
+        },
+        {
+          "name": "s0",
+          "type": "index"
+        },
+        {
+          "name": "s1",
+          "type": "index"
+        },
+        {
+          "name": "s2",
+          "type": "index"
+        },
+        {
+          "name": "s3",
+          "type": "index"
+        },
+        {
+          "name": "source_extent",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_attention_strided_f32_f16",
+      "family": "loom_libs",
+      "symbol": "ggml_attention_strided_f32_f16",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "qk_size",
+          "type": "index"
+        },
+        {
+          "name": "v_size",
+          "type": "index"
+        },
+        {
+          "name": "q_count",
+          "type": "index"
+        },
+        {
+          "name": "kv_count",
+          "type": "index"
+        },
+        {
+          "name": "head_count",
+          "type": "index"
+        },
+        {
+          "name": "kv_head_count",
+          "type": "index"
+        },
+        {
+          "name": "q_s1",
+          "type": "index"
+        },
+        {
+          "name": "q_s2",
+          "type": "index"
+        },
+        {
+          "name": "k_s1",
+          "type": "index"
+        },
+        {
+          "name": "k_s2",
+          "type": "index"
+        },
+        {
+          "name": "v_s1",
+          "type": "index"
+        },
+        {
+          "name": "v_s2",
+          "type": "index"
+        },
+        {
+          "name": "m_s1",
+          "type": "index"
+        },
+        {
+          "name": "q_extent",
+          "type": "index"
+        },
+        {
+          "name": "k_extent",
+          "type": "index"
+        },
+        {
+          "name": "v_extent",
+          "type": "index"
+        },
+        {
+          "name": "m_extent",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "qk_size",
+          "type": "index"
+        },
+        {
+          "name": "v_size",
+          "type": "index"
+        },
+        {
+          "name": "q_count",
+          "type": "index"
+        },
+        {
+          "name": "kv_count",
+          "type": "index"
+        },
+        {
+          "name": "head_count",
+          "type": "index"
+        },
+        {
+          "name": "kv_head_count",
+          "type": "index"
+        },
+        {
+          "name": "q_s1",
+          "type": "index"
+        },
+        {
+          "name": "q_s2",
+          "type": "index"
+        },
+        {
+          "name": "k_s1",
+          "type": "index"
+        },
+        {
+          "name": "k_s2",
+          "type": "index"
+        },
+        {
+          "name": "v_s1",
+          "type": "index"
+        },
+        {
+          "name": "v_s2",
+          "type": "index"
+        },
+        {
+          "name": "m_s1",
+          "type": "index"
+        },
+        {
+          "name": "q_extent",
+          "type": "index"
+        },
+        {
+          "name": "k_extent",
+          "type": "index"
+        },
+        {
+          "name": "v_extent",
+          "type": "index"
+        },
+        {
+          "name": "m_extent",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "query",
+        "key",
+        "value",
+        "mask",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_mul_mat_small_f16_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_small_f16_f32",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "k_size",
+          "type": "index"
+        },
+        {
+          "name": "n_size",
+          "type": "index"
+        },
+        {
+          "name": "t_count",
+          "type": "index"
+        },
+        {
+          "name": "w_s1",
+          "type": "index"
+        },
+        {
+          "name": "x_s1",
+          "type": "index"
+        },
+        {
+          "name": "w_extent",
+          "type": "index"
+        },
+        {
+          "name": "x_extent",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "k_size",
+          "type": "index"
+        },
+        {
+          "name": "n_size",
+          "type": "index"
+        },
+        {
+          "name": "t_count",
+          "type": "index"
+        },
+        {
+          "name": "w_s1",
+          "type": "index"
+        },
+        {
+          "name": "x_s1",
+          "type": "index"
+        },
+        {
+          "name": "w_extent",
+          "type": "index"
+        },
+        {
+          "name": "x_extent",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "weight",
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_mul_mat_small_f32_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_small_f32_f32",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "k_size",
+          "type": "index"
+        },
+        {
+          "name": "n_size",
+          "type": "index"
+        },
+        {
+          "name": "t_count",
+          "type": "index"
+        },
+        {
+          "name": "w_s1",
+          "type": "index"
+        },
+        {
+          "name": "x_s1",
+          "type": "index"
+        },
+        {
+          "name": "w_extent",
+          "type": "index"
+        },
+        {
+          "name": "x_extent",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "k_size",
+          "type": "index"
+        },
+        {
+          "name": "n_size",
+          "type": "index"
+        },
+        {
+          "name": "t_count",
+          "type": "index"
+        },
+        {
+          "name": "w_s1",
+          "type": "index"
+        },
+        {
+          "name": "x_s1",
+          "type": "index"
+        },
+        {
+          "name": "w_extent",
+          "type": "index"
+        },
+        {
+          "name": "x_extent",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "weight",
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_mul_mat_small_q8_0_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_small_q8_0_f32",
+      "source": "ops/small_rows_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "k_size",
+          "type": "index"
+        },
+        {
+          "name": "n_size",
+          "type": "index"
+        },
+        {
+          "name": "t_count",
+          "type": "index"
+        },
+        {
+          "name": "w_s1",
+          "type": "index"
+        },
+        {
+          "name": "x_s1",
+          "type": "index"
+        },
+        {
+          "name": "w_extent",
+          "type": "index"
+        },
+        {
+          "name": "x_extent",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "k_size",
+          "type": "index"
+        },
+        {
+          "name": "n_size",
+          "type": "index"
+        },
+        {
+          "name": "t_count",
+          "type": "index"
+        },
+        {
+          "name": "w_s1",
+          "type": "index"
+        },
+        {
+          "name": "x_s1",
+          "type": "index"
+        },
+        {
+          "name": "w_extent",
+          "type": "index"
+        },
+        {
+          "name": "x_extent",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "weight",
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/small_rows_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
     }
   ],
   "link_modules": [],

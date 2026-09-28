@@ -18,9 +18,9 @@
 
 namespace ggml::hrx {
 
-// SOFT_MAX (no mask, scale 1), SUM_ROWS, ARGSORT and narrow GET_ROWS on short F32 rows, such
+// SOFT_MAX (no mask, scale 1), SUM_ROWS, NORM, ARGSORT and narrow GET_ROWS on short F32 rows, such
 // as a MoE router's, CONT of strided F32 views and broadcast REPEAT: ggml_softmax_rows_f32, ggml_sum_rows_f32,
-// ggml_argsort_rows_f32, ggml_get_rows_small_f32 and ggml_copy_strided_f32.
+// ggml_argsort_rows_f32, ggml_norm_rows_f32, ggml_get_rows_small_f32 and ggml_copy_strided_f32.
 void register_small_rows_dispatches(DispatchRegistryBuilder & registry);
 
 }  // namespace ggml::hrx

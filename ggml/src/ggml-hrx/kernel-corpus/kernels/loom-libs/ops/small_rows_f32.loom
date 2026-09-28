@@ -14,7 +14,8 @@
 // limitations under the License.
 //
 // Row ops for short rows (MoE routers, head groups): SOFT_MAX (no mask, scale 1), SUM_ROWS,
-// ARGSORT and GET_ROWS. They run where a model's router or head-group reduction would
+// ARGSORT and GET_ROWS; and NORM (LayerNorm without affine, as encoders such as ModernBERT use),
+// one workgroup per row. They run where a model's router or head-group reduction would
 // otherwise leave the GPU for a few dozen floats per token. One workitem per row (softmax,
 // sum) or per element (argsort rank, gather); rows are short, so no cross-lane reduction.
 
@@ -262,6 +263,528 @@ kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_copy_strided_f
   %value = view.load %input_view[%source] : view<[%extent]xf32> -> f32
   scf.if %valid {
     view.store %value, %output_view[%linear] : f32, view<[%elements]xf32>
+  }
+  kernel.return
+}
+
+// NORM: y = (x - mean) / sqrt(var + eps) per row, var of the centered values (ggml's order).
+// One 256-lane workgroup per row: lanes stride the columns, two workgroup reductions.
+config.decl @ggml.norm_rows_f32.epsilon : f32
+
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_norm_rows_f32") @ggml_norm_rows_f32(%column_count: index, %row_count: index) {
+  %one = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%row_count, %one, %one) workgroup_size(%c256, %one, %one) : index
+} launch(%column_count: index, %row_count: index, %input: buffer, %output: buffer) {
+  %cols = index.assume %column_count [range(%column_count, 1, 65536)] : index
+  %rows = index.assume %row_count [range(%row_count, 1, 16777216)] : index
+  %eps = config.get @ggml.norm_rows_f32.epsilon : f32
+  %c256 = index.constant 256 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %zero_offset = index.constant 0 : offset
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 16777215)] : index
+  %lane = kernel.workitem.id<x> : index
+  %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
+  %input_view = buffer.view %input_noalias[%zero_offset] : buffer -> view<[%rows]x[%cols]xf32>
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%rows]x[%cols]xf32>
+  %sum = scf.for %column = [%lane to %cols step %c256](%acc = %c0_f32 : f32) -> (f32) {
+    %value = view.load %input_view[%row, %column] : view<[%rows]x[%cols]xf32> -> f32
+    %next = scalar.addf %acc, %value : f32
+    scf.yield %next : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %sum : f32
+  %cols_i32 = index.cast %cols : index to i32
+  %cols_f32 = scalar.sitofp %cols_i32 : i32 to f32
+  %mean = scalar.divf %row_sum, %cols_f32 : f32
+  %squares = scf.for %column = [%lane to %cols step %c256](%acc = %c0_f32 : f32) -> (f32) {
+    %value = view.load %input_view[%row, %column] : view<[%rows]x[%cols]xf32> -> f32
+    %centered = scalar.subf %value, %mean : f32
+    %square = scalar.mulf %centered, %centered : f32
+    %next = scalar.addf %acc, %square : f32
+    scf.yield %next : f32
+  }
+  %row_squares = kernel.workgroup.reduce<addf> %squares : f32
+  %variance = scalar.divf %row_squares, %cols_f32 : f32
+  %biased = scalar.addf %variance, %eps : f32
+  %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased : f32
+  %unused = scf.for %column = [%lane to %cols step %c256](%carry = %c0_f32 : f32) -> (f32) {
+    %value = view.load %input_view[%row, %column] : view<[%rows]x[%cols]xf32> -> f32
+    %centered = scalar.subf %value, %mean : f32
+    %normalized = scalar.mulf %centered, %scale : f32
+    view.store %normalized, %output_view[%row, %column] : f32, view<[%rows]x[%cols]xf32>
+    scf.yield %carry : f32
+  }
+  kernel.return
+}
+
+// ADD / SUB / MUL / DIV with either input strided or broadcast (stride 0 on a broadcast dim) into a
+// packed output: the cases the packed binary kernels do not take. One workitem per output element.
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_binary_strided_f32") @ggml_binary_strided_f32(%ne0: index, %ne1: index, %ne2: index, %ne3: index, %a0: index, %a1: index, %a2: index, %a3: index, %b0: index, %b1: index, %b2: index, %b3: index, %a_extent: index, %b_extent: index, %op: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %e01 = index.mul %ne0, %ne1 : index
+  %e012 = index.mul %e01, %ne2 : index
+  %elements = index.mul %e012, %ne3 : index
+  %rounded = index.add %elements, %rounding : index
+  %groups = index.div %rounded, %sixtyfour : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%ne0: index, %ne1: index, %ne2: index, %ne3: index, %a0: index, %a1: index, %a2: index, %a3: index, %b0: index, %b1: index, %b2: index, %b3: index, %a_extent: index, %b_extent: index, %op: index, %lhs: buffer, %rhs: buffer, %output: buffer) {
+  %n0 = index.assume %ne0 [range(%ne0, 1, 16777216)] : index
+  %n1 = index.assume %ne1 [range(%ne1, 1, 16777216)] : index
+  %n2 = index.assume %ne2 [range(%ne2, 1, 16777216)] : index
+  %n3 = index.assume %ne3 [range(%ne3, 1, 16777216)] : index
+  %ae = index.assume %a_extent [range(%a_extent, 1, 268435456)] : index
+  %be = index.assume %b_extent [range(%b_extent, 1, 268435456)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c64 = index.constant 64 : index
+  %zero_offset = index.constant 0 : offset
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %base = index.mul %group, %c64 : index
+  %linear0 = index.add %base, %lane : index
+  %e01 = index.mul %n0, %n1 : index
+  %e012 = index.mul %e01, %n2 : index
+  %elements = index.mul %e012, %n3 : index
+  %valid = index.cmp ult, %linear0, %elements : index
+  %linear = scf.select %valid, %linear0, %c0 : index
+  %i0 = index.rem %linear, %n0 : index
+  %q0 = index.div %linear, %n0 : index
+  %i1 = index.rem %q0, %n1 : index
+  %q1 = index.div %q0, %n1 : index
+  %i2 = index.rem %q1, %n2 : index
+  %i3 = index.div %q1, %n2 : index
+  %x0 = index.mul %i0, %a0 : index
+  %x1 = index.mul %i1, %a1 : index
+  %x2 = index.mul %i2, %a2 : index
+  %x3 = index.mul %i3, %a3 : index
+  %x01 = index.add %x0, %x1 : index
+  %x23 = index.add %x2, %x3 : index
+  %xa0 = index.add %x01, %x23 : index
+  %xin = index.cmp ult, %xa0, %ae : index
+  %xa = scf.select %xin, %xa0, %c0 : index
+  %y0 = index.mul %i0, %b0 : index
+  %y1 = index.mul %i1, %b1 : index
+  %y2 = index.mul %i2, %b2 : index
+  %y3 = index.mul %i3, %b3 : index
+  %y01 = index.add %y0, %y1 : index
+  %y23 = index.add %y2, %y3 : index
+  %yb0 = index.add %y01, %y23 : index
+  %yin = index.cmp ult, %yb0, %be : index
+  %yb = scf.select %yin, %yb0, %c0 : index
+  %lhs_na, %rhs_na, %out_na = buffer.assume.noalias %lhs, %rhs, %output : buffer, buffer, buffer
+  %lhs_view = buffer.view %lhs_na[%zero_offset] : buffer -> view<[%ae]xf32>
+  %rhs_view = buffer.view %rhs_na[%zero_offset] : buffer -> view<[%be]xf32>
+  %out_view = buffer.view %out_na[%zero_offset] : buffer -> view<[%elements]xf32>
+  %a = view.load %lhs_view[%xa] : view<[%ae]xf32> -> f32
+  %b = view.load %rhs_view[%yb] : view<[%be]xf32> -> f32
+  %sum = scalar.addf %a, %b : f32
+  %difference = scalar.subf %a, %b : f32
+  %product = scalar.mulf %a, %b : f32
+  %quotient = scalar.divf %a, %b : f32
+  %is_add = index.cmp eq, %op, %c0 : index
+  %is_sub = index.cmp eq, %op, %c1 : index
+  %is_mul = index.cmp eq, %op, %c2 : index
+  %r0 = scf.select %is_mul, %product, %quotient : f32
+  %r1 = scf.select %is_sub, %difference, %r0 : f32
+  %result = scf.select %is_add, %sum, %r1 : f32
+  scf.if %valid {
+    view.store %result, %out_view[%linear] : f32, view<[%elements]xf32>
+  }
+  kernel.return
+}
+
+// CLAMP of a packed F32 tensor, standalone (the MoE router's clamp is fused elsewhere).
+config.decl @ggml.clamp_f32.min : f32
+
+config.decl @ggml.clamp_f32.max : f32
+
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_clamp_f32") @ggml_clamp_f32(%element_count: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %rounded = index.add %element_count, %rounding : index
+  %groups = index.div %rounded, %sixtyfour : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%element_count: index, %input: buffer, %output: buffer) {
+  %n = index.assume %element_count [range(%element_count, 1, 268435456)] : index
+  %lo = config.get @ggml.clamp_f32.min : f32
+  %hi = config.get @ggml.clamp_f32.max : f32
+  %c0 = index.constant 0 : index
+  %c64 = index.constant 64 : index
+  %zero_offset = index.constant 0 : offset
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %base = index.mul %group, %c64 : index
+  %i0 = index.add %base, %lane : index
+  %valid = index.cmp ult, %i0, %n : index
+  %i = scf.select %valid, %i0, %c0 : index
+  %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
+  %input_view = buffer.view %input_noalias[%zero_offset] : buffer -> view<[%n]xf32>
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%n]xf32>
+  %value = view.load %input_view[%i] : view<[%n]xf32> -> f32
+  %above = scalar.maxnumf %value, %lo : f32
+  %clamped = scalar.minnumf %above, %hi : f32
+  scf.if %valid {
+    view.store %clamped, %output_view[%i] : f32, view<[%n]xf32>
+  }
+  kernel.return
+}
+
+// CLAMP in place (ggml_clamp's output is a view of its input): one buffer, read then write.
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_clamp_inplace_f32") @ggml_clamp_inplace_f32(%element_count: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %rounded = index.add %element_count, %rounding : index
+  %groups = index.div %rounded, %sixtyfour : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%element_count: index, %data: buffer) {
+  %n = index.assume %element_count [range(%element_count, 1, 268435456)] : index
+  %lo = config.get @ggml.clamp_f32.min : f32
+  %hi = config.get @ggml.clamp_f32.max : f32
+  %c0 = index.constant 0 : index
+  %c64 = index.constant 64 : index
+  %zero_offset = index.constant 0 : offset
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %base = index.mul %group, %c64 : index
+  %i0 = index.add %base, %lane : index
+  %valid = index.cmp ult, %i0, %n : index
+  %i = scf.select %valid, %i0, %c0 : index
+  %view = buffer.view %data[%zero_offset] : buffer -> view<[%n]xf32>
+  %value = view.load %view[%i] : view<[%n]xf32> -> f32
+  %above = scalar.maxnumf %value, %lo : f32
+  %clamped = scalar.minnumf %above, %hi : f32
+  scf.if %valid {
+    view.store %clamped, %view[%i] : f32, view<[%n]xf32>
+  }
+  kernel.return
+}
+
+// CPY of an F32 tensor (any element strides) into a packed F16 destination, such as an attention
+// mask converted for flash attention. One workitem per element.
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_copy_strided_f32_f16") @ggml_copy_strided_f32_f16(%ne0: index, %ne1: index, %ne2: index, %ne3: index, %s0: index, %s1: index, %s2: index, %s3: index, %source_extent: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %e01 = index.mul %ne0, %ne1 : index
+  %e012 = index.mul %e01, %ne2 : index
+  %elements = index.mul %e012, %ne3 : index
+  %rounded = index.add %elements, %rounding : index
+  %groups = index.div %rounded, %sixtyfour : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%ne0: index, %ne1: index, %ne2: index, %ne3: index, %s0: index, %s1: index, %s2: index, %s3: index, %source_extent: index, %input: buffer, %output: buffer) {
+  %n0 = index.assume %ne0 [range(%ne0, 1, 16777216)] : index
+  %n1 = index.assume %ne1 [range(%ne1, 1, 16777216)] : index
+  %n2 = index.assume %ne2 [range(%ne2, 1, 16777216)] : index
+  %n3 = index.assume %ne3 [range(%ne3, 1, 16777216)] : index
+  %extent = index.assume %source_extent [range(%source_extent, 1, 268435456)] : index
+  %c0 = index.constant 0 : index
+  %c64 = index.constant 64 : index
+  %zero_offset = index.constant 0 : offset
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %base = index.mul %group, %c64 : index
+  %linear0 = index.add %base, %lane : index
+  %e01 = index.mul %n0, %n1 : index
+  %e012 = index.mul %e01, %n2 : index
+  %elements = index.mul %e012, %n3 : index
+  %valid = index.cmp ult, %linear0, %elements : index
+  %linear = scf.select %valid, %linear0, %c0 : index
+  %i0 = index.rem %linear, %n0 : index
+  %q0 = index.div %linear, %n0 : index
+  %i1 = index.rem %q0, %n1 : index
+  %q1 = index.div %q0, %n1 : index
+  %i2 = index.rem %q1, %n2 : index
+  %i3 = index.div %q1, %n2 : index
+  %o0 = index.mul %i0, %s0 : index
+  %o1 = index.mul %i1, %s1 : index
+  %o2 = index.mul %i2, %s2 : index
+  %o3 = index.mul %i3, %s3 : index
+  %o01 = index.add %o0, %o1 : index
+  %o23 = index.add %o2, %o3 : index
+  %source0 = index.add %o01, %o23 : index
+  %in_range = index.cmp ult, %source0, %extent : index
+  %source = scf.select %in_range, %source0, %c0 : index
+  %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
+  %input_view = buffer.view %input_noalias[%zero_offset] : buffer -> view<[%extent]xf32>
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%elements]xf16>
+  %value = view.load %input_view[%source] : view<[%extent]xf32> -> f32
+  %half = scalar.fptrunc %value : f32 to f16
+  scf.if %valid {
+    view.store %half, %output_view[%linear] : f16, view<[%elements]xf16>
+  }
+  kernel.return
+}
+
+// FLASH_ATTN_EXT for encoder-sized inputs with any Q/K/V/mask strides (F32 query, F16 key, value
+// and mask, no ALiBi or softcap): the layouts the llama-shaped flash-attention kernels do not
+// take, such as one contiguous block per head. One workgroup per (query token, head), one lane
+// per value dimension, online softmax over the keys (running max and sum), so no lane has to
+// wait for another; each lane computes the query-key dot products itself.
+config.decl @ggml.attention_strided.scale : f32
+
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_attention_strided_f32_f16") @ggml_attention_strided_f32_f16(%qk_size: index, %v_size: index, %q_count: index, %kv_count: index, %head_count: index, %kv_head_count: index, %q_s1: index, %q_s2: index, %k_s1: index, %k_s2: index, %v_s1: index, %v_s2: index, %m_s1: index, %q_extent: index, %k_extent: index, %v_extent: index, %m_extent: index) {
+  %one = index.constant 1 : index
+  %groups = index.mul %q_count, %head_count : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%v_size, %one, %one) : index
+} launch(%qk_size: index, %v_size: index, %q_count: index, %kv_count: index, %head_count: index, %kv_head_count: index, %q_s1: index, %q_s2: index, %k_s1: index, %k_s2: index, %v_s1: index, %v_s2: index, %m_s1: index, %q_extent: index, %k_extent: index, %v_extent: index, %m_extent: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %output: buffer) {
+  %d = index.assume %qk_size [range(%qk_size, 1, 1024)] : index
+  %dv = index.assume %v_size [range(%v_size, 1, 1024)] : index
+  %nq = index.assume %q_count [range(%q_count, 1, 65536)] : index
+  %nkv = index.assume %kv_count [range(%kv_count, 1, 65536)] : index
+  %nh = index.assume %head_count [range(%head_count, 1, 1024)] : index
+  %nhkv = index.assume %kv_head_count [range(%kv_head_count, 1, 1024)] : index
+  %qe = index.assume %q_extent [range(%q_extent, 1, 268435456)] : index
+  %ke = index.assume %k_extent [range(%k_extent, 1, 268435456)] : index
+  %ve = index.assume %v_extent [range(%v_extent, 1, 268435456)] : index
+  %me = index.assume %m_extent [range(%m_extent, 1, 268435456)] : index
+  %scale = config.get @ggml.attention_strided.scale : f32
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %zero_offset = index.constant 0 : offset
+  %f0 = scalar.constant 0.0 : f32
+  %lowest = scalar.constant -3.40282347e+38 : f32
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %qi = index.div %group, %nh : index
+  %h = index.rem %group, %nh : index
+  %ratio = index.div %nh, %nhkv : index
+  %hkv = index.div %h, %ratio : index
+  %q_na, %k_na, %v_na, %m_na, %o_na = buffer.assume.noalias %query, %key, %value, %mask, %output : buffer, buffer, buffer, buffer, buffer
+  %q_view = buffer.view %q_na[%zero_offset] : buffer -> view<[%qe]xf32>
+  %k_view = buffer.view %k_na[%zero_offset] : buffer -> view<[%ke]xf16>
+  %v_view = buffer.view %v_na[%zero_offset] : buffer -> view<[%ve]xf16>
+  %m_view = buffer.view %m_na[%zero_offset] : buffer -> view<[%me]xf16>
+  %out_count0 = index.mul %dv, %nh : index
+  %out_count = index.mul %out_count0, %nq : index
+  %o_view = buffer.view %o_na[%zero_offset] : buffer -> view<[%out_count]xf32>
+  %qa = index.mul %qi, %q_s1 : index
+  %qb = index.mul %h, %q_s2 : index
+  %q_base = index.add %qa, %qb : index
+  %kb = index.mul %hkv, %k_s2 : index
+  %vb = index.mul %hkv, %v_s2 : index
+  %m_base = index.mul %qi, %m_s1 : index
+  %m_final, %l_final, %acc_final = scf.for %j = [%c0 to %nkv step %c1](%m = %lowest : f32, %l = %f0 : f32, %acc = %f0 : f32) -> (f32, f32, f32) {
+    %kj = index.mul %j, %k_s1 : index
+    %k_base = index.add %kj, %kb : index
+    %dot = scf.for %t = [%c0 to %d step %c1](%sum = %f0 : f32) -> (f32) {
+      %qt0 = index.add %q_base, %t : index
+      %qt = index.assume %qt0 [range(%qt0, 0, 268435455)] : index
+      %kt0 = index.add %k_base, %t : index
+      %kt = index.assume %kt0 [range(%kt0, 0, 268435455)] : index
+      %qv = view.load %q_view[%qt] : view<[%qe]xf32> -> f32
+      %kv16 = view.load %k_view[%kt] : view<[%ke]xf16> -> f16
+      %kv = scalar.extf %kv16 : f16 to f32
+      %next = scalar.fmaf %qv, %kv, %sum : f32
+      scf.yield %next : f32
+    }
+    %mi0 = index.add %m_base, %j : index
+    %mi = index.assume %mi0 [range(%mi0, 0, 268435455)] : index
+    %mask16 = view.load %m_view[%mi] : view<[%me]xf16> -> f16
+    %maskv = scalar.extf %mask16 : f16 to f32
+    %scaled = scalar.mulf %dot, %scale : f32
+    %score = scalar.addf %scaled, %maskv : f32
+    %m_new = scalar.maxnumf %m, %score : f32
+    %d_old = scalar.subf %m, %m_new : f32
+    %corr = scalar.expf<afn> %d_old : f32
+    %d_new = scalar.subf %score, %m_new : f32
+    %p = scalar.expf<afn> %d_new : f32
+    %l_scaled = scalar.mulf %l, %corr : f32
+    %l_new = scalar.addf %l_scaled, %p : f32
+    %vj = index.mul %j, %v_s1 : index
+    %v_row = index.add %vj, %vb : index
+    %vi0 = index.add %v_row, %lane : index
+    %vi = index.assume %vi0 [range(%vi0, 0, 268435455)] : index
+    %v16 = view.load %v_view[%vi] : view<[%ve]xf16> -> f16
+    %vv = scalar.extf %v16 : f16 to f32
+    %acc_scaled = scalar.mulf %acc, %corr : f32
+    %acc_new = scalar.fmaf %p, %vv, %acc_scaled : f32
+    scf.yield %m_new, %l_new, %acc_new : f32, f32, f32
+  }
+  %result = scalar.divf %acc_final, %l_final : f32
+  %oh = index.mul %h, %dv : index
+  %oq0 = index.mul %qi, %nh : index
+  %oq = index.mul %oq0, %dv : index
+  %o0 = index.add %oq, %oh : index
+  %oi0 = index.add %o0, %lane : index
+  %oi = index.assume %oi0 [range(%oi0, 0, 268435455)] : index
+  view.store %result, %o_view[%oi] : f32, view<[%out_count]xf32>
+  kernel.return
+}
+
+// MUL_MAT of a small F16 weight [K, N] (any K, such as a classification head's) with F32 columns
+// [K, T] (any element strides), into a packed [N, T]: one workitem per output, a loop over K.
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_mul_mat_small_f16_f32") @ggml_mul_mat_small_f16_f32(%k_size: index, %n_size: index, %t_count: index, %w_s1: index, %x_s1: index, %w_extent: index, %x_extent: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %outputs = index.mul %n_size, %t_count : index
+  %rounded = index.add %outputs, %rounding : index
+  %groups = index.div %rounded, %sixtyfour : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%k_size: index, %n_size: index, %t_count: index, %w_s1: index, %x_s1: index, %w_extent: index, %x_extent: index, %weight: buffer, %input: buffer, %output: buffer) {
+  %k = index.assume %k_size [range(%k_size, 1, 1048576)] : index
+  %n = index.assume %n_size [range(%n_size, 1, 1048576)] : index
+  %t = index.assume %t_count [range(%t_count, 1, 1048576)] : index
+  %we = index.assume %w_extent [range(%w_extent, 1, 268435456)] : index
+  %xe = index.assume %x_extent [range(%x_extent, 1, 268435456)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  %f0 = scalar.constant 0.0 : f32
+  %zero_offset = index.constant 0 : offset
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %base = index.mul %group, %c64 : index
+  %o0 = index.add %base, %lane : index
+  %outputs = index.mul %n, %t : index
+  %valid = index.cmp ult, %o0, %outputs : index
+  %o = scf.select %valid, %o0, %c0 : index
+  %col = index.rem %o, %n : index
+  %tok = index.div %o, %n : index
+  %w_na, %x_na, %out_na = buffer.assume.noalias %weight, %input, %output : buffer, buffer, buffer
+  %w_view = buffer.view %w_na[%zero_offset] : buffer -> view<[%we]xf16>
+  %x_view = buffer.view %x_na[%zero_offset] : buffer -> view<[%xe]xf32>
+  %out_view = buffer.view %out_na[%zero_offset] : buffer -> view<[%outputs]xf32>
+  %w_base = index.mul %col, %w_s1 : index
+  %x_base = index.mul %tok, %x_s1 : index
+  %dot = scf.for %i = [%c0 to %k step %c1](%sum = %f0 : f32) -> (f32) {
+    %wi0 = index.add %w_base, %i : index
+    %wi = index.assume %wi0 [range(%wi0, 0, 268435455)] : index
+    %xi0 = index.add %x_base, %i : index
+    %xi = index.assume %xi0 [range(%xi0, 0, 268435455)] : index
+    %w16 = view.load %w_view[%wi] : view<[%we]xf16> -> f16
+      %w = scalar.extf %w16 : f16 to f32
+    %x = view.load %x_view[%xi] : view<[%xe]xf32> -> f32
+    %next = scalar.fmaf %w, %x, %sum : f32
+    scf.yield %next : f32
+  }
+  scf.if %valid {
+    view.store %dot, %out_view[%o] : f32, view<[%outputs]xf32>
+  }
+  kernel.return
+}
+
+// MUL_MAT of a small F32 weight [K, N] (any K, such as a classification head's) with F32 columns
+// [K, T] (any element strides), into a packed [N, T]: one workitem per output, a loop over K.
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_mul_mat_small_f32_f32") @ggml_mul_mat_small_f32_f32(%k_size: index, %n_size: index, %t_count: index, %w_s1: index, %x_s1: index, %w_extent: index, %x_extent: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %outputs = index.mul %n_size, %t_count : index
+  %rounded = index.add %outputs, %rounding : index
+  %groups = index.div %rounded, %sixtyfour : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%k_size: index, %n_size: index, %t_count: index, %w_s1: index, %x_s1: index, %w_extent: index, %x_extent: index, %weight: buffer, %input: buffer, %output: buffer) {
+  %k = index.assume %k_size [range(%k_size, 1, 1048576)] : index
+  %n = index.assume %n_size [range(%n_size, 1, 1048576)] : index
+  %t = index.assume %t_count [range(%t_count, 1, 1048576)] : index
+  %we = index.assume %w_extent [range(%w_extent, 1, 268435456)] : index
+  %xe = index.assume %x_extent [range(%x_extent, 1, 268435456)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  %f0 = scalar.constant 0.0 : f32
+  %zero_offset = index.constant 0 : offset
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %base = index.mul %group, %c64 : index
+  %o0 = index.add %base, %lane : index
+  %outputs = index.mul %n, %t : index
+  %valid = index.cmp ult, %o0, %outputs : index
+  %o = scf.select %valid, %o0, %c0 : index
+  %col = index.rem %o, %n : index
+  %tok = index.div %o, %n : index
+  %w_na, %x_na, %out_na = buffer.assume.noalias %weight, %input, %output : buffer, buffer, buffer
+  %w_view = buffer.view %w_na[%zero_offset] : buffer -> view<[%we]xf32>
+  %x_view = buffer.view %x_na[%zero_offset] : buffer -> view<[%xe]xf32>
+  %out_view = buffer.view %out_na[%zero_offset] : buffer -> view<[%outputs]xf32>
+  %w_base = index.mul %col, %w_s1 : index
+  %x_base = index.mul %tok, %x_s1 : index
+  %dot = scf.for %i = [%c0 to %k step %c1](%sum = %f0 : f32) -> (f32) {
+    %wi0 = index.add %w_base, %i : index
+    %wi = index.assume %wi0 [range(%wi0, 0, 268435455)] : index
+    %xi0 = index.add %x_base, %i : index
+    %xi = index.assume %xi0 [range(%xi0, 0, 268435455)] : index
+    %w = view.load %w_view[%wi] : view<[%we]xf32> -> f32
+    %x = view.load %x_view[%xi] : view<[%xe]xf32> -> f32
+    %next = scalar.fmaf %w, %x, %sum : f32
+    scf.yield %next : f32
+  }
+  scf.if %valid {
+    view.store %dot, %out_view[%o] : f32, view<[%outputs]xf32>
+  }
+  kernel.return
+}
+
+// MUL_MAT of a Q8_0 weight [K, N] with K any multiple of 32 (the tiled kernels need 256), with F32
+// columns [K, T] (any element strides), into a packed [N, T]: one workitem per output, a loop over
+// the 34-byte blocks (f16 scale, 32 int8 codes).
+kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_mul_mat_small_q8_0_f32") @ggml_mul_mat_small_q8_0_f32(%k_size: index, %n_size: index, %t_count: index, %w_s1: index, %x_s1: index, %w_extent: index, %x_extent: index) {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %outputs = index.mul %n_size, %t_count : index
+  %rounded = index.add %outputs, %rounding : index
+  %groups = index.div %rounded, %sixtyfour : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%k_size: index, %n_size: index, %t_count: index, %w_s1: index, %x_s1: index, %w_extent: index, %x_extent: index, %weight: buffer, %input: buffer, %output: buffer) {
+  %k = index.assume %k_size [range(%k_size, 32, 1048576)] : index
+  %n = index.assume %n_size [range(%n_size, 1, 1048576)] : index
+  %t = index.assume %t_count [range(%t_count, 1, 1048576)] : index
+  %xe = index.assume %x_extent [range(%x_extent, 1, 268435456)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %f0 = scalar.constant 0.0 : f32
+  %zero_offset = index.constant 0 : offset
+  %block_bytes = index.constant 34 : offset
+  %code_offset = index.constant 2 : offset
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %base = index.mul %group, %c64 : index
+  %o0 = index.add %base, %lane : index
+  %outputs = index.mul %n, %t : index
+  %valid = index.cmp ult, %o0, %outputs : index
+  %o = scf.select %valid, %o0, %c0 : index
+  %col = index.rem %o, %n : index
+  %tok = index.div %o, %n : index
+  %x_na, %out_na = buffer.assume.noalias %input, %output : buffer, buffer
+  %x_view = buffer.view %x_na[%zero_offset] : buffer -> view<[%xe]xf32>
+  %out_view = buffer.view %out_na[%zero_offset] : buffer -> view<[%outputs]xf32>
+  %blocks = index.div %k, %c32 : index
+  %row_block = index.mul %col, %w_s1 : index
+  %x_base = index.mul %tok, %x_s1 : index
+  %dot = scf.for %b = [%c0 to %blocks step %c1](%sum = %f0 : f32) -> (f32) {
+    %gb = index.add %row_block, %b : index
+    %block_base = index.scale %gb, %block_bytes : index, offset -> offset
+    %code_base = index.add %block_base, %code_offset : offset
+    %d_view = buffer.view %weight[%block_base] : buffer -> view<1xf16>
+    %code_view = buffer.view %weight[%code_base] : buffer -> view<32xi8>
+    %d16 = view.load %d_view[%c0] : view<1xf16> -> f16
+    %d = scalar.extf %d16 : f16 to f32
+    %xb = index.mul %b, %c32 : index
+    %xrow = index.add %x_base, %xb : index
+    %partial = scf.for %i = [%c0 to %c32 step %c1](%acc = %f0 : f32) -> (f32) {
+      %code = view.load %code_view[%i] : view<32xi8> -> i8
+      %q = scalar.sitofp %code : i8 to f32
+      %xi0 = index.add %xrow, %i : index
+      %xi = index.assume %xi0 [range(%xi0, 0, 268435455)] : index
+      %x = view.load %x_view[%xi] : view<[%xe]xf32> -> f32
+      %next = scalar.fmaf %q, %x, %acc : f32
+      scf.yield %next : f32
+    }
+    %next_sum = scalar.fmaf %d, %partial, %sum : f32
+    scf.yield %next_sum : f32
+  }
+  scf.if %valid {
+    view.store %dot, %out_view[%o] : f32, view<[%outputs]xf32>
   }
   kernel.return
 }

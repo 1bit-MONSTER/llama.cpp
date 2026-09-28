@@ -1107,7 +1107,7 @@ static bool match_q6_k_token1_final_projection_q8_dispatch(const DispatchMatchCo
 
 static bool match_mul_mat_postops_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const MulMatPostOpsMatch match = match_mul_mat_postops(context);
-    if (!match.matched()) {
+    if (!match.matched() || match.input_size % 256 != 0) {
         return false;
     }
 
