@@ -37,7 +37,8 @@ bool match_mul_mat_id_decode_dispatch(const DispatchMatchContext & context, Disp
     if (!match.matched() || match.token_count < 1 || match.token_count > kMaximumDecodeTokens ||
         match.token_count * match.route_count > kMaximumDecodeRows || match.route_stride < match.route_count ||
         match.input_size < 256 || match.input_size > 32768 || match.input_size % 32 != 0 ||
-        match.output_size < 1 || match.expert_count < 1) {
+        match.output_size < 1 || match.expert_count < 1 ||
+        (match.input_route_count != 1 && match.input_route_count != match.route_count)) {
         return false;
     }
 

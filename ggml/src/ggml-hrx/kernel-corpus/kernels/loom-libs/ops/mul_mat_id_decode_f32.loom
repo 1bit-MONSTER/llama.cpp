@@ -33,10 +33,11 @@ func.decl @ggml_mul_mat_decode_load_f32_block(%token_count: index, %input_size: 
 
 func.decl @ggml_mul_mat_decode_f32_block_row(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %input_size: index, %row: index, %block: index, %lane: index, %weight: buffer, %input0: vector<4xf32>, %input1: vector<4xf32>, %input2: vector<4xf32>, %input3: vector<4xf32>) -> (f32)
 
-// One workgroup (one wave64) per (output-row pair, token*slot). Row pair x, flat row y =
-// token * slot_count + slot. The slot's expert comes from ids[token][slot]; the input row is
-// token * input_rows + slot % input_rows (input_rows is 1 when every slot reads the same
-// activation, slot_count when each slot has its own). ids are [token][route_stride] i32 (llama.cpp's
+// One workgroup (one wave64) per (output-row pair, slot, token): row pair x, slot y, token z, so
+// no thread divides by a runtime count (AMDGPU Loom lowers only constant divisors). The slot's
+// expert comes from ids[token][slot]; the input row is token * input_rows + (input_rows == 1 ?
+// 0 : slot): input_rows is 1 when every slot reads the same activation, slot_count when each
+// slot has its own (the matcher admits only those two). ids are [token][route_stride] i32 (llama.cpp's
 // route ids are a strided view of the argsort). Output layout [token][slot][output_size].
 kernel.def target(@ggml_mul_mat_id_decode_gfx11_wave64) export("ggml_mul_mat_id_decode_f32_wave64") @ggml_mul_mat_id_decode_f32_wave64(%token_count: index, %slot_count: index, %input_rows: index, %input_size: index, %output_size: index, %expert_count: index, %route_stride: index) {
   %row_capacity = config.get @ggml.mul_mat_id_decode.row_capacity : index
@@ -46,7 +47,7 @@ kernel.def target(@ggml_mul_mat_id_decode_gfx11_wave64) export("ggml_mul_mat_id_
   %c64 = index.constant 64 : index
   %padded_output_size = index.add %output_capacity, %c1 : index
   %output_pairs = index.div %padded_output_size, %c2 : index
-  kernel.launch.config workgroups(%output_pairs, %row_capacity, %c1) workgroup_size(%c64, %c1, %c1) : index
+  kernel.launch.config workgroups(%output_pairs, %slot_count, %token_count) workgroup_size(%c64, %c1, %c1) : index
 } launch(%token_count: index, %slot_count: index, %input_rows: index, %input_size: index, %output_size: index, %expert_count: index, %route_stride: index, %input: buffer, %weight: buffer, %ids: buffer, %output: buffer) {
   %weight_format = config.get @ggml.mul_mat_id_decode.weight_format : index
   %row_capacity = config.get @ggml.mul_mat_id_decode.row_capacity : index
@@ -71,7 +72,10 @@ kernel.def target(@ggml_mul_mat_id_decode_gfx11_wave64) export("ggml_mul_mat_id_
   %lane0 = kernel.workitem.id<x> : index
   %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
   %pair = kernel.workgroup.id<x> : index
-  %flat0 = kernel.workgroup.id<y> : index
+  %slot_id = kernel.workgroup.id<y> : index
+  %token_id = kernel.workgroup.id<z> : index
+  %flat_base = index.mul %token_id, %bounded_slots : index
+  %flat0 = index.add %flat_base, %slot_id : index
   %row00 = index.mul %pair, %c2 : index
   %valid_flat = index.cmp ult, %flat0, %flat_count : index
   %valid_row = index.cmp ult, %row00, %bounded_output_size : index
@@ -82,9 +86,10 @@ kernel.def target(@ggml_mul_mat_id_decode_gfx11_wave64) export("ggml_mul_mat_id_
   %row0, %launch_output_size = index.assume %safe_row, %bounded_output_size [lt(%safe_row, %bounded_output_size)] : index, index
   %row1 = index.add %row0, %c1 : index
   %row1_valid = index.cmp ult, %row1, %launch_output_size : index
-  %token = index.div %flat, %bounded_slots : index
-  %slot = index.rem %flat, %bounded_slots : index
-  %input_slot = index.rem %slot, %bounded_input_rows : index
+  %token = scf.select %valid_flat, %token_id, %c0 : index
+  %slot = scf.select %valid_flat, %slot_id, %c0 : index
+  %shared_input = index.cmp eq, %bounded_input_rows, %c1 : index
+  %input_slot = scf.select %shared_input, %c0, %slot : index
   %input_row_base = index.mul %token, %bounded_input_rows : index
   %input_row0 = index.add %input_row_base, %input_slot : index
   %input_row = index.assume %input_row0 [lt(%input_row0, %input_token_count)] : index
