@@ -13,11 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Projections for one token (decode) on Q3_K, Q4_K, Q5_K, Q6_K, IQ3_S, IQ4_NL, IQ4_XS and Q8_0
-// weights, read in their GGUF block layout (ops/kquant_decode_f32.loom): FFN gate/up pairs fused
-// with SwiGLU, and plain projections with an optional following residual ADD. Mixed-quant models
-// (Unsloth UD-Q4_K_XL and similar) pair these types freely per layer; without this they take the
-// generic dequantize-4-values-at-a-time kernels.
+// Decode projections (1 token, or 2-8 for MTP / speculative verify batches) on Q3_K, Q4_K, Q5_K,
+// Q6_K, IQ3_S, IQ4_NL, IQ4_XS and Q8_0 weights, read in their GGUF block layout
+// (ops/kquant_decode_f32.loom): FFN gate/up pairs fused with SwiGLU, and plain projections with an
+// optional following residual ADD. Mixed-quant models (Unsloth UD-Q4_K_XL and similar) pair these
+// types freely per layer; without this they take the generic dequantize-4-values-at-a-time
+// kernels.
 
 #include "dispatch-kquant-decode.h"
 
@@ -36,6 +37,11 @@ static constexpr KernelCatalogRef kKQuantSwiGLUDecodeKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_kquant_swiglu_decode_f32");
 static constexpr KernelCatalogRef kKQuantMulMatDecodeKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_kquant_mul_mat_decode_f32");
+// 2..8 tokens (MTP / speculative verify batches): weights dequantized once per lane for all tokens.
+static constexpr KernelCatalogRef kKQuantSwiGLUDecodeTokensKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_kquant_swiglu_decode_tokens_f32");
+static constexpr KernelCatalogRef kKQuantMulMatDecodeTokensKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_kquant_mul_mat_decode_tokens_f32");
 
 bool kquant_format(CommonMulMatWeightFormat format) {
     switch (format) {
@@ -56,6 +62,20 @@ bool kquant_format(CommonMulMatWeightFormat format) {
 // The kernels' config ranges (ops/kquant_decode_f32.loom).
 constexpr int64_t kMaxInputSize  = 65536;
 constexpr int64_t kMaxOutputSize = 1048576;
+constexpr int64_t kMaxTokens     = 8;
+
+// A MUL_MAT with 1..kMaxTokens tokens: the common matcher's decode form admits exactly one token and
+// its prefill form two or more.
+CommonMulMatMatch match_few_token_mul_mat(const Graph & graph, const GraphNode * node, KernelCatalogRef kernel) {
+    CommonMulMatMatch match = common_match_mul_mat_any_format(graph, node, kernel, true);
+    if (!match.matched()) {
+        match = common_match_mul_mat_any_format(graph, node, kernel, false);
+    }
+    if (!match.matched() || match.token_count > kMaxTokens) {
+        return {};
+    }
+    return match;
+}
 
 bool uncovered(const DispatchMatchContext & context, const GraphNode * node) {
     size_t index = 0;
@@ -69,9 +89,10 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
         return false;
     }
     const CommonMulMatMatch root =
-        common_match_mul_mat_any_format(graph, context.root_node, kKQuantSwiGLUDecodeKernel, true);
-    if (!root.matched() || root.token_count != 1 || !kquant_format(root.weight_format) ||
-        root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize) {
+        match_few_token_mul_mat(graph, context.root_node, kKQuantSwiGLUDecodeKernel);
+    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens ||
+        !kquant_format(root.weight_format) || root.input_size % 256 != 0 || root.input_size > kMaxInputSize ||
+        root.output_size > kMaxOutputSize) {
         return false;
     }
 
@@ -93,9 +114,10 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
         graph.index().consumers(peer_id).size() != 1) {
         return false;
     }
-    const CommonMulMatMatch other = common_match_mul_mat_any_format(graph, peer, kKQuantSwiGLUDecodeKernel, true);
+    const CommonMulMatMatch other = match_few_token_mul_mat(graph, peer, kKQuantSwiGLUDecodeKernel);
     if (!other.matched() || !kquant_format(other.weight_format) || other.input->id != root.input->id ||
-        other.input_size != root.input_size || other.output_size != root.output_size || other.token_count != 1) {
+        other.input_size != root.input_size || other.output_size != root.output_size ||
+        other.token_count != root.token_count) {
         return false;
     }
     const Value * output = common_graph_value(graph, glu->output);
@@ -114,7 +136,12 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kKQuantSwiGLUDecodeKernel);
+    dispatch.kernel = make_kernel_specialization(root.token_count == 1 ? kKQuantSwiGLUDecodeKernel :
+                                                                         kKQuantSwiGLUDecodeTokensKernel);
+    if (root.token_count > 1) {
+        dispatch.kernel.compile_parameters.emplace("ggml.kquant_decode.token_count",
+                                                   std::to_string(root.token_count));
+    }
     dispatch.kernel.compile_parameters.emplace("ggml.kquant_swiglu_decode.input_size",
                                                std::to_string(root.input_size));
     dispatch.kernel.compile_parameters.emplace("ggml.kquant_swiglu_decode.output_size",
@@ -134,15 +161,17 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
 }
 
 
-bool match_kquant_mul_mat_decode(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, DispatchMatch & dispatch_match,
+                                      bool require_add) {
     const Graph & graph = context.graph;
     if (!graph.has_index()) {
         return false;
     }
     const CommonMulMatMatch root =
-        common_match_mul_mat_any_format(graph, context.root_node, kKQuantMulMatDecodeKernel, true);
-    if (!root.matched() || root.token_count != 1 || !kquant_format(root.weight_format) ||
-        root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize) {
+        match_few_token_mul_mat(graph, context.root_node, kKQuantMulMatDecodeKernel);
+    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens ||
+        !kquant_format(root.weight_format) || root.input_size % 256 != 0 || root.input_size > kMaxInputSize ||
+        root.output_size > kMaxOutputSize) {
         return false;
     }
 
@@ -165,6 +194,9 @@ bool match_kquant_mul_mat_decode(const DispatchMatchContext & context, DispatchM
     } else {
         add = nullptr;
     }
+    if (require_add && add == nullptr) {
+        return false;
+    }
 
     if (!append_covered_node_index_once(graph, context.covered_nodes, context.root_node,
                                         dispatch_match.covered_nodes) ||
@@ -175,7 +207,12 @@ bool match_kquant_mul_mat_decode(const DispatchMatchContext & context, DispatchM
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kKQuantMulMatDecodeKernel);
+    dispatch.kernel = make_kernel_specialization(root.token_count == 1 ? kKQuantMulMatDecodeKernel :
+                                                                         kKQuantMulMatDecodeTokensKernel);
+    if (root.token_count > 1) {
+        dispatch.kernel.compile_parameters.emplace("ggml.kquant_decode.token_count",
+                                                   std::to_string(root.token_count));
+    }
     dispatch.kernel.compile_parameters.emplace("ggml.kquant_mul_mat_decode.input_size",
                                                std::to_string(root.input_size));
     dispatch.kernel.compile_parameters.emplace("ggml.kquant_mul_mat_decode.output_size",
@@ -194,6 +231,14 @@ bool match_kquant_mul_mat_decode(const DispatchMatchContext & context, DispatchM
     return true;
 }
 
+bool match_kquant_mul_mat_decode(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    return match_kquant_mul_mat_decode_impl(context, dispatch_match, false);
+}
+
+bool match_kquant_mul_mat_add_decode(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    return match_kquant_mul_mat_decode_impl(context, dispatch_match, true);
+}
+
 }  // namespace
 
 void register_kquant_decode_dispatches(DispatchRegistryBuilder & registry) {
@@ -208,7 +253,18 @@ void register_kquant_decode_dispatches(DispatchRegistryBuilder & registry) {
         DispatchSource::Common,
         match_kquant_swiglu_decode,
     });
-    // Above the generic common.mul_mat f32 matchers (80/70/60), below every specialized one.
+    // Projection + residual ADD above common.mul_mat_postops.f32_f32_wmma (180), which otherwise takes
+    // the 2-8 token (MTP verify) projections through the prefill WMMA kernel.
+    registry.add({
+        "kquant.mul_mat_add.decode_f32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        185,
+        DispatchSource::Common,
+        match_kquant_mul_mat_add_decode,
+    });
+    // Plain projections above the generic common.mul_mat f32 matchers (80/70/60), below every
+    // specialized one.
     registry.add({
         "kquant.mul_mat.decode_f32",
         GGML_OP_MUL_MAT,
