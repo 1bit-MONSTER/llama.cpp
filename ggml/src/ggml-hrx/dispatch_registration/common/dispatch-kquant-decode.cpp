@@ -197,11 +197,14 @@ bool match_kquant_mul_mat_decode(const DispatchMatchContext & context, DispatchM
 }  // namespace
 
 void register_kquant_decode_dispatches(DispatchRegistryBuilder & registry) {
+    // Above common.mul_mat_swiglu.symmetric_i4_lowrow_adjacent_dual (310): that path repacks the
+    // weights to int4 at first use and quantizes activations to int4, and under llama-server it
+    // made 27B decode 10.7 tok/s against 11.9 with this kernel.
     registry.add({
         "kquant.swiglu.decode_f32",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::Fused,
-        305,
+        315,
         DispatchSource::Common,
         match_kquant_swiglu_decode,
     });
