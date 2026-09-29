@@ -19,6 +19,7 @@
 #include "dispatch-res-scale-pair.h"
 #include "dispatch-zaya-cca-conv.h"
 #include "dispatch-zaya-cca-qk-norm.h"
+#include "dispatch-kquant-decode.h"
 #include "dispatch-unary.h"
 
 namespace ggml::hrx {
@@ -42,6 +43,7 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_res_scale_pair_dispatches(registry);
     register_zaya_cca_conv_dispatches(registry);
     register_zaya_cca_qk_norm_dispatches(registry);
+    register_kquant_decode_dispatches(registry);
     register_unary_dispatch(registry);
     register_rmsnorm_dispatches(registry);
 }
