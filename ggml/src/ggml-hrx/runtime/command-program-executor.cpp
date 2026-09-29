@@ -4,6 +4,7 @@
 #include "dispatch/command-program-resolver.h"
 #include "ggml-impl.h"
 #include "hrx-interop-utils.h"
+#include "runtime/hrx-sleeping-wait.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/transient-arena.h"
 
@@ -919,8 +920,9 @@ static Status flush_stream_commands(const CommandProgramExecutionContext & conte
 }
 
 static Status wait_stream_commands(const CommandProgramExecutionContext & context, const char * label) {
+    static thread_local WaitHistory graph_wait_history;
     Status status;
-    if (ErrorResult error = take_status(hrx_stream_wait(context.stream))) {
+    if (ErrorResult error = take_status(stream_wait_sleeping(context.stream, graph_wait_history))) {
         status.log("%s failed: %s", label, error->c_str());
     }
     return status;
