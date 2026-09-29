@@ -280,6 +280,8 @@ ggml_add_backend_library(ggml-hrx
     runtime/kernel-executable-cache.h
     runtime/loom-kernel-jit.cpp
     runtime/loom-kernel-jit.h
+    runtime/loom-jit-disk-cache.cpp
+    runtime/loom-jit-disk-cache.h
     runtime/prepared-command-program-cache.cpp
     runtime/prepared-command-program-cache.h
     runtime/transient-arena.cpp

@@ -1,4 +1,5 @@
 #include "loom-kernel-jit.h"
+#include "loom-jit-disk-cache.h"
 
 #include "ggml-impl.h"
 #include "hrx-interop-utils.h"
@@ -25,6 +26,7 @@ class LoomAmdgpuJit {
         reset();
         ggml_hrx_loom_jit_amdgpu_options options = {};
         options.processor                        = target;
+        loom_jit_disk_cache_set_target(target);  // 1bit
         options.identifier                       = target;
         options.sanitizer                        = std::getenv("GGML_HRX_LOOM_SANITIZER");
         options.sanitizer_reporting              = std::getenv("GGML_HRX_LOOM_SANITIZER_REPORTING");
@@ -62,6 +64,9 @@ static bool compile_kernel(ggml_hrx_loom_jit_amdgpu *         jit,
                            const std::string &                key,
                            ggml_hrx_loom_jit_compile_result & compiled,
                            std::string &                      error_message) {
+    if (loom_jit_disk_cache_load(request, compiled)) {  // 1bit: compiled in an earlier process
+        return true;
+    }
     std::vector<ggml_hrx_loom_jit_config_binding> configs;
     configs.reserve(request.config_storage.size());
     for (const auto & config : request.config_storage) {
@@ -90,6 +95,7 @@ static bool compile_kernel(ggml_hrx_loom_jit_amdgpu *         jit,
         GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
         return false;
     }
+    loom_jit_disk_cache_store(request, compiled);  // 1bit
     return true;
 }
 
