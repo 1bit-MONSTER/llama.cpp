@@ -226,6 +226,9 @@
     },
     {
       "path": "ops/small_rows_f32.loom"
+    },
+    {
+      "path": "ops/mul_mat_id_decode_f32.loom"
     }
   ],
   "exports": [
@@ -7336,6 +7339,113 @@
         "library_sources": []
       },
       "compile_dependencies": []
+    },
+    {
+      "name": "ggml_mul_mat_id_decode_f32_wave64",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_decode_f32_wave64",
+      "source": "ops/mul_mat_id_decode_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "slot_count",
+          "type": "index"
+        },
+        {
+          "name": "input_rows",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "slot_count",
+          "type": "index"
+        },
+        {
+          "name": "input_rows",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "ids",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/mul_mat_id_decode_f32.loom"
+        ],
+        "library_sources": [
+          "ops/mul_mat_f32_f32_decode.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "ops/mul_mat_f32_f32_decode.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
     }
   ],
   "link_modules": [],
