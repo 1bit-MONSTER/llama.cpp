@@ -7463,6 +7463,10 @@
         {
           "name": "row_size",
           "type": "index"
+        },
+        {
+          "name": "row_count",
+          "type": "index"
         }
       ],
       "launch_parameters": [
@@ -7472,6 +7476,10 @@
         },
         {
           "name": "row_size",
+          "type": "index"
+        },
+        {
+          "name": "row_count",
           "type": "index"
         }
       ],

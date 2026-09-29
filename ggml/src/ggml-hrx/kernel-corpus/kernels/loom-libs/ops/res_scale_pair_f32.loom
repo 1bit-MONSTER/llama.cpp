@@ -26,34 +26,40 @@ config.decl @ggml.res_scale_pair_f32.has_bias : %value: index where [range(%valu
 
 config.decl @ggml.res_scale_pair_f32.has_addend : %value: index where [range(%value, 0, 1)]
 
-kernel.def target(@ggml_res_scale_pair_f32_gfx11_wave64) export("ggml_res_scale_pair_f32") @ggml_res_scale_pair_f32(%element_count: index, %row_size: index) {
+// Grid: x over the channels of a row (256 per workgroup), y over the rows, so no thread divides
+// by the runtime row size (AMDGPU Loom lowers only constant divisors).
+kernel.def target(@ggml_res_scale_pair_f32_gfx11_wave64) export("ggml_res_scale_pair_f32") @ggml_res_scale_pair_f32(%element_count: index, %row_size: index, %row_count: index) {
   %one = index.constant 1 : index
   %twofiftysix = index.constant 256 : index
   %rounding = index.constant 255 : index
-  %rounded = index.add %element_count, %rounding : index
-  %workgroup_count = index.div %rounded, %twofiftysix : index
-  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
-} launch(%element_count: index, %row_size: index, %a: buffer, %b: buffer, %s: buffer, %y: buffer, %output: buffer) {
+  %rounded = index.add %row_size, %rounding : index
+  %column_groups = index.div %rounded, %twofiftysix : index
+  kernel.launch.config workgroups(%column_groups, %row_count, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%element_count: index, %row_size: index, %row_count: index, %a: buffer, %b: buffer, %s: buffer, %y: buffer, %output: buffer) {
   %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
   %row = index.assume %row_size [range(%row_size, 1, 134217728)] : index
   %has_bias = config.get @ggml.res_scale_pair_f32.has_bias : index
   %has_addend = config.get @ggml.res_scale_pair_f32.has_addend : index
-  %workgroup = kernel.workgroup.id<x> : index
+  %column_group = kernel.workgroup.id<x> : index
+  %row_index = kernel.workgroup.id<y> : index
   %workitem = kernel.workitem.id<x> : index
   %twofiftysix = index.constant 256 : index
   %zero = index.constant 0 : index
-  %base0 = index.mul %workgroup, %twofiftysix : index
-  %linear0 = index.add %base0, %workitem : index
-  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
-  %in_bounds = index.cmp ult, %linear, %count : index
+  %column_base = index.mul %column_group, %twofiftysix : index
+  %column0 = index.add %column_base, %workitem : index
+  %column = index.assume %column0 [range(%column0, 0, 134217983)] : index
+  %row_offset = index.mul %row_index, %row : index
+  %linear = index.add %row_offset, %column : index
+  %in_bounds = index.cmp ult, %column, %row : index
   %zero_offset = index.constant 0 : offset
   %a_view = buffer.view %a[%zero_offset] : buffer -> view<[%count]xf32>
   %b_view = buffer.view %b[%zero_offset] : buffer -> view<[%row]xf32>
   %s_view = buffer.view %s[%zero_offset] : buffer -> view<[%row]xf32>
   %y_view = buffer.view %y[%zero_offset] : buffer -> view<[%count]xf32>
   %output_view = buffer.view %output[%zero_offset] : buffer -> view<[%count]xf32>
+  %in_rows = index.cmp ult, %linear, %count : index
   scf.if %in_bounds {
-    %column = index.rem %linear, %row : index
+  scf.if %in_rows {
     %a_value = view.load %a_view[%linear] : view<[%count]xf32> -> f32
     %s_value = view.load %s_view[%column] : view<[%row]xf32> -> f32
     %use_bias = index.cmp ne, %has_bias, %zero : index
@@ -75,5 +81,59 @@ kernel.def target(@ggml_res_scale_pair_f32_gfx11_wave64) export("ggml_res_scale_
     }
     view.store %result, %output_view[%linear] : f32, view<[%count]xf32>
   }
+  }
   kernel.return
+}
+
+// Cases. Rows of 8 channels, 2 rows; period(8) makes an iota a per-channel pattern, so each
+// expectation checks the per-channel broadcast of b and s and the per-element a and y. Run with
+// --config=ggml.res_scale_pair_f32.has_bias=1 --config=ggml.res_scale_pair_f32.has_addend=1
+// for the first two, and both =0 for the third.
+
+// (a + b) * s + y with a = c + 1, b = c, s = 2, y = c for channel c: 5c + 2.
+check.case public @ggml_res_scale_pair_f32_bias_addend_case {
+  %count = check.literal value(16) : index
+  %row = check.literal value(8) : index
+  %rows = check.literal value(2) : index
+  %a = check.generate.iota offset(1.0) step(1.0) period(8) : tensor<16xf32>
+  %b = check.generate.iota offset(0.0) step(1.0) : tensor<8xf32>
+  %s = check.generate.fill value(2.0) : tensor<8xf32>
+  %y = check.generate.iota offset(0.0) step(1.0) period(8) : tensor<16xf32>
+  %output = check.generate.fill value(-7.0) : tensor<16xf32>
+  %expected = check.generate.iota offset(2.0) step(5.0) period(8) : tensor<16xf32>
+  kernel.launch @ggml_res_scale_pair_f32[%count, %row, %rows](%count, %row, %rows, %a, %b, %s, %y, %output) : [index, index, index](index, index, index, tensor<16xf32>, tensor<8xf32>, tensor<8xf32>, tensor<16xf32>, tensor<16xf32>)
+  check.expect.equal actual(%output) expected(%expected) : tensor<16xf32>
+  check.return
+}
+
+// Per-channel scale: a = 1.5, b = 0.5, s = c + 1, y = 3: 2c + 5.
+check.case public @ggml_res_scale_pair_f32_channel_scale_case {
+  %count = check.literal value(16) : index
+  %row = check.literal value(8) : index
+  %rows = check.literal value(2) : index
+  %a = check.generate.fill value(1.5) : tensor<16xf32>
+  %b = check.generate.fill value(0.5) : tensor<8xf32>
+  %s = check.generate.iota offset(1.0) step(1.0) : tensor<8xf32>
+  %y = check.generate.fill value(3.0) : tensor<16xf32>
+  %output = check.generate.fill value(-7.0) : tensor<16xf32>
+  %expected = check.generate.iota offset(5.0) step(2.0) period(8) : tensor<16xf32>
+  kernel.launch @ggml_res_scale_pair_f32[%count, %row, %rows](%count, %row, %rows, %a, %b, %s, %y, %output) : [index, index, index](index, index, index, tensor<16xf32>, tensor<8xf32>, tensor<8xf32>, tensor<16xf32>, tensor<16xf32>)
+  check.expect.equal actual(%output) expected(%expected) : tensor<16xf32>
+  check.return
+}
+
+// Without bias and addend, b and y must not be read: a = c + 1, s = 3, b = y = 100: 3c + 3.
+check.case public @ggml_res_scale_pair_f32_plain_case {
+  %count = check.literal value(16) : index
+  %row = check.literal value(8) : index
+  %rows = check.literal value(2) : index
+  %a = check.generate.iota offset(1.0) step(1.0) period(8) : tensor<16xf32>
+  %b = check.generate.fill value(100.0) : tensor<8xf32>
+  %s = check.generate.fill value(3.0) : tensor<8xf32>
+  %y = check.generate.fill value(100.0) : tensor<16xf32>
+  %output = check.generate.fill value(-7.0) : tensor<16xf32>
+  %expected = check.generate.iota offset(3.0) step(3.0) period(8) : tensor<16xf32>
+  kernel.launch @ggml_res_scale_pair_f32[%count, %row, %rows](%count, %row, %rows, %a, %b, %s, %y, %output) : [index, index, index](index, index, index, tensor<16xf32>, tensor<8xf32>, tensor<8xf32>, tensor<16xf32>, tensor<16xf32>)
+  check.expect.equal actual(%output) expected(%expected) : tensor<16xf32>
+  check.return
 }
