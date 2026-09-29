@@ -13,11 +13,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Projections for one token (decode) on Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS and Q8_0 weights, read in
-// their GGUF block layout (ops/kquant_decode_f32.loom): FFN gate/up pairs fused with SwiGLU, and
-// plain projections with an optional following residual ADD. Mixed-quant models (Unsloth UD-Q4_K_XL and similar) pair
-// these types freely per layer; without this they take the generic dequantize-4-values-at-a-time
-// kernels.
+// Projections for one token (decode) on Q3_K, Q4_K, Q5_K, Q6_K, IQ3_S, IQ4_NL, IQ4_XS and Q8_0
+// weights, read in their GGUF block layout (ops/kquant_decode_f32.loom): FFN gate/up pairs fused
+// with SwiGLU, and plain projections with an optional following residual ADD. Mixed-quant models
+// (Unsloth UD-Q4_K_XL and similar) pair these types freely per layer; without this they take the
+// generic dequantize-4-values-at-a-time kernels.
 
 #include "dispatch-kquant-decode.h"
 
@@ -39,9 +39,11 @@ static constexpr KernelCatalogRef kKQuantMulMatDecodeKernel =
 
 bool kquant_format(CommonMulMatWeightFormat format) {
     switch (format) {
+        case CommonMulMatWeightFormat::Q3K:
         case CommonMulMatWeightFormat::Q4K:
         case CommonMulMatWeightFormat::Q5K:
         case CommonMulMatWeightFormat::Q6K:
+        case CommonMulMatWeightFormat::IQ3_S:
         case CommonMulMatWeightFormat::IQ4_NL:
         case CommonMulMatWeightFormat::IQ4_XS:
         case CommonMulMatWeightFormat::Q8_0:
