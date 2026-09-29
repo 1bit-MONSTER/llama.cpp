@@ -22,6 +22,7 @@
 #include "llama-model-loader.h"
 
 #include "ggml-backend.h"
+#include "gguf.h"
 
 #include <algorithm>
 #include <cctype>
@@ -29,10 +30,80 @@
 #include <cstring>
 #include <stdexcept>
 
+// keys straight from the GGUF: llama_model_loader instantiates its string-keyed get_key / get_arr
+// for a few types only (bool and array ones fail to link with GCC)
+static bool gguf_bool(const gguf_context * ctx, const char * key, bool & out) {
+    const int64_t id = gguf_find_key(ctx, key);
+    if (id < 0) {
+        return false;
+    }
+    if (gguf_get_kv_type(ctx, id) != GGUF_TYPE_BOOL) {
+        throw std::runtime_error(format("%s is not a bool", key));
+    }
+    out = gguf_get_val_bool(ctx, id);
+    return true;
+}
+
+static bool gguf_strings(const gguf_context * ctx, const char * key, std::vector<std::string> & out, bool required) {
+    const int64_t id = gguf_find_key(ctx, key);
+    if (id < 0) {
+        if (required) {
+            throw std::runtime_error(format("key not found in model: %s", key));
+        }
+        return false;
+    }
+    if (gguf_get_kv_type(ctx, id) != GGUF_TYPE_ARRAY || gguf_get_arr_type(ctx, id) != GGUF_TYPE_STRING) {
+        throw std::runtime_error(format("%s is not an array of strings", key));
+    }
+    out.clear();
+    for (size_t i = 0; i < gguf_get_arr_n(ctx, id); ++i) {
+        out.emplace_back(gguf_get_arr_str(ctx, id, i));
+    }
+    return true;
+}
+
+static void gguf_ints(const gguf_context * ctx, const char * key, std::vector<int32_t> & out) {
+    const int64_t id = gguf_find_key(ctx, key);
+    if (id < 0) {
+        throw std::runtime_error(format("key not found in model: %s", key));
+    }
+    if (gguf_get_kv_type(ctx, id) != GGUF_TYPE_ARRAY || gguf_get_arr_type(ctx, id) != GGUF_TYPE_INT32) {
+        throw std::runtime_error(format("%s is not an array of int32", key));
+    }
+    const auto * data = static_cast<const int32_t *>(gguf_get_arr_data(ctx, id));
+    out.assign(data, data + gguf_get_arr_n(ctx, id));
+}
+
+static bool gguf_u32(const gguf_context * ctx, const char * key, uint32_t & out, bool required) {
+    const int64_t id = gguf_find_key(ctx, key);
+    if (id < 0) {
+        if (required) {
+            throw std::runtime_error(format("key not found in model: %s", key));
+        }
+        return false;
+    }
+    switch (gguf_get_kv_type(ctx, id)) {
+        case GGUF_TYPE_UINT32: out = gguf_get_val_u32(ctx, id); return true;
+        case GGUF_TYPE_INT32:  out = (uint32_t) gguf_get_val_i32(ctx, id); return true;
+        case GGUF_TYPE_UINT16: out = gguf_get_val_u16(ctx, id); return true;
+        case GGUF_TYPE_UINT8:  out = gguf_get_val_u8(ctx, id); return true;
+        default: throw std::runtime_error(format("%s is not an unsigned integer", key));
+    }
+}
+
+static void gguf_str(const gguf_context * ctx, const char * key, std::string & out) {
+    const int64_t id = gguf_find_key(ctx, key);
+    if (id < 0 || gguf_get_kv_type(ctx, id) != GGUF_TYPE_STRING) {
+        throw std::runtime_error(format("%s: missing or not a string", key));
+    }
+    out = gguf_get_val_str(ctx, id);
+}
+
 void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
+    const gguf_context * meta = ml.metadata;
     uint32_t version = 0;
-    ml.get_key("prism.hadamard.tied_output", tied_output, false);
-    if (!ml.get_key("prism.hadamard.version", version, false)) {
+    gguf_bool(meta, "prism.hadamard.tied_output", tied_output);
+    if (!gguf_u32(meta, "prism.hadamard.version", version, false)) {
         if (tied_output) {
             throw std::runtime_error("prism.hadamard.tied_output without prism.hadamard.version");
         }
@@ -51,11 +122,11 @@ void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
     uint32_t block_size = 0;
     std::string transform, axis, sign_mode;
     std::vector<std::string> weight_names;
-    ml.get_key("prism.hadamard.block_size", block_size);
-    ml.get_key("prism.hadamard.transform", transform);
-    ml.get_key("prism.hadamard.axis", axis);
-    ml.get_key("prism.hadamard.sign_mode", sign_mode);
-    ml.get_arr("prism.hadamard.weight_names", weight_names);
+    gguf_u32(meta, "prism.hadamard.block_size", block_size, true);
+    gguf_str(meta, "prism.hadamard.transform", transform);
+    gguf_str(meta, "prism.hadamard.axis", axis);
+    gguf_str(meta, "prism.hadamard.sign_mode", sign_mode);
+    gguf_strings(meta, "prism.hadamard.weight_names", weight_names, true);
 
     if (block_size == 0 || (block_size & (block_size - 1)) != 0) {
         throw std::runtime_error(format("invalid prism.hadamard.block_size: %u", block_size));
@@ -75,8 +146,8 @@ void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
 
     if (sign_mode == "explicit") {
         std::vector<int32_t> widths, values;
-        ml.get_arr("prism.hadamard.sign_widths", widths);
-        ml.get_arr("prism.hadamard.sign_values", values);
+        gguf_ints(meta, "prism.hadamard.sign_widths", widths);
+        gguf_ints(meta, "prism.hadamard.sign_values", values);
         // explicit with no widths would read as identity later and silently change the model
         if (widths.empty()) {
             throw std::runtime_error("prism.hadamard.sign_mode is explicit but sign_widths is empty");
@@ -100,7 +171,7 @@ void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
         }
     }
 
-    ml.get_key("prism.hadamard.gdn_v_grouped", gdn_v_grouped, false);
+    gguf_bool(meta, "prism.hadamard.gdn_v_grouped", gdn_v_grouped);
 
     // the activation transform is applied in build_lora_mm / build_lora_mm_id only: refuse
     // architectures and tensor kinds not verified to route every matmul through them
@@ -158,7 +229,7 @@ void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
 
     // tables read by row lookup store rotated rows: the lookup result gets the inverse
     std::vector<std::string> inverse_names;
-    ml.get_arr("prism.hadamard.inverse_weight_names", inverse_names, false);
+    gguf_strings(meta, "prism.hadamard.inverse_weight_names", inverse_names, false);
     for (const auto & name : inverse_names) {
         // only the token-embedding lookup applies it; any other table would stay rotated
         if (name != "token_embd.weight") {
