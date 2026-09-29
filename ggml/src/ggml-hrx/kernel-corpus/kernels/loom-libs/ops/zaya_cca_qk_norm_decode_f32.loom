@@ -1,0 +1,237 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// ZAYA's CCA query/key mixing and normalization for one token (decode), in one dispatch. llama.cpp
+// builds it from ~30 graph nodes (about 16 dispatches on HRX) between the CCA convolution and RoPE.
+// With Q = Qraw, K = Kraw (the plain projections), C = the convolution output (Q part, then K part),
+// head_dim D, n_head query heads and n_head_kv key heads (gqa = n_head / n_head_kv):
+//   query head h:  v = C_q[h, d] + (Q[h, d] + K[h / gqa, d]) * 0.5
+//   key head k:    m = (sum_j Q[k * gqa + j, d]) * (1 / gqa)
+//                  v = C_k[k, d] + (m + K[k, d]) * 0.5
+// then per head RMSNorm without weight (eps from the graph), and each key head times its scale.
+// One workgroup per head, one thread per channel of the head.
+
+amdgpu.target<gfx11-generic> @ggml_zaya_cca_qk_norm_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.zaya_cca_qk_norm.head_dim : %value: index where [range(%value, 64, 256), mul(%value, 64)]
+
+config.decl @ggml.zaya_cca_qk_norm.n_head : %value: index where [range(%value, 1, 128)]
+
+config.decl @ggml.zaya_cca_qk_norm.n_head_kv : %value: index where [range(%value, 1, 128)]
+
+config.decl @ggml.zaya_cca_qk_norm.gqa : %value: index where [range(%value, 1, 128)]
+
+config.decl @ggml.zaya_cca_qk_norm.rms_epsilon : f32
+
+// The pre-normalization value of channel %d of head %h.
+func.def inline @ggml_zaya_cca_qk_value(%h: index, %d: index, %head_dim: index, %n_head: index, %n_head_kv: index, %gqa: index, %conv: buffer, %qraw: buffer, %kraw: buffer) -> (f32) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %zero_offset = index.constant 0 : offset
+  %half = scalar.constant 0.5 : f32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %q_size = index.mul %n_head, %head_dim : index
+  %k_size = index.mul %n_head_kv, %head_dim : index
+  %conv_size = index.add %q_size, %k_size : index
+  %is_q = index.cmp ult, %h, %n_head : index
+  %value = scf.if %is_q -> (f32) {
+    %qi_row = index.mul %h, %head_dim : index
+    %qi_raw = index.add %qi_row, %d : index
+    %kv = index.div %h, %gqa : index
+    %ki_row = index.mul %kv, %head_dim : index
+    %ki_raw = index.add %ki_row, %d : index
+    %qi, %q_bound = index.assume %qi_raw, %q_size [lt(%qi_raw, %q_size)] : index, index
+    %ki, %k_bound = index.assume %ki_raw, %k_size [lt(%ki_raw, %k_size)] : index, index
+    %ci, %c_bound = index.assume %qi_raw, %conv_size [lt(%qi_raw, %conv_size)] : index, index
+    %q_view = buffer.view %qraw[%zero_offset] : buffer -> view<[%q_bound]xf32>
+    %k_view = buffer.view %kraw[%zero_offset] : buffer -> view<[%k_bound]xf32>
+    %c_view = buffer.view %conv[%zero_offset] : buffer -> view<[%c_bound]xf32>
+    %q = view.load %q_view[%qi] : view<[%q_bound]xf32> -> f32
+    %k = view.load %k_view[%ki] : view<[%k_bound]xf32> -> f32
+    %c = view.load %c_view[%ci] : view<[%c_bound]xf32> -> f32
+    %qk = scalar.addf %q, %k : f32
+    %mean = scalar.mulf %qk, %half : f32
+    %v = scalar.addf %c, %mean : f32
+    scf.yield %v : f32
+  } else {
+    %kv = index.sub %h, %n_head : index
+    %group_base = index.mul %kv, %gqa : index
+    %sum = scf.for %j = [%c0 to %gqa step %c1](%partial = %c0_f32 : f32) -> (f32) {
+      %qh = index.add %group_base, %j : index
+      %qj_row = index.mul %qh, %head_dim : index
+      %qj_raw = index.add %qj_row, %d : index
+      %qj, %qj_bound = index.assume %qj_raw, %q_size [lt(%qj_raw, %q_size)] : index, index
+      %qj_view = buffer.view %qraw[%zero_offset] : buffer -> view<[%qj_bound]xf32>
+      %qv = view.load %qj_view[%qj] : view<[%qj_bound]xf32> -> f32
+      %next = scalar.addf %partial, %qv : f32
+      scf.yield %next : f32
+    }
+    %gqa_i32 = index.cast %gqa : index to i32
+    %gqa_f32 = scalar.sitofp %gqa_i32 : i32 to f32
+    %one = scalar.constant 1.0 : f32
+    %inv_gqa = scalar.divf %one, %gqa_f32 : f32
+    %qmean = scalar.mulf %sum, %inv_gqa : f32
+    %ki_row = index.mul %kv, %head_dim : index
+    %ki_raw = index.add %ki_row, %d : index
+    %ki, %k_bound = index.assume %ki_raw, %k_size [lt(%ki_raw, %k_size)] : index, index
+    %k_view = buffer.view %kraw[%zero_offset] : buffer -> view<[%k_bound]xf32>
+    %k = view.load %k_view[%ki] : view<[%k_bound]xf32> -> f32
+    %ci_raw = index.add %q_size, %ki_raw : index
+    %ci, %c_bound = index.assume %ci_raw, %conv_size [lt(%ci_raw, %conv_size)] : index, index
+    %c_view = buffer.view %conv[%zero_offset] : buffer -> view<[%c_bound]xf32>
+    %c = view.load %c_view[%ci] : view<[%c_bound]xf32> -> f32
+    %qk = scalar.addf %qmean, %k : f32
+    %mean = scalar.mulf %qk, %half : f32
+    %v = scalar.addf %c, %mean : f32
+    scf.yield %v : f32
+  }
+  func.return %value : f32
+}
+
+// Store channel %d of head %h, normalized by %scale (and the key scale for key heads).
+func.def inline @ggml_zaya_cca_qk_store(%h: index, %d: index, %value: f32, %scale: f32, %head_dim: index, %n_head: index, %n_head_kv: index, %k_scale: buffer, %q_out: buffer, %k_out: buffer) {
+  %zero_offset = index.constant 0 : offset
+  %q_size = index.mul %n_head, %head_dim : index
+  %k_size = index.mul %n_head_kv, %head_dim : index
+  %normalized = scalar.mulf %value, %scale : f32
+  %is_q = index.cmp ult, %h, %n_head : index
+  scf.if %is_q {
+    %qi_row = index.mul %h, %head_dim : index
+    %qi_raw = index.add %qi_row, %d : index
+    %qi, %q_bound = index.assume %qi_raw, %q_size [lt(%qi_raw, %q_size)] : index, index
+    %q_view = buffer.view %q_out[%zero_offset] : buffer -> view<[%q_bound]xf32>
+    view.store %normalized, %q_view[%qi] : f32, view<[%q_bound]xf32>
+  } else {
+    %kv_raw = index.sub %h, %n_head : index
+    %kv, %kv_bound = index.assume %kv_raw, %n_head_kv [lt(%kv_raw, %n_head_kv)] : index, index
+    %scale_view = buffer.view %k_scale[%zero_offset] : buffer -> view<[%kv_bound]xf32>
+    %ks = view.load %scale_view[%kv] : view<[%kv_bound]xf32> -> f32
+    %scaled = scalar.mulf %normalized, %ks : f32
+    %ki_row = index.mul %kv_raw, %head_dim : index
+    %ki_raw = index.add %ki_row, %d : index
+    %ki, %k_bound = index.assume %ki_raw, %k_size [lt(%ki_raw, %k_size)] : index, index
+    %k_view = buffer.view %k_out[%zero_offset] : buffer -> view<[%k_bound]xf32>
+    view.store %scaled, %k_view[%ki] : f32, view<[%k_bound]xf32>
+  }
+  func.return
+}
+
+kernel.def target(@ggml_zaya_cca_qk_norm_gfx11_wave64) export("ggml_zaya_cca_qk_norm_decode_f32") @ggml_zaya_cca_qk_norm_decode_f32() {
+  %head_dim = config.get @ggml.zaya_cca_qk_norm.head_dim : index
+  %n_head = config.get @ggml.zaya_cca_qk_norm.n_head : index
+  %n_head_kv = config.get @ggml.zaya_cca_qk_norm.n_head_kv : index
+  %c1 = index.constant 1 : index
+  %heads = index.add %n_head, %n_head_kv : index
+  kernel.launch.config workgroups(%heads, %c1, %c1) workgroup_size(%head_dim, %c1, %c1) : index
+} launch(%conv: buffer, %qraw: buffer, %kraw: buffer, %k_scale: buffer, %q_out: buffer, %k_out: buffer) {
+  %head_dim = config.get @ggml.zaya_cca_qk_norm.head_dim : index
+  %n_head = config.get @ggml.zaya_cca_qk_norm.n_head : index
+  %n_head_kv = config.get @ggml.zaya_cca_qk_norm.n_head_kv : index
+  %gqa = config.get @ggml.zaya_cca_qk_norm.gqa : index
+  %epsilon = config.get @ggml.zaya_cca_qk_norm.rms_epsilon : f32
+  %h = kernel.workgroup.id<x> : index
+  %d0 = kernel.workitem.id<x> : index
+  %d, %d_bound = index.assume %d0, %head_dim [lt(%d0, %head_dim)] : index, index
+  %value = func.call @ggml_zaya_cca_qk_value(%h, %d, %head_dim, %n_head, %n_head_kv, %gqa, %conv, %qraw, %kraw) : (index, index, index, index, index, index, buffer, buffer, buffer) -> (f32)
+  %square = scalar.mulf %value, %value : f32
+  %sum = kernel.workgroup.reduce<addf> %square : f32
+  %head_dim_i32 = index.cast %head_dim : index to i32
+  %head_dim_f32 = scalar.sitofp %head_dim_i32 : i32 to f32
+  %mean = scalar.divf %sum, %head_dim_f32 : f32
+  %biased = scalar.addf %mean, %epsilon : f32
+  %scale = scalar.rsqrtf %biased : f32
+  func.call @ggml_zaya_cca_qk_store(%h, %d, %value, %scale, %head_dim, %n_head, %n_head_kv, %k_scale, %q_out, %k_out) : (index, index, f32, f32, index, index, index, buffer, buffer, buffer) -> ()
+  kernel.return
+}
+
+// Reference for the cases: one thread per head, plain loops.
+kernel.def target(@ggml_zaya_cca_qk_norm_gfx11_wave64) export("ggml_zaya_cca_qk_norm_decode_reference_f32") @ggml_zaya_cca_qk_norm_decode_reference_f32() {
+  %n_head = config.get @ggml.zaya_cca_qk_norm.n_head : index
+  %n_head_kv = config.get @ggml.zaya_cca_qk_norm.n_head_kv : index
+  %c1 = index.constant 1 : index
+  %heads = index.add %n_head, %n_head_kv : index
+  kernel.launch.config workgroups(%heads, %c1, %c1) workgroup_size(%c1, %c1, %c1) : index
+} launch(%conv: buffer, %qraw: buffer, %kraw: buffer, %k_scale: buffer, %q_out: buffer, %k_out: buffer) {
+  %head_dim = config.get @ggml.zaya_cca_qk_norm.head_dim : index
+  %n_head = config.get @ggml.zaya_cca_qk_norm.n_head : index
+  %n_head_kv = config.get @ggml.zaya_cca_qk_norm.n_head_kv : index
+  %gqa = config.get @ggml.zaya_cca_qk_norm.gqa : index
+  %epsilon = config.get @ggml.zaya_cca_qk_norm.rms_epsilon : f32
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %h = kernel.workgroup.id<x> : index
+  %sum = scf.for %d = [%c0 to %head_dim step %c1](%partial = %c0_f32 : f32) -> (f32) {
+    %v = func.call @ggml_zaya_cca_qk_value(%h, %d, %head_dim, %n_head, %n_head_kv, %gqa, %conv, %qraw, %kraw) : (index, index, index, index, index, index, buffer, buffer, buffer) -> (f32)
+    %sq = scalar.mulf %v, %v : f32
+    %next = scalar.addf %partial, %sq : f32
+    scf.yield %next : f32
+  }
+  %head_dim_i32 = index.cast %head_dim : index to i32
+  %head_dim_f32 = scalar.sitofp %head_dim_i32 : i32 to f32
+  %mean = scalar.divf %sum, %head_dim_f32 : f32
+  %biased = scalar.addf %mean, %epsilon : f32
+  %root = scalar.sqrtf %biased : f32
+  %one = scalar.constant 1.0 : f32
+  %scale = scalar.divf %one, %root : f32
+  scf.for %d = [%c0 to %head_dim step %c1] {
+    %v = func.call @ggml_zaya_cca_qk_value(%h, %d, %head_dim, %n_head, %n_head_kv, %gqa, %conv, %qraw, %kraw) : (index, index, index, index, index, index, buffer, buffer, buffer) -> (f32)
+    func.call @ggml_zaya_cca_qk_store(%h, %d, %v, %scale, %head_dim, %n_head, %n_head_kv, %k_scale, %q_out, %k_out) : (index, index, f32, f32, index, index, index, buffer, buffer, buffer) -> ()
+  }
+  kernel.return
+}
+
+// Cases: head_dim 64, 4 query heads, 2 key heads (gqa 2). Run with
+// --config=ggml.zaya_cca_qk_norm.head_dim=64 --config=ggml.zaya_cca_qk_norm.n_head=4
+// --config=ggml.zaya_cca_qk_norm.n_head_kv=2 --config=ggml.zaya_cca_qk_norm.gqa=2
+// --config=ggml.zaya_cca_qk_norm.rms_epsilon=1e-24
+
+// Constant heads normalize to 1: C = 1, Q = 2, K = 4 give v = 4 for query heads and
+// 1 + (2 + 4) / 2 = 4 for key heads, so queries are 1 and keys are their scale (3).
+check.case public @ggml_zaya_cca_qk_norm_decode_exact_case {
+  %conv = check.generate.fill value(1.0) : tensor<384xf32>
+  %qraw = check.generate.fill value(2.0) : tensor<256xf32>
+  %kraw = check.generate.fill value(4.0) : tensor<128xf32>
+  %k_scale = check.generate.fill value(3.0) : tensor<2xf32>
+  %q_out = check.generate.fill value(-7.0) : tensor<256xf32>
+  %k_out = check.generate.fill value(-7.0) : tensor<128xf32>
+  %q_expected = check.generate.fill value(1.0) : tensor<256xf32>
+  %k_expected = check.generate.fill value(3.0) : tensor<128xf32>
+  kernel.launch @ggml_zaya_cca_qk_norm_decode_f32[](%conv, %qraw, %kraw, %k_scale, %q_out, %k_out) : [](tensor<384xf32>, tensor<256xf32>, tensor<128xf32>, tensor<2xf32>, tensor<256xf32>, tensor<128xf32>)
+  check.expect.close actual(%q_out) expected(%q_expected) atol(1.0e-5) rtol(1.0e-5) nan(same) : tensor<256xf32>
+  check.expect.close actual(%k_out) expected(%k_expected) atol(1.0e-5) rtol(1.0e-5) nan(same) : tensor<128xf32>
+  check.return
+}
+
+// Differential: independent random inputs against the reference kernel.
+check.case public @ggml_zaya_cca_qk_norm_decode_random_case {
+  %conv_seed = check.param.seed base(7300000000000021011) count(1) : i64
+  %qraw_seed = check.param.seed base(7300000000000021012) count(1) : i64
+  %kraw_seed = check.param.seed base(7300000000000021013) count(1) : i64
+  %scale_seed = check.param.seed base(7300000000000021014) count(1) : i64
+  %conv = check.generate.random.uniform seed(%conv_seed) range(-1.0 to 1.0) : tensor<384xf32>
+  %qraw = check.generate.random.uniform seed(%qraw_seed) range(-1.0 to 1.0) : tensor<256xf32>
+  %kraw = check.generate.random.uniform seed(%kraw_seed) range(-1.0 to 1.0) : tensor<128xf32>
+  %k_scale = check.generate.random.uniform seed(%scale_seed) range(0.5 to 2.0) : tensor<2xf32>
+  %q_out = check.generate.fill value(-7.0) : tensor<256xf32>
+  %k_out = check.generate.fill value(-7.0) : tensor<128xf32>
+  %q_expected = check.generate.fill value(7.0) : tensor<256xf32>
+  %k_expected = check.generate.fill value(7.0) : tensor<128xf32>
+  kernel.launch @ggml_zaya_cca_qk_norm_decode_reference_f32[](%conv, %qraw, %kraw, %k_scale, %q_expected, %k_expected) : [](tensor<384xf32>, tensor<256xf32>, tensor<128xf32>, tensor<2xf32>, tensor<256xf32>, tensor<128xf32>)
+  kernel.launch @ggml_zaya_cca_qk_norm_decode_f32[](%conv, %qraw, %kraw, %k_scale, %q_out, %k_out) : [](tensor<384xf32>, tensor<256xf32>, tensor<128xf32>, tensor<2xf32>, tensor<256xf32>, tensor<128xf32>)
+  check.expect.close actual(%q_out) expected(%q_expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<256xf32>
+  check.expect.close actual(%k_out) expected(%k_expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<128xf32>
+  check.return
+}
