@@ -223,6 +223,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-scale.cpp
     dispatch_registration/common/dispatch-small-rows.cpp
     dispatch_registration/common/dispatch-small-rows.h
+    dispatch_registration/common/dispatch-mul-mat-id-decode.cpp
+    dispatch_registration/common/dispatch-mul-mat-id-decode.h
     dispatch_registration/common/dispatch-scale.h
     dispatch_registration/common/dispatch-unary.cpp
     dispatch_registration/common/dispatch-unary.h
