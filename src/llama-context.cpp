@@ -2414,6 +2414,12 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * gf = model.build_graph(gparams);
 
+    // once, on the pristine graph (after scheduling, cross-backend copies hide the producers)
+    if (gf && !hadamard_verified && !model.hadamard.empty()) {
+        model.hadamard.verify_graph(gf);
+        hadamard_verified = true;
+    }
+
     this->n_outputs = save_n_outputs;
 
     // initialize scheduler with the specified graph
@@ -2453,6 +2459,7 @@ llm_graph_params llama_context::graph_params(
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
+        /*.hadamard    =*/ model.hadamard.empty() ? nullptr : &model.hadamard,
     };
 }
 

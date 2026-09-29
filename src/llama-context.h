@@ -370,6 +370,8 @@ private:
     llm_graph_result_ptr gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
 
+    bool hadamard_verified = false;  // prism.hadamard coverage checked on the first graph
+
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
 
