@@ -1,0 +1,272 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// ZAYA's CCA convolution for one token of one sequence (decode), in one dispatch. llama.cpp builds
+// it from ~35 graph nodes (13 dispatches on HRX): concat Q and K, append them to the two-step conv
+// state, a depthwise 2-tap conv plus bias, then per group of 128 channels a 2-tap grouped conv
+// (two F16 matmuls over the depthwise outputs at steps t-1 and t), their sum, and a bias.
+//
+// Per channel c (x = Q or K projection at c, (s0, s1) the conv state, (w0, w1) and b the depthwise
+// weights and bias):
+//   d0[c] = s0 * w0 + s1 * w1 + b          d1[c] = s1 * w0 + x * w1 + b
+// Per output o in group g = o / 128 (W is [128 ic, channels, 2 taps], ic fastest):
+//   out[o] = sum_ic (W[ic, o, 0] * d0[128 g + ic] + W[ic, o, 1] * d1[128 g + ic]) + grp_bias[o]
+// and the new conv state of channel o is (s1, x).
+//
+// One wave64 per output: lanes cover the 128 input channels of the group two at a time, so the F16
+// weight reads are contiguous, and each lane recomputes the two depthwise values it needs (a few
+// loads) instead of staging them through memory. Group size 128 and the channel counts are
+// compile-time config, so every divisor is a constant.
+
+amdgpu.target<gfx11-generic> @ggml_zaya_cca_conv_decode_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.zaya_cca_conv.channels : %value: index where [range(%value, 128, 8192), mul(%value, 128)]
+
+config.decl @ggml.zaya_cca_conv.q_size : %value: index where [range(%value, 1, 8191)]
+
+// The depthwise conv of channel %c at both steps, and the channel's new input x.
+func.def inline @ggml_zaya_cca_depthwise(%c: index, %channels: index, %q_size: index, %qraw: buffer, %kraw: buffer, %state: buffer, %dw: buffer, %dw_bias: buffer) -> (f32, f32, f32, f32) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %zero_offset = index.constant 0 : offset
+  %state_size = index.mul %channels, %c2 : index
+  %i0_raw = index.mul %c, %c2 : index
+  %i1_raw = index.add %i0_raw, %c1 : index
+  %i0, %state_bound0 = index.assume %i0_raw, %state_size [lt(%i0_raw, %state_size)] : index, index
+  %i1, %state_bound1 = index.assume %i1_raw, %state_size [lt(%i1_raw, %state_size)] : index, index
+  %state_view0 = buffer.view %state[%zero_offset] : buffer -> view<[%state_bound0]xf32>
+  %state_view1 = buffer.view %state[%zero_offset] : buffer -> view<[%state_bound1]xf32>
+  %dw_view0 = buffer.view %dw[%zero_offset] : buffer -> view<[%state_bound0]xf32>
+  %dw_view1 = buffer.view %dw[%zero_offset] : buffer -> view<[%state_bound1]xf32>
+  %s0 = view.load %state_view0[%i0] : view<[%state_bound0]xf32> -> f32
+  %s1 = view.load %state_view1[%i1] : view<[%state_bound1]xf32> -> f32
+  %w0 = view.load %dw_view0[%i0] : view<[%state_bound0]xf32> -> f32
+  %w1 = view.load %dw_view1[%i1] : view<[%state_bound1]xf32> -> f32
+  %cb, %channel_bound = index.assume %c, %channels [lt(%c, %channels)] : index, index
+  %bias_view = buffer.view %dw_bias[%zero_offset] : buffer -> view<[%channel_bound]xf32>
+  %b = view.load %bias_view[%cb] : view<[%channel_bound]xf32> -> f32
+  %is_q = index.cmp ult, %c, %q_size : index
+  %x = scf.if %is_q -> (f32) {
+    %qi, %q_bound = index.assume %c, %q_size [lt(%c, %q_size)] : index, index
+    %q_view = buffer.view %qraw[%zero_offset] : buffer -> view<[%q_bound]xf32>
+    %qv = view.load %q_view[%qi] : view<[%q_bound]xf32> -> f32
+    scf.yield %qv : f32
+  } else {
+    %k_size = index.sub %channels, %q_size : index
+    %ki_raw = index.sub %c, %q_size : index
+    %ki, %k_bound = index.assume %ki_raw, %k_size [lt(%ki_raw, %k_size)] : index, index
+    %k_view = buffer.view %kraw[%zero_offset] : buffer -> view<[%k_bound]xf32>
+    %kv = view.load %k_view[%ki] : view<[%k_bound]xf32> -> f32
+    scf.yield %kv : f32
+  }
+  %p00 = scalar.mulf %s0, %w0 : f32
+  %p01 = scalar.mulf %s1, %w1 : f32
+  %sum0 = scalar.addf %p00, %p01 : f32
+  %d0 = scalar.addf %sum0, %b : f32
+  %p10 = scalar.mulf %s1, %w0 : f32
+  %p11 = scalar.mulf %x, %w1 : f32
+  %sum1 = scalar.addf %p10, %p11 : f32
+  %d1 = scalar.addf %sum1, %b : f32
+  func.return %d0, %d1, %x, %s1 : f32, f32, f32, f32
+}
+
+// W[ic, o, tap] as f32.
+func.def inline @ggml_zaya_cca_weight(%ic: index, %o: index, %tap: index, %channels: index, %weight: buffer) -> (f32) {
+  %c128 = index.constant 128 : index
+  %zero_offset = index.constant 0 : offset
+  %tap_size = index.mul %channels, %c128 : index
+  %c2 = index.constant 2 : index
+  %weight_size = index.mul %tap_size, %c2 : index
+  %row = index.mul %o, %c128 : index
+  %in_tap = index.add %row, %ic : index
+  %tap_base = index.mul %tap, %tap_size : index
+  %wi_raw = index.add %tap_base, %in_tap : index
+  %wi, %weight_bound = index.assume %wi_raw, %weight_size [lt(%wi_raw, %weight_size)] : index, index
+  %weight_view = buffer.view %weight[%zero_offset] : buffer -> view<[%weight_bound]xf16>
+  %wh = view.load %weight_view[%wi] : view<[%weight_bound]xf16> -> f16
+  %wf = scalar.extf %wh : f16 to f32
+  func.return %wf : f32
+}
+
+kernel.def target(@ggml_zaya_cca_conv_decode_gfx11_wave64) export("ggml_zaya_cca_conv_decode_f32") @ggml_zaya_cca_conv_decode_f32() {
+  %channels = config.get @ggml.zaya_cca_conv.channels : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %workgroups = index.div %channels, %c4 : index
+  kernel.launch.config workgroups(%workgroups, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%qraw: buffer, %kraw: buffer, %state: buffer, %dw: buffer, %dw_bias: buffer, %weight: buffer, %grp_bias: buffer, %output: buffer, %new_state: buffer) {
+  %channels = config.get @ggml.zaya_cca_conv.channels : index
+  %q_size = config.get @ggml.zaya_cca_conv.q_size : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c128 = index.constant 128 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %zero_offset = index.constant 0 : offset
+  %workgroup = kernel.workgroup.id<x> : index
+  %wave0 = kernel.subgroup.id : index
+  %wave = index.assume %wave0 [range(%wave0, 0, 3)] : index
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+  %o_base = index.mul %workgroup, %c4 : index
+  %o0 = index.add %o_base, %wave : index
+  %valid = index.cmp ult, %o0, %channels : index
+  scf.if %valid {
+    %o, %output_bound = index.assume %o0, %channels [lt(%o0, %channels)] : index, index
+    %group = index.div %o, %c128 : index
+    %group_base = index.mul %group, %c128 : index
+    %ic_base = index.mul %lane, %c2 : index
+    %acc = scf.for %j = [%c0 to %c2 step %c1](%partial = %c0_f32 : f32) -> (f32) {
+      %ic = index.add %ic_base, %j : index
+      %cin = index.add %group_base, %ic : index
+      %d0, %d1, %x_in, %s1_in = func.call @ggml_zaya_cca_depthwise(%cin, %channels, %q_size, %qraw, %kraw, %state, %dw, %dw_bias) : (index, index, index, buffer, buffer, buffer, buffer, buffer) -> (f32, f32, f32, f32)
+      %w0 = func.call @ggml_zaya_cca_weight(%ic, %o, %c0, %channels, %weight) : (index, index, index, index, buffer) -> (f32)
+      %w1 = func.call @ggml_zaya_cca_weight(%ic, %o, %c1, %channels, %weight) : (index, index, index, index, buffer) -> (f32)
+      %t0 = scalar.mulf %w0, %d0 : f32
+      %t1 = scalar.mulf %w1, %d1 : f32
+      %both = scalar.addf %t0, %t1 : f32
+      %next = scalar.addf %partial, %both : f32
+      scf.yield %next : f32
+    }
+    %sum = kernel.subgroup.reduce<addf> %acc : f32
+    %is_lane_zero = index.cmp eq, %lane, %c0 : index
+    scf.if %is_lane_zero {
+      %grp_view = buffer.view %grp_bias[%zero_offset] : buffer -> view<[%output_bound]xf32>
+      %gb = view.load %grp_view[%o] : view<[%output_bound]xf32> -> f32
+      %result = scalar.addf %sum, %gb : f32
+      %out_view = buffer.view %output[%zero_offset] : buffer -> view<[%output_bound]xf32>
+      view.store %result, %out_view[%o] : f32, view<[%output_bound]xf32>
+      %e0, %e1, %x_own, %s1_own = func.call @ggml_zaya_cca_depthwise(%o, %channels, %q_size, %qraw, %kraw, %state, %dw, %dw_bias) : (index, index, index, buffer, buffer, buffer, buffer, buffer) -> (f32, f32, f32, f32)
+      %state_size = index.mul %channels, %c2 : index
+      %n0_raw = index.mul %o, %c2 : index
+      %n1_raw = index.add %n0_raw, %c1 : index
+      %n0, %new_bound0 = index.assume %n0_raw, %state_size [lt(%n0_raw, %state_size)] : index, index
+      %n1, %new_bound1 = index.assume %n1_raw, %state_size [lt(%n1_raw, %state_size)] : index, index
+      %new_view0 = buffer.view %new_state[%zero_offset] : buffer -> view<[%new_bound0]xf32>
+      %new_view1 = buffer.view %new_state[%zero_offset] : buffer -> view<[%new_bound1]xf32>
+      view.store %s1_own, %new_view0[%n0] : f32, view<[%new_bound0]xf32>
+      view.store %x_own, %new_view1[%n1] : f32, view<[%new_bound1]xf32>
+    }
+  }
+  kernel.return
+}
+
+// Reference for the cases: one thread per output, a plain loop over the group's input channels.
+kernel.def target(@ggml_zaya_cca_conv_decode_gfx11_wave64) export("ggml_zaya_cca_conv_decode_reference_f32") @ggml_zaya_cca_conv_decode_reference_f32() {
+  %channels = config.get @ggml.zaya_cca_conv.channels : index
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  %workgroups = index.div %channels, %c64 : index
+  kernel.launch.config workgroups(%workgroups, %c1, %c1) workgroup_size(%c64, %c1, %c1) : index
+} launch(%qraw: buffer, %kraw: buffer, %state: buffer, %dw: buffer, %dw_bias: buffer, %weight: buffer, %grp_bias: buffer, %output: buffer, %new_state: buffer) {
+  %channels = config.get @ggml.zaya_cca_conv.channels : index
+  %q_size = config.get @ggml.zaya_cca_conv.q_size : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+  %zero_offset = index.constant 0 : offset
+  %workgroup = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %o_base = index.mul %workgroup, %c64 : index
+  %o0 = index.add %o_base, %item : index
+  %valid = index.cmp ult, %o0, %channels : index
+  scf.if %valid {
+    %o, %output_bound = index.assume %o0, %channels [lt(%o0, %channels)] : index, index
+    %group = index.div %o, %c128 : index
+    %group_base = index.mul %group, %c128 : index
+    %acc = scf.for %ic = [%c0 to %c128 step %c1](%partial = %c0_f32 : f32) -> (f32) {
+      %cin = index.add %group_base, %ic : index
+      %d0, %d1, %x_in, %s1_in = func.call @ggml_zaya_cca_depthwise(%cin, %channels, %q_size, %qraw, %kraw, %state, %dw, %dw_bias) : (index, index, index, buffer, buffer, buffer, buffer, buffer) -> (f32, f32, f32, f32)
+      %w0 = func.call @ggml_zaya_cca_weight(%ic, %o, %c0, %channels, %weight) : (index, index, index, index, buffer) -> (f32)
+      %w1 = func.call @ggml_zaya_cca_weight(%ic, %o, %c1, %channels, %weight) : (index, index, index, index, buffer) -> (f32)
+      %t0 = scalar.mulf %w0, %d0 : f32
+      %t1 = scalar.mulf %w1, %d1 : f32
+      %p0 = scalar.addf %partial, %t0 : f32
+      %p1 = scalar.addf %p0, %t1 : f32
+      scf.yield %p1 : f32
+    }
+    %grp_view = buffer.view %grp_bias[%zero_offset] : buffer -> view<[%output_bound]xf32>
+    %gb = view.load %grp_view[%o] : view<[%output_bound]xf32> -> f32
+    %result = scalar.addf %acc, %gb : f32
+    %out_view = buffer.view %output[%zero_offset] : buffer -> view<[%output_bound]xf32>
+    view.store %result, %out_view[%o] : f32, view<[%output_bound]xf32>
+    %e0, %e1, %x_own, %s1_own = func.call @ggml_zaya_cca_depthwise(%o, %channels, %q_size, %qraw, %kraw, %state, %dw, %dw_bias) : (index, index, index, buffer, buffer, buffer, buffer, buffer) -> (f32, f32, f32, f32)
+    %state_size = index.mul %channels, %c2 : index
+    %n0_raw = index.mul %o, %c2 : index
+    %n1_raw = index.add %n0_raw, %c1 : index
+    %n0, %new_bound0 = index.assume %n0_raw, %state_size [lt(%n0_raw, %state_size)] : index, index
+    %n1, %new_bound1 = index.assume %n1_raw, %state_size [lt(%n1_raw, %state_size)] : index, index
+    %new_view0 = buffer.view %new_state[%zero_offset] : buffer -> view<[%new_bound0]xf32>
+    %new_view1 = buffer.view %new_state[%zero_offset] : buffer -> view<[%new_bound1]xf32>
+    view.store %s1_own, %new_view0[%n0] : f32, view<[%new_bound0]xf32>
+    view.store %x_own, %new_view1[%n1] : f32, view<[%new_bound1]xf32>
+  }
+  kernel.return
+}
+
+// Cases: channels = 256 (two groups), q_size = 160 (the Q/K split falls inside group 1).
+// Run with --config=ggml.zaya_cca_conv.channels=256 --config=ggml.zaya_cca_conv.q_size=160.
+
+// Exact: state 1, (w0, w1) = (0, 1), b = 1, x = 2, W = 0.25: d0 = 2, d1 = 3, so every output is
+// 128 * 0.25 * 5 = 160 plus grp_bias[o] = o; the new state is (s1, x) = (1, 2).
+check.case public @ggml_zaya_cca_conv_decode_exact_case {
+  %qraw = check.generate.fill value(2.0) : tensor<160xf32>
+  %kraw = check.generate.fill value(2.0) : tensor<96xf32>
+  %state = check.generate.fill value(1.0) : tensor<512xf32>
+  %dw = check.generate.iota offset(0.0) step(1.0) period(2) : tensor<512xf32>
+  %dw_bias = check.generate.fill value(1.0) : tensor<256xf32>
+  %weight = check.generate.fill value(0.25) : tensor<65536xf16>
+  %grp_bias = check.generate.iota offset(0.0) step(1.0) : tensor<256xf32>
+  %output = check.generate.fill value(-7.0) : tensor<256xf32>
+  %new_state = check.generate.fill value(-7.0) : tensor<512xf32>
+  %expected = check.generate.iota offset(160.0) step(1.0) : tensor<256xf32>
+  %expected_state = check.generate.iota offset(1.0) step(1.0) period(2) : tensor<512xf32>
+  kernel.launch @ggml_zaya_cca_conv_decode_f32[](%qraw, %kraw, %state, %dw, %dw_bias, %weight, %grp_bias, %output, %new_state) : [](tensor<160xf32>, tensor<96xf32>, tensor<512xf32>, tensor<512xf32>, tensor<256xf32>, tensor<65536xf16>, tensor<256xf32>, tensor<256xf32>, tensor<512xf32>)
+  check.expect.equal actual(%output) expected(%expected) : tensor<256xf32>
+  check.expect.equal actual(%new_state) expected(%expected_state) : tensor<512xf32>
+  check.return
+}
+
+// Differential: independent random inputs for every binding against the reference kernel.
+check.case public @ggml_zaya_cca_conv_decode_random_case {
+  %qraw_seed = check.param.seed base(7300000000011000033) count(1) : i64
+  %kraw_seed = check.param.seed base(7300000000012000036) count(1) : i64
+  %state_seed = check.param.seed base(7300000000013000039) count(1) : i64
+  %dw_seed = check.param.seed base(7300000000014000042) count(1) : i64
+  %dw_bias_seed = check.param.seed base(7300000000015000045) count(1) : i64
+  %weight_seed = check.param.seed base(7300000000016000048) count(1) : i64
+  %grp_bias_seed = check.param.seed base(7300000000017000051) count(1) : i64
+  %qraw = check.generate.random.uniform seed(%qraw_seed) range(-1.0 to 1.0) : tensor<160xf32>
+  %kraw = check.generate.random.uniform seed(%kraw_seed) range(-1.0 to 1.0) : tensor<96xf32>
+  %state = check.generate.random.uniform seed(%state_seed) range(-1.0 to 1.0) : tensor<512xf32>
+  %dw = check.generate.random.uniform seed(%dw_seed) range(-1.0 to 1.0) : tensor<512xf32>
+  %dw_bias = check.generate.random.uniform seed(%dw_bias_seed) range(-0.5 to 0.5) : tensor<256xf32>
+  %weight = check.generate.random.uniform seed(%weight_seed) range(-0.25 to 0.25) : tensor<65536xf16>
+  %grp_bias = check.generate.random.uniform seed(%grp_bias_seed) range(-0.5 to 0.5) : tensor<256xf32>
+  %output = check.generate.fill value(-7.0) : tensor<256xf32>
+  %new_state = check.generate.fill value(-7.0) : tensor<512xf32>
+  %expected = check.generate.fill value(7.0) : tensor<256xf32>
+  %expected_state = check.generate.fill value(7.0) : tensor<512xf32>
+  kernel.launch @ggml_zaya_cca_conv_decode_reference_f32[](%qraw, %kraw, %state, %dw, %dw_bias, %weight, %grp_bias, %expected, %expected_state) : [](tensor<160xf32>, tensor<96xf32>, tensor<512xf32>, tensor<512xf32>, tensor<256xf32>, tensor<65536xf16>, tensor<256xf32>, tensor<256xf32>, tensor<512xf32>)
+  kernel.launch @ggml_zaya_cca_conv_decode_f32[](%qraw, %kraw, %state, %dw, %dw_bias, %weight, %grp_bias, %output, %new_state) : [](tensor<160xf32>, tensor<96xf32>, tensor<512xf32>, tensor<512xf32>, tensor<256xf32>, tensor<65536xf16>, tensor<256xf32>, tensor<256xf32>, tensor<512xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-4) rtol(1.0e-4) nan(same) : tensor<256xf32>
+  check.expect.equal actual(%new_state) expected(%expected_state) : tensor<512xf32>
+  check.return
+}

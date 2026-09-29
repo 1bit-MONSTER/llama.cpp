@@ -232,6 +232,9 @@
     },
     {
       "path": "ops/res_scale_pair_f32.loom"
+    },
+    {
+      "path": "ops/zaya_cca_conv_decode_f32.loom"
     }
   ],
   "exports": [
@@ -7502,6 +7505,45 @@
         "mode": "direct",
         "primary_sources": [
           "ops/res_scale_pair_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_zaya_cca_conv_decode_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_zaya_cca_conv_decode_f32",
+      "source": "ops/zaya_cca_conv_decode_f32.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "qraw",
+        "kraw",
+        "state",
+        "dw",
+        "dw_bias",
+        "weight",
+        "grp_bias",
+        "output",
+        "new_state"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/zaya_cca_conv_decode_f32.loom"
         ],
         "library_sources": []
       },
