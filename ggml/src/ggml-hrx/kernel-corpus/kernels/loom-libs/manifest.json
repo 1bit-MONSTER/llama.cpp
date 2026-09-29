@@ -229,6 +229,9 @@
     },
     {
       "path": "ops/mul_mat_id_decode_f32.loom"
+    },
+    {
+      "path": "ops/res_scale_pair_f32.loom"
     }
   ],
   "exports": [
@@ -7446,6 +7449,55 @@
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom"
       ]
+    },
+    {
+      "name": "ggml_res_scale_pair_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_res_scale_pair_f32",
+      "source": "ops/res_scale_pair_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "row_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "row_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "a",
+        "bias",
+        "scale",
+        "addend",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/res_scale_pair_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
     }
   ],
   "link_modules": [],
