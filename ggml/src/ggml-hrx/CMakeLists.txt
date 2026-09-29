@@ -277,6 +277,8 @@ ggml_add_backend_library(ggml-hrx
     graph/value-map.cpp
     graph/value-map.h
     runtime/command-program-executor.cpp
+    runtime/hrx-sleeping-wait.cpp
+    runtime/hrx-sleeping-wait.h
     runtime/command-program-executor.h
     runtime/graph-executor.cpp
     runtime/graph-executor.h

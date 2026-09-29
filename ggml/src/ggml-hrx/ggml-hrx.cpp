@@ -10,6 +10,7 @@
 #include "hrx_runtime.h"
 #include "kernel-corpus/kernel-corpus.h"
 #include "loom-jit.h"
+#include "runtime/hrx-sleeping-wait.h"
 #include "runtime/graph-executor.h"
 #include "runtime/graph-program-cache.h"
 #include "runtime/kernel-executable-cache.h"
@@ -502,7 +503,8 @@ static bool backend_copy_tensor_async(ggml_backend_t      backend_src,
 
 static void backend_synchronize(ggml_backend_t backend) {
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
-    if (HRX_CHECK(hrx_stream_synchronize(context->stream))) {
+    static thread_local ggml::hrx::WaitHistory synchronize_wait_history;
+    if (HRX_CHECK(ggml::hrx::stream_synchronize_sleeping(context->stream, synchronize_wait_history))) {
         context->graph_replay_state.mark_stream_synchronized();
     }
 }
