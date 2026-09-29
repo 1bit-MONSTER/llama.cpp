@@ -16,6 +16,7 @@
 #include "dispatch-grouped-mul-mat.h"
 #include "dispatch-small-rows.h"
 #include "dispatch-mul-mat-id-decode.h"
+#include "dispatch-res-scale-pair.h"
 #include "dispatch-unary.h"
 
 namespace ggml::hrx {
@@ -36,6 +37,7 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_scale_dispatch(registry);
     register_small_rows_dispatches(registry);
     register_mul_mat_id_decode_dispatches(registry);
+    register_res_scale_pair_dispatches(registry);
     register_unary_dispatch(registry);
     register_rmsnorm_dispatches(registry);
 }

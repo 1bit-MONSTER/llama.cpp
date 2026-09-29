@@ -1,0 +1,79 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// One side of ZAYA's residual scale in one dispatch:
+//   out = (a + b) * s [+ y]
+// a, y and out are [row_size, rows]; b and s are [row_size] and broadcast over rows. The bias b
+// (config has_bias) and the addend y (config has_addend: the other side, already computed) are
+// optional. Every element uses the same add, mul, add order as the ADD / MUL nodes it replaces,
+// so the result is bitwise the same; only the dispatches (and their gaps) go.
+
+amdgpu.target<gfx11-generic> @ggml_res_scale_pair_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.res_scale_pair_f32.has_bias : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.res_scale_pair_f32.has_addend : %value: index where [range(%value, 0, 1)]
+
+kernel.def target(@ggml_res_scale_pair_f32_gfx11_wave64) export("ggml_res_scale_pair_f32") @ggml_res_scale_pair_f32(%element_count: index, %row_size: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroup_count = index.div %rounded, %twofiftysix : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%element_count: index, %row_size: index, %a: buffer, %b: buffer, %s: buffer, %y: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %row = index.assume %row_size [range(%row_size, 1, 134217728)] : index
+  %has_bias = config.get @ggml.res_scale_pair_f32.has_bias : index
+  %has_addend = config.get @ggml.res_scale_pair_f32.has_addend : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %twofiftysix = index.constant 256 : index
+  %zero = index.constant 0 : index
+  %base0 = index.mul %workgroup, %twofiftysix : index
+  %linear0 = index.add %base0, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %zero_offset = index.constant 0 : offset
+  %a_view = buffer.view %a[%zero_offset] : buffer -> view<[%count]xf32>
+  %b_view = buffer.view %b[%zero_offset] : buffer -> view<[%row]xf32>
+  %s_view = buffer.view %s[%zero_offset] : buffer -> view<[%row]xf32>
+  %y_view = buffer.view %y[%zero_offset] : buffer -> view<[%count]xf32>
+  %output_view = buffer.view %output[%zero_offset] : buffer -> view<[%count]xf32>
+  scf.if %in_bounds {
+    %column = index.rem %linear, %row : index
+    %a_value = view.load %a_view[%linear] : view<[%count]xf32> -> f32
+    %s_value = view.load %s_view[%column] : view<[%row]xf32> -> f32
+    %use_bias = index.cmp ne, %has_bias, %zero : index
+    %use_addend = index.cmp ne, %has_addend, %zero : index
+    %biased = scf.if %use_bias -> (f32) {
+      %b_value = view.load %b_view[%column] : view<[%row]xf32> -> f32
+      %sum = scalar.addf %a_value, %b_value : f32
+      scf.yield %sum : f32
+    } else {
+      scf.yield %a_value : f32
+    }
+    %scaled = scalar.mulf %biased, %s_value : f32
+    %result = scf.if %use_addend -> (f32) {
+      %y_value = view.load %y_view[%linear] : view<[%count]xf32> -> f32
+      %total = scalar.addf %scaled, %y_value : f32
+      scf.yield %total : f32
+    } else {
+      scf.yield %scaled : f32
+    }
+    view.store %result, %output_view[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}
