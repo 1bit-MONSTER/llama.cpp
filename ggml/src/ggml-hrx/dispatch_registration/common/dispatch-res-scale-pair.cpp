@@ -150,6 +150,7 @@ bool match_res_scale_pair(const DispatchMatchContext & context, DispatchMatch & 
     dispatch.kernel = make_kernel_specialization(kResScalePairKernel);
     dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
     dispatch.kernel.integer_parameters.emplace("row_size", output->ne[0]);
+    dispatch.kernel.integer_parameters.emplace("row_count", output->ne[1]);
     dispatch.kernel.compile_parameters.emplace("ggml.res_scale_pair_f32.has_bias", bias != nullptr ? "1" : "0");
     dispatch.kernel.compile_parameters.emplace("ggml.res_scale_pair_f32.has_addend", addend != nullptr ? "1" : "0");
     dispatch.bindings.push_back(source(a));
