@@ -227,6 +227,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-mul-mat-id-decode.h
     dispatch_registration/common/dispatch-res-scale-pair.cpp
     dispatch_registration/common/dispatch-res-scale-pair.h
+    dispatch_registration/common/dispatch-zaya-cca-conv.cpp
+    dispatch_registration/common/dispatch-zaya-cca-conv.h
     dispatch_registration/common/dispatch-scale.h
     dispatch_registration/common/dispatch-unary.cpp
     dispatch_registration/common/dispatch-unary.h
