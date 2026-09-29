@@ -220,6 +220,15 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
     ggml_tensor * inp_out_ids = build_inp_out_ids();
     ggml_tensor * prev_router = nullptr;
 
+    // A CONT of a fresh, already contiguous result (not a view) copies it for nothing; each copy is
+    // a dispatch per layer on a GPU backend. Views keep their CONT even when contiguous: on HRX the
+    // consumers of a sliced or permuted view (flash attention, the grouped conv matmul) take a
+    // much slower strided path (2026-09-29). The MoE router keeps its CONTs as well: dropping them
+    // made each layer wait ~110 us before the top-k gather.
+    const auto cont_if_needed = [&](ggml_tensor * t) {
+        return ggml_is_contiguous(t) && t->view_src == nullptr ? t : ggml_cont(ctx0, t);
+    };
+
     const auto apply_res_scale = [&](ggml_tensor * x, ggml_tensor * scale, ggml_tensor * bias, const char * name, int il) {
         if (scale == nullptr) {
             return x;
@@ -285,10 +294,10 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         cb(Qraw, "Qraw", il);
         cb(Kraw, "Kraw", il);
 
-        ggml_tensor * cur_state_src = ggml_cont(ctx0, cur);
+        ggml_tensor * cur_state_src = cont_if_needed(cur);
         ggml_tensor * cur_seq = ggml_reshape_3d(ctx0, cur_state_src, n_embd, n_seq_tokens, n_seqs);
 
-        ggml_tensor * hs_d = ggml_reshape_3d(ctx0, ggml_cont(ctx0, prev_hs), n_embd, 1, n_seqs);
+        ggml_tensor * hs_d = ggml_reshape_3d(ctx0, cont_if_needed(prev_hs), n_embd, 1, n_seqs);
         if (n_seq_tokens > 1) {
             ggml_tensor * cur_shift = ggml_view_3d(ctx0, cur_seq, n_embd, n_seq_tokens - 1, n_seqs,
                     cur_seq->nb[1],
@@ -296,7 +305,7 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
                     0);
             hs_d = ggml_concat(ctx0, hs_d, cur_shift, 1);
         }
-        hs_d = ggml_reshape_2d(ctx0, ggml_cont(ctx0, hs_d), n_embd, n_tokens);
+        hs_d = ggml_reshape_2d(ctx0, cont_if_needed(hs_d), n_embd, n_tokens);
         cb(hs_d, "cca_hs_d", il);
 
         ggml_tensor * V1 = ggml_mul_mat(ctx0, layer.cca_val_proj1, cur);
@@ -318,8 +327,8 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         // here copies for nothing, and with this block entirely on HRX the copied K read back wrong
         // in 512-token batches (wikitext perplexity 71.8 instead of 21.6; right with a CPU split
         // after the copy, or without the copy). Decode was unaffected.
-        ggml_tensor * Qpre = ggml_reshape_3d(ctx0, ggml_is_contiguous(Qraw) ? Qraw : ggml_cont(ctx0, Qraw), n_embd_head, n_head, n_tokens);
-        ggml_tensor * Kpre = ggml_reshape_3d(ctx0, ggml_is_contiguous(Kraw) ? Kraw : ggml_cont(ctx0, Kraw), n_embd_head, n_head_kv, n_tokens);
+        ggml_tensor * Qpre = ggml_reshape_3d(ctx0, ggml_is_contiguous(Qraw) ? Qraw : cont_if_needed(Qraw), n_embd_head, n_head, n_tokens);
+        ggml_tensor * Kpre = ggml_reshape_3d(ctx0, ggml_is_contiguous(Kraw) ? Kraw : cont_if_needed(Kraw), n_embd_head, n_head_kv, n_tokens);
 
         ggml_tensor * Kpre_grouped = ggml_reshape_4d(ctx0, Kpre, n_embd_head, 1, n_head_kv, n_tokens);
         Kpre_grouped = ggml_repeat_4d(ctx0, Kpre_grouped, n_embd_head, n_gqa, n_head_kv, n_tokens);
@@ -329,7 +338,7 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
 
         ggml_tensor * Qgroup = ggml_reshape_4d(ctx0, Qpre, n_embd_head, n_gqa, n_head_kv, n_tokens);
         Qgroup = ggml_permute(ctx0, Qgroup, 1, 0, 2, 3);
-        Qgroup = ggml_cont(ctx0, Qgroup);
+        Qgroup = cont_if_needed(Qgroup);
         ggml_tensor * Qmean = ggml_scale(ctx0, ggml_sum_rows(ctx0, Qgroup), 1.0f/n_gqa);  // MEAN, as SUM_ROWS + SCALE
         Qmean = ggml_reshape_3d(ctx0, Qmean, n_embd_head, n_head_kv, n_tokens);
         ggml_tensor * qk_mean_k = ggml_scale(ctx0, ggml_add(ctx0, Qmean, Kpre), 0.5f);
@@ -340,7 +349,7 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         ggml_tensor * QKraw_t = ggml_reshape_3d(ctx0, QKraw, n_qk, n_seq_tokens, n_seqs);
         // with one token per sequence the transpose moves no data: a reshape does it without a copy
         QKraw_t = n_seq_tokens == 1 ? ggml_reshape_3d(ctx0, QKraw_t, 1, n_qk, n_seqs)
-                                    : ggml_cont(ctx0, ggml_transpose(ctx0, QKraw_t));
+                                    : cont_if_needed(ggml_transpose(ctx0, QKraw_t));
 
         ggml_tensor * conv_input = ggml_concat(ctx0, conv_state, QKraw_t, 0);
         cb(conv_input, "cca_conv_input", il);
@@ -356,7 +365,7 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
                 conv_states_all->nb[1],
                 kv_head*conv_states_all->nb[1]);
         ggml_build_forward_expand(gf, ggml_cpy(ctx0,
-                ggml_reshape_2d(ctx0, ggml_cont(ctx0, last_conv_states), conv_state_size, n_seqs),
+                ggml_reshape_2d(ctx0, cont_if_needed(last_conv_states), conv_state_size, n_seqs),
                 conv_state_update_target));
 
         ggml_tensor * last_hs = ggml_view_2d(ctx0, cur_seq, n_embd, n_seqs,
@@ -365,11 +374,11 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         ggml_tensor * prev_hs_update_target = ggml_view_2d(ctx0, hs_states_all, n_embd, n_seqs,
                 hs_states_all->nb[1],
                 kv_head*hs_states_all->nb[1]);
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_cont(ctx0, last_hs), prev_hs_update_target));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, cont_if_needed(last_hs), prev_hs_update_target));
 
         ggml_tensor * conv_dw = layer.ssm_conv1d;
         if (conv_dw->type != GGML_TYPE_F32) {
-            conv_dw = ggml_cont(ctx0, ggml_cast(ctx0, conv_dw, GGML_TYPE_F32));
+            conv_dw = cont_if_needed(ggml_cast(ctx0, conv_dw, GGML_TYPE_F32));
         }
         ggml_tensor * QK = ggml_ssm_conv(ctx0, conv_input, conv_dw);
         // Grouped conv (2 taps, no padding) as one batched matmul per tap: the weights are
@@ -389,7 +398,7 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         for (int tap = 0; tap < 2; ++tap) {
             ggml_tensor * x = ggml_view_4d(ctx0, QK, ic_g, n_groups, n_seq_tokens, n_seqs,
                     ic_g*ggml_element_size(QK), QK->nb[1], QK->nb[2], tap*QK->nb[1]);
-            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 3, 1, 2));              // [IC_G, T, S, G]
+            x = cont_if_needed(ggml_permute(ctx0, x, 0, 3, 1, 2));              // [IC_G, T, S, G]
             x = ggml_reshape_3d(ctx0, x, ic_g, n_seq_tokens*n_seqs, n_groups);   // [IC_G, T*S, G]
             ggml_tensor * w = ggml_view_3d(ctx0, w_grp, ic_g, ic_g, n_groups,
                     w_grp->nb[1], ic_g*w_grp->nb[1], tap*w_grp->nb[2]);         // [IC_G, OC_G, G]
@@ -397,7 +406,7 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
             grp = grp ? ggml_add(ctx0, grp, y) : y;
         }
         grp = ggml_reshape_4d(ctx0, grp, ic_g, n_seq_tokens, n_seqs, n_groups);  // [OC_G, T, S, G]
-        QK = ggml_cont(ctx0, ggml_permute(ctx0, grp, 0, 2, 3, 1));               // [OC_G, G, T, S]
+        QK = cont_if_needed(ggml_permute(ctx0, grp, 0, 2, 3, 1));               // [OC_G, G, T, S]
         QK = ggml_reshape_2d(ctx0, QK, n_qk, n_tokens);
         QK = ggml_add(ctx0, QK, layer.cca_conv_grp_b);
         cb(QK, "QK_grp", il);
@@ -405,8 +414,8 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         ggml_tensor * Q_conv = ggml_view_2d(ctx0, QK, n_embd_q, n_tokens, QK->nb[1], 0);
         ggml_tensor * K_conv = ggml_view_2d(ctx0, QK, n_embd_k, n_tokens, QK->nb[1], n_embd_q*ggml_element_size(QK));
 
-        ggml_tensor * Qcur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, Q_conv), n_embd_head, n_head, n_tokens);
-        ggml_tensor * Kcur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, K_conv), n_embd_head, n_head_kv, n_tokens);
+        ggml_tensor * Qcur = ggml_reshape_3d(ctx0, cont_if_needed(Q_conv), n_embd_head, n_head, n_tokens);
+        ggml_tensor * Kcur = ggml_reshape_3d(ctx0, cont_if_needed(K_conv), n_embd_head, n_head_kv, n_tokens);
 
         Qcur = ggml_add(ctx0, Qcur, qk_mean_q);
         Kcur = ggml_add(ctx0, Kcur, qk_mean_k);
@@ -432,7 +441,7 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
 
-        Vcur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, Vcur), n_embd_head, n_head_kv, n_tokens);
+        Vcur = ggml_reshape_3d(ctx0, cont_if_needed(Vcur), n_embd_head, n_head_kv, n_tokens);
 
         cur = build_attn(inp->get_attn(), vlora ? nullptr : layer.wo, nullptr, nullptr,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
