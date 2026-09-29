@@ -525,7 +525,10 @@ static bool match_mul_mat_swiglu_q5_projection_dispatch(const DispatchMatchConte
     gate_up.bindings.push_back(
         symmetric_i4_weight_binding(*match.gate_up.up_weight, match.gate_up.input_size, match.gate_up.output_size));
     gate_up.bindings.push_back({ match.gate_up.input->id, 0, match.gate_up.input->byte_count });
-    gate_up.bindings.push_back({ match.gate_up.output->id, 0, match.gate_up.output->byte_count });
+    // The q8-plane variant publishes only q8_output (publish_f32 is false), so its output binding is a
+    // placeholder: bind the already-written input, not the SwiGLU value this path never materializes
+    // (the executor rejects reading a transient before any write).
+    gate_up.bindings.push_back({ match.gate_up.input->id, 0, match.gate_up.input->byte_count });
     gate_up.bindings.push_back({ i4_payload, 0, i4_payload_bytes });
     gate_up.bindings.push_back({ i4_scales, 0, i4_metadata_bytes });
     gate_up.bindings.push_back({ i4_sums, 0, i4_metadata_bytes });
