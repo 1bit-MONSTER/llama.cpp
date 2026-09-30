@@ -35,7 +35,14 @@ from .base import ModelBase, TextModel, gguf, logger
     "LLaMAModel",
     "LlaMAForCausalLM",
     "llamaForCausalLM",
-    "LlamaForConditionalGeneration")
+    "LlamaForConditionalGeneration",
+    "CombinedLMForCausalLM",
+    "EduLLMForCausalLM",
+    "MyModelForCausalLM",
+    "SoloForCausalLM",
+    "XMistralForCausalLM",
+    "XMixtralForCausalLM",
+)
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     undo_permute = True
@@ -424,7 +431,9 @@ class LlamaEmbedNemotronModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA_EMBED
 
 
-@ModelBase.register("SmolLM3ForCausalLM")
+@ModelBase.register("SmolLM3ForCausalLM",
+    "SmolLM3ModelForCausalLM",
+)
 class SmolLM3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.SMOLLM3
 

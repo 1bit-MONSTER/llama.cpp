@@ -9,7 +9,9 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("GPTJForCausalLM")
+@ModelBase.register("GPTJForCausalLM",
+    "FlaxGPTJForCausalLM",
+)
 class GPTJModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPTJ
 

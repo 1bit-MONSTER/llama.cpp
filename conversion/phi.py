@@ -13,7 +13,9 @@ if TYPE_CHECKING:
 from .base import MmprojModel, ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
 
 
-@ModelBase.register("PhiForCausalLM", "Phi2Model")
+@ModelBase.register("PhiForCausalLM", "Phi2Model",
+    "PhiMoLForCausalLM",
+)
 class Phi2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI2
 

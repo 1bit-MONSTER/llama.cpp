@@ -14,7 +14,10 @@ if TYPE_CHECKING:
 from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
 
 
-@ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification")
+@ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification",
+    "BertForCausalLM",
+    "BertLMHeadModel",
+)
 class BertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -262,7 +265,9 @@ class DistilBertModel(BertModel):
         return super().filter_tensors((name, gen))
 
 
-@ModelBase.register("RobertaModel", "RobertaForSequenceClassification", "RobertaForMaskedLM")
+@ModelBase.register("RobertaModel", "RobertaForSequenceClassification", "RobertaForMaskedLM",
+    "RobertaForCausalLM",
+)
 class RobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -458,7 +463,9 @@ class EuroBertModel(TextModel):
         return super().filter_tensors((name, gen))
 
 
-@ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
+@ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification",
+    "XLMRobertaForCausalLM",
+)
 class XLMRobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
     _lora_files = {}

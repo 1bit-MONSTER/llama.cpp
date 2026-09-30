@@ -10,7 +10,26 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register("GPT2LMHeadModel", "GPT2Model", "GPT2")
+@ModelBase.register("GPT2LMHeadModel", "GPT2Model", "GPT2",
+    "AxonForCausalLM",
+    "CoGPT2LMHeadModel",
+    "CustomGPT2LMHeadModel",
+    "DEXV1LMHeadModel",
+    "GPT2ForCausalLM",
+    "GPT2WithHMForCausalLM",
+    "GPT2hlcLMHeadModel",
+    "KW2LMHeadModel",
+    "LoRAGPT2LMHeadModel",
+    "NanoGPTLMHeadModel",
+    "PipelinedGPT2LMHeadModel",
+    "PoptorchPipelinedGPT2LMHeadModel",
+    "QGPT2LMHeadModel",
+    "SDLMHeadModel",
+    "SelfDebiasingGPT2LMHeadModel",
+    "TFGPT2LMHeadModel",
+    "TranceptionLMHeadModel",
+    "ZsGPT2LMHeadModel",
+)
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
 

@@ -9,7 +9,9 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("GPTNeoForCausalLM")
+@ModelBase.register("GPTNeoForCausalLM",
+    "GptNeoForCausalLM",
+)
 class GPTNeoModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPTNEO
 

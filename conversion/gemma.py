@@ -13,7 +13,9 @@ if TYPE_CHECKING:
 from .base import MmprojModel, ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register("GemmaForCausalLM", "GemmaModel")
+@ModelBase.register("GemmaForCausalLM", "GemmaModel",
+    "MuToRGemmaForCausalLM",
+)
 class GemmaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA
 

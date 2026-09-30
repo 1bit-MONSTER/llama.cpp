@@ -12,7 +12,9 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register("GPTNeoXForCausalLM", "GPTNeoXModel")
+@ModelBase.register("GPTNeoXForCausalLM", "GPTNeoXModel",
+    "GPTNeoXLongForCausalLM",
+)
 class GPTNeoXModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPTNEOX
 

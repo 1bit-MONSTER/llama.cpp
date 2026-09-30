@@ -9,7 +9,10 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("OPTForCausalLM")
+@ModelBase.register("OPTForCausalLM",
+    "Int8OPTForCausalLM",
+    "myOPTForCausalLM",
+)
 class OPTModel(TextModel):
     model_arch = gguf.MODEL_ARCH.OPT
 
