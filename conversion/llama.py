@@ -551,3 +551,23 @@ class DynamicSlidingWindowModel(LlamaModel):
     def modify_tensors(self, data_torch, name, bid):
         name = name.replace(".attn.", ".self_attn.")
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("TransformerForCausalLM")
+class TransformerForCausalLMModel(LlamaModel):
+    # llama shape under different names: model.embeddings, attn.{q,k,v,o}_proj,
+    # attn_norm / mlp_norm; config says num_heads / num_kv_heads.
+    model_arch = gguf.MODEL_ARCH.LLAMA
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for dst, src in (("num_attention_heads", "num_heads"), ("num_key_value_heads", "num_kv_heads")):
+            if dst not in self.hparams and src in self.hparams:
+                self.hparams[dst] = self.hparams[src]
+
+    def modify_tensors(self, data_torch, name, bid):
+        name = name.replace("model.embeddings", "model.embed_tokens")
+        name = name.replace(".attn.", ".self_attn.")
+        name = name.replace("attn_norm", "input_layernorm")
+        name = name.replace("mlp_norm", "post_attention_layernorm")
+        yield from super().modify_tensors(data_torch, name, bid)
