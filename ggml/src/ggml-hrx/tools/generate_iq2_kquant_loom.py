@@ -18,13 +18,18 @@
 # ggml-common.h (iq2xxs_grid, iq2xs_grid: MIT, the ggml authors) as 16-bit codes (2 bits per value).
 # Usage: generate_iq2_kquant_loom.py ggml/src/ggml-common.h > out.loom
 # The output sits verbatim in kernel-corpus/kernels/loom-libs/ops/kquant_decode_f32.loom.
-import re, sys
+import re
+import sys
 src = open(sys.argv[1]).read()
+
+
 def grid(name, n):
     m = re.search(r'GGML_TABLE_BEGIN\(uint64_t, ' + name + r', ' + str(n) + r'\)(.*?)GGML_TABLE_END', src, re.S)
+    assert m, name
     v = [int(x, 16) for x in re.findall(r'0x[0-9a-fA-F]+', m.group(1))]
     lv = {8: 0, 25: 1, 43: 2}
     return [sum(lv[(e >> (8 * j)) & 255] << (2 * j) for j in range(8)) for e in v]
+
 
 def fill(fname, codes):
     o = [f'func.def inline @{fname}(%grid: buffer, %chunk: index) {{',
@@ -42,6 +47,7 @@ def fill(fname, codes):
         o.append('  }')
     o += ['  func.return', '}', '']
     return '\n'.join(o)
+
 
 common = '''
 // IQ2_XXS / IQ2_XS: a 256-value block is 8 groups of 32, each 4 grid slots of 8 values; lane l16
@@ -265,6 +271,8 @@ func.def inline @ggml_kquant_iq2xs_lane_parts(%grid: buffer, %weight: buffer, %r
   func.return %v, %scale, %p0 : vector<16xf32>, f32, index
 }
 '''
+
+
 def dot_and_weights(fmt):
     return f'''
 func.def inline @ggml_kquant_{fmt}_lane_dot(%grid: buffer, %weight: buffer, %input: buffer, %row_base: offset, %block: index, %lane16: index) -> (f32) {{
@@ -293,5 +301,7 @@ func.def inline @ggml_kquant_{fmt}_lane_weights(%grid: buffer, %weight: buffer, 
   func.return %w, %p0, %p1, %p2, %p3 : vector<16xf32>, index, index, index, index
 }}
 '''
+
+
 out = fill('ggml_kquant_iq2xxs_grid_fill', grid('iq2xxs_grid', 256)) + fill('ggml_kquant_iq2xs_grid_fill', grid('iq2xs_grid', 512)) + common + dot_and_weights('iq2xxs') + dot_and_weights('iq2xs')
 sys.stdout.write(out)

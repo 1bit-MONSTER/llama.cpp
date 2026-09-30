@@ -19,14 +19,19 @@
 # so an entry is stored as a 16-bit code: 2 bits per value, level index 0/1/2.
 # Usage: generate_iq2_dequant_loom.py ggml/src/ggml-common.h > out.loom
 # The output sits verbatim in kernel-corpus/kernels/loom-libs/motifs/dequant.loom.
-import re, sys
+import re
+import sys
 src = open(sys.argv[1]).read()
+
+
 def grid(name, n):
     m = re.search(r'GGML_TABLE_BEGIN\(uint64_t, ' + name + r', ' + str(n) + r'\)(.*?)GGML_TABLE_END', src, re.S)
+    assert m, name
     v = [int(x, 16) for x in re.findall(r'0x[0-9a-fA-F]+', m.group(1))]
     assert len(v) == n
     lv = {8: 0, 25: 1, 43: 2}
     return [sum(lv[(e >> (8 * j)) & 255] << (2 * j) for j in range(8)) for e in v]
+
 
 def lookup(fname, prefix, codes):
     n = len(codes) // 32
@@ -55,6 +60,7 @@ def lookup(fname, prefix, codes):
           '  %code = scalar.fptoui %v_f32 : f32 to i32',
           '  func.return %code : i32', '}', '']
     return '\n'.join(o)
+
 
 common = '''
 // ksigns_iq2xs[i] (ggml-common.h) is i with its parity as bit 7.
@@ -244,5 +250,5 @@ func.def inline @ggml_iq2xs_f16_vector4(%weight: buffer, %row_byte_base: offset,
 }
 '''
 out = lookup('ggml_iq2xxs_grid_code_i32', 'iq2xxs_code', grid('iq2xxs_grid', 256)) + '\n' + \
-      lookup('ggml_iq2xs_grid_code_i32', 'iq2xs_code', grid('iq2xs_grid', 512)) + common
+    lookup('ggml_iq2xs_grid_code_i32', 'iq2xs_code', grid('iq2xs_grid', 512)) + common
 sys.stdout.write(out)
