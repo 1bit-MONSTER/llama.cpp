@@ -164,6 +164,7 @@ class Qwen2MoeModel(TextModel):
     "FSDPQwen3ForCausalLM",
     "LlavaQwen3ForCausalLM",
     "PenguinVLQwen3ForCausalLM",
+    "SDARForCausalLM",
 )
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
