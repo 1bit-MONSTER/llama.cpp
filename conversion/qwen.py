@@ -50,6 +50,7 @@ class QwenModel(TextModel):
     "KORMoForCausalLM",
     "AudioFlamingo3ForConditionalGeneration",
     "DotsOCRForCausalLM",
+    "Qwen2ReasoningForCausalLM",
 )
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
@@ -152,7 +153,10 @@ class Qwen2MoeModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("Qwen3ForCausalLM", "Qwen3Model")
+@ModelBase.register("Qwen3ForCausalLM", "Qwen3Model",
+    "XQwen3ForCausalLM",
+    "FSDPQwen3ForCausalLM",
+)
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 

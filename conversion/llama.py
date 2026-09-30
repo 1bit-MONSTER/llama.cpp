@@ -45,6 +45,22 @@ from .base import ModelBase, TextModel, gguf, logger
     "YiForCausalLM",
     "CustomLlamaForCausalLM",
     "ZhinaoForCausalLM",
+    "CodeLlamaForCausalLM",
+    "BabyLlamaForCausalLM",
+    "MyLlamaForCausalLM",
+    "smallLlamaForCausalLM",
+    "myLlamaForCausalLM",
+    "UserLlamaForCausalLM",
+    "ConstrainedLlamaForCausalLM",
+    "DistributedLlamaForCausalLM",
+    "OffsetLlamaForCausalLM",
+    "GaudiLlamaForCausalLM",
+    "HeliumForCausalLM",
+    "AprielForCausalLM",
+    "FunctionaryForCausalLM",
+    "GENERatorForCausalLM",
+    "PawLlamaForCausalLM",
+    "MobiLlamaForCausalLM",
 )
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
