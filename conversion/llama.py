@@ -86,6 +86,7 @@ from .base import ModelBase, TextModel, gguf, logger
     "VCoderDSLlavaLlamaForCausalLM",
     "VCoderLlavaLlamaForCausalLM",
     "vwLlamaForCausalLM",
+    "MPLUGOwl2LlamaForCausalLM",
 )
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA

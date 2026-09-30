@@ -42,6 +42,8 @@ class Phi2Model(TextModel):
 
 @ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV", "Phi3Model",
     "LlavaPhi3ForCausalLM",
+    "Phi3VForCausalLM",
+    "Phi4MMForCausalLM",
 )
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
