@@ -15,6 +15,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 @ModelBase.register("MambaForCausalLM", "MambaLMHeadModel", "FalconMambaForCausalLM", "MambaModel",
     "LlavaMambaForCausalLM",
+    "MambaModelForCausalLM",
 )
 class MambaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MAMBA
