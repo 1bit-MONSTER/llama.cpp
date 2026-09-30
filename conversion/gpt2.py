@@ -29,6 +29,9 @@ from .base import ModelBase, TextModel, gguf, logger
     "TFGPT2LMHeadModel",
     "TranceptionLMHeadModel",
     "ZsGPT2LMHeadModel",
+    "ChessForCausalLM",
+    "NotaGenLMHeadModel",
+    "ProGenForCausalLM",
 )
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
