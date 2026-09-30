@@ -8,7 +8,10 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("MPTForCausalLM", "MptForCausalLM")
+@ModelBase.register("MPTForCausalLM", "MptForCausalLM",
+    "LlavaMPTForCausalLM",
+    "SPILlavaMPTForCausalLM",
+)
 class MPTModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MPT
 

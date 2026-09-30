@@ -12,7 +12,11 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register("QWenLMHeadModel", "QwenForCausalLM", "QwenLMHeadModel", "QWenForCausalLM")
+@ModelBase.register("QWenLMHeadModel", "QwenForCausalLM", "QwenLMHeadModel", "QWenForCausalLM",
+    "BunnyQwenForCausalLM",
+    "LlavaQWenForCausalLM",
+    "LlavaQwenForCausalLM",
+)
 class QwenModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN
 
@@ -51,6 +55,8 @@ class QwenModel(TextModel):
     "AudioFlamingo3ForConditionalGeneration",
     "DotsOCRForCausalLM",
     "Qwen2ReasoningForCausalLM",
+    "LlavaQwen1_5ForCausalLM",
+    "LlavaQwen2ForCausalLM",
 )
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
@@ -156,6 +162,7 @@ class Qwen2MoeModel(TextModel):
 @ModelBase.register("Qwen3ForCausalLM", "Qwen3Model",
     "XQwen3ForCausalLM",
     "FSDPQwen3ForCausalLM",
+    "LlavaQwen3ForCausalLM",
 )
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3

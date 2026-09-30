@@ -14,6 +14,8 @@ from .base import ModelBase, TextModel, gguf, logger
 
 @ModelBase.register("GPTNeoXForCausalLM", "GPTNeoXModel",
     "GPTNeoXLongForCausalLM",
+    "LlavaGPTNeoXForCausalLM",
+    "LlavaPythiaForCausalLM",
 )
 class GPTNeoXModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPTNEOX

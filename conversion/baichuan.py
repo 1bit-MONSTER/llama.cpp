@@ -8,7 +8,9 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register("BaichuanForCausalLM", "BaiChuanForCausalLM")
+@ModelBase.register("BaichuanForCausalLM", "BaiChuanForCausalLM",
+    "LlavaBaichuan2ForCausalLM",
+)
 class BaichuanModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BAICHUAN
 

@@ -35,6 +35,8 @@ from .base import ModelBase, TextModel, gguf, logger
     "AraGPT2LMHeadModel",
     "OpenAIGPTLMHeadModel",
     "CubeLM",
+    "LlavaGPT2ForCausalLM",
+    "LlavaGpt2ForCausalLM",
 )
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2

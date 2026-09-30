@@ -16,6 +16,8 @@ from .base import MmprojModel, ModelBase, SentencePieceTokenTypes, TextModel, gg
 @ModelBase.register("PhiForCausalLM", "Phi2Model",
     "PhiMoLForCausalLM",
     "MixFormerSequentialForCausalLM",
+    "LlavaPhiForCausalLM",
+    "TinyLlavaPhiForCausalLM",
 )
 class Phi2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI2
@@ -38,7 +40,9 @@ class Phi2Model(TextModel):
         self.gguf_writer.add_add_bos_token(False)
 
 
-@ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV", "Phi3Model")
+@ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV", "Phi3Model",
+    "LlavaPhi3ForCausalLM",
+)
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 

@@ -15,6 +15,8 @@ from .base import MmprojModel, ModelBase, TextModel, gguf, logger
 
 @ModelBase.register("GemmaForCausalLM", "GemmaModel",
     "MuToRGemmaForCausalLM",
+    "LlavaGemmaForCausalLM",
+    "TALlavaGemmaForCausalLM",
 )
 class GemmaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA
