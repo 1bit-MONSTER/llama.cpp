@@ -44,6 +44,7 @@ class Phi2Model(TextModel):
     "LlavaPhi3ForCausalLM",
     "Phi3VForCausalLM",
     "Phi4MMForCausalLM",
+    "BunnyPhi3ForCausalLM",
 )
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
