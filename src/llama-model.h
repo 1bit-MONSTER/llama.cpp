@@ -3,6 +3,7 @@
 #include "llama.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
+#include "llama-hadamard.h"
 #include "llama-hparams.h"
 #include "llama-memory.h"
 #include "llama-vocab.h"
@@ -592,6 +593,9 @@ struct llama_model {
     std::string name = "n/a";
 
     llama_hparams hparams = {};
+
+    // prism.hadamard folds (llama-hadamard.h): read in load_hparams, bound in load_tensors
+    llama_hadamard hadamard;
     llama_vocab   vocab;
 
     // for classifier models
