@@ -441,6 +441,24 @@ class SmolLM3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.SMOLLM3
 
 
+@ModelBase.register("Step1MoEForCausalLM", "Step1ForCausalLM")
+class Step1Model(LlamaModel):
+    # Step-1 is a dense llama-layout decoder as the HF census sees it. Every
+    # `Step1MoEForCausalLM` checkpoint is the StepLaw sweep, whose moe_every_n_layer (64)
+    # exceeds its layer count (16), so no layer is a MoE layer and the tensors are the plain
+    # llama set (input_layernorm / post_attention_layernorm / q,k,v,o_proj / gate,up,down_proj).
+    # The config names the KV head count `num_attention_groups` and the context length
+    # `max_seq_len`, which the base LlamaModel does not read.
+    model_arch = gguf.MODEL_ARCH.LLAMA
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "num_key_value_heads" not in self.hparams and "num_attention_groups" in self.hparams:
+            self.hparams["num_key_value_heads"] = self.hparams["num_attention_groups"]
+        if "max_position_embeddings" not in self.hparams and "max_seq_len" in self.hparams:
+            self.hparams["max_position_embeddings"] = self.hparams["max_seq_len"]
+
+
 @ModelBase.register("ApertusForCausalLM")
 class ApertusModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.APERTUS
