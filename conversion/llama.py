@@ -543,7 +543,7 @@ class ApertusModel(LlamaModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("DynamicSlidingWindowForCausalLM")
+@ModelBase.register("DynamicSlidingWindowForCausalLM", "SlidingWindowForCausalLM")
 class DynamicSlidingWindowModel(LlamaModel):
     # llama shape with per-norm biases, under an "attn." prefix
     model_arch = gguf.MODEL_ARCH.LLAMA
