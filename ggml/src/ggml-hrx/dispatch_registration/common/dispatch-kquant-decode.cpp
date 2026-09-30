@@ -77,6 +77,40 @@ CommonMulMatMatch match_few_token_mul_mat(const Graph & graph, const GraphNode *
     return match;
 }
 
+// A value is ready at this root when its producer (looking through layout aliases) is a graph input
+// or an already-claimed node. A dispatch is emitted at its root's position, so reading a value that
+// a later-rooted fusion will produce fails with "reads transient value before write".
+bool value_ready(const DispatchMatchContext & context, ValueId id) {
+    const Graph & graph = context.graph;
+    for (int depth = 0; depth < 16; ++depth) {
+        const GraphNode * producer = graph.index().producer(id);
+        if (producer == nullptr) {
+            return true;
+        }
+        size_t index = 0;
+        if (!graph.index().node_index(producer, index) || index >= context.covered_nodes.size()) {
+            return false;
+        }
+        if (context.covered_nodes[index]) {
+            return true;
+        }
+        if (!is_layout_alias_node(graph, *producer) || producer->inputs.empty()) {
+            return false;
+        }
+        id = producer->inputs[0];
+    }
+    return false;
+}
+
+// Some fused producers (e.g. qwen3_moe's routed down + next-layer norm) publish the next input only
+// as a Q8_1 alternate and never write the F32 value when every consumer reads the alternate.
+// These kernels read F32, so leave such inputs to the q8 consumers.
+bool has_q8_alternate(const DispatchMatchContext & context, const Value & input, int64_t input_size,
+                      int64_t token_count) {
+    const size_t bytes = static_cast<size_t>(token_count) * ggml_row_size(GGML_TYPE_Q8_1, input_size);
+    return find_alternate_value(context.graph, context.plan, input.id, GGML_TYPE_Q8_1, bytes) != nullptr;
+}
+
 bool uncovered(const DispatchMatchContext & context, const GraphNode * node) {
     size_t index = 0;
     return context.graph.index().node_index(node, index) && index < context.covered_nodes.size() &&
@@ -92,7 +126,8 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
         match_few_token_mul_mat(graph, context.root_node, kKQuantSwiGLUDecodeKernel);
     if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens ||
         !kquant_format(root.weight_format) || root.input_size % 256 != 0 || root.input_size > kMaxInputSize ||
-        root.output_size > kMaxOutputSize) {
+        root.output_size > kMaxOutputSize || !value_ready(context, root.input->id) ||
+        has_q8_alternate(context, *root.input, root.input_size, root.token_count)) {
         return false;
     }
 
@@ -171,7 +206,8 @@ bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, Disp
         match_few_token_mul_mat(graph, context.root_node, kKQuantMulMatDecodeKernel);
     if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens ||
         !kquant_format(root.weight_format) || root.input_size % 256 != 0 || root.input_size > kMaxInputSize ||
-        root.output_size > kMaxOutputSize) {
+        root.output_size > kMaxOutputSize || !value_ready(context, root.input->id) ||
+        has_q8_alternate(context, *root.input, root.input_size, root.token_count)) {
         return false;
     }
 
@@ -185,7 +221,8 @@ bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, Disp
         const Value * sum         = common_graph_value(graph, add->output);
         if ((root_is_lhs || add->inputs[1] == root.output->id) && other != nullptr && sum != nullptr &&
             other->type == GGML_TYPE_F32 && sum->type == GGML_TYPE_F32 && other->contiguous && sum->contiguous &&
-            common_same_shape(*root.output, *other) && common_same_shape(*root.output, *sum)) {
+            common_same_shape(*root.output, *other) && common_same_shape(*root.output, *sum) &&
+            value_ready(context, other->id)) {
             addend = other;
             output = sum;
         } else {
