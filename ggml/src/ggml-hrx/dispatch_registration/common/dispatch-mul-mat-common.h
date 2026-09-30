@@ -185,6 +185,10 @@ inline ggml_type common_mul_mat_format_type(CommonMulMatWeightFormat format) {
             return GGML_TYPE_Q5_0;
         case CommonMulMatWeightFormat::Q5_1:
             return GGML_TYPE_Q5_1;
+        case CommonMulMatWeightFormat::IQ2_XXS:
+            return GGML_TYPE_IQ2_XXS;
+        case CommonMulMatWeightFormat::IQ2_XS:
+            return GGML_TYPE_IQ2_XS;
         case CommonMulMatWeightFormat::IQ2_S:
             return GGML_TYPE_IQ2_S;
         case CommonMulMatWeightFormat::IQ3_S:
