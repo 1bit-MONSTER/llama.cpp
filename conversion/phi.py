@@ -15,6 +15,7 @@ from .base import MmprojModel, ModelBase, SentencePieceTokenTypes, TextModel, gg
 
 @ModelBase.register("PhiForCausalLM", "Phi2Model",
     "PhiMoLForCausalLM",
+    "MixFormerSequentialForCausalLM",
 )
 class Phi2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI2
