@@ -2069,6 +2069,7 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
   %c256 = index.constant 256 : index
   %zero_offset = index.constant 0 : offset
   %zero = scalar.constant 0.0 : f32
+  %zero4 = vector.constant 0.0 : vector<4xf32>
   %table = func.call @ggml_kquant_iq4nl_table() : () -> (vector<16xi8>)
   %blocks = index.div %input_size, %c256 : index
   %wg = kernel.workgroup.id<x> : index
@@ -2940,13 +2941,15 @@ func.def inline @ggml_kquant_lane_weights(%format: index, %kv_lane: f32, %grid: 
   func.return %r, %r_0, %r_1, %r_2, %r_3 : vector<16xf32>, index, index, index, index
 }
 
-// Dot product of lane weights with token %t's input. %shape (folded per format): 0 = four runs of
-// 4 (Q6_K), 1 = two runs of 8 at %p0 and %p2 (Q4_K, Q5_K, IQ4_XS, IQ4_NL), 2 = 16 contiguous
-// values at %p0 (Q3_K, IQ3_S, Q8_0); fewer, wider loads for the wider runs.
-func.def inline @ggml_kquant_token_dot(%shape: index, %w: vector<16xf32>, %p0: index, %p1: index, %p2: index, %p3: index, %input: buffer, %t: index, %blocks: index, %block: index) -> (f32) {
-  %zero_scalar = scalar.constant 0.0 : f32
+// Accumulate lane weights times token %t's input into %acc (four partial sums; reduced once after
+// the block loop). %shape (folded per format): 0 = four runs of 4 (Q6_K), 1 = two runs of 8 at %p0
+// and %p2 (Q4_K, Q5_K, IQ4_XS, IQ4_NL), 2 = 16 contiguous values at %p0 (Q3_K, IQ3_S, Q8_0).
+func.def inline @ggml_kquant_token_fma(%shape: index, %w: vector<16xf32>, %p0: index, %p1: index, %p2: index, %p3: index, %input: buffer, %t: index, %blocks: index, %block: index, %acc: vector<4xf32>) -> (vector<4xf32>) {
   %s1 = index.constant 1 : index
   %s2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c12 = index.constant 12 : index
   %x_block_bytes = index.constant 1024 : offset
   %row_blocks = index.mul %t, %blocks : index
   %x_block = index.add %row_blocks, %block : index
@@ -2954,24 +2957,25 @@ func.def inline @ggml_kquant_token_dot(%shape: index, %w: vector<16xf32>, %p0: i
   %xv = buffer.view %input[%x_base] : buffer -> view<256xf32>
   %is_run16 = index.cmp eq, %shape, %s2 : index
   %is_run8 = index.cmp eq, %shape, %s1 : index
-  %sum = scf.if %is_run16 -> (f32) {
+  %xa, %xb, %xc, %xd = scf.if %is_run16 -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
     %q0 = index.assume %p0 [range(%p0, 0, 240)] : index
     %x = vector.load %xv[%q0] : view<256xf32> -> vector<16xf32>
-    %a = vector.mulf %w, %x : vector<16xf32>
-    %r = vector.reduce<addf> %a, %zero_scalar : vector<16xf32>, f32
-    scf.yield %r : f32
+    %x0 = vector.slice %x[0] : vector<16xf32> -> vector<4xf32>
+    %x1 = vector.slice %x[4] : vector<16xf32> -> vector<4xf32>
+    %x2 = vector.slice %x[8] : vector<16xf32> -> vector<4xf32>
+    %x3 = vector.slice %x[12] : vector<16xf32> -> vector<4xf32>
+    scf.yield %x0, %x1, %x2, %x3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
   } else {
-    %r8 = scf.if %is_run8 -> (f32) {
+    %y0, %y1, %y2, %y3 = scf.if %is_run8 -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
       %q0 = index.assume %p0 [range(%p0, 0, 248)] : index
       %q2 = index.assume %p2 [range(%p2, 0, 248)] : index
-      %x0 = vector.load %xv[%q0] : view<256xf32> -> vector<8xf32>
-      %x1 = vector.load %xv[%q2] : view<256xf32> -> vector<8xf32>
-      %w0 = vector.slice %w[0] : vector<16xf32> -> vector<8xf32>
-      %w1 = vector.slice %w[8] : vector<16xf32> -> vector<8xf32>
-      %a0 = vector.mulf %w0, %x0 : vector<8xf32>
-      %a1 = vector.fmaf %w1, %x1, %a0 : vector<8xf32>
-      %r = vector.reduce<addf> %a1, %zero_scalar : vector<8xf32>, f32
-      scf.yield %r : f32
+      %xl = vector.load %xv[%q0] : view<256xf32> -> vector<8xf32>
+      %xh = vector.load %xv[%q2] : view<256xf32> -> vector<8xf32>
+      %x0 = vector.slice %xl[0] : vector<8xf32> -> vector<4xf32>
+      %x1 = vector.slice %xl[4] : vector<8xf32> -> vector<4xf32>
+      %x2 = vector.slice %xh[0] : vector<8xf32> -> vector<4xf32>
+      %x3 = vector.slice %xh[4] : vector<8xf32> -> vector<4xf32>
+      scf.yield %x0, %x1, %x2, %x3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
     } else {
       %q0 = index.assume %p0 [range(%p0, 0, 252)] : index
       %q1 = index.assume %p1 [range(%p1, 0, 252)] : index
@@ -2981,23 +2985,22 @@ func.def inline @ggml_kquant_token_dot(%shape: index, %w: vector<16xf32>, %p0: i
       %x1 = vector.load %xv[%q1] : view<256xf32> -> vector<4xf32>
       %x2 = vector.load %xv[%q2] : view<256xf32> -> vector<4xf32>
       %x3 = vector.load %xv[%q3] : view<256xf32> -> vector<4xf32>
-      %w0 = vector.slice %w[0] : vector<16xf32> -> vector<4xf32>
-      %w1 = vector.slice %w[4] : vector<16xf32> -> vector<4xf32>
-      %w2 = vector.slice %w[8] : vector<16xf32> -> vector<4xf32>
-      %w3 = vector.slice %w[12] : vector<16xf32> -> vector<4xf32>
-      %a0 = vector.mulf %w0, %x0 : vector<4xf32>
-      %a1 = vector.fmaf %w1, %x1, %a0 : vector<4xf32>
-      %a2 = vector.fmaf %w2, %x2, %a1 : vector<4xf32>
-      %a3 = vector.fmaf %w3, %x3, %a2 : vector<4xf32>
-      %r = vector.reduce<addf> %a3, %zero_scalar : vector<4xf32>, f32
-      scf.yield %r : f32
+      scf.yield %x0, %x1, %x2, %x3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
     }
-    scf.yield %r8 : f32
+    scf.yield %y0, %y1, %y2, %y3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
   }
-  func.return %sum : f32
+  %w0 = vector.slice %w[0] : vector<16xf32> -> vector<4xf32>
+  %w1 = vector.slice %w[4] : vector<16xf32> -> vector<4xf32>
+  %w2 = vector.slice %w[8] : vector<16xf32> -> vector<4xf32>
+  %w3 = vector.slice %w[12] : vector<16xf32> -> vector<4xf32>
+  %a0 = vector.fmaf %w0, %xa, %acc : vector<4xf32>
+  %a1 = vector.fmaf %w1, %xb, %a0 : vector<4xf32>
+  %a2 = vector.fmaf %w2, %xc, %a1 : vector<4xf32>
+  %a3 = vector.fmaf %w3, %xd, %a2 : vector<4xf32>
+  func.return %a3 : vector<4xf32>
 }
 
-// Run shape of a format's lane weights, for ggml_kquant_token_dot.
+// Run shape of a format's lane weights, for ggml_kquant_token_fma.
 func.def pure inline @ggml_kquant_run_shape(%format: index) -> (index) {
   %f6 = index.constant 6 : index
   %f11 = index.constant 11 : index
@@ -3039,6 +3042,7 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
   %c16 = index.constant 16 : index
   %zero_offset = index.constant 0 : offset
   %zero = scalar.constant 0.0 : f32
+  %zero4 = vector.constant 0.0 : vector<4xf32>
   %table = func.call @ggml_kquant_iq4nl_table() : () -> (vector<16xi8>)
   %blocks = index.div %input_size, %c256 : index
   %wg = kernel.workgroup.id<x> : index
@@ -3083,90 +3087,76 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
   %tv7 = index.cmp ult, %c7t, %tokens : index
   %valid = index.cmp ult, %row, %output_size : index
   scf.if %valid {
-    %g0_part, %u0_part, %g1_part, %u1_part, %g2_part, %u2_part, %g3_part, %u3_part, %g4_part, %u4_part, %g5_part, %u5_part, %g6_part, %u6_part, %g7_part, %u7_part = scf.for %block = [%first_block to %blocks step %c4](%g0_acc = %zero : f32, %u0_acc = %zero : f32, %g1_acc = %zero : f32, %u1_acc = %zero : f32, %g2_acc = %zero : f32, %u2_acc = %zero : f32, %g3_acc = %zero : f32, %u3_acc = %zero : f32, %g4_acc = %zero : f32, %u4_acc = %zero : f32, %g5_acc = %zero : f32, %u5_acc = %zero : f32, %g6_acc = %zero : f32, %u6_acc = %zero : f32, %g7_acc = %zero : f32, %u7_acc = %zero : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+    %g0_part, %u0_part, %g1_part, %u1_part, %g2_part, %u2_part, %g3_part, %u3_part, %g4_part, %u4_part, %g5_part, %u5_part, %g6_part, %u6_part, %g7_part, %u7_part = scf.for %block = [%first_block to %blocks step %c4](%g0_acc = %zero4 : vector<4xf32>, %u0_acc = %zero4 : vector<4xf32>, %g1_acc = %zero4 : vector<4xf32>, %u1_acc = %zero4 : vector<4xf32>, %g2_acc = %zero4 : vector<4xf32>, %u2_acc = %zero4 : vector<4xf32>, %g3_acc = %zero4 : vector<4xf32>, %u3_acc = %zero4 : vector<4xf32>, %g4_acc = %zero4 : vector<4xf32>, %u4_acc = %zero4 : vector<4xf32>, %g5_acc = %zero4 : vector<4xf32>, %u5_acc = %zero4 : vector<4xf32>, %g6_acc = %zero4 : vector<4xf32>, %u6_acc = %zero4 : vector<4xf32>, %g7_acc = %zero4 : vector<4xf32>, %u7_acc = %zero4 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
       %gshape = func.call pure @ggml_kquant_run_shape(%gate_format) : (index) -> (index)
       %gw, %gp0, %gp1, %gp2, %gp3 = func.call @ggml_kquant_lane_weights(%gate_format, %kv_lane, %grid, %gate, %row, %blocks, %block, %lane16) : (index, f32, buffer, buffer, index, index, index, index) -> (vector<16xf32>, index, index, index, index)
       %ushape = func.call pure @ggml_kquant_run_shape(%up_format) : (index) -> (index)
       %uw, %up0, %up1, %up2, %up3 = func.call @ggml_kquant_lane_weights(%up_format, %kv_lane, %grid, %up, %row, %blocks, %block, %lane16) : (index, f32, buffer, buffer, index, index, index, index) -> (vector<16xf32>, index, index, index, index)
-      %g0_next, %u0_next = scf.if %tv0 -> (f32, f32) {
-        %g0_d = func.call @ggml_kquant_token_dot(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c0t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %g0_s = scalar.addf %g0_acc, %g0_d : f32
-        %u0_d = func.call @ggml_kquant_token_dot(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c0t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %u0_s = scalar.addf %u0_acc, %u0_d : f32
-        scf.yield %g0_s, %u0_s : f32, f32
+      %g0_next, %u0_next = scf.if %tv0 -> (vector<4xf32>, vector<4xf32>) {
+        %g0_s = func.call @ggml_kquant_token_fma(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c0t, %blocks, %block, %g0_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        %u0_s = func.call @ggml_kquant_token_fma(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c0t, %blocks, %block, %u0_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %g0_s, %u0_s : vector<4xf32>, vector<4xf32>
       } else {
-        scf.yield %g0_acc, %u0_acc : f32, f32
+        scf.yield %g0_acc, %u0_acc : vector<4xf32>, vector<4xf32>
       }
-      %g1_next, %u1_next = scf.if %tv1 -> (f32, f32) {
-        %g1_d = func.call @ggml_kquant_token_dot(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c1t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %g1_s = scalar.addf %g1_acc, %g1_d : f32
-        %u1_d = func.call @ggml_kquant_token_dot(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c1t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %u1_s = scalar.addf %u1_acc, %u1_d : f32
-        scf.yield %g1_s, %u1_s : f32, f32
+      %g1_next, %u1_next = scf.if %tv1 -> (vector<4xf32>, vector<4xf32>) {
+        %g1_s = func.call @ggml_kquant_token_fma(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c1t, %blocks, %block, %g1_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        %u1_s = func.call @ggml_kquant_token_fma(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c1t, %blocks, %block, %u1_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %g1_s, %u1_s : vector<4xf32>, vector<4xf32>
       } else {
-        scf.yield %g1_acc, %u1_acc : f32, f32
+        scf.yield %g1_acc, %u1_acc : vector<4xf32>, vector<4xf32>
       }
-      %g2_next, %u2_next = scf.if %tv2 -> (f32, f32) {
-        %g2_d = func.call @ggml_kquant_token_dot(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c2t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %g2_s = scalar.addf %g2_acc, %g2_d : f32
-        %u2_d = func.call @ggml_kquant_token_dot(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c2t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %u2_s = scalar.addf %u2_acc, %u2_d : f32
-        scf.yield %g2_s, %u2_s : f32, f32
+      %g2_next, %u2_next = scf.if %tv2 -> (vector<4xf32>, vector<4xf32>) {
+        %g2_s = func.call @ggml_kquant_token_fma(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c2t, %blocks, %block, %g2_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        %u2_s = func.call @ggml_kquant_token_fma(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c2t, %blocks, %block, %u2_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %g2_s, %u2_s : vector<4xf32>, vector<4xf32>
       } else {
-        scf.yield %g2_acc, %u2_acc : f32, f32
+        scf.yield %g2_acc, %u2_acc : vector<4xf32>, vector<4xf32>
       }
-      %g3_next, %u3_next = scf.if %tv3 -> (f32, f32) {
-        %g3_d = func.call @ggml_kquant_token_dot(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c3t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %g3_s = scalar.addf %g3_acc, %g3_d : f32
-        %u3_d = func.call @ggml_kquant_token_dot(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c3t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %u3_s = scalar.addf %u3_acc, %u3_d : f32
-        scf.yield %g3_s, %u3_s : f32, f32
+      %g3_next, %u3_next = scf.if %tv3 -> (vector<4xf32>, vector<4xf32>) {
+        %g3_s = func.call @ggml_kquant_token_fma(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c3t, %blocks, %block, %g3_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        %u3_s = func.call @ggml_kquant_token_fma(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c3t, %blocks, %block, %u3_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %g3_s, %u3_s : vector<4xf32>, vector<4xf32>
       } else {
-        scf.yield %g3_acc, %u3_acc : f32, f32
+        scf.yield %g3_acc, %u3_acc : vector<4xf32>, vector<4xf32>
       }
-      %g4_next, %u4_next = scf.if %tv4 -> (f32, f32) {
-        %g4_d = func.call @ggml_kquant_token_dot(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c4t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %g4_s = scalar.addf %g4_acc, %g4_d : f32
-        %u4_d = func.call @ggml_kquant_token_dot(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c4t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %u4_s = scalar.addf %u4_acc, %u4_d : f32
-        scf.yield %g4_s, %u4_s : f32, f32
+      %g4_next, %u4_next = scf.if %tv4 -> (vector<4xf32>, vector<4xf32>) {
+        %g4_s = func.call @ggml_kquant_token_fma(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c4t, %blocks, %block, %g4_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        %u4_s = func.call @ggml_kquant_token_fma(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c4t, %blocks, %block, %u4_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %g4_s, %u4_s : vector<4xf32>, vector<4xf32>
       } else {
-        scf.yield %g4_acc, %u4_acc : f32, f32
+        scf.yield %g4_acc, %u4_acc : vector<4xf32>, vector<4xf32>
       }
-      %g5_next, %u5_next = scf.if %tv5 -> (f32, f32) {
-        %g5_d = func.call @ggml_kquant_token_dot(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c5t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %g5_s = scalar.addf %g5_acc, %g5_d : f32
-        %u5_d = func.call @ggml_kquant_token_dot(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c5t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %u5_s = scalar.addf %u5_acc, %u5_d : f32
-        scf.yield %g5_s, %u5_s : f32, f32
+      %g5_next, %u5_next = scf.if %tv5 -> (vector<4xf32>, vector<4xf32>) {
+        %g5_s = func.call @ggml_kquant_token_fma(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c5t, %blocks, %block, %g5_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        %u5_s = func.call @ggml_kquant_token_fma(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c5t, %blocks, %block, %u5_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %g5_s, %u5_s : vector<4xf32>, vector<4xf32>
       } else {
-        scf.yield %g5_acc, %u5_acc : f32, f32
+        scf.yield %g5_acc, %u5_acc : vector<4xf32>, vector<4xf32>
       }
-      %g6_next, %u6_next = scf.if %tv6 -> (f32, f32) {
-        %g6_d = func.call @ggml_kquant_token_dot(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c6t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %g6_s = scalar.addf %g6_acc, %g6_d : f32
-        %u6_d = func.call @ggml_kquant_token_dot(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c6t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %u6_s = scalar.addf %u6_acc, %u6_d : f32
-        scf.yield %g6_s, %u6_s : f32, f32
+      %g6_next, %u6_next = scf.if %tv6 -> (vector<4xf32>, vector<4xf32>) {
+        %g6_s = func.call @ggml_kquant_token_fma(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c6t, %blocks, %block, %g6_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        %u6_s = func.call @ggml_kquant_token_fma(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c6t, %blocks, %block, %u6_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %g6_s, %u6_s : vector<4xf32>, vector<4xf32>
       } else {
-        scf.yield %g6_acc, %u6_acc : f32, f32
+        scf.yield %g6_acc, %u6_acc : vector<4xf32>, vector<4xf32>
       }
-      %g7_next, %u7_next = scf.if %tv7 -> (f32, f32) {
-        %g7_d = func.call @ggml_kquant_token_dot(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c7t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %g7_s = scalar.addf %g7_acc, %g7_d : f32
-        %u7_d = func.call @ggml_kquant_token_dot(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c7t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %u7_s = scalar.addf %u7_acc, %u7_d : f32
-        scf.yield %g7_s, %u7_s : f32, f32
+      %g7_next, %u7_next = scf.if %tv7 -> (vector<4xf32>, vector<4xf32>) {
+        %g7_s = func.call @ggml_kquant_token_fma(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c7t, %blocks, %block, %g7_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        %u7_s = func.call @ggml_kquant_token_fma(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c7t, %blocks, %block, %u7_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %g7_s, %u7_s : vector<4xf32>, vector<4xf32>
       } else {
-        scf.yield %g7_acc, %u7_acc : f32, f32
+        scf.yield %g7_acc, %u7_acc : vector<4xf32>, vector<4xf32>
       }
-      scf.yield %g0_next, %u0_next, %g1_next, %u1_next, %g2_next, %u2_next, %g3_next, %u3_next, %g4_next, %u4_next, %g5_next, %u5_next, %g6_next, %u6_next, %g7_next, %u7_next : f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32
+      scf.yield %g0_next, %u0_next, %g1_next, %u1_next, %g2_next, %u2_next, %g3_next, %u3_next, %g4_next, %u4_next, %g5_next, %u5_next, %g6_next, %u6_next, %g7_next, %u7_next : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
     }
     %leader = index.cmp eq, %lane, %c0 : index
     %n_total = index.mul %tokens, %output_size : index
     scf.if %tv0 {
-      %g0_sum = kernel.subgroup.reduce<addf> %g0_part : f32
-      %u0_sum = kernel.subgroup.reduce<addf> %u0_part : f32
+      %g0_lane = vector.reduce<addf> %g0_part, %zero : vector<4xf32>, f32
+      %g0_sum = kernel.subgroup.reduce<addf> %g0_lane : f32
+      %u0_lane = vector.reduce<addf> %u0_part, %zero : vector<4xf32>, f32
+      %u0_sum = kernel.subgroup.reduce<addf> %u0_lane : f32
       scf.if %leader {
         %o0_row = index.mul %c0t, %output_size : index
         %o0_raw = index.add %o0_row, %row : index
@@ -3177,8 +3167,10 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
       }
     }
     scf.if %tv1 {
-      %g1_sum = kernel.subgroup.reduce<addf> %g1_part : f32
-      %u1_sum = kernel.subgroup.reduce<addf> %u1_part : f32
+      %g1_lane = vector.reduce<addf> %g1_part, %zero : vector<4xf32>, f32
+      %g1_sum = kernel.subgroup.reduce<addf> %g1_lane : f32
+      %u1_lane = vector.reduce<addf> %u1_part, %zero : vector<4xf32>, f32
+      %u1_sum = kernel.subgroup.reduce<addf> %u1_lane : f32
       scf.if %leader {
         %o1_row = index.mul %c1t, %output_size : index
         %o1_raw = index.add %o1_row, %row : index
@@ -3189,8 +3181,10 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
       }
     }
     scf.if %tv2 {
-      %g2_sum = kernel.subgroup.reduce<addf> %g2_part : f32
-      %u2_sum = kernel.subgroup.reduce<addf> %u2_part : f32
+      %g2_lane = vector.reduce<addf> %g2_part, %zero : vector<4xf32>, f32
+      %g2_sum = kernel.subgroup.reduce<addf> %g2_lane : f32
+      %u2_lane = vector.reduce<addf> %u2_part, %zero : vector<4xf32>, f32
+      %u2_sum = kernel.subgroup.reduce<addf> %u2_lane : f32
       scf.if %leader {
         %o2_row = index.mul %c2t, %output_size : index
         %o2_raw = index.add %o2_row, %row : index
@@ -3201,8 +3195,10 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
       }
     }
     scf.if %tv3 {
-      %g3_sum = kernel.subgroup.reduce<addf> %g3_part : f32
-      %u3_sum = kernel.subgroup.reduce<addf> %u3_part : f32
+      %g3_lane = vector.reduce<addf> %g3_part, %zero : vector<4xf32>, f32
+      %g3_sum = kernel.subgroup.reduce<addf> %g3_lane : f32
+      %u3_lane = vector.reduce<addf> %u3_part, %zero : vector<4xf32>, f32
+      %u3_sum = kernel.subgroup.reduce<addf> %u3_lane : f32
       scf.if %leader {
         %o3_row = index.mul %c3t, %output_size : index
         %o3_raw = index.add %o3_row, %row : index
@@ -3213,8 +3209,10 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
       }
     }
     scf.if %tv4 {
-      %g4_sum = kernel.subgroup.reduce<addf> %g4_part : f32
-      %u4_sum = kernel.subgroup.reduce<addf> %u4_part : f32
+      %g4_lane = vector.reduce<addf> %g4_part, %zero : vector<4xf32>, f32
+      %g4_sum = kernel.subgroup.reduce<addf> %g4_lane : f32
+      %u4_lane = vector.reduce<addf> %u4_part, %zero : vector<4xf32>, f32
+      %u4_sum = kernel.subgroup.reduce<addf> %u4_lane : f32
       scf.if %leader {
         %o4_row = index.mul %c4t, %output_size : index
         %o4_raw = index.add %o4_row, %row : index
@@ -3225,8 +3223,10 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
       }
     }
     scf.if %tv5 {
-      %g5_sum = kernel.subgroup.reduce<addf> %g5_part : f32
-      %u5_sum = kernel.subgroup.reduce<addf> %u5_part : f32
+      %g5_lane = vector.reduce<addf> %g5_part, %zero : vector<4xf32>, f32
+      %g5_sum = kernel.subgroup.reduce<addf> %g5_lane : f32
+      %u5_lane = vector.reduce<addf> %u5_part, %zero : vector<4xf32>, f32
+      %u5_sum = kernel.subgroup.reduce<addf> %u5_lane : f32
       scf.if %leader {
         %o5_row = index.mul %c5t, %output_size : index
         %o5_raw = index.add %o5_row, %row : index
@@ -3237,8 +3237,10 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
       }
     }
     scf.if %tv6 {
-      %g6_sum = kernel.subgroup.reduce<addf> %g6_part : f32
-      %u6_sum = kernel.subgroup.reduce<addf> %u6_part : f32
+      %g6_lane = vector.reduce<addf> %g6_part, %zero : vector<4xf32>, f32
+      %g6_sum = kernel.subgroup.reduce<addf> %g6_lane : f32
+      %u6_lane = vector.reduce<addf> %u6_part, %zero : vector<4xf32>, f32
+      %u6_sum = kernel.subgroup.reduce<addf> %u6_lane : f32
       scf.if %leader {
         %o6_row = index.mul %c6t, %output_size : index
         %o6_raw = index.add %o6_row, %row : index
@@ -3249,8 +3251,10 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
       }
     }
     scf.if %tv7 {
-      %g7_sum = kernel.subgroup.reduce<addf> %g7_part : f32
-      %u7_sum = kernel.subgroup.reduce<addf> %u7_part : f32
+      %g7_lane = vector.reduce<addf> %g7_part, %zero : vector<4xf32>, f32
+      %g7_sum = kernel.subgroup.reduce<addf> %g7_lane : f32
+      %u7_lane = vector.reduce<addf> %u7_part, %zero : vector<4xf32>, f32
+      %u7_sum = kernel.subgroup.reduce<addf> %u7_lane : f32
       scf.if %leader {
         %o7_row = index.mul %c7t, %output_size : index
         %o7_raw = index.add %o7_row, %row : index
@@ -3286,6 +3290,7 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
   %c16 = index.constant 16 : index
   %zero_offset = index.constant 0 : offset
   %zero = scalar.constant 0.0 : f32
+  %zero4 = vector.constant 0.0 : vector<4xf32>
   %table = func.call @ggml_kquant_iq4nl_table() : () -> (vector<16xi8>)
   %blocks = index.div %input_size, %c256 : index
   %wg = kernel.workgroup.id<x> : index
@@ -3328,71 +3333,64 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
   %tv7 = index.cmp ult, %c7t, %tokens : index
   %valid = index.cmp ult, %row, %output_size : index
   scf.if %valid {
-    %m0_part, %m1_part, %m2_part, %m3_part, %m4_part, %m5_part, %m6_part, %m7_part = scf.for %block = [%first_block to %blocks step %c4](%m0_acc = %zero : f32, %m1_acc = %zero : f32, %m2_acc = %zero : f32, %m3_acc = %zero : f32, %m4_acc = %zero : f32, %m5_acc = %zero : f32, %m6_acc = %zero : f32, %m7_acc = %zero : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+    %m0_part, %m1_part, %m2_part, %m3_part, %m4_part, %m5_part, %m6_part, %m7_part = scf.for %block = [%first_block to %blocks step %c4](%m0_acc = %zero4 : vector<4xf32>, %m1_acc = %zero4 : vector<4xf32>, %m2_acc = %zero4 : vector<4xf32>, %m3_acc = %zero4 : vector<4xf32>, %m4_acc = %zero4 : vector<4xf32>, %m5_acc = %zero4 : vector<4xf32>, %m6_acc = %zero4 : vector<4xf32>, %m7_acc = %zero4 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
       %mshape = func.call pure @ggml_kquant_run_shape(%format) : (index) -> (index)
       %mw, %mp0, %mp1, %mp2, %mp3 = func.call @ggml_kquant_lane_weights(%format, %kv_lane, %grid, %weight, %row, %blocks, %block, %lane16) : (index, f32, buffer, buffer, index, index, index, index) -> (vector<16xf32>, index, index, index, index)
-      %m0_next = scf.if %tv0 -> (f32) {
-        %m0_d = func.call @ggml_kquant_token_dot(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c0t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %m0_s = scalar.addf %m0_acc, %m0_d : f32
-        scf.yield %m0_s : f32
+      %m0_next = scf.if %tv0 -> (vector<4xf32>) {
+        %m0_s = func.call @ggml_kquant_token_fma(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c0t, %blocks, %block, %m0_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %m0_s : vector<4xf32>
       } else {
-        scf.yield %m0_acc : f32
+        scf.yield %m0_acc : vector<4xf32>
       }
-      %m1_next = scf.if %tv1 -> (f32) {
-        %m1_d = func.call @ggml_kquant_token_dot(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c1t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %m1_s = scalar.addf %m1_acc, %m1_d : f32
-        scf.yield %m1_s : f32
+      %m1_next = scf.if %tv1 -> (vector<4xf32>) {
+        %m1_s = func.call @ggml_kquant_token_fma(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c1t, %blocks, %block, %m1_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %m1_s : vector<4xf32>
       } else {
-        scf.yield %m1_acc : f32
+        scf.yield %m1_acc : vector<4xf32>
       }
-      %m2_next = scf.if %tv2 -> (f32) {
-        %m2_d = func.call @ggml_kquant_token_dot(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c2t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %m2_s = scalar.addf %m2_acc, %m2_d : f32
-        scf.yield %m2_s : f32
+      %m2_next = scf.if %tv2 -> (vector<4xf32>) {
+        %m2_s = func.call @ggml_kquant_token_fma(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c2t, %blocks, %block, %m2_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %m2_s : vector<4xf32>
       } else {
-        scf.yield %m2_acc : f32
+        scf.yield %m2_acc : vector<4xf32>
       }
-      %m3_next = scf.if %tv3 -> (f32) {
-        %m3_d = func.call @ggml_kquant_token_dot(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c3t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %m3_s = scalar.addf %m3_acc, %m3_d : f32
-        scf.yield %m3_s : f32
+      %m3_next = scf.if %tv3 -> (vector<4xf32>) {
+        %m3_s = func.call @ggml_kquant_token_fma(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c3t, %blocks, %block, %m3_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %m3_s : vector<4xf32>
       } else {
-        scf.yield %m3_acc : f32
+        scf.yield %m3_acc : vector<4xf32>
       }
-      %m4_next = scf.if %tv4 -> (f32) {
-        %m4_d = func.call @ggml_kquant_token_dot(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c4t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %m4_s = scalar.addf %m4_acc, %m4_d : f32
-        scf.yield %m4_s : f32
+      %m4_next = scf.if %tv4 -> (vector<4xf32>) {
+        %m4_s = func.call @ggml_kquant_token_fma(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c4t, %blocks, %block, %m4_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %m4_s : vector<4xf32>
       } else {
-        scf.yield %m4_acc : f32
+        scf.yield %m4_acc : vector<4xf32>
       }
-      %m5_next = scf.if %tv5 -> (f32) {
-        %m5_d = func.call @ggml_kquant_token_dot(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c5t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %m5_s = scalar.addf %m5_acc, %m5_d : f32
-        scf.yield %m5_s : f32
+      %m5_next = scf.if %tv5 -> (vector<4xf32>) {
+        %m5_s = func.call @ggml_kquant_token_fma(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c5t, %blocks, %block, %m5_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %m5_s : vector<4xf32>
       } else {
-        scf.yield %m5_acc : f32
+        scf.yield %m5_acc : vector<4xf32>
       }
-      %m6_next = scf.if %tv6 -> (f32) {
-        %m6_d = func.call @ggml_kquant_token_dot(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c6t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %m6_s = scalar.addf %m6_acc, %m6_d : f32
-        scf.yield %m6_s : f32
+      %m6_next = scf.if %tv6 -> (vector<4xf32>) {
+        %m6_s = func.call @ggml_kquant_token_fma(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c6t, %blocks, %block, %m6_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %m6_s : vector<4xf32>
       } else {
-        scf.yield %m6_acc : f32
+        scf.yield %m6_acc : vector<4xf32>
       }
-      %m7_next = scf.if %tv7 -> (f32) {
-        %m7_d = func.call @ggml_kquant_token_dot(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c7t, %blocks, %block) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index) -> (f32)
-        %m7_s = scalar.addf %m7_acc, %m7_d : f32
-        scf.yield %m7_s : f32
+      %m7_next = scf.if %tv7 -> (vector<4xf32>) {
+        %m7_s = func.call @ggml_kquant_token_fma(%mshape, %mw, %mp0, %mp1, %mp2, %mp3, %input, %c7t, %blocks, %block, %m7_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
+        scf.yield %m7_s : vector<4xf32>
       } else {
-        scf.yield %m7_acc : f32
+        scf.yield %m7_acc : vector<4xf32>
       }
-      scf.yield %m0_next, %m1_next, %m2_next, %m3_next, %m4_next, %m5_next, %m6_next, %m7_next : f32, f32, f32, f32, f32, f32, f32, f32
+      scf.yield %m0_next, %m1_next, %m2_next, %m3_next, %m4_next, %m5_next, %m6_next, %m7_next : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
     }
     %leader = index.cmp eq, %lane, %c0 : index
     %n_total = index.mul %tokens, %output_size : index
     scf.if %tv0 {
-      %m0_sum = kernel.subgroup.reduce<addf> %m0_part : f32
+      %m0_lane = vector.reduce<addf> %m0_part, %zero : vector<4xf32>, f32
+      %m0_sum = kernel.subgroup.reduce<addf> %m0_lane : f32
       scf.if %leader {
         %o0_row = index.mul %c0t, %output_size : index
         %o0_raw = index.add %o0_row, %row : index
@@ -3411,7 +3409,8 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
       }
     }
     scf.if %tv1 {
-      %m1_sum = kernel.subgroup.reduce<addf> %m1_part : f32
+      %m1_lane = vector.reduce<addf> %m1_part, %zero : vector<4xf32>, f32
+      %m1_sum = kernel.subgroup.reduce<addf> %m1_lane : f32
       scf.if %leader {
         %o1_row = index.mul %c1t, %output_size : index
         %o1_raw = index.add %o1_row, %row : index
@@ -3430,7 +3429,8 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
       }
     }
     scf.if %tv2 {
-      %m2_sum = kernel.subgroup.reduce<addf> %m2_part : f32
+      %m2_lane = vector.reduce<addf> %m2_part, %zero : vector<4xf32>, f32
+      %m2_sum = kernel.subgroup.reduce<addf> %m2_lane : f32
       scf.if %leader {
         %o2_row = index.mul %c2t, %output_size : index
         %o2_raw = index.add %o2_row, %row : index
@@ -3449,7 +3449,8 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
       }
     }
     scf.if %tv3 {
-      %m3_sum = kernel.subgroup.reduce<addf> %m3_part : f32
+      %m3_lane = vector.reduce<addf> %m3_part, %zero : vector<4xf32>, f32
+      %m3_sum = kernel.subgroup.reduce<addf> %m3_lane : f32
       scf.if %leader {
         %o3_row = index.mul %c3t, %output_size : index
         %o3_raw = index.add %o3_row, %row : index
@@ -3468,7 +3469,8 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
       }
     }
     scf.if %tv4 {
-      %m4_sum = kernel.subgroup.reduce<addf> %m4_part : f32
+      %m4_lane = vector.reduce<addf> %m4_part, %zero : vector<4xf32>, f32
+      %m4_sum = kernel.subgroup.reduce<addf> %m4_lane : f32
       scf.if %leader {
         %o4_row = index.mul %c4t, %output_size : index
         %o4_raw = index.add %o4_row, %row : index
@@ -3487,7 +3489,8 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
       }
     }
     scf.if %tv5 {
-      %m5_sum = kernel.subgroup.reduce<addf> %m5_part : f32
+      %m5_lane = vector.reduce<addf> %m5_part, %zero : vector<4xf32>, f32
+      %m5_sum = kernel.subgroup.reduce<addf> %m5_lane : f32
       scf.if %leader {
         %o5_row = index.mul %c5t, %output_size : index
         %o5_raw = index.add %o5_row, %row : index
@@ -3506,7 +3509,8 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
       }
     }
     scf.if %tv6 {
-      %m6_sum = kernel.subgroup.reduce<addf> %m6_part : f32
+      %m6_lane = vector.reduce<addf> %m6_part, %zero : vector<4xf32>, f32
+      %m6_sum = kernel.subgroup.reduce<addf> %m6_lane : f32
       scf.if %leader {
         %o6_row = index.mul %c6t, %output_size : index
         %o6_raw = index.add %o6_row, %row : index
@@ -3525,7 +3529,8 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
       }
     }
     scf.if %tv7 {
-      %m7_sum = kernel.subgroup.reduce<addf> %m7_part : f32
+      %m7_lane = vector.reduce<addf> %m7_part, %zero : vector<4xf32>, f32
+      %m7_sum = kernel.subgroup.reduce<addf> %m7_lane : f32
       scf.if %leader {
         %o7_row = index.mul %c7t, %output_size : index
         %o7_raw = index.add %o7_row, %row : index
