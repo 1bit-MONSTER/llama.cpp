@@ -37,6 +37,7 @@ from .base import ModelBase, TextModel, gguf, logger
     "CubeLM",
     "LlavaGPT2ForCausalLM",
     "LlavaGpt2ForCausalLM",
+    "GPT2LMHeadCustomModel",
 )
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
@@ -47,6 +48,10 @@ class GPT2Model(TextModel):
         self.gguf_writer.add_embedding_length(self.hparams["n_embd"])
         self.gguf_writer.add_feed_forward_length(4 * self.hparams["n_embd"])
         self.gguf_writer.add_head_count(self.hparams["n_head"])
+        # custom GPT-2 variants can use multi-query attention (attention_head_type ==
+        # "multiquery"); the gpt2 graph reads n_head_kv, so record it when present.
+        if self.hparams.get("attention_head_type") == "multiquery":
+            self.gguf_writer.add_head_count_kv(1)
         self.gguf_writer.add_layer_norm_eps(self.hparams["layer_norm_epsilon"])
         self.gguf_writer.add_file_type(self.ftype)
 
