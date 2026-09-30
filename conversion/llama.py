@@ -541,3 +541,13 @@ class ApertusModel(LlamaModel):
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("DynamicSlidingWindowForCausalLM")
+class DynamicSlidingWindowModel(LlamaModel):
+    # llama shape with per-norm biases, under an "attn." prefix
+    model_arch = gguf.MODEL_ARCH.LLAMA
+
+    def modify_tensors(self, data_torch, name, bid):
+        name = name.replace(".attn.", ".self_attn.")
+        yield from super().modify_tensors(data_torch, name, bid)

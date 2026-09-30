@@ -38,6 +38,7 @@ void llama_model_llama::load_arch_tensors(llama_model_loader &) {
 
     // output
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+    output_norm_b = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "bias"), {n_embd}, TENSOR_NOT_REQUIRED);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
 
     // if output is NULL, init from the input tok embed
@@ -49,6 +50,7 @@ void llama_model_llama::load_arch_tensors(llama_model_loader &) {
         auto & layer = layers[i];
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+        layer.attn_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
 
         create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
@@ -57,6 +59,7 @@ void llama_model_llama::load_arch_tensors(llama_model_loader &) {
         layer.wo_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
 
         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+        layer.ffn_norm_b = create_tensor(tn(LLM_TENSOR_FFN_NORM, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
 
         if (hparams.rope_scaling_type_train == LLAMA_ROPE_SCALING_TYPE_LONGROPE) {
             layer.rope_long  = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_LONG,  "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
@@ -130,7 +133,7 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
 
         // norm
         cur = build_norm(inpL,
-                model.layers[il].attn_norm, NULL,
+                model.layers[il].attn_norm, model.layers[il].attn_norm_b,
                 LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
@@ -182,7 +185,7 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
         if (model.layers[il].ffn_gate_inp == nullptr) {
 
             cur = build_norm(ffn_inp,
-                    model.layers[il].ffn_norm, NULL,
+                    model.layers[il].ffn_norm, model.layers[il].ffn_norm_b,
                     LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
@@ -196,7 +199,7 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
         } else {
             // MoE branch
             cur = build_norm(ffn_inp,
-                    model.layers[il].ffn_norm, NULL,
+                    model.layers[il].ffn_norm, model.layers[il].ffn_norm_b,
                     LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
@@ -229,7 +232,7 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
     cur = inpL;
 
     cur = build_norm(cur,
-            model.output_norm, NULL,
+            model.output_norm, model.output_norm_b,
             LLM_NORM_RMS, -1);
 
     cb(cur, "result_norm", -1);
