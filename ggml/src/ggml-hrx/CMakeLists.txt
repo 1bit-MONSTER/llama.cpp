@@ -233,6 +233,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-zaya-cca-qk-norm.h
     dispatch_registration/common/dispatch-kquant-decode.cpp
     dispatch_registration/common/dispatch-kquant-decode.h
+    dispatch_registration/common/dispatch-softplus.cpp
+    dispatch_registration/common/dispatch-softplus.h
     dispatch_registration/common/dispatch-scale.h
     dispatch_registration/common/dispatch-unary.cpp
     dispatch_registration/common/dispatch-unary.h

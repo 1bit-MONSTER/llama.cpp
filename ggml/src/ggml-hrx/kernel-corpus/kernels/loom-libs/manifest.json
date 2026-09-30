@@ -241,6 +241,9 @@
     },
     {
       "path": "ops/kquant_decode_f32.loom"
+    },
+    {
+      "path": "ops/softplus_f32.loom"
     }
   ],
   "exports": [
@@ -7699,6 +7702,41 @@
         "mode": "direct",
         "primary_sources": [
           "ops/kquant_decode_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_softplus_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_softplus_f32",
+      "source": "ops/softplus_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/softplus_f32.loom"
         ],
         "library_sources": []
       },
