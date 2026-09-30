@@ -61,6 +61,10 @@ from .base import ModelBase, TextModel, gguf, logger
     "GENERatorForCausalLM",
     "PawLlamaForCausalLM",
     "MobiLlamaForCausalLM",
+    "ScratchLlamaForCausalLM",
+    "PhoneLMForCausalLM",
+    "DeciCoderForCausalLM",
+    "KirimForCausalLM",
 )
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA

@@ -32,6 +32,7 @@ from .base import ModelBase, TextModel, gguf, logger
     "ChessForCausalLM",
     "NotaGenLMHeadModel",
     "ProGenForCausalLM",
+    "AraGPT2LMHeadModel",
 )
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
