@@ -1985,8 +1985,6 @@ func.def inline @ggml_kquant_iq3s_lane_dot(%grid_buf: buffer, %weight: buffer, %
   func.return %result : f32
 }
 
-
-// Bytes per 256 values of a weight format.
 func.def inline @ggml_kquant_iq2xxs_grid_fill(%grid: buffer, %chunk: index) {
   %zero_offset = index.constant 0 : offset
   %gv = buffer.view %grid[%zero_offset] : buffer -> view<512xi32>
@@ -3661,6 +3659,7 @@ func.def inline @ggml_kquant_grid_fill_for(%format: index, %grid: buffer, %chunk
   func.return
 }
 
+// Bytes per 256 values of a weight format.
 func.def pure inline @ggml_kquant_block_bytes(%format: index) -> (offset) {
   %f5 = index.constant 5 : index
   %f6 = index.constant 6 : index
