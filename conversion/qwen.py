@@ -167,6 +167,7 @@ class Qwen2MoeModel(TextModel):
     "SDARForCausalLM",
 )
 class Qwen3Model(Qwen2Model):
+
     model_arch = gguf.MODEL_ARCH.QWEN3
 
     # extra logic for rerank models
@@ -723,3 +724,13 @@ class DSparkModel(DFlashModel):
         if name.endswith(("embed_tokens.weight", "lm_head.weight")):
             return None
         return super().filter_tensors((name, gen))
+
+
+@ModelBase.register("OpensciForCausalLM")
+class OpensciModel(Qwen3Model):
+    # Opensci is qwen3 shape; its qk norms are named q_layernorm/k_layernorm.
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+    def modify_tensors(self, data_torch, name, bid):
+        name = name.replace("q_layernorm", "q_norm").replace("k_layernorm", "k_norm")
+        yield from super().modify_tensors(data_torch, name, bid)
