@@ -28,8 +28,7 @@
 //     vector.table.lookup lowers to 15 selects per byte on gfx11 and made IQ4_XS compute-bound.
 //   Q2_K, Q3_K, Q6_K, IQ3_S, IQ4_NL, Q8_0: see their lane functions (2-byte aligned blocks, 16-bit
 //     loads). IQ3_S reads its 512-entry grid from workgroup memory, written once per workgroup.
-// Weight format config values follow dispatch-mul-mat-weight-format.h (Q2_K 12, which only
-// dispatch-kquant-decode.cpp uses, Q3_K 11, Q4_K 4, Q5_K 5,
+// Weight format config values follow dispatch-mul-mat-weight-format.h (Q2_K 12, Q3_K 11, Q4_K 4, Q5_K 5,
 // Q6_K 6, IQ3_S 21, IQ4_NL 20, IQ4_XS 23, Q8_0 80).
 
 amdgpu.target<gfx11-generic> @ggml_kquant_decode_gfx11_wave64 {subgroup_size = 64}
