@@ -26,11 +26,11 @@
 //     8 values 16 positions later from the high nibbles. The IQ4_NL table value of each code is
 //     read from lane (code) of the 16-lane group, which holds kvalues_iq4nl[code]; a 16-entry
 //     vector.table.lookup lowers to 15 selects per byte on gfx11 and made IQ4_XS compute-bound.
-//   Q2_K, Q3_K, Q6_K, IQ2_XXS, IQ2_XS, IQ3_S, IQ4_NL, Q8_0: see their lane functions (2-byte aligned
-//     blocks, 16-bit loads). IQ2_XXS, IQ2_XS and IQ3_S read their grids from workgroup memory,
-//     written once per workgroup.
+//   Q2_K, Q3_K, Q6_K, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, Q8_0: see their lane functions
+//     (2-byte aligned blocks, 16-bit loads). IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS and IQ3_S read their grids
+//     from workgroup memory, written once per workgroup.
 // Weight format config values follow dispatch-mul-mat-weight-format.h (Q2_K 12, Q3_K 11, Q4_K 4, Q5_K 5,
-// Q6_K 6, IQ2_XXS 24, IQ2_XS 25, IQ3_S 21, IQ4_NL 20, IQ4_XS 23, Q8_0 80).
+// Q6_K 6, IQ2_S 22, IQ2_XXS 24, IQ2_XS 25, IQ3_XXS 28, IQ3_S 21, IQ4_NL 20, IQ4_XS 23, Q8_0 80).
 
 amdgpu.target<gfx11-generic> @ggml_kquant_decode_gfx11_wave64 {subgroup_size = 64}
 
@@ -3637,7 +3637,1741 @@ func.def inline @ggml_kquant_iq2xs_lane_weights(%grid: buffer, %weight: buffer, 
   func.return %w, %p0, %p1, %p2, %p3 : vector<16xf32>, index, index, index, index
 }
 
-// Stage the grid of %format (IQ3_S 21, IQ2_XXS 24, IQ2_XS 25) into workgroup memory, chunk %chunk.
+// Stages the IQ3_XXS grid, one 12-bit code per word; subgroup %chunk (0..3) writes words 64 %chunk .. +63.
+func.def inline @ggml_kquant_iq3xxs_grid_fill(%grid: buffer, %chunk: index) {
+  %zero_offset = index.constant 0 : offset
+  %gv = buffer.view %grid[%zero_offset] : buffer -> view<512xi32>
+  %k0 = index.constant 0 : index
+  %is0 = index.cmp eq, %chunk, %k0 : index
+  scf.if %is0 {
+    %v0_0_0 = scalar.constant 0 : i32
+    %v0_0_1 = scalar.constant 2 : i32
+    %v0_0_2 = scalar.constant 4 : i32
+    %v0_0_3 = scalar.constant 9 : i32
+    %w0_0 = vector.from_elements %v0_0_0, %v0_0_1, %v0_0_2, %v0_0_3 : vector<4xi32>
+    %o0_0 = index.constant 0 : index
+    vector.store %w0_0, %gv[%o0_0] : vector<4xi32>, view<512xi32>
+    %v0_1_0 = scalar.constant 11 : i32
+    %v0_1_1 = scalar.constant 15 : i32
+    %v0_1_2 = scalar.constant 16 : i32
+    %v0_1_3 = scalar.constant 18 : i32
+    %w0_1 = vector.from_elements %v0_1_0, %v0_1_1, %v0_1_2, %v0_1_3 : vector<4xi32>
+    %o0_1 = index.constant 4 : index
+    vector.store %w0_1, %gv[%o0_1] : vector<4xi32>, view<512xi32>
+    %v0_2_0 = scalar.constant 25 : i32
+    %v0_2_1 = scalar.constant 34 : i32
+    %v0_2_2 = scalar.constant 59 : i32
+    %v0_2_3 = scalar.constant 61 : i32
+    %w0_2 = vector.from_elements %v0_2_0, %v0_2_1, %v0_2_2, %v0_2_3 : vector<4xi32>
+    %o0_2 = index.constant 8 : index
+    vector.store %w0_2, %gv[%o0_2] : vector<4xi32>, view<512xi32>
+    %v0_3_0 = scalar.constant 65 : i32
+    %v0_3_1 = scalar.constant 67 : i32
+    %v0_3_2 = scalar.constant 72 : i32
+    %v0_3_3 = scalar.constant 74 : i32
+    %w0_3 = vector.from_elements %v0_3_0, %v0_3_1, %v0_3_2, %v0_3_3 : vector<4xi32>
+    %o0_3 = index.constant 12 : index
+    vector.store %w0_3, %gv[%o0_3] : vector<4xi32>, view<512xi32>
+    %v0_4_0 = scalar.constant 81 : i32
+    %v0_4_1 = scalar.constant 85 : i32
+    %v0_4_2 = scalar.constant 88 : i32
+    %v0_4_3 = scalar.constant 90 : i32
+    %w0_4 = vector.from_elements %v0_4_0, %v0_4_1, %v0_4_2, %v0_4_3 : vector<4xi32>
+    %o0_4 = index.constant 16 : index
+    vector.store %w0_4, %gv[%o0_4] : vector<4xi32>, view<512xi32>
+    %v0_5_0 = scalar.constant 97 : i32
+    %v0_5_1 = scalar.constant 108 : i32
+    %v0_5_2 = scalar.constant 120 : i32
+    %v0_5_3 = scalar.constant 128 : i32
+    %w0_5 = vector.from_elements %v0_5_0, %v0_5_1, %v0_5_2, %v0_5_3 : vector<4xi32>
+    %o0_5 = index.constant 20 : index
+    vector.store %w0_5, %gv[%o0_5] : vector<4xi32>, view<512xi32>
+    %v0_6_0 = scalar.constant 130 : i32
+    %v0_6_1 = scalar.constant 132 : i32
+    %v0_6_2 = scalar.constant 137 : i32
+    %v0_6_3 = scalar.constant 144 : i32
+    %w0_6 = vector.from_elements %v0_6_0, %v0_6_1, %v0_6_2, %v0_6_3 : vector<4xi32>
+    %o0_6 = index.constant 24 : index
+    vector.store %w0_6, %gv[%o0_6] : vector<4xi32>, view<512xi32>
+    %v0_7_0 = scalar.constant 146 : i32
+    %v0_7_1 = scalar.constant 153 : i32
+    %v0_7_2 = scalar.constant 155 : i32
+    %v0_7_3 = scalar.constant 159 : i32
+    %w0_7 = vector.from_elements %v0_7_0, %v0_7_1, %v0_7_2, %v0_7_3 : vector<4xi32>
+    %o0_7 = index.constant 28 : index
+    vector.store %w0_7, %gv[%o0_7] : vector<4xi32>, view<512xi32>
+    %v0_8_0 = scalar.constant 169 : i32
+    %v0_8_1 = scalar.constant 175 : i32
+    %v0_8_2 = scalar.constant 189 : i32
+    %v0_8_3 = scalar.constant 193 : i32
+    %w0_8 = vector.from_elements %v0_8_0, %v0_8_1, %v0_8_2, %v0_8_3 : vector<4xi32>
+    %o0_8 = index.constant 32 : index
+    vector.store %w0_8, %gv[%o0_8] : vector<4xi32>, view<512xi32>
+    %v0_9_0 = scalar.constant 199 : i32
+    %v0_9_1 = scalar.constant 200 : i32
+    %v0_9_2 = scalar.constant 202 : i32
+    %v0_9_3 = scalar.constant 213 : i32
+    %w0_9 = vector.from_elements %v0_9_0, %v0_9_1, %v0_9_2, %v0_9_3 : vector<4xi32>
+    %o0_9 = index.constant 36 : index
+    vector.store %w0_9, %gv[%o0_9] : vector<4xi32>, view<512xi32>
+    %v0_10_0 = scalar.constant 248 : i32
+    %v0_10_1 = scalar.constant 267 : i32
+    %v0_10_2 = scalar.constant 287 : i32
+    %v0_10_3 = scalar.constant 292 : i32
+    %w0_10 = vector.from_elements %v0_10_0, %v0_10_1, %v0_10_2, %v0_10_3 : vector<4xi32>
+    %o0_10 = index.constant 40 : index
+    vector.store %w0_10, %gv[%o0_10] : vector<4xi32>, view<512xi32>
+    %v0_11_0 = scalar.constant 303 : i32
+    %v0_11_1 = scalar.constant 315 : i32
+    %v0_11_2 = scalar.constant 317 : i32
+    %v0_11_3 = scalar.constant 321 : i32
+    %w0_11 = vector.from_elements %v0_11_0, %v0_11_1, %v0_11_2, %v0_11_3 : vector<4xi32>
+    %o0_11 = index.constant 44 : index
+    vector.store %w0_11, %gv[%o0_11] : vector<4xi32>, view<512xi32>
+    %v0_12_0 = scalar.constant 327 : i32
+    %v0_12_1 = scalar.constant 346 : i32
+    %v0_12_2 = scalar.constant 362 : i32
+    %v0_12_3 = scalar.constant 413 : i32
+    %w0_12 = vector.from_elements %v0_12_0, %v0_12_1, %v0_12_2, %v0_12_3 : vector<4xi32>
+    %o0_12 = index.constant 48 : index
+    vector.store %w0_12, %gv[%o0_12] : vector<4xi32>, view<512xi32>
+    %v0_13_0 = scalar.constant 436 : i32
+    %v0_13_1 = scalar.constant 456 : i32
+    %v0_13_2 = scalar.constant 460 : i32
+    %v0_13_3 = scalar.constant 462 : i32
+    %w0_13 = vector.from_elements %v0_13_0, %v0_13_1, %v0_13_2, %v0_13_3 : vector<4xi32>
+    %o0_13 = index.constant 52 : index
+    vector.store %w0_13, %gv[%o0_13] : vector<4xi32>, view<512xi32>
+    %v0_14_0 = scalar.constant 483 : i32
+    %v0_14_1 = scalar.constant 497 : i32
+    %v0_14_2 = scalar.constant 513 : i32
+    %v0_14_3 = scalar.constant 515 : i32
+    %w0_14 = vector.from_elements %v0_14_0, %v0_14_1, %v0_14_2, %v0_14_3 : vector<4xi32>
+    %o0_14 = index.constant 56 : index
+    vector.store %w0_14, %gv[%o0_14] : vector<4xi32>, view<512xi32>
+    %v0_15_0 = scalar.constant 520 : i32
+    %v0_15_1 = scalar.constant 522 : i32
+    %v0_15_2 = scalar.constant 529 : i32
+    %v0_15_3 = scalar.constant 531 : i32
+    %w0_15 = vector.from_elements %v0_15_0, %v0_15_1, %v0_15_2, %v0_15_3 : vector<4xi32>
+    %o0_15 = index.constant 60 : index
+    vector.store %w0_15, %gv[%o0_15] : vector<4xi32>, view<512xi32>
+  }
+  %k1 = index.constant 1 : index
+  %is1 = index.cmp eq, %chunk, %k1 : index
+  scf.if %is1 {
+    %v1_0_0 = scalar.constant 536 : i32
+    %v1_0_1 = scalar.constant 538 : i32
+    %v1_0_2 = scalar.constant 540 : i32
+    %v1_0_3 = scalar.constant 551 : i32
+    %w1_0 = vector.from_elements %v1_0_0, %v1_0_1, %v1_0_2, %v1_0_3 : vector<4xi32>
+    %o1_0 = index.constant 64 : index
+    vector.store %w1_0, %gv[%o1_0] : vector<4xi32>, view<512xi32>
+    %v1_1_0 = scalar.constant 552 : i32
+    %v1_1_1 = scalar.constant 576 : i32
+    %v1_1_2 = scalar.constant 578 : i32
+    %v1_1_3 = scalar.constant 585 : i32
+    %w1_1 = vector.from_elements %v1_1_0, %v1_1_1, %v1_1_2, %v1_1_3 : vector<4xi32>
+    %o1_1 = index.constant 68 : index
+    vector.store %w1_1, %gv[%o1_1] : vector<4xi32>, view<512xi32>
+    %v1_2_0 = scalar.constant 592 : i32
+    %v1_2_1 = scalar.constant 594 : i32
+    %v1_2_2 = scalar.constant 641 : i32
+    %v1_2_3 = scalar.constant 643 : i32
+    %w1_2 = vector.from_elements %v1_2_0, %v1_2_1, %v1_2_2, %v1_2_3 : vector<4xi32>
+    %o1_2 = index.constant 72 : index
+    vector.store %w1_2, %gv[%o1_2] : vector<4xi32>, view<512xi32>
+    %v1_3_0 = scalar.constant 648 : i32
+    %v1_3_1 = scalar.constant 650 : i32
+    %v1_3_2 = scalar.constant 657 : i32
+    %v1_3_3 = scalar.constant 664 : i32
+    %w1_3 = vector.from_elements %v1_3_0, %v1_3_1, %v1_3_2, %v1_3_3 : vector<4xi32>
+    %o1_3 = index.constant 76 : index
+    vector.store %w1_3, %gv[%o1_3] : vector<4xi32>, view<512xi32>
+    %v1_4_0 = scalar.constant 698 : i32
+    %v1_4_1 = scalar.constant 704 : i32
+    %v1_4_2 = scalar.constant 706 : i32
+    %v1_4_3 = scalar.constant 720 : i32
+    %w1_4 = vector.from_elements %v1_4_0, %v1_4_1, %v1_4_2, %v1_4_3 : vector<4xi32>
+    %o1_4 = index.constant 80 : index
+    vector.store %w1_4, %gv[%o1_4] : vector<4xi32>, view<512xi32>
+    %v1_5_0 = scalar.constant 729 : i32
+    %v1_5_1 = scalar.constant 742 : i32
+    %v1_5_2 = scalar.constant 758 : i32
+    %v1_5_3 = scalar.constant 769 : i32
+    %w1_5 = vector.from_elements %v1_5_0, %v1_5_1, %v1_5_2, %v1_5_3 : vector<4xi32>
+    %o1_5 = index.constant 84 : index
+    vector.store %w1_5, %gv[%o1_5] : vector<4xi32>, view<512xi32>
+    %v1_6_0 = scalar.constant 773 : i32
+    %v1_6_1 = scalar.constant 808 : i32
+    %v1_6_2 = scalar.constant 848 : i32
+    %v1_6_3 = scalar.constant 852 : i32
+    %w1_6 = vector.from_elements %v1_6_0, %v1_6_1, %v1_6_2, %v1_6_3 : vector<4xi32>
+    %o1_6 = index.constant 88 : index
+    vector.store %w1_6, %gv[%o1_6] : vector<4xi32>, view<512xi32>
+    %v1_7_0 = scalar.constant 870 : i32
+    %v1_7_1 = scalar.constant 889 : i32
+    %v1_7_2 = scalar.constant 901 : i32
+    %v1_7_3 = scalar.constant 978 : i32
+    %w1_7 = vector.from_elements %v1_7_0, %v1_7_1, %v1_7_2, %v1_7_3 : vector<4xi32>
+    %o1_7 = index.constant 92 : index
+    vector.store %w1_7, %gv[%o1_7] : vector<4xi32>, view<512xi32>
+    %v1_8_0 = scalar.constant 992 : i32
+    %v1_8_1 = scalar.constant 1024 : i32
+    %v1_8_2 = scalar.constant 1026 : i32
+    %v1_8_3 = scalar.constant 1033 : i32
+    %w1_8 = vector.from_elements %v1_8_0, %v1_8_1, %v1_8_2, %v1_8_3 : vector<4xi32>
+    %o1_8 = index.constant 96 : index
+    vector.store %w1_8, %gv[%o1_8] : vector<4xi32>, view<512xi32>
+    %v1_9_0 = scalar.constant 1035 : i32
+    %v1_9_1 = scalar.constant 1040 : i32
+    %v1_9_2 = scalar.constant 1042 : i32
+    %v1_9_3 = scalar.constant 1046 : i32
+    %w1_9 = vector.from_elements %v1_9_0, %v1_9_1, %v1_9_2, %v1_9_3 : vector<4xi32>
+    %o1_9 = index.constant 100 : index
+    vector.store %w1_9, %gv[%o1_9] : vector<4xi32>, view<512xi32>
+    %v1_10_0 = scalar.constant 1049 : i32
+    %v1_10_1 = scalar.constant 1058 : i32
+    %v1_10_2 = scalar.constant 1089 : i32
+    %v1_10_3 = scalar.constant 1091 : i32
+    %w1_10 = vector.from_elements %v1_10_0, %v1_10_1, %v1_10_2, %v1_10_3 : vector<4xi32>
+    %o1_10 = index.constant 104 : index
+    vector.store %w1_10, %gv[%o1_10] : vector<4xi32>, view<512xi32>
+    %v1_11_0 = scalar.constant 1093 : i32
+    %v1_11_1 = scalar.constant 1096 : i32
+    %v1_11_2 = scalar.constant 1098 : i32
+    %v1_11_3 = scalar.constant 1105 : i32
+    %w1_11 = vector.from_elements %v1_11_0, %v1_11_1, %v1_11_2, %v1_11_3 : vector<4xi32>
+    %o1_11 = index.constant 108 : index
+    vector.store %w1_11, %gv[%o1_11] : vector<4xi32>, view<512xi32>
+    %v1_12_0 = scalar.constant 1112 : i32
+    %v1_12_1 = scalar.constant 1139 : i32
+    %v1_12_2 = scalar.constant 1143 : i32
+    %v1_12_3 = scalar.constant 1144 : i32
+    %w1_12 = vector.from_elements %v1_12_0, %v1_12_1, %v1_12_2, %v1_12_3 : vector<4xi32>
+    %o1_12 = index.constant 112 : index
+    vector.store %w1_12, %gv[%o1_12] : vector<4xi32>, view<512xi32>
+    %v1_13_0 = scalar.constant 1152 : i32
+    %v1_13_1 = scalar.constant 1154 : i32
+    %v1_13_2 = scalar.constant 1161 : i32
+    %v1_13_3 = scalar.constant 1167 : i32
+    %w1_13 = vector.from_elements %v1_13_0, %v1_13_1, %v1_13_2, %v1_13_3 : vector<4xi32>
+    %o1_13 = index.constant 116 : index
+    vector.store %w1_13, %gv[%o1_13] : vector<4xi32>, view<512xi32>
+    %v1_14_0 = scalar.constant 1168 : i32
+    %v1_14_1 = scalar.constant 1170 : i32
+    %v1_14_2 = scalar.constant 1183 : i32
+    %v1_14_3 = scalar.constant 1184 : i32
+    %w1_14 = vector.from_elements %v1_14_0, %v1_14_1, %v1_14_2, %v1_14_3 : vector<4xi32>
+    %o1_14 = index.constant 120 : index
+    vector.store %w1_14, %gv[%o1_14] : vector<4xi32>, view<512xi32>
+    %v1_15_0 = scalar.constant 1197 : i32
+    %v1_15_1 = scalar.constant 1217 : i32
+    %v1_15_2 = scalar.constant 1224 : i32
+    %v1_15_3 = scalar.constant 1228 : i32
+    %w1_15 = vector.from_elements %v1_15_0, %v1_15_1, %v1_15_2, %v1_15_3 : vector<4xi32>
+    %o1_15 = index.constant 124 : index
+    vector.store %w1_15, %gv[%o1_15] : vector<4xi32>, view<512xi32>
+  }
+  %k2 = index.constant 2 : index
+  %is2 = index.cmp eq, %chunk, %k2 : index
+  scf.if %is2 {
+    %v2_0_0 = scalar.constant 1272 : i32
+    %v2_0_1 = scalar.constant 1276 : i32
+    %v2_0_2 = scalar.constant 1309 : i32
+    %v2_0_3 = scalar.constant 1323 : i32
+    %w2_0 = vector.from_elements %v2_0_0, %v2_0_1, %v2_0_2, %v2_0_3 : vector<4xi32>
+    %o2_0 = index.constant 128 : index
+    vector.store %w2_0, %gv[%o2_0] : vector<4xi32>, view<512xi32>
+    %v2_1_0 = scalar.constant 1347 : i32
+    %v2_1_1 = scalar.constant 1367 : i32
+    %v2_1_2 = scalar.constant 1377 : i32
+    %v2_1_3 = scalar.constant 1404 : i32
+    %w2_1 = vector.from_elements %v2_1_0, %v2_1_1, %v2_1_2, %v2_1_3 : vector<4xi32>
+    %o2_1 = index.constant 132 : index
+    vector.store %w2_1, %gv[%o2_1] : vector<4xi32>, view<512xi32>
+    %v2_2_0 = scalar.constant 1473 : i32
+    %v2_2_1 = scalar.constant 1475 : i32
+    %v2_2_2 = scalar.constant 1486 : i32
+    %v2_2_3 = scalar.constant 1509 : i32
+    %w2_2 = vector.from_elements %v2_2_0, %v2_2_1, %v2_2_2, %v2_2_3 : vector<4xi32>
+    %o2_2 = index.constant 136 : index
+    vector.store %w2_2, %gv[%o2_2] : vector<4xi32>, view<512xi32>
+    %v2_3_0 = scalar.constant 1537 : i32
+    %v2_3_1 = scalar.constant 1544 : i32
+    %v2_3_2 = scalar.constant 1546 : i32
+    %v2_3_3 = scalar.constant 1553 : i32
+    %w2_3 = vector.from_elements %v2_3_0, %v2_3_1, %v2_3_2, %v2_3_3 : vector<4xi32>
+    %o2_3 = index.constant 140 : index
+    vector.store %w2_3, %gv[%o2_3] : vector<4xi32>, view<512xi32>
+    %v2_4_0 = scalar.constant 1555 : i32
+    %v2_4_1 = scalar.constant 1576 : i32
+    %v2_4_2 = scalar.constant 1589 : i32
+    %v2_4_3 = scalar.constant 1594 : i32
+    %w2_4 = vector.from_elements %v2_4_0, %v2_4_1, %v2_4_2, %v2_4_3 : vector<4xi32>
+    %o2_4 = index.constant 144 : index
+    vector.store %w2_4, %gv[%o2_4] : vector<4xi32>, view<512xi32>
+    %v2_5_0 = scalar.constant 1600 : i32
+    %v2_5_1 = scalar.constant 1602 : i32
+    %v2_5_2 = scalar.constant 1616 : i32
+    %v2_5_3 = scalar.constant 1625 : i32
+    %w2_5 = vector.from_elements %v2_5_0, %v2_5_1, %v2_5_2, %v2_5_3 : vector<4xi32>
+    %o2_5 = index.constant 148 : index
+    vector.store %w2_5, %gv[%o2_5] : vector<4xi32>, view<512xi32>
+    %v2_6_0 = scalar.constant 1636 : i32
+    %v2_6_1 = scalar.constant 1638 : i32
+    %v2_6_2 = scalar.constant 1665 : i32
+    %v2_6_3 = scalar.constant 1667 : i32
+    %w2_6 = vector.from_elements %v2_6_0, %v2_6_1, %v2_6_2, %v2_6_3 : vector<4xi32>
+    %o2_6 = index.constant 152 : index
+    vector.store %w2_6, %gv[%o2_6] : vector<4xi32>, view<512xi32>
+    %v2_7_0 = scalar.constant 1672 : i32
+    %v2_7_1 = scalar.constant 1685 : i32
+    %v2_7_2 = scalar.constant 1706 : i32
+    %v2_7_3 = scalar.constant 1722 : i32
+    %w2_7 = vector.from_elements %v2_7_0, %v2_7_1, %v2_7_2, %v2_7_3 : vector<4xi32>
+    %o2_7 = index.constant 156 : index
+    vector.store %w2_7, %gv[%o2_7] : vector<4xi32>, view<512xi32>
+    %v2_8_0 = scalar.constant 1737 : i32
+    %v2_8_1 = scalar.constant 1755 : i32
+    %v2_8_2 = scalar.constant 1816 : i32
+    %v2_8_3 = scalar.constant 1831 : i32
+    %w2_8 = vector.from_elements %v2_8_0, %v2_8_1, %v2_8_2, %v2_8_3 : vector<4xi32>
+    %o2_8 = index.constant 160 : index
+    vector.store %w2_8, %gv[%o2_8] : vector<4xi32>, view<512xi32>
+    %v2_9_0 = scalar.constant 1850 : i32
+    %v2_9_1 = scalar.constant 1856 : i32
+    %v2_9_2 = scalar.constant 1862 : i32
+    %v2_9_3 = scalar.constant 1874 : i32
+    %w2_9 = vector.from_elements %v2_9_0, %v2_9_1, %v2_9_2, %v2_9_3 : vector<4xi32>
+    %o2_9 = index.constant 164 : index
+    vector.store %w2_9, %gv[%o2_9] : vector<4xi32>, view<512xi32>
+    %v2_10_0 = scalar.constant 1901 : i32
+    %v2_10_1 = scalar.constant 1932 : i32
+    %v2_10_2 = scalar.constant 1950 : i32
+    %v2_10_3 = scalar.constant 1971 : i32
+    %w2_10 = vector.from_elements %v2_10_0, %v2_10_1, %v2_10_2, %v2_10_3 : vector<4xi32>
+    %o2_10 = index.constant 168 : index
+    vector.store %w2_10, %gv[%o2_10] : vector<4xi32>, view<512xi32>
+    %v2_11_0 = scalar.constant 2011 : i32
+    %v2_11_1 = scalar.constant 2032 : i32
+    %v2_11_2 = scalar.constant 2052 : i32
+    %v2_11_3 = scalar.constant 2063 : i32
+    %w2_11 = vector.from_elements %v2_11_0, %v2_11_1, %v2_11_2, %v2_11_3 : vector<4xi32>
+    %o2_11 = index.constant 172 : index
+    vector.store %w2_11, %gv[%o2_11] : vector<4xi32>, view<512xi32>
+    %v2_12_0 = scalar.constant 2077 : i32
+    %v2_12_1 = scalar.constant 2079 : i32
+    %v2_12_2 = scalar.constant 2091 : i32
+    %v2_12_3 = scalar.constant 2095 : i32
+    %w2_12 = vector.from_elements %v2_12_0, %v2_12_1, %v2_12_2, %v2_12_3 : vector<4xi32>
+    %o2_12 = index.constant 176 : index
+    vector.store %w2_12, %gv[%o2_12] : vector<4xi32>, view<512xi32>
+    %v2_13_0 = scalar.constant 2172 : i32
+    %v2_13_1 = scalar.constant 2192 : i32
+    %v2_13_2 = scalar.constant 2207 : i32
+    %v2_13_3 = scalar.constant 2208 : i32
+    %w2_13 = vector.from_elements %v2_13_0, %v2_13_1, %v2_13_2, %v2_13_3 : vector<4xi32>
+    %o2_13 = index.constant 180 : index
+    vector.store %w2_13, %gv[%o2_13] : vector<4xi32>, view<512xi32>
+    %v2_14_0 = scalar.constant 2224 : i32
+    %v2_14_1 = scalar.constant 2230 : i32
+    %v2_14_2 = scalar.constant 2247 : i32
+    %v2_14_3 = scalar.constant 2277 : i32
+    %w2_14 = vector.from_elements %v2_14_0, %v2_14_1, %v2_14_2, %v2_14_3 : vector<4xi32>
+    %o2_14 = index.constant 184 : index
+    vector.store %w2_14, %gv[%o2_14] : vector<4xi32>, view<512xi32>
+    %v2_15_0 = scalar.constant 2308 : i32
+    %v2_15_1 = scalar.constant 2345 : i32
+    %v2_15_2 = scalar.constant 2356 : i32
+    %v2_15_3 = scalar.constant 2389 : i32
+    %w2_15 = vector.from_elements %v2_15_0, %v2_15_1, %v2_15_2, %v2_15_3 : vector<4xi32>
+    %o2_15 = index.constant 188 : index
+    vector.store %w2_15, %gv[%o2_15] : vector<4xi32>, view<512xi32>
+  }
+  %k3 = index.constant 3 : index
+  %is3 = index.cmp eq, %chunk, %k3 : index
+  scf.if %is3 {
+    %v3_0_0 = scalar.constant 2403 : i32
+    %v3_0_1 = scalar.constant 2424 : i32
+    %v3_0_2 = scalar.constant 2501 : i32
+    %v3_0_3 = scalar.constant 2504 : i32
+    %w3_0 = vector.from_elements %v3_0_0, %v3_0_1, %v3_0_2, %v3_0_3 : vector<4xi32>
+    %o3_0 = index.constant 192 : index
+    vector.store %w3_0, %gv[%o3_0] : vector<4xi32>, view<512xi32>
+    %v3_1_0 = scalar.constant 2506 : i32
+    %v3_1_1 = scalar.constant 2520 : i32
+    %v3_1_2 = scalar.constant 2570 : i32
+    %v3_1_3 = scalar.constant 2593 : i32
+    %w3_1 = vector.from_elements %v3_1_0, %v3_1_1, %v3_1_2, %v3_1_3 : vector<4xi32>
+    %o3_1 = index.constant 196 : index
+    vector.store %w3_1, %gv[%o3_1] : vector<4xi32>, view<512xi32>
+    %v3_2_0 = scalar.constant 2616 : i32
+    %v3_2_1 = scalar.constant 2624 : i32
+    %v3_2_2 = scalar.constant 2630 : i32
+    %v3_2_3 = scalar.constant 2646 : i32
+    %w3_2 = vector.from_elements %v3_2_0, %v3_2_1, %v3_2_2, %v3_2_3 : vector<4xi32>
+    %o3_2 = index.constant 200 : index
+    vector.store %w3_2, %gv[%o3_2] : vector<4xi32>, view<512xi32>
+    %v3_3_0 = scalar.constant 2669 : i32
+    %v3_3_1 = scalar.constant 2700 : i32
+    %v3_3_2 = scalar.constant 2714 : i32
+    %v3_3_3 = scalar.constant 2746 : i32
+    %w3_3 = vector.from_elements %v3_3_0, %v3_3_1, %v3_3_2, %v3_3_3 : vector<4xi32>
+    %o3_3 = index.constant 204 : index
+    vector.store %w3_3, %gv[%o3_3] : vector<4xi32>, view<512xi32>
+    %v3_4_0 = scalar.constant 2754 : i32
+    %v3_4_1 = scalar.constant 2795 : i32
+    %v3_4_2 = scalar.constant 2824 : i32
+    %v3_4_3 = scalar.constant 2835 : i32
+    %w3_4 = vector.from_elements %v3_4_0, %v3_4_1, %v3_4_2, %v3_4_3 : vector<4xi32>
+    %o3_4 = index.constant 208 : index
+    vector.store %w3_4, %gv[%o3_4] : vector<4xi32>, view<512xi32>
+    %v3_5_0 = scalar.constant 2839 : i32
+    %v3_5_1 = scalar.constant 2874 : i32
+    %v3_5_2 = scalar.constant 2882 : i32
+    %v3_5_3 = scalar.constant 2905 : i32
+    %w3_5 = vector.from_elements %v3_5_0, %v3_5_1, %v3_5_2, %v3_5_3 : vector<4xi32>
+    %o3_5 = index.constant 212 : index
+    vector.store %w3_5, %gv[%o3_5] : vector<4xi32>, view<512xi32>
+    %v3_6_0 = scalar.constant 2984 : i32
+    %v3_6_1 = scalar.constant 3028 : i32
+    %v3_6_2 = scalar.constant 3042 : i32
+    %v3_6_3 = scalar.constant 3092 : i32
+    %w3_6 = vector.from_elements %v3_6_0, %v3_6_1, %v3_6_2, %v3_6_3 : vector<4xi32>
+    %o3_6 = index.constant 216 : index
+    vector.store %w3_6, %gv[%o3_6] : vector<4xi32>, view<512xi32>
+    %v3_7_0 = scalar.constant 3108 : i32
+    %v3_7_1 = scalar.constant 3110 : i32
+    %v3_7_2 = scalar.constant 3124 : i32
+    %v3_7_3 = scalar.constant 3153 : i32
+    %w3_7 = vector.from_elements %v3_7_0, %v3_7_1, %v3_7_2, %v3_7_3 : vector<4xi32>
+    %o3_7 = index.constant 220 : index
+    vector.store %w3_7, %gv[%o3_7] : vector<4xi32>, view<512xi32>
+    %v3_8_0 = scalar.constant 3185 : i32
+    %v3_8_1 = scalar.constant 3215 : i32
+    %v3_8_2 = scalar.constant 3252 : i32
+    %v3_8_3 = scalar.constant 3288 : i32
+    %w3_8 = vector.from_elements %v3_8_0, %v3_8_1, %v3_8_2, %v3_8_3 : vector<4xi32>
+    %o3_8 = index.constant 224 : index
+    vector.store %w3_8, %gv[%o3_8] : vector<4xi32>, view<512xi32>
+    %v3_9_0 = scalar.constant 3294 : i32
+    %v3_9_1 = scalar.constant 3364 : i32
+    %v3_9_2 = scalar.constant 3397 : i32
+    %v3_9_3 = scalar.constant 3434 : i32
+    %w3_9 = vector.from_elements %v3_9_0, %v3_9_1, %v3_9_2, %v3_9_3 : vector<4xi32>
+    %o3_9 = index.constant 228 : index
+    vector.store %w3_9, %gv[%o3_9] : vector<4xi32>, view<512xi32>
+    %v3_10_0 = scalar.constant 3483 : i32
+    %v3_10_1 = scalar.constant 3523 : i32
+    %v3_10_2 = scalar.constant 3537 : i32
+    %v3_10_3 = scalar.constant 3587 : i32
+    %w3_10 = vector.from_elements %v3_10_0, %v3_10_1, %v3_10_2, %v3_10_3 : vector<4xi32>
+    %o3_10 = index.constant 232 : index
+    vector.store %w3_10, %gv[%o3_10] : vector<4xi32>, view<512xi32>
+    %v3_11_0 = scalar.constant 3589 : i32
+    %v3_11_1 = scalar.constant 3591 : i32
+    %v3_11_2 = scalar.constant 3592 : i32
+    %v3_11_3 = scalar.constant 3610 : i32
+    %w3_11 = vector.from_elements %v3_11_0, %v3_11_1, %v3_11_2, %v3_11_3 : vector<4xi32>
+    %o3_11 = index.constant 236 : index
+    vector.store %w3_11, %gv[%o3_11] : vector<4xi32>, view<512xi32>
+    %v3_12_0 = scalar.constant 3626 : i32
+    %v3_12_1 = scalar.constant 3670 : i32
+    %v3_12_2 = scalar.constant 3680 : i32
+    %v3_12_3 = scalar.constant 3722 : i32
+    %w3_12 = vector.from_elements %v3_12_0, %v3_12_1, %v3_12_2, %v3_12_3 : vector<4xi32>
+    %o3_12 = index.constant 240 : index
+    vector.store %w3_12, %gv[%o3_12] : vector<4xi32>, view<512xi32>
+    %v3_13_0 = scalar.constant 3749 : i32
+    %v3_13_1 = scalar.constant 3754 : i32
+    %v3_13_2 = scalar.constant 3776 : i32
+    %v3_13_3 = scalar.constant 3789 : i32
+    %w3_13 = vector.from_elements %v3_13_0, %v3_13_1, %v3_13_2, %v3_13_3 : vector<4xi32>
+    %o3_13 = index.constant 244 : index
+    vector.store %w3_13, %gv[%o3_13] : vector<4xi32>, view<512xi32>
+    %v3_14_0 = scalar.constant 3803 : i32
+    %v3_14_1 = scalar.constant 3824 : i32
+    %v3_14_2 = scalar.constant 3857 : i32
+    %v3_14_3 = scalar.constant 3873 : i32
+    %w3_14 = vector.from_elements %v3_14_0, %v3_14_1, %v3_14_2, %v3_14_3 : vector<4xi32>
+    %o3_14 = index.constant 248 : index
+    vector.store %w3_14, %gv[%o3_14] : vector<4xi32>, view<512xi32>
+    %v3_15_0 = scalar.constant 3904 : i32
+    %v3_15_1 = scalar.constant 3906 : i32
+    %v3_15_2 = scalar.constant 3924 : i32
+    %v3_15_3 = scalar.constant 3992 : i32
+    %w3_15 = vector.from_elements %v3_15_0, %v3_15_1, %v3_15_2, %v3_15_3 : vector<4xi32>
+    %o3_15 = index.constant 252 : index
+    vector.store %w3_15, %gv[%o3_15] : vector<4xi32>, view<512xi32>
+  }
+  func.return
+}
+
+// IQ3_XXS: a 256-value block is 8 groups of 32, each 4 slots of 8 values (two grid entries of 4); lane l16
+// owns group l16 / 2, slots 2 (l16 % 2) and +1: values 32 (l16 / 2) + 16 (l16 % 2) .. +15, one scale.
+// The grid (12-bit codes) is staged in workgroup memory like IQ2's; signs are ksigns_iq2xs (7 bits + parity).
+func.def inline @ggml_kquant_iq3xxs_slot_values(%code_a: i32, %code_b: i32, %signs7: i32) -> (vector<8xf32>) {
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c7_i32 = scalar.constant 7 : i32
+  %c12_i32 = scalar.constant 12 : i32
+  %p4 = scalar.shrui %signs7, %c4_i32 : i32
+  %x4 = scalar.xori %signs7, %p4 : i32
+  %p2 = scalar.shrui %x4, %c2_i32 : i32
+  %x2 = scalar.xori %x4, %p2 : i32
+  %p1 = scalar.shrui %x2, %c1_i32 : i32
+  %x1 = scalar.xori %x2, %p1 : i32
+  %parity = scalar.andi %x1, %c1_i32 : i32
+  %high = scalar.shli %parity, %c7_i32 : i32
+  %signs8 = scalar.ori %signs7, %high : i32
+  %b_hi = scalar.shli %code_b, %c12_i32 : i32
+  %both = scalar.ori %code_a, %b_hi : i32
+  %s0 = scalar.constant 0 : i32
+  %s3 = scalar.constant 3 : i32
+  %s5 = scalar.constant 5 : i32
+  %s6 = scalar.constant 6 : i32
+  %s8 = scalar.constant 8 : i32
+  %s9 = scalar.constant 9 : i32
+  %s12 = scalar.constant 12 : i32
+  %s15 = scalar.constant 15 : i32
+  %s18 = scalar.constant 18 : i32
+  %s21 = scalar.constant 21 : i32
+  %shift3 = vector.from_elements %s0, %s3, %s6, %s9, %s12, %s15, %s18, %s21 : vector<8xi32>
+  %shift1 = vector.from_elements %s0, %c1_i32, %c2_i32, %s3, %c4_i32, %s5, %s6, %c7_i32 : vector<8xi32>
+  %cv = vector.splat %both : vector<8xi32>
+  %lvs = vector.shrui %cv, %shift3 : vector<8xi32>
+  %seven = vector.splat %c7_i32 : vector<8xi32>
+  %lv = vector.andi %lvs, %seven : vector<8xi32>
+  %eight = vector.splat %s8 : vector<8xi32>
+  %four = vector.splat %c4_i32 : vector<8xi32>
+  %lv8 = vector.muli %lv, %eight : vector<8xi32>
+  %base = vector.addi %lv8, %four : vector<8xi32>
+  // level 7 is the only one with all three bits set: bump = 2 (L & L >> 1 & L >> 2 & 1)
+  %one7 = vector.splat %c1_i32 : vector<8xi32>
+  %two7 = vector.splat %c2_i32 : vector<8xi32>
+  %l1 = vector.shrui %lv, %one7 : vector<8xi32>
+  %l2 = vector.shrui %lv, %two7 : vector<8xi32>
+  %a01 = vector.andi %lv, %l1 : vector<8xi32>
+  %a012 = vector.andi %a01, %l2 : vector<8xi32>
+  %is7 = vector.andi %a012, %one7 : vector<8xi32>
+  %bump = vector.shli %is7, %one7 : vector<8xi32>
+  %mag = vector.addi %base, %bump : vector<8xi32>
+  %sv = vector.splat %signs8 : vector<8xi32>
+  %sb0 = vector.shrui %sv, %shift1 : vector<8xi32>
+  %one = vector.splat %c1_i32 : vector<8xi32>
+  %sb = vector.andi %sb0, %one : vector<8xi32>
+  %sb2 = vector.shli %sb, %one : vector<8xi32>
+  %sgn = vector.subi %one, %sb2 : vector<8xi32>
+  %v = vector.muli %mag, %sgn : vector<8xi32>
+  %vf = vector.sitofp %v : vector<8xi32> to vector<8xf32>
+  func.return %vf : vector<8xf32>
+}
+
+// IQ3_XXS (98 bytes): lane slots s = 2h, 2h + 1 of group g use grid indices at bytes 2 + 8 g + 2 s (+1)
+// and sign group s of aux = u32 at byte 66 + 4 g, scale d * (0.5 + (aux >> 28)) * 0.5.
+func.def inline @ggml_kquant_iq3xxs_lane_parts(%grid: buffer, %weight: buffer, %row_base: offset, %block: index, %lane16: index) -> (vector<16xf32>, f32, index) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c33 = index.constant 33 : index
+  %c7_i32 = scalar.constant 7 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c28_i32 = scalar.constant 28 : i32
+  %c127_i32 = scalar.constant 127 : i32
+  %c05 = scalar.constant 0.5 : f32
+  %block_bytes = index.constant 98 : offset
+  %zero_offset = index.constant 0 : offset
+  %l = index.assume %lane16 [range(%lane16, 0, 15)] : index
+  %g = index.div %l, %c2 : index
+  %h = index.rem %l, %c2 : index
+  %s0 = index.mul %h, %c2 : index
+  %s1 = index.add %s0, %c1 : index
+  %block_add = index.scale %block, %block_bytes : index, offset -> offset
+  %block_base = index.add %row_base, %block_add : offset
+  %hv = buffer.view %weight[%block_base] : buffer -> view<49xf16>
+  %wv = buffer.view %weight[%block_base] : buffer -> view<49xi16>
+  %bv = buffer.view %weight[%block_base] : buffer -> view<98xi8>
+  %gv = buffer.view %grid[%zero_offset] : buffer -> view<512xi32>
+  %d_f16 = view.load %hv[%c0] : view<49xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %g8 = index.mul %g, %c8 : index
+  %i0 = index.add %g8, %c2 : index
+  %h4 = index.mul %h, %c4 : index
+  %ia = index.add %i0, %h4 : index
+  %ib = index.add %ia, %c1 : index
+  %ic = index.add %ia, %c2 : index
+  %id = index.add %ia, %c3 : index
+  %ia_i8 = view.load %bv[%ia] : view<98xi8> -> i8
+  %ib_i8 = view.load %bv[%ib] : view<98xi8> -> i8
+  %ic_i8 = view.load %bv[%ic] : view<98xi8> -> i8
+  %id_i8 = view.load %bv[%id] : view<98xi8> -> i8
+  %ga = scalar.extui %ia_i8 : i8 to i32
+  %gb = scalar.extui %ib_i8 : i8 to i32
+  %gc = scalar.extui %ic_i8 : i8 to i32
+  %gd = scalar.extui %id_i8 : i8 to i32
+  %ga_x = index.cast %ga : i32 to index
+  %gb_x = index.cast %gb : i32 to index
+  %gc_x = index.cast %gc : i32 to index
+  %gd_x = index.cast %gd : i32 to index
+  %ga_b = index.assume %ga_x [range(%ga_x, 0, 255)] : index
+  %gb_b = index.assume %gb_x [range(%gb_x, 0, 255)] : index
+  %gc_b = index.assume %gc_x [range(%gc_x, 0, 255)] : index
+  %gd_b = index.assume %gd_x [range(%gd_x, 0, 255)] : index
+  %code_a = view.load %gv[%ga_b] : view<512xi32> -> i32
+  %code_b = view.load %gv[%gb_b] : view<512xi32> -> i32
+  %code_c = view.load %gv[%gc_b] : view<512xi32> -> i32
+  %code_d = view.load %gv[%gd_b] : view<512xi32> -> i32
+  %g2 = index.add %g, %g : index
+  %w0_at = index.add %c33, %g2 : index
+  %w1_at = index.add %w0_at, %c1 : index
+  %w0_i16 = view.load %wv[%w0_at] : view<49xi16> -> i16
+  %w1_i16 = view.load %wv[%w1_at] : view<49xi16> -> i16
+  %w0 = scalar.extui %w0_i16 : i16 to i32
+  %w1 = scalar.extui %w1_i16 : i16 to i32
+  %w1s = scalar.shli %w1, %c16_i32 : i32
+  %aux = scalar.ori %w0, %w1s : i32
+  %sc4 = scalar.shrui %aux, %c28_i32 : i32
+  %sc_f = scalar.uitofp %sc4 : i32 to f32
+  %sc_p = scalar.addf %sc_f, %c05 : f32
+  %ds = scalar.mulf %d, %sc_p : f32
+  %scale = scalar.mulf %ds, %c05 : f32
+  %s0_i32 = index.cast %s0 : index to i32
+  %s1_i32 = index.cast %s1 : index to i32
+  %sha = scalar.muli %s0_i32, %c7_i32 : i32
+  %shb = scalar.muli %s1_i32, %c7_i32 : i32
+  %sa0 = scalar.shrui %aux, %sha : i32
+  %sb0 = scalar.shrui %aux, %shb : i32
+  %sa = scalar.andi %sa0, %c127_i32 : i32
+  %sb = scalar.andi %sb0, %c127_i32 : i32
+  %va = func.call @ggml_kquant_iq3xxs_slot_values(%code_a, %code_b, %sa) : (i32, i32, i32) -> (vector<8xf32>)
+  %vb = func.call @ggml_kquant_iq3xxs_slot_values(%code_c, %code_d, %sb) : (i32, i32, i32) -> (vector<8xf32>)
+  %v = func.call @ggml_kquant_iq2_join16(%va, %vb) : (vector<8xf32>, vector<8xf32>) -> (vector<16xf32>)
+  %g32 = index.mul %g, %c32 : index
+  %h16 = index.mul %h, %c16 : index
+  %p0 = index.add %g32, %h16 : index
+  func.return %v, %scale, %p0 : vector<16xf32>, f32, index
+}
+
+func.def inline @ggml_kquant_iq3xxs_lane_dot(%grid: buffer, %weight: buffer, %input: buffer, %row_base: offset, %block: index, %lane16: index) -> (f32) {
+  %zero_scalar = scalar.constant 0.0 : f32
+  %x_block_bytes = index.constant 1024 : offset
+  %v, %scale, %p = func.call @ggml_kquant_iq3xxs_lane_parts(%grid, %weight, %row_base, %block, %lane16) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, f32, index)
+  %x_base = index.scale %block, %x_block_bytes : index, offset -> offset
+  %xv = buffer.view %input[%x_base] : buffer -> view<256xf32>
+  %x = vector.load %xv[%p] : view<256xf32> -> vector<16xf32>
+  %vx = vector.mulf %v, %x : vector<16xf32>
+  %sum = vector.reduce<addf> %vx, %zero_scalar : vector<16xf32>, f32
+  %result = scalar.mulf %scale, %sum : f32
+  func.return %result : f32
+}
+
+func.def inline @ggml_kquant_iq3xxs_lane_weights(%grid: buffer, %weight: buffer, %row_base: offset, %block: index, %lane16: index) -> (vector<16xf32>, index, index, index, index) {
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c12 = index.constant 12 : index
+  %v, %scale, %p0 = func.call @ggml_kquant_iq3xxs_lane_parts(%grid, %weight, %row_base, %block, %lane16) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, f32, index)
+  %sv = vector.splat %scale : vector<16xf32>
+  %w = vector.mulf %v, %sv : vector<16xf32>
+  %p1 = index.add %p0, %c4 : index
+  %p2 = index.add %p0, %c8 : index
+  %p3 = index.add %p0, %c12 : index
+  func.return %w, %p0, %p1, %p2, %p3 : vector<16xf32>, index, index, index, index
+}
+
+// Stages the IQ2_S grid as 512 words (two 16-bit codes each); subgroup %chunk (0..3) writes
+// words 128 %chunk .. +127.
+func.def inline @ggml_kquant_iq2s_grid_fill(%grid: buffer, %chunk: index) {
+  %zero_offset = index.constant 0 : offset
+  %gv = buffer.view %grid[%zero_offset] : buffer -> view<512xi32>
+  %k0 = index.constant 0 : index
+  %is0 = index.cmp eq, %chunk, %k0 : index
+  scf.if %is0 {
+    %v0_0_0 = scalar.constant 131072 : i32
+    %v0_0_1 = scalar.constant 524293 : i32
+    %v0_0_2 = scalar.constant 1114122 : i32
+    %v0_0_3 = scalar.constant 1441812 : i32
+    %w0_0 = vector.from_elements %v0_0_0, %v0_0_1, %v0_0_2, %v0_0_3 : vector<4xi32>
+    %o0_0 = index.constant 0 : index
+    vector.store %w0_0, %gv[%o0_0] : vector<4xi32>, view<512xi32>
+    %v0_1_0 = scalar.constant 2097177 : i32
+    %v0_1_1 = scalar.constant 2424866 : i32
+    %v0_1_2 = scalar.constant 4259880 : i32
+    %v0_1_3 = scalar.constant 4587588 : i32
+    %w0_1 = vector.from_elements %v0_1_0, %v0_1_1, %v0_1_2, %v0_1_3 : vector<4xi32>
+    %o0_1 = index.constant 4 : index
+    vector.store %w0_1, %gv[%o0_1] : vector<4xi32>, view<512xi32>
+    %v0_2_0 = scalar.constant 5242953 : i32
+    %v0_2_1 = scalar.constant 5570642 : i32
+    %v0_2_2 = scalar.constant 6357080 : i32
+    %v0_2_3 = scalar.constant 6684772 : i32
+    %w0_2 = vector.from_elements %v0_2_0, %v0_2_1, %v0_2_2, %v0_2_3 : vector<4xi32>
+    %o0_2 = index.constant 8 : index
+    vector.store %w0_2, %gv[%o0_2] : vector<4xi32>, view<512xi32>
+    %v0_3_0 = scalar.constant 8388713 : i32
+    %v0_3_1 = scalar.constant 8716418 : i32
+    %v0_3_2 = scalar.constant 9502856 : i32
+    %v0_3_3 = scalar.constant 10485908 : i32
+    %w0_3 = vector.from_elements %v0_3_0, %v0_3_1, %v0_3_2, %v0_3_3 : vector<4xi32>
+    %o0_3 = index.constant 12 : index
+    vector.store %w0_3, %gv[%o0_3] : vector<4xi32>, view<512xi32>
+    %v0_4_0 = scalar.constant 11141285 : i32
+    %v0_4_1 = scalar.constant 17039617 : i32
+    %v0_4_2 = scalar.constant 17367302 : i32
+    %v0_4_3 = scalar.constant 17957136 : i32
+    %w0_4 = vector.from_elements %v0_4_0, %v0_4_1, %v0_4_2, %v0_4_3 : vector<4xi32>
+    %o0_4 = index.constant 16 : index
+    vector.store %w0_4, %gv[%o0_4] : vector<4xi32>, view<512xi32>
+    %v0_5_0 = scalar.constant 18350357 : i32
+    %v0_5_1 = scalar.constant 19136801 : i32
+    %v0_5_2 = scalar.constant 21102912 : i32
+    %v0_5_3 = scalar.constant 21496133 : i32
+    %w0_5 = vector.from_elements %v0_5_0, %v0_5_1, %v0_5_2, %v0_5_3 : vector<4xi32>
+    %o0_5 = index.constant 20 : index
+    vector.store %w0_5, %gv[%o0_5] : vector<4xi32>, view<512xi32>
+    %v0_6_0 = scalar.constant 22282577 : i32
+    %v0_6_1 = scalar.constant 22610262 : i32
+    %v0_6_2 = scalar.constant 23396704 : i32
+    %v0_6_3 = scalar.constant 25231720 : i32
+    %w0_6 = vector.from_elements %v0_6_0, %v0_6_1, %v0_6_2, %v0_6_3 : vector<4xi32>
+    %o0_6 = index.constant 24 : index
+    vector.store %w0_6, %gv[%o0_6] : vector<4xi32>, view<512xi32>
+    %v0_7_0 = scalar.constant 26214788 : i32
+    %v0_7_1 = scalar.constant 26542482 : i32
+    %v0_7_2 = scalar.constant 27525537 : i32
+    %v0_7_3 = scalar.constant 33686016 : i32
+    %w0_7 = vector.from_elements %v0_7_0, %v0_7_1, %v0_7_2, %v0_7_3 : vector<4xi32>
+    %o0_7 = index.constant 28 : index
+    vector.store %w0_7, %gv[%o0_7] : vector<4xi32>, view<512xi32>
+    %v0_8_0 = scalar.constant 34079237 : i32
+    %v0_8_1 = scalar.constant 34865681 : i32
+    %v0_8_2 = scalar.constant 36307488 : i32
+    %v0_8_3 = scalar.constant 38011457 : i32
+    %w0_8 = vector.from_elements %v0_8_0, %v0_8_1, %v0_8_2, %v0_8_3 : vector<4xi32>
+    %o0_8 = index.constant 32 : index
+    vector.store %w0_8, %gv[%o0_8] : vector<4xi32>, view<512xi32>
+    %v0_9_0 = scalar.constant 38339142 : i32
+    %v0_9_1 = scalar.constant 39125584 : i32
+    %v0_9_2 = scalar.constant 42271360 : i32
+    %v0_9_3 = scalar.constant 43254410 : i32
+    %w0_9 = vector.from_elements %v0_9_0, %v0_9_1, %v0_9_2, %v0_9_3 : vector<4xi32>
+    %o0_9 = index.constant 36 : index
+    vector.store %w0_9, %gv[%o0_9] : vector<4xi32>, view<512xi32>
+    %v0_10_0 = scalar.constant 67175074 : i32
+    %v0_10_1 = scalar.constant 67503108 : i32
+    %v0_10_2 = scalar.constant 68158473 : i32
+    %v0_10_3 = scalar.constant 68486162 : i32
+    %w0_10 = vector.from_elements %v0_10_0, %v0_10_1, %v0_10_2, %v0_10_3 : vector<4xi32>
+    %o0_10 = index.constant 40 : index
+    vector.store %w0_10, %gv[%o0_10] : vector<4xi32>, view<512xi32>
+    %v0_11_0 = scalar.constant 69272600 : i32
+    %v0_11_1 = scalar.constant 69600292 : i32
+    %v0_11_2 = scalar.constant 71304233 : i32
+    %v0_11_3 = scalar.constant 71631938 : i32
+    %w0_11 = vector.from_elements %v0_11_0, %v0_11_1, %v0_11_2, %v0_11_3 : vector<4xi32>
+    %o0_11 = index.constant 44 : index
+    vector.store %w0_11, %gv[%o0_11] : vector<4xi32>, view<512xi32>
+    %v0_12_0 = scalar.constant 71959624 : i32
+    %v0_12_1 = scalar.constant 72614993 : i32
+    %v0_12_2 = scalar.constant 72942678 : i32
+    %v0_12_3 = scalar.constant 73532512 : i32
+    %w0_12 = vector.from_elements %v0_12_0, %v0_12_1, %v0_12_2, %v0_12_3 : vector<4xi32>
+    %o0_12 = index.constant 48 : index
+    vector.store %w0_12, %gv[%o0_12] : vector<4xi32>, view<512xi32>
+    %v0_13_0 = scalar.constant 75564133 : i32
+    %v0_13_1 = scalar.constant 75891844 : i32
+    %v0_13_2 = scalar.constant 76547209 : i32
+    %v0_13_3 = scalar.constant 77071509 : i32
+    %w0_13 = vector.from_elements %v0_13_0, %v0_13_1, %v0_13_2, %v0_13_3 : vector<4xi32>
+    %o0_13 = index.constant 52 : index
+    vector.store %w0_13, %gv[%o0_13] : vector<4xi32>, view<512xi32>
+    %v0_14_0 = scalar.constant 77857953 : i32
+    %v0_14_1 = scalar.constant 84018432 : i32
+    %v0_14_2 = scalar.constant 84411653 : i32
+    %v0_14_3 = scalar.constant 85001482 : i32
+    %w0_14 = vector.from_elements %v0_14_0, %v0_14_1, %v0_14_2, %v0_14_3 : vector<4xi32>
+    %o0_14 = index.constant 56 : index
+    vector.store %w0_14, %gv[%o0_14] : vector<4xi32>, view<512xi32>
+    %v0_15_0 = scalar.constant 85329172 : i32
+    %v0_15_1 = scalar.constant 85984537 : i32
+    %v0_15_2 = scalar.constant 86508837 : i32
+    %v0_15_3 = scalar.constant 88343873 : i32
+    %w0_15 = vector.from_elements %v0_15_0, %v0_15_1, %v0_15_2, %v0_15_3 : vector<4xi32>
+    %o0_15 = index.constant 60 : index
+    vector.store %w0_15, %gv[%o0_15] : vector<4xi32>, view<512xi32>
+    %v0_16_0 = scalar.constant 88671558 : i32
+    %v0_16_1 = scalar.constant 89261392 : i32
+    %v0_16_2 = scalar.constant 89654613 : i32
+    %v0_16_3 = scalar.constant 90441057 : i32
+    %w0_16 = vector.from_elements %v0_16_0, %v0_16_1, %v0_16_2, %v0_16_3 : vector<4xi32>
+    %o0_16 = index.constant 64 : index
+    vector.store %w0_16, %gv[%o0_16] : vector<4xi32>, view<512xi32>
+    %v0_17_0 = scalar.constant 92407168 : i32
+    %v0_17_1 = scalar.constant 92800389 : i32
+    %v0_17_2 = scalar.constant 93586833 : i32
+    %v0_17_3 = scalar.constant 100730272 : i32
+    %w0_17 = vector.from_elements %v0_17_0, %v0_17_1, %v0_17_2, %v0_17_3 : vector<4xi32>
+    %o0_17 = index.constant 68 : index
+    vector.store %w0_17, %gv[%o0_17] : vector<4xi32>, view<512xi32>
+    %v0_18_0 = scalar.constant 101058052 : i32
+    %v0_18_1 = scalar.constant 101713417 : i32
+    %v0_18_2 = scalar.constant 104859157 : i32
+    %v0_18_3 = scalar.constant 105383493 : i32
+    %w0_18 = vector.from_elements %v0_18_0, %v0_18_1, %v0_18_2, %v0_18_3 : vector<4xi32>
+    %o0_18 = index.constant 72 : index
+    vector.store %w0_18, %gv[%o0_18] : vector<4xi32>, view<512xi32>
+    %v0_19_0 = scalar.constant 106169937 : i32
+    %v0_19_1 = scalar.constant 109119072 : i32
+    %v0_19_2 = scalar.constant 110102148 : i32
+    %v0_19_3 = scalar.constant 134350848 : i32
+    %w0_19 = vector.from_elements %v0_19_0, %v0_19_1, %v0_19_2, %v0_19_3 : vector<4xi32>
+    %o0_19 = index.constant 76 : index
+    vector.store %w0_19, %gv[%o0_19] : vector<4xi32>, view<512xi32>
+    %v0_20_0 = scalar.constant 134744069 : i32
+    %v0_20_1 = scalar.constant 135530513 : i32
+    %v0_20_2 = scalar.constant 135858198 : i32
+    %v0_20_3 = scalar.constant 136644640 : i32
+    %w0_20 = vector.from_elements %v0_20_0, %v0_20_1, %v0_20_2, %v0_20_3 : vector<4xi32>
+    %o0_20 = index.constant 80 : index
+    vector.store %w0_20, %gv[%o0_20] : vector<4xi32>, view<512xi32>
+    %v0_21_0 = scalar.constant 138479658 : i32
+    %v0_21_1 = scalar.constant 138807364 : i32
+    %v0_21_2 = scalar.constant 139462729 : i32
+    %v0_21_3 = scalar.constant 139790418 : i32
+    %w0_21 = vector.from_elements %v0_21_0, %v0_21_1, %v0_21_2, %v0_21_3 : vector<4xi32>
+    %o0_21 = index.constant 84 : index
+    vector.store %w0_21, %gv[%o0_21] : vector<4xi32>, view<512xi32>
+    %v0_22_0 = scalar.constant 140576856 : i32
+    %v0_22_1 = scalar.constant 142608484 : i32
+    %v0_22_2 = scalar.constant 143919237 : i32
+    %v0_22_3 = scalar.constant 151062698 : i32
+    %w0_22 = vector.from_elements %v0_22_0, %v0_22_1, %v0_22_2, %v0_22_3 : vector<4xi32>
+    %o0_22 = index.constant 88 : index
+    vector.store %w0_22, %gv[%o0_22] : vector<4xi32>, view<512xi32>
+    %v0_23_0 = scalar.constant 152045828 : i32
+    %v0_23_1 = scalar.constant 152373522 : i32
+    %v0_23_2 = scalar.constant 153159960 : i32
+    %v0_23_3 = scalar.constant 155519296 : i32
+    %w0_23 = vector.from_elements %v0_23_0, %v0_23_1, %v0_23_2, %v0_23_3 : vector<4xi32>
+    %o0_23 = index.constant 92 : index
+    vector.store %w0_23, %gv[%o0_23] : vector<4xi32>, view<512xi32>
+    %v0_24_0 = scalar.constant 156305736 : i32
+    %v0_24_1 = scalar.constant 157288788 : i32
+    %v0_24_2 = scalar.constant 160434561 : i32
+    %v0_24_3 = scalar.constant 168888832 : i32
+    %w0_24 = vector.from_elements %v0_24_0, %v0_24_1, %v0_24_2, %v0_24_3 : vector<4xi32>
+    %o0_24 = index.constant 96 : index
+    vector.store %w0_24, %gv[%o0_24] : vector<4xi32>, view<512xi32>
+    %v0_25_0 = scalar.constant 170002964 : i32
+    %v0_25_1 = scalar.constant 170527272 : i32
+    %v0_25_2 = scalar.constant 177801808 : i32
+    %v0_25_3 = scalar.constant 268701697 : i32
+    %w0_25 = vector.from_elements %v0_25_0, %v0_25_1, %v0_25_2, %v0_25_3 : vector<4xi32>
+    %o0_25 = index.constant 100 : index
+    vector.store %w0_25, %gv[%o0_25] : vector<4xi32>, view<512xi32>
+    %v0_26_0 = scalar.constant 269029382 : i32
+    %v0_26_1 = scalar.constant 269619216 : i32
+    %v0_26_2 = scalar.constant 270012437 : i32
+    %v0_26_3 = scalar.constant 270798881 : i32
+    %w0_26 = vector.from_elements %v0_26_0, %v0_26_1, %v0_26_2, %v0_26_3 : vector<4xi32>
+    %o0_26 = index.constant 104 : index
+    vector.store %w0_26, %gv[%o0_26] : vector<4xi32>, view<512xi32>
+    %v0_27_0 = scalar.constant 272633894 : i32
+    %v0_27_1 = scalar.constant 272961602 : i32
+    %v0_27_2 = scalar.constant 273748040 : i32
+    %v0_27_3 = scalar.constant 274075732 : i32
+    %w0_27 = vector.from_elements %v0_27_0, %v0_27_1, %v0_27_2, %v0_27_3 : vector<4xi32>
+    %o0_27 = index.constant 108 : index
+    vector.store %w0_27, %gv[%o0_27] : vector<4xi32>, view<512xi32>
+    %v0_28_0 = scalar.constant 274731097 : i32
+    %v0_28_1 = scalar.constant 275058786 : i32
+    %v0_28_2 = scalar.constant 276893800 : i32
+    %v0_28_3 = scalar.constant 277221508 : i32
+    %w0_28 = vector.from_elements %v0_28_0, %v0_28_1, %v0_28_2, %v0_28_3 : vector<4xi32>
+    %o0_28 = index.constant 112 : index
+    vector.store %w0_28, %gv[%o0_28] : vector<4xi32>, view<512xi32>
+    %v0_29_0 = scalar.constant 278204560 : i32
+    %v0_29_1 = scalar.constant 278991000 : i32
+    %v0_29_2 = scalar.constant 285216932 : i32
+    %v0_29_3 = scalar.constant 285544706 : i32
+    %w0_29 = vector.from_elements %v0_29_0, %v0_29_1, %v0_29_2, %v0_29_3 : vector<4xi32>
+    %o0_29 = index.constant 116 : index
+    vector.store %w0_29, %gv[%o0_29] : vector<4xi32>, view<512xi32>
+    %v0_30_0 = scalar.constant 285872392 : i32
+    %v0_30_1 = scalar.constant 286527761 : i32
+    %v0_30_2 = scalar.constant 286855446 : i32
+    %v0_30_3 = scalar.constant 287445280 : i32
+    %w0_30 = vector.from_elements %v0_30_0, %v0_30_1, %v0_30_2, %v0_30_3 : vector<4xi32>
+    %o0_30 = index.constant 120 : index
+    vector.store %w0_30, %gv[%o0_30] : vector<4xi32>, view<512xi32>
+    %v0_31_0 = scalar.constant 287838501 : i32
+    %v0_31_1 = scalar.constant 289673537 : i32
+    %v0_31_2 = scalar.constant 290001222 : i32
+    %v0_31_3 = scalar.constant 290591056 : i32
+    %w0_31 = vector.from_elements %v0_31_0, %v0_31_1, %v0_31_2, %v0_31_3 : vector<4xi32>
+    %o0_31 = index.constant 124 : index
+    vector.store %w0_31, %gv[%o0_31] : vector<4xi32>, view<512xi32>
+  }
+  %k1 = index.constant 1 : index
+  %is1 = index.cmp eq, %chunk, %k1 : index
+  scf.if %is1 {
+    %v1_0_0 = scalar.constant 290984277 : i32
+    %v1_0_1 = scalar.constant 291770721 : i32
+    %v1_0_2 = scalar.constant 293736832 : i32
+    %v1_0_3 = scalar.constant 294130053 : i32
+    %w1_0 = vector.from_elements %v1_0_0, %v1_0_1, %v1_0_2, %v1_0_3 : vector<4xi32>
+    %o1_0 = index.constant 128 : index
+    vector.store %w1_0, %gv[%o1_0] : vector<4xi32>, view<512xi32>
+    %v1_1_0 = scalar.constant 294916497 : i32
+    %v1_1_1 = scalar.constant 302256641 : i32
+    %v1_1_2 = scalar.constant 303043081 : i32
+    %v1_1_3 = scalar.constant 304157205 : i32
+    %w1_1 = vector.from_elements %v1_1_0, %v1_1_1, %v1_1_2, %v1_1_3 : vector<4xi32>
+    %o1_1 = index.constant 132 : index
+    vector.store %w1_1, %gv[%o1_1] : vector<4xi32>, view<512xi32>
+    %v1_2_0 = scalar.constant 306188836 : i32
+    %v1_2_1 = scalar.constant 307302981 : i32
+    %v1_2_2 = scalar.constant 310448724 : i32
+    %v1_2_3 = scalar.constant 311431812 : i32
+    %w1_2 = vector.from_elements %v1_2_0, %v1_2_1, %v1_2_2, %v1_2_3 : vector<4xi32>
+    %o1_2 = index.constant 136 : index
+    vector.store %w1_2, %gv[%o1_2] : vector<4xi32>, view<512xi32>
+    %v1_3_0 = scalar.constant 335680512 : i32
+    %v1_3_1 = scalar.constant 336073733 : i32
+    %v1_3_2 = scalar.constant 336860177 : i32
+    %v1_3_3 = scalar.constant 337187862 : i32
+    %w1_3 = vector.from_elements %v1_3_0, %v1_3_1, %v1_3_2, %v1_3_3 : vector<4xi32>
+    %o1_3 = index.constant 140 : index
+    vector.store %w1_3, %gv[%o1_3] : vector<4xi32>, view<512xi32>
+    %v1_4_0 = scalar.constant 337974304 : i32
+    %v1_4_1 = scalar.constant 339809320 : i32
+    %v1_4_2 = scalar.constant 340137028 : i32
+    %v1_4_3 = scalar.constant 340792393 : i32
+    %w1_4 = vector.from_elements %v1_4_0, %v1_4_1, %v1_4_2, %v1_4_3 : vector<4xi32>
+    %o1_4 = index.constant 144 : index
+    vector.store %w1_4, %gv[%o1_4] : vector<4xi32>, view<512xi32>
+    %v1_5_0 = scalar.constant 341120082 : i32
+    %v1_5_1 = scalar.constant 341906520 : i32
+    %v1_5_2 = scalar.constant 343938148 : i32
+    %v1_5_3 = scalar.constant 344265858 : i32
+    %w1_5 = vector.from_elements %v1_5_0, %v1_5_1, %v1_5_2, %v1_5_3 : vector<4xi32>
+    %o1_5 = index.constant 148 : index
+    vector.store %w1_5, %gv[%o1_5] : vector<4xi32>, view<512xi32>
+    %v1_6_0 = scalar.constant 345052296 : i32
+    %v1_6_1 = scalar.constant 346035348 : i32
+    %v1_6_2 = scalar.constant 352589057 : i32
+    %v1_6_3 = scalar.constant 352916742 : i32
+    %w1_6 = vector.from_elements %v1_6_0, %v1_6_1, %v1_6_2, %v1_6_3 : vector<4xi32>
+    %o1_6 = index.constant 152 : index
+    vector.store %w1_6, %gv[%o1_6] : vector<4xi32>, view<512xi32>
+    %v1_7_0 = scalar.constant 353506576 : i32
+    %v1_7_1 = scalar.constant 353899797 : i32
+    %v1_7_2 = scalar.constant 354686241 : i32
+    %v1_7_3 = scalar.constant 356652352 : i32
+    %w1_7 = vector.from_elements %v1_7_0, %v1_7_1, %v1_7_2, %v1_7_3 : vector<4xi32>
+    %o1_7 = index.constant 156 : index
+    vector.store %w1_7, %gv[%o1_7] : vector<4xi32>, view<512xi32>
+    %v1_8_0 = scalar.constant 357045573 : i32
+    %v1_8_1 = scalar.constant 357832017 : i32
+    %v1_8_2 = scalar.constant 360781152 : i32
+    %v1_8_3 = scalar.constant 361764228 : i32
+    %w1_8 = vector.from_elements %v1_8_0, %v1_8_1, %v1_8_2, %v1_8_3 : vector<4xi32>
+    %o1_8 = index.constant 160 : index
+    vector.store %w1_8, %gv[%o1_8] : vector<4xi32>, view<512xi32>
+    %v1_9_0 = scalar.constant 369432064 : i32
+    %v1_9_1 = scalar.constant 370218504 : i32
+    %v1_9_2 = scalar.constant 371201556 : i32
+    %v1_9_3 = scalar.constant 373560897 : i32
+    %w1_9 = vector.from_elements %v1_9_0, %v1_9_1, %v1_9_2, %v1_9_3 : vector<4xi32>
+    %o1_9 = index.constant 164 : index
+    vector.store %w1_9, %gv[%o1_9] : vector<4xi32>, view<512xi32>
+    %v1_10_0 = scalar.constant 377493072 : i32
+    %v1_10_1 = scalar.constant 402724522 : i32
+    %v1_10_2 = scalar.constant 403052548 : i32
+    %v1_10_3 = scalar.constant 403707913 : i32
+    %w1_10 = vector.from_elements %v1_10_0, %v1_10_1, %v1_10_2, %v1_10_3 : vector<4xi32>
+    %o1_10 = index.constant 168 : index
+    vector.store %w1_10, %gv[%o1_10] : vector<4xi32>, view<512xi32>
+    %v1_11_0 = scalar.constant 404232213 : i32
+    %v1_11_1 = scalar.constant 406853665 : i32
+    %v1_11_2 = scalar.constant 407181378 : i32
+    %v1_11_3 = scalar.constant 407967816 : i32
+    %w1_11 = vector.from_elements %v1_11_0, %v1_11_1, %v1_11_2, %v1_11_3 : vector<4xi32>
+    %o1_11 = index.constant 172 : index
+    vector.store %w1_11, %gv[%o1_11] : vector<4xi32>, view<512xi32>
+    %v1_12_0 = scalar.constant 408950868 : i32
+    %v1_12_1 = scalar.constant 411310209 : i32
+    %v1_12_2 = scalar.constant 419567872 : i32
+    %v1_12_3 = scalar.constant 419961093 : i32
+    %w1_12 = vector.from_elements %v1_12_0, %v1_12_1, %v1_12_2, %v1_12_3 : vector<4xi32>
+    %o1_12 = index.constant 176 : index
+    vector.store %w1_12, %gv[%o1_12] : vector<4xi32>, view<512xi32>
+    %v1_13_0 = scalar.constant 420747537 : i32
+    %v1_13_1 = scalar.constant 423696672 : i32
+    %v1_13_2 = scalar.constant 424679748 : i32
+    %v1_13_3 = scalar.constant 430053737 : i32
+    %w1_13 = vector.from_elements %v1_13_0, %v1_13_1, %v1_13_2, %v1_13_3 : vector<4xi32>
+    %o1_13 = index.constant 180 : index
+    vector.store %w1_13, %gv[%o1_13] : vector<4xi32>, view<512xi32>
+    %v1_14_0 = scalar.constant 437262852 : i32
+    %v1_14_1 = scalar.constant 441850432 : i32
+    %v1_14_2 = scalar.constant 537010176 : i32
+    %v1_14_3 = scalar.constant 537403397 : i32
+    %w1_14 = vector.from_elements %v1_14_0, %v1_14_1, %v1_14_2, %v1_14_3 : vector<4xi32>
+    %o1_14 = index.constant 184 : index
+    vector.store %w1_14, %gv[%o1_14] : vector<4xi32>, view<512xi32>
+    %v1_15_0 = scalar.constant 538189841 : i32
+    %v1_15_1 = scalar.constant 538517526 : i32
+    %v1_15_2 = scalar.constant 539303968 : i32
+    %v1_15_3 = scalar.constant 541138986 : i32
+    %w1_15 = vector.from_elements %v1_15_0, %v1_15_1, %v1_15_2, %v1_15_3 : vector<4xi32>
+    %o1_15 = index.constant 188 : index
+    vector.store %w1_15, %gv[%o1_15] : vector<4xi32>, view<512xi32>
+    %v1_16_0 = scalar.constant 542122052 : i32
+    %v1_16_1 = scalar.constant 542449746 : i32
+    %v1_16_2 = scalar.constant 545267812 : i32
+    %v1_16_3 = scalar.constant 546578570 : i32
+    %w1_16 = vector.from_elements %v1_16_0, %v1_16_1, %v1_16_2, %v1_16_3 : vector<4xi32>
+    %o1_16 = index.constant 192 : index
+    vector.store %w1_16, %gv[%o1_16] : vector<4xi32>, view<512xi32>
+    %v1_17_0 = scalar.constant 553722026 : i32
+    %v1_17_1 = scalar.constant 554705156 : i32
+    %v1_17_2 = scalar.constant 555032850 : i32
+    %v1_17_3 = scalar.constant 557850913 : i32
+    %w1_17 = vector.from_elements %v1_17_0, %v1_17_1, %v1_17_2, %v1_17_3 : vector<4xi32>
+    %o1_17 = index.constant 196 : index
+    vector.store %w1_17, %gv[%o1_17] : vector<4xi32>, view<512xi32>
+    %v1_18_0 = scalar.constant 558178626 : i32
+    %v1_18_1 = scalar.constant 559161681 : i32
+    %v1_18_2 = scalar.constant 562110816 : i32
+    %v1_18_3 = scalar.constant 563093892 : i32
+    %w1_18 = vector.from_elements %v1_18_0, %v1_18_1, %v1_18_2, %v1_18_3 : vector<4xi32>
+    %o1_18 = index.constant 200 : index
+    vector.store %w1_18, %gv[%o1_18] : vector<4xi32>, view<512xi32>
+    %v1_19_0 = scalar.constant 571089408 : i32
+    %v1_19_1 = scalar.constant 573055522 : i32
+    %v1_19_2 = scalar.constant 574890538 : i32
+    %v1_19_3 = scalar.constant 579347024 : i32
+    %w1_19 = vector.from_elements %v1_19_0, %v1_19_1, %v1_19_2, %v1_19_3 : vector<4xi32>
+    %o1_19 = index.constant 204 : index
+    vector.store %w1_19, %gv[%o1_19] : vector<4xi32>, view<512xi32>
+    %v1_20_0 = scalar.constant 581444234 : i32
+    %v1_20_1 = scalar.constant 604251137 : i32
+    %v1_20_2 = scalar.constant 604578822 : i32
+    %v1_20_3 = scalar.constant 605365264 : i32
+    %w1_20 = vector.from_elements %v1_20_0, %v1_20_1, %v1_20_2, %v1_20_3 : vector<4xi32>
+    %o1_20 = index.constant 208 : index
+    vector.store %w1_20, %gv[%o1_20] : vector<4xi32>, view<512xi32>
+    %v1_21_0 = scalar.constant 606151704 : i32
+    %v1_21_1 = scalar.constant 608183332 : i32
+    %v1_21_2 = scalar.constant 608511042 : i32
+    %v1_21_3 = scalar.constant 609297480 : i32
+    %w1_21 = vector.from_elements %v1_21_0, %v1_21_1, %v1_21_2, %v1_21_3 : vector<4xi32>
+    %o1_21 = index.constant 212 : index
+    vector.store %w1_21, %gv[%o1_21] : vector<4xi32>, view<512xi32>
+    %v1_22_0 = scalar.constant 610280532 : i32
+    %v1_22_1 = scalar.constant 612639873 : i32
+    %v1_22_2 = scalar.constant 620766352 : i32
+    %v1_22_3 = scalar.constant 621290757 : i32
+    %w1_22 = vector.from_elements %v1_22_0, %v1_22_1, %v1_22_2, %v1_22_3 : vector<4xi32>
+    %o1_22 = index.constant 216 : index
+    vector.store %w1_22, %gv[%o1_22] : vector<4xi32>, view<512xi32>
+    %v1_23_0 = scalar.constant 622077201 : i32
+    %v1_23_1 = scalar.constant 625026336 : i32
+    %v1_23_2 = scalar.constant 626009412 : i32
+    %v1_23_3 = scalar.constant 629155174 : i32
+    %w1_23 = vector.from_elements %v1_23_0, %v1_23_1, %v1_23_2, %v1_23_3 : vector<4xi32>
+    %o1_23 = index.constant 220 : index
+    vector.store %w1_23, %gv[%o1_23] : vector<4xi32>, view<512xi32>
+    %v1_24_0 = scalar.constant 637806081 : i32
+    %v1_24_1 = scalar.constant 641738256 : i32
+    %v1_24_2 = scalar.constant 671098457 : i32
+    %v1_24_3 = scalar.constant 672212997 : i32
+    %w1_24 = vector.from_elements %v1_24_0, %v1_24_1, %v1_24_2, %v1_24_3 : vector<4xi32>
+    %o1_24 = index.constant 224 : index
+    vector.store %w1_24, %gv[%o1_24] : vector<4xi32>, view<512xi32>
+    %v1_25_0 = scalar.constant 675358740 : i32
+    %v1_25_1 = scalar.constant 676341828 : i32
+    %v1_25_2 = scalar.constant 682240138 : i32
+    %v1_25_3 = scalar.constant 688138497 : i32
+    %w1_25 = vector.from_elements %v1_25_0, %v1_25_1, %v1_25_2, %v1_25_3 : vector<4xi32>
+    %o1_25 = index.constant 228 : index
+    vector.store %w1_25, %gv[%o1_25] : vector<4xi32>, view<512xi32>
+    %v1_26_0 = scalar.constant 697641232 : i32
+    %v1_26_1 = scalar.constant 706882058 : i32
+    %v1_26_2 = scalar.constant 713566820 : i32
+    %v1_26_3 = scalar.constant 1073818250 : i32
+    %w1_26 = vector.from_elements %v1_26_0, %v1_26_1, %v1_26_2, %v1_26_3 : vector<4xi32>
+    %o1_26 = index.constant 232 : index
+    vector.store %w1_26, %gv[%o1_26] : vector<4xi32>, view<512xi32>
+    %v1_27_0 = scalar.constant 1074151428 : i32
+    %v1_27_1 = scalar.constant 1074806793 : i32
+    %v1_27_2 = scalar.constant 1075134482 : i32
+    %v1_27_3 = scalar.constant 1075462168 : i32
+    %w1_27 = vector.from_elements %v1_27_0, %v1_27_1, %v1_27_2, %v1_27_3 : vector<4xi32>
+    %o1_27 = index.constant 236 : index
+    vector.store %w1_27, %gv[%o1_27] : vector<4xi32>, view<512xi32>
+    %v1_28_0 = scalar.constant 1076117537 : i32
+    %v1_28_1 = scalar.constant 1077952550 : i32
+    %v1_28_2 = scalar.constant 1078280258 : i32
+    %v1_28_3 = scalar.constant 1078607944 : i32
+    %w1_28 = vector.from_elements %v1_28_0, %v1_28_1, %v1_28_2, %v1_28_3 : vector<4xi32>
+    %o1_28 = index.constant 240 : index
+    vector.store %w1_28, %gv[%o1_28] : vector<4xi32>, view<512xi32>
+    %v1_29_0 = scalar.constant 1079263313 : i32
+    %v1_29_1 = scalar.constant 1079590998 : i32
+    %v1_29_2 = scalar.constant 1080180832 : i32
+    %v1_29_3 = scalar.constant 1082212453 : i32
+    %w1_29 = vector.from_elements %v1_29_0, %v1_29_1, %v1_29_2, %v1_29_3 : vector<4xi32>
+    %o1_29 = index.constant 244 : index
+    vector.store %w1_29, %gv[%o1_29] : vector<4xi32>, view<512xi32>
+    %v1_30_0 = scalar.constant 1083195524 : i32
+    %v1_30_1 = scalar.constant 1083719829 : i32
+    %v1_30_2 = scalar.constant 1084506273 : i32
+    %v1_30_3 = scalar.constant 1090666752 : i32
+    %w1_30 = vector.from_elements %v1_30_0, %v1_30_1, %v1_30_2, %v1_30_3 : vector<4xi32>
+    %o1_30 = index.constant 248 : index
+    vector.store %w1_30, %gv[%o1_30] : vector<4xi32>, view<512xi32>
+    %v1_31_0 = scalar.constant 1091059973 : i32
+    %v1_31_1 = scalar.constant 1091846417 : i32
+    %v1_31_2 = scalar.constant 1092174102 : i32
+    %v1_31_3 = scalar.constant 1092763936 : i32
+    %w1_31 = vector.from_elements %v1_31_0, %v1_31_1, %v1_31_2, %v1_31_3 : vector<4xi32>
+    %o1_31 = index.constant 252 : index
+    vector.store %w1_31, %gv[%o1_31] : vector<4xi32>, view<512xi32>
+  }
+  %k2 = index.constant 2 : index
+  %is2 = index.cmp eq, %chunk, %k2 : index
+  scf.if %is2 {
+    %v2_0_0 = scalar.constant 1094795557 : i32
+    %v2_0_1 = scalar.constant 1095123268 : i32
+    %v2_0_2 = scalar.constant 1095778633 : i32
+    %v2_0_3 = scalar.constant 1096106322 : i32
+    %w2_0 = vector.from_elements %v2_0_0, %v2_0_1, %v2_0_2, %v2_0_3 : vector<4xi32>
+    %o2_0 = index.constant 256 : index
+    vector.store %w2_0, %gv[%o2_0] : vector<4xi32>, view<512xi32>
+    %v2_1_0 = scalar.constant 1096892760 : i32
+    %v2_1_1 = scalar.constant 1098924388 : i32
+    %v2_1_2 = scalar.constant 1099252098 : i32
+    %v2_1_3 = scalar.constant 1100038536 : i32
+    %w2_1 = vector.from_elements %v2_1_0, %v2_1_1, %v2_1_2, %v2_1_3 : vector<4xi32>
+    %o2_1 = index.constant 260 : index
+    vector.store %w2_1, %gv[%o2_1] : vector<4xi32>, view<512xi32>
+    %v2_2_0 = scalar.constant 1101021588 : i32
+    %v2_2_1 = scalar.constant 1107575297 : i32
+    %v2_2_2 = scalar.constant 1108492816 : i32
+    %v2_2_3 = scalar.constant 1108886037 : i32
+    %w2_2 = vector.from_elements %v2_2_0, %v2_2_1, %v2_2_2, %v2_2_3 : vector<4xi32>
+    %o2_2 = index.constant 264 : index
+    vector.store %w2_2, %gv[%o2_2] : vector<4xi32>, view<512xi32>
+    %v2_3_0 = scalar.constant 1111507492 : i32
+    %v2_3_1 = scalar.constant 1112031813 : i32
+    %v2_3_2 = scalar.constant 1112818257 : i32
+    %v2_3_3 = scalar.constant 1115767392 : i32
+    %w2_3 = vector.from_elements %v2_3_0, %v2_3_1, %v2_3_2, %v2_3_3 : vector<4xi32>
+    %o2_3 = index.constant 268 : index
+    vector.store %w2_3, %gv[%o2_3] : vector<4xi32>, view<512xi32>
+    %v2_4_0 = scalar.constant 1140867716 : i32
+    %v2_4_1 = scalar.constant 1141195778 : i32
+    %v2_4_2 = scalar.constant 1141523464 : i32
+    %v2_4_3 = scalar.constant 1142178833 : i32
+    %w2_4 = vector.from_elements %v2_4_0, %v2_4_1, %v2_4_2, %v2_4_3 : vector<4xi32>
+    %o2_4 = index.constant 272 : index
+    vector.store %w2_4, %gv[%o2_4] : vector<4xi32>, view<512xi32>
+    %v2_5_0 = scalar.constant 1142506518 : i32
+    %v2_5_1 = scalar.constant 1143096352 : i32
+    %v2_5_2 = scalar.constant 1143489573 : i32
+    %v2_5_3 = scalar.constant 1145324609 : i32
+    %w2_5 = vector.from_elements %v2_5_0, %v2_5_1, %v2_5_2, %v2_5_3 : vector<4xi32>
+    %o2_5 = index.constant 276 : index
+    vector.store %w2_5, %gv[%o2_5] : vector<4xi32>, view<512xi32>
+    %v2_6_0 = scalar.constant 1145652294 : i32
+    %v2_6_1 = scalar.constant 1146242128 : i32
+    %v2_6_2 = scalar.constant 1146635349 : i32
+    %v2_6_3 = scalar.constant 1147421793 : i32
+    %w2_6 = vector.from_elements %v2_6_0, %v2_6_1, %v2_6_2, %v2_6_3 : vector<4xi32>
+    %o2_6 = index.constant 280 : index
+    vector.store %w2_6, %gv[%o2_6] : vector<4xi32>, view<512xi32>
+    %v2_7_0 = scalar.constant 1149387904 : i32
+    %v2_7_1 = scalar.constant 1149781125 : i32
+    %v2_7_2 = scalar.constant 1150567569 : i32
+    %v2_7_3 = scalar.constant 1157711008 : i32
+    %w2_7 = vector.from_elements %v2_7_0, %v2_7_1, %v2_7_2, %v2_7_3 : vector<4xi32>
+    %o2_7 = index.constant 284 : index
+    vector.store %w2_7, %gv[%o2_7] : vector<4xi32>, view<512xi32>
+    %v2_8_0 = scalar.constant 1158038788 : i32
+    %v2_8_1 = scalar.constant 1158694153 : i32
+    %v2_8_2 = scalar.constant 1159021842 : i32
+    %v2_8_3 = scalar.constant 1159808280 : i32
+    %w2_8 = vector.from_elements %v2_8_0, %v2_8_1, %v2_8_2, %v2_8_3 : vector<4xi32>
+    %o2_8 = index.constant 288 : index
+    vector.store %w2_8, %gv[%o2_8] : vector<4xi32>, view<512xi32>
+    %v2_9_0 = scalar.constant 1161839908 : i32
+    %v2_9_1 = scalar.constant 1162167618 : i32
+    %v2_9_2 = scalar.constant 1162954056 : i32
+    %v2_9_3 = scalar.constant 1163937108 : i32
+    %w2_9 = vector.from_elements %v2_9_0, %v2_9_1, %v2_9_2, %v2_9_3 : vector<4xi32>
+    %o2_9 = index.constant 292 : index
+    vector.store %w2_9, %gv[%o2_9] : vector<4xi32>, view<512xi32>
+    %v2_10_0 = scalar.constant 1166099818 : i32
+    %v2_10_1 = scalar.constant 1167082884 : i32
+    %v2_10_2 = scalar.constant 1174554112 : i32
+    %v2_10_3 = scalar.constant 1174947333 : i32
+    %w2_10 = vector.from_elements %v2_10_0, %v2_10_1, %v2_10_2, %v2_10_3 : vector<4xi32>
+    %o2_10 = index.constant 296 : index
+    vector.store %w2_10, %gv[%o2_10] : vector<4xi32>, view<512xi32>
+    %v2_11_0 = scalar.constant 1175733777 : i32
+    %v2_11_1 = scalar.constant 1178682912 : i32
+    %v2_11_2 = scalar.constant 1179665988 : i32
+    %v2_11_3 = scalar.constant 1185236608 : i32
+    %w2_11 = vector.from_elements %v2_11_0, %v2_11_1, %v2_11_2, %v2_11_3 : vector<4xi32>
+    %o2_11 = index.constant 300 : index
+    vector.store %w2_11, %gv[%o2_11] : vector<4xi32>, view<512xi32>
+    %v2_12_0 = scalar.constant 1208240129 : i32
+    %v2_12_1 = scalar.constant 1209026569 : i32
+    %v2_12_2 = scalar.constant 1209354258 : i32
+    %v2_12_3 = scalar.constant 1210140696 : i32
+    %w2_12 = vector.from_elements %v2_12_0, %v2_12_1, %v2_12_2, %v2_12_3 : vector<4xi32>
+    %o2_12 = index.constant 304 : index
+    vector.store %w2_12, %gv[%o2_12] : vector<4xi32>, view<512xi32>
+    %v2_13_0 = scalar.constant 1212172324 : i32
+    %v2_13_1 = scalar.constant 1212500034 : i32
+    %v2_13_2 = scalar.constant 1213286472 : i32
+    %v2_13_3 = scalar.constant 1214269524 : i32
+    %w2_13 = vector.from_elements %v2_13_0, %v2_13_1, %v2_13_2, %v2_13_3 : vector<4xi32>
+    %o2_13 = index.constant 308 : index
+    vector.store %w2_13, %gv[%o2_13] : vector<4xi32>, view<512xi32>
+    %v2_14_0 = scalar.constant 1217415300 : i32
+    %v2_14_1 = scalar.constant 1224886528 : i32
+    %v2_14_2 = scalar.constant 1225279749 : i32
+    %v2_14_3 = scalar.constant 1226066193 : i32
+    %w2_14 = vector.from_elements %v2_14_0, %v2_14_1, %v2_14_2, %v2_14_3 : vector<4xi32>
+    %o2_14 = index.constant 312 : index
+    vector.store %w2_14, %gv[%o2_14] : vector<4xi32>, view<512xi32>
+    %v2_15_0 = scalar.constant 1229015328 : i32
+    %v2_15_1 = scalar.constant 1229998404 : i32
+    %v2_15_2 = scalar.constant 1234585984 : i32
+    %v2_15_3 = scalar.constant 1241795073 : i32
+    %w2_15 = vector.from_elements %v2_15_0, %v2_15_1, %v2_15_2, %v2_15_3 : vector<4xi32>
+    %o2_15 = index.constant 316 : index
+    vector.store %w2_15, %gv[%o2_15] : vector<4xi32>, view<512xi32>
+    %v2_16_0 = scalar.constant 1245727248 : i32
+    %v2_16_1 = scalar.constant 1342328832 : i32
+    %v2_16_2 = scalar.constant 1342722053 : i32
+    %v2_16_3 = scalar.constant 1343508497 : i32
+    %w2_16 = vector.from_elements %v2_16_0, %v2_16_1, %v2_16_2, %v2_16_3 : vector<4xi32>
+    %o2_16 = index.constant 320 : index
+    vector.store %w2_16, %gv[%o2_16] : vector<4xi32>, view<512xi32>
+    %v2_17_0 = scalar.constant 1343836182 : i32
+    %v2_17_1 = scalar.constant 1344426016 : i32
+    %v2_17_2 = scalar.constant 1344819237 : i32
+    %v2_17_3 = scalar.constant 1346654273 : i32
+    %w2_17 = vector.from_elements %v2_17_0, %v2_17_1, %v2_17_2, %v2_17_3 : vector<4xi32>
+    %o2_17 = index.constant 324 : index
+    vector.store %w2_17, %gv[%o2_17] : vector<4xi32>, view<512xi32>
+    %v2_18_0 = scalar.constant 1346981958 : i32
+    %v2_18_1 = scalar.constant 1347571792 : i32
+    %v2_18_2 = scalar.constant 1347965013 : i32
+    %v2_18_3 = scalar.constant 1348751457 : i32
+    %w2_18 = vector.from_elements %v2_18_0, %v2_18_1, %v2_18_2, %v2_18_3 : vector<4xi32>
+    %o2_18 = index.constant 328 : index
+    vector.store %w2_18, %gv[%o2_18] : vector<4xi32>, view<512xi32>
+    %v2_19_0 = scalar.constant 1350717568 : i32
+    %v2_19_1 = scalar.constant 1351110789 : i32
+    %v2_19_2 = scalar.constant 1351897233 : i32
+    %v2_19_3 = scalar.constant 1359237377 : i32
+    %w2_19 = vector.from_elements %v2_19_0, %v2_19_1, %v2_19_2, %v2_19_3 : vector<4xi32>
+    %o2_19 = index.constant 332 : index
+    vector.store %w2_19, %gv[%o2_19] : vector<4xi32>, view<512xi32>
+    %v2_20_0 = scalar.constant 1359565062 : i32
+    %v2_20_1 = scalar.constant 1360154896 : i32
+    %v2_20_2 = scalar.constant 1360548117 : i32
+    %v2_20_3 = scalar.constant 1361334561 : i32
+    %w2_20 = vector.from_elements %v2_20_0, %v2_20_1, %v2_20_2, %v2_20_3 : vector<4xi32>
+    %o2_20 = index.constant 336 : index
+    vector.store %w2_20, %gv[%o2_20] : vector<4xi32>, view<512xi32>
+    %v2_21_0 = scalar.constant 1363300672 : i32
+    %v2_21_1 = scalar.constant 1363693893 : i32
+    %v2_21_2 = scalar.constant 1364480337 : i32
+    %v2_21_3 = scalar.constant 1367429472 : i32
+    %w2_21 = vector.from_elements %v2_21_0, %v2_21_1, %v2_21_2, %v2_21_3 : vector<4xi32>
+    %o2_21 = index.constant 340 : index
+    vector.store %w2_21, %gv[%o2_21] : vector<4xi32>, view<512xi32>
+    %v2_22_0 = scalar.constant 1368412548 : i32
+    %v2_22_1 = scalar.constant 1376080384 : i32
+    %v2_22_2 = scalar.constant 1376866824 : i32
+    %v2_22_3 = scalar.constant 1377849876 : i32
+    %w2_22 = vector.from_elements %v2_22_0, %v2_22_1, %v2_22_2, %v2_22_3 : vector<4xi32>
+    %o2_22 = index.constant 344 : index
+    vector.store %w2_22, %gv[%o2_22] : vector<4xi32>, view<512xi32>
+    %v2_23_0 = scalar.constant 1380209217 : i32
+    %v2_23_1 = scalar.constant 1382634064 : i32
+    %v2_23_2 = scalar.constant 1409372800 : i32
+    %v2_23_3 = scalar.constant 1409700868 : i32
+    %w2_23 = vector.from_elements %v2_23_0, %v2_23_1, %v2_23_2, %v2_23_3 : vector<4xi32>
+    %o2_23 = index.constant 348 : index
+    vector.store %w2_23, %gv[%o2_23] : vector<4xi32>, view<512xi32>
+    %v2_24_0 = scalar.constant 1410356233 : i32
+    %v2_24_1 = scalar.constant 1410683922 : i32
+    %v2_24_2 = scalar.constant 1411470360 : i32
+    %v2_24_3 = scalar.constant 1413501988 : i32
+    %w2_24 = vector.from_elements %v2_24_0, %v2_24_1, %v2_24_2, %v2_24_3 : vector<4xi32>
+    %o2_24 = index.constant 352 : index
+    vector.store %w2_24, %gv[%o2_24] : vector<4xi32>, view<512xi32>
+    %v2_25_0 = scalar.constant 1413829698 : i32
+    %v2_25_1 = scalar.constant 1414616136 : i32
+    %v2_25_2 = scalar.constant 1415599188 : i32
+    %v2_25_3 = scalar.constant 1417958529 : i32
+    %w2_25 = vector.from_elements %v2_25_0, %v2_25_1, %v2_25_2, %v2_25_3 : vector<4xi32>
+    %o2_25 = index.constant 356 : index
+    vector.store %w2_25, %gv[%o2_25] : vector<4xi32>, view<512xi32>
+    %v2_26_0 = scalar.constant 1426085008 : i32
+    %v2_26_1 = scalar.constant 1426412802 : i32
+    %v2_26_2 = scalar.constant 1427199240 : i32
+    %v2_26_3 = scalar.constant 1428182292 : i32
+    %w2_26 = vector.from_elements %v2_26_0, %v2_26_1, %v2_26_2, %v2_26_3 : vector<4xi32>
+    %o2_26 = index.constant 360 : index
+    vector.store %w2_26, %gv[%o2_26] : vector<4xi32>, view<512xi32>
+    %v2_27_0 = scalar.constant 1430541633 : i32
+    %v2_27_1 = scalar.constant 1434473808 : i32
+    %v2_27_2 = scalar.constant 1443124737 : i32
+    %v2_27_3 = scalar.constant 1445352976 : i32
+    %w2_27 = vector.from_elements %v2_27_0, %v2_27_1, %v2_27_2, %v2_27_3 : vector<4xi32>
+    %o2_27 = index.constant 364 : index
+    vector.store %w2_27, %gv[%o2_27] : vector<4xi32>, view<512xi32>
+    %v2_28_0 = scalar.constant 1476417088 : i32
+    %v2_28_1 = scalar.constant 1476745218 : i32
+    %v2_28_2 = scalar.constant 1477531656 : i32
+    %v2_28_3 = scalar.constant 1478514708 : i32
+    %w2_28 = vector.from_elements %v2_28_0, %v2_28_1, %v2_28_2, %v2_28_3 : vector<4xi32>
+    %o2_28 = index.constant 368 : index
+    vector.store %w2_28, %gv[%o2_28] : vector<4xi32>, view<512xi32>
+    %v2_29_0 = scalar.constant 1480874049 : i32
+    %v2_29_1 = scalar.constant 1482315856 : i32
+    %v2_29_2 = scalar.constant 1493260416 : i32
+    %v2_29_3 = scalar.constant 1494243588 : i32
+    %w2_29 = vector.from_elements %v2_29_0, %v2_29_1, %v2_29_2, %v2_29_3 : vector<4xi32>
+    %o2_29 = index.constant 372 : index
+    vector.store %w2_29, %gv[%o2_29] : vector<4xi32>, view<512xi32>
+    %v2_30_0 = scalar.constant 1509972288 : i32
+    %v2_30_1 = scalar.constant 1518688793 : i32
+    %v2_30_2 = scalar.constant 1610701480 : i32
+    %v2_30_3 = scalar.constant 1611030532 : i32
+    %w2_30 = vector.from_elements %v2_30_0, %v2_30_1, %v2_30_2, %v2_30_3 : vector<4xi32>
+    %o2_30 = index.constant 376 : index
+    vector.store %w2_30, %gv[%o2_30] : vector<4xi32>, view<512xi32>
+    %v2_31_0 = scalar.constant 1611816976 : i32
+    %v2_31_1 = scalar.constant 1612210197 : i32
+    %v2_31_2 = scalar.constant 1612996641 : i32
+    %v2_31_3 = scalar.constant 1615159360 : i32
+    %w2_31 = vector.from_elements %v2_31_0, %v2_31_1, %v2_31_2, %v2_31_3 : vector<4xi32>
+    %o2_31 = index.constant 380 : index
+    vector.store %w2_31, %gv[%o2_31] : vector<4xi32>, view<512xi32>
+  }
+  %k3 = index.constant 3 : index
+  %is3 = index.cmp eq, %chunk, %k3 : index
+  scf.if %is3 {
+    %v3_0_0 = scalar.constant 1615945800 : i32
+    %v3_0_1 = scalar.constant 1616928852 : i32
+    %v3_0_2 = scalar.constant 1620074628 : i32
+    %v3_0_3 = scalar.constant 1627545856 : i32
+    %w3_0 = vector.from_elements %v3_0_0, %v3_0_1, %v3_0_2, %v3_0_3 : vector<4xi32>
+    %o3_0 = index.constant 384 : index
+    vector.store %w3_0, %gv[%o3_0] : vector<4xi32>, view<512xi32>
+    %v3_1_0 = scalar.constant 1627939077 : i32
+    %v3_1_1 = scalar.constant 1628725521 : i32
+    %v3_1_2 = scalar.constant 1631674656 : i32
+    %v3_1_3 = scalar.constant 1632657732 : i32
+    %w3_1 = vector.from_elements %v3_1_0, %v3_1_1, %v3_1_2, %v3_1_3 : vector<4xi32>
+    %o3_1 = index.constant 388 : index
+    vector.store %w3_1, %gv[%o3_1] : vector<4xi32>, view<512xi32>
+    %v3_2_0 = scalar.constant 1637441920 : i32
+    %v3_2_1 = scalar.constant 1645240836 : i32
+    %v3_2_2 = scalar.constant 1649828416 : i32
+    %v3_2_3 = scalar.constant 1677746849 : i32
+    %w3_2 = vector.from_elements %v3_2_0, %v3_2_1, %v3_2_2, %v3_2_3 : vector<4xi32>
+    %o3_2 = index.constant 392 : index
+    vector.store %w3_2, %gv[%o3_2] : vector<4xi32>, view<512xi32>
+    %v3_3_0 = scalar.constant 1678271493 : i32
+    %v3_3_1 = scalar.constant 1679057937 : i32
+    %v3_3_2 = scalar.constant 1682007072 : i32
+    %v3_3_3 = scalar.constant 1682990148 : i32
+    %w3_3 = vector.from_elements %v3_3_0, %v3_3_1, %v3_3_2, %v3_3_3 : vector<4xi32>
+    %o3_3 = index.constant 396 : index
+    vector.store %w3_3, %gv[%o3_3] : vector<4xi32>, view<512xi32>
+    %v3_4_0 = scalar.constant 1694590080 : i32
+    %v3_4_1 = scalar.constant 1695573252 : i32
+    %v3_4_2 = scalar.constant 1699374400 : i32
+    %v3_4_3 = scalar.constant 1704093032 : i32
+    %w3_4 = vector.from_elements %v3_4_0, %v3_4_1, %v3_4_2, %v3_4_3 : vector<4xi32>
+    %o3_4 = index.constant 400 : index
+    vector.store %w3_4, %gv[%o3_4] : vector<4xi32>, view<512xi32>
+    %v3_5_0 = scalar.constant 1721001472 : i32
+    %v3_5_1 = scalar.constant 1745119233 : i32
+    %v3_5_2 = scalar.constant 1751476240 : i32
+    %v3_5_3 = scalar.constant 1761634456 : i32
+    %w3_5 = vector.from_elements %v3_5_0, %v3_5_1, %v3_5_2, %v3_5_3 : vector<4xi32>
+    %o3_5 = index.constant 404 : index
+    vector.store %w3_5, %gv[%o3_5] : vector<4xi32>, view<512xi32>
+    %v3_6_0 = scalar.constant 1782737194 : i32
+    %v3_6_1 = scalar.constant -2147456351 : i32
+    %v3_6_2 = scalar.constant -2147123198 : i32
+    %v3_6_3 = scalar.constant -2146336760 : i32
+    %w3_6 = vector.from_elements %v3_6_0, %v3_6_1, %v3_6_2, %v3_6_3 : vector<4xi32>
+    %o3_6 = index.constant 408 : index
+    vector.store %w3_6, %gv[%o3_6] : vector<4xi32>, view<512xi32>
+    %v3_7_0 = scalar.constant -2145812460 : i32
+    %v3_7_1 = scalar.constant -2145026016 : i32
+    %v3_7_2 = scalar.constant -2142994367 : i32
+    %v3_7_3 = scalar.constant -2142076848 : i32
+    %w3_7 = vector.from_elements %v3_7_0, %v3_7_1, %v3_7_2, %v3_7_3 : vector<4xi32>
+    %o3_7 = index.constant 412 : index
+    vector.store %w3_7, %gv[%o3_7] : vector<4xi32>, view<512xi32>
+    %v3_8_0 = scalar.constant -2141683627 : i32
+    %v3_8_1 = scalar.constant -2139062175 : i32
+    %v3_8_2 = scalar.constant -2137948027 : i32
+    %v3_8_3 = scalar.constant -2130607980 : i32
+    %w3_8 = vector.from_elements %v3_8_0, %v3_8_1, %v3_8_2, %v3_8_3 : vector<4xi32>
+    %o3_8 = index.constant 416 : index
+    vector.store %w3_8, %gv[%o3_8] : vector<4xi32>, view<512xi32>
+    %v3_9_0 = scalar.constant -2130083580 : i32
+    %v3_9_1 = scalar.constant -2129493744 : i32
+    %v3_9_2 = scalar.constant -2129100523 : i32
+    %v3_9_3 = scalar.constant -2128314079 : i32
+    %w3_9 = vector.from_elements %v3_9_0, %v3_9_1, %v3_9_2, %v3_9_3 : vector<4xi32>
+    %o3_9 = index.constant 420 : index
+    vector.store %w3_9, %gv[%o3_9] : vector<4xi32>, view<512xi32>
+    %v3_10_0 = scalar.constant -2126347968 : i32
+    %v3_10_1 = scalar.constant -2125954747 : i32
+    %v3_10_2 = scalar.constant -2125168303 : i32
+    %v3_10_3 = scalar.constant -2122022527 : i32
+    %w3_10 = vector.from_elements %v3_10_0, %v3_10_1, %v3_10_2, %v3_10_3 : vector<4xi32>
+    %o3_10 = index.constant 424 : index
+    vector.store %w3_10, %gv[%o3_10] : vector<4xi32>, view<512xi32>
+    %v3_11_0 = scalar.constant -2119597680 : i32
+    %v3_11_1 = scalar.constant -2113568256 : i32
+    %v3_11_2 = scalar.constant -2112781814 : i32
+    %v3_11_3 = scalar.constant -2109636076 : i32
+    %w3_11 = vector.from_elements %v3_11_0, %v3_11_1, %v3_11_2, %v3_11_3 : vector<4xi32>
+    %o3_11 = index.constant 428 : index
+    vector.store %w3_11, %gv[%o3_11] : vector<4xi32>, view<512xi32>
+    %v3_12_0 = scalar.constant -2108652988 : i32
+    %v3_12_1 = scalar.constant -2080078847 : i32
+    %v3_12_2 = scalar.constant -2079751162 : i32
+    %v3_12_3 = scalar.constant -2079161328 : i32
+    %w3_12 = vector.from_elements %v3_12_0, %v3_12_1, %v3_12_2, %v3_12_3 : vector<4xi32>
+    %o3_12 = index.constant 432 : index
+    vector.store %w3_12, %gv[%o3_12] : vector<4xi32>, view<512xi32>
+    %v3_13_0 = scalar.constant -2078768107 : i32
+    %v3_13_1 = scalar.constant -2076146655 : i32
+    %v3_13_2 = scalar.constant -2075818942 : i32
+    %v3_13_3 = scalar.constant -2075032504 : i32
+    %w3_13 = vector.from_elements %v3_13_0, %v3_13_1, %v3_13_2, %v3_13_3 : vector<4xi32>
+    %o3_13 = index.constant 436 : index
+    vector.store %w3_13, %gv[%o3_13] : vector<4xi32>, view<512xi32>
+    %v3_14_0 = scalar.constant -2074049452 : i32
+    %v3_14_1 = scalar.constant -2071690111 : i32
+    %v3_14_2 = scalar.constant -2063563632 : i32
+    %v3_14_3 = scalar.constant -2063235838 : i32
+    %w3_14 = vector.from_elements %v3_14_0, %v3_14_1, %v3_14_2, %v3_14_3 : vector<4xi32>
+    %o3_14 = index.constant 440 : index
+    vector.store %w3_14, %gv[%o3_14] : vector<4xi32>, view<512xi32>
+    %v3_15_0 = scalar.constant -2062449400 : i32
+    %v3_15_1 = scalar.constant -2061466348 : i32
+    %v3_15_2 = scalar.constant -2059107007 : i32
+    %v3_15_3 = scalar.constant -2055174832 : i32
+    %w3_15 = vector.from_elements %v3_15_0, %v3_15_1, %v3_15_2, %v3_15_3 : vector<4xi32>
+    %o3_15 = index.constant 444 : index
+    vector.store %w3_15, %gv[%o3_15] : vector<4xi32>, view<512xi32>
+    %v3_16_0 = scalar.constant -2046720630 : i32
+    %v3_16_1 = scalar.constant -2045737468 : i32
+    %v3_16_2 = scalar.constant -2042591703 : i32
+    %v3_16_3 = scalar.constant -2012903424 : i32
+    %w3_16 = vector.from_elements %v3_16_0, %v3_16_1, %v3_16_2, %v3_16_3 : vector<4xi32>
+    %o3_16 = index.constant 448 : index
+    vector.store %w3_16, %gv[%o3_16] : vector<4xi32>, view<512xi32>
+    %v3_17_0 = scalar.constant -2011920367 : i32
+    %v3_17_1 = scalar.constant -2008774591 : i32
+    %v3_17_2 = scalar.constant -2002614192 : i32
+    %v3_17_3 = scalar.constant -1996191487 : i32
+    %w3_17 = vector.from_elements %v3_17_0, %v3_17_1, %v3_17_2, %v3_17_3 : vector<4xi32>
+    %o3_17 = index.constant 452 : index
+    vector.store %w3_17, %gv[%o3_17] : vector<4xi32>, view<512xi32>
+    %v3_18_0 = scalar.constant -1989834432 : i32
+    %v3_18_1 = scalar.constant -1973908958 : i32
+    %v3_18_2 = scalar.constant -1971156390 : i32
+    %v3_18_3 = scalar.constant -1878947166 : i32
+    %w3_18 = vector.from_elements %v3_18_0, %v3_18_1, %v3_18_2, %v3_18_3 : vector<4xi32>
+    %o3_18 = index.constant 456 : index
+    vector.store %w3_18, %gv[%o3_18] : vector<4xi32>, view<512xi32>
+    %v3_19_0 = scalar.constant -1878421500 : i32
+    %v3_19_1 = scalar.constant -1877831664 : i32
+    %v3_19_2 = scalar.constant -1877438443 : i32
+    %v3_19_3 = scalar.constant -1874816988 : i32
+    %w3_19 = vector.from_elements %v3_19_0, %v3_19_1, %v3_19_2, %v3_19_3 : vector<4xi32>
+    %o3_19 = index.constant 460 : index
+    vector.store %w3_19, %gv[%o3_19] : vector<4xi32>, view<512xi32>
+    %v3_20_0 = scalar.constant -1874489278 : i32
+    %v3_20_1 = scalar.constant -1873702840 : i32
+    %v3_20_2 = scalar.constant -1872719788 : i32
+    %v3_20_3 = scalar.constant -1870360447 : i32
+    %w3_20 = vector.from_elements %v3_20_0, %v3_20_1, %v3_20_2, %v3_20_3 : vector<4xi32>
+    %o3_20 = index.constant 464 : index
+    vector.store %w3_20, %gv[%o3_20] : vector<4xi32>, view<512xi32>
+    %v3_21_0 = scalar.constant -1862233968 : i32
+    %v3_21_1 = scalar.constant -1861119739 : i32
+    %v3_21_2 = scalar.constant -1857973996 : i32
+    %v3_21_3 = scalar.constant -1856990908 : i32
+    %w3_21 = vector.from_elements %v3_21_0, %v3_21_1, %v3_21_2, %v3_21_3 : vector<4xi32>
+    %o3_21 = index.constant 468 : index
+    vector.store %w3_21, %gv[%o3_21] : vector<4xi32>, view<512xi32>
+    %v3_22_0 = scalar.constant -1845391014 : i32
+    %v3_22_1 = scalar.constant -1844407804 : i32
+    %v3_22_2 = scalar.constant -1834577344 : i32
+    %v3_22_3 = scalar.constant -1811770368 : i32
+    %w3_22 = vector.from_elements %v3_22_0, %v3_22_1, %v3_22_2, %v3_22_3 : vector<4xi32>
+    %o3_22 = index.constant 472 : index
+    vector.store %w3_22, %gv[%o3_22] : vector<4xi32>, view<512xi32>
+    %v3_23_0 = scalar.constant -1811377147 : i32
+    %v3_23_1 = scalar.constant -1810590703 : i32
+    %v3_23_2 = scalar.constant -1807641568 : i32
+    %v3_23_3 = scalar.constant -1806658492 : i32
+    %w3_23 = vector.from_elements %v3_23_0, %v3_23_1, %v3_23_2, %v3_23_3 : vector<4xi32>
+    %o3_23 = index.constant 476 : index
+    vector.store %w3_23, %gv[%o3_23] : vector<4xi32>, view<512xi32>
+    %v3_24_0 = scalar.constant -1802070912 : i32
+    %v3_24_1 = scalar.constant -1794861823 : i32
+    %v3_24_2 = scalar.constant -1790929648 : i32
+    %v3_24_3 = scalar.constant -1784572520 : i32
+    %w3_24 = vector.from_elements %v3_24_0, %v3_24_1, %v3_24_2, %v3_24_3 : vector<4xi32>
+    %o3_24 = index.constant 480 : index
+    vector.store %w3_24, %gv[%o3_24] : vector<4xi32>, view<512xi32>
+    %v3_25_0 = scalar.constant -1773758976 : i32
+    %v3_25_1 = scalar.constant -1744726428 : i32
+    %v3_25_2 = scalar.constant -1743742972 : i32
+    %v3_25_3 = scalar.constant -1740597210 : i32
+    %w3_25 = vector.from_elements %v3_25_0, %v3_25_1, %v3_25_2, %v3_25_3 : vector<4xi32>
+    %o3_25 = index.constant 484 : index
+    vector.store %w3_25, %gv[%o3_25] : vector<4xi32>, view<512xi32>
+    %v3_26_0 = scalar.constant -1728014167 : i32
+    %v3_26_1 = scalar.constant -1722640055 : i32
+    %v3_26_2 = scalar.constant -1610573168 : i32
+    %v3_26_3 = scalar.constant -1609916411 : i32
+    %w3_26 = vector.from_elements %v3_26_0, %v3_26_1, %v3_26_2, %v3_26_3 : vector<4xi32>
+    %o3_26 = index.constant 488 : index
+    vector.store %w3_26, %gv[%o3_26] : vector<4xi32>, view<512xi32>
+    %v3_27_0 = scalar.constant -1608343532 : i32
+    %v3_27_1 = scalar.constant -1606311894 : i32
+    %v3_27_2 = scalar.constant -1605328828 : i32
+    %v3_27_3 = scalar.constant -1599430494 : i32
+    %w3_27 = vector.from_elements %v3_27_0, %v3_27_1, %v3_27_2, %v3_27_3 : vector<4xi32>
+    %o3_27 = index.constant 492 : index
+    vector.store %w3_27, %gv[%o3_27] : vector<4xi32>, view<512xi32>
+    %v3_28_0 = scalar.constant -1587175104 : i32
+    %v3_28_1 = scalar.constant -1576361470 : i32
+    %v3_28_2 = scalar.constant -1574395358 : i32
+    %v3_28_3 = scalar.constant -1568497110 : i32
+    %w3_28 = vector.from_elements %v3_28_0, %v3_28_1, %v3_28_2, %v3_28_3 : vector<4xi32>
+    %o3_28 = index.constant 496 : index
+    vector.store %w3_28, %gv[%o3_28] : vector<4xi32>, view<512xi32>
+    %v3_29_0 = scalar.constant -1567972728 : i32
+    %v3_29_1 = scalar.constant -1543396696 : i32
+    %v3_29_2 = scalar.constant -1542413308 : i32
+    %v3_29_3 = scalar.constant -1534483392 : i32
+    %w3_29 = vector.from_elements %v3_29_0, %v3_29_1, %v3_29_2, %v3_29_3 : vector<4xi32>
+    %o3_29 = index.constant 500 : index
+    vector.store %w3_29, %gv[%o3_29] : vector<4xi32>, view<512xi32>
+    %v3_30_0 = scalar.constant -1526684508 : i32
+    %v3_30_1 = scalar.constant -1504598759 : i32
+    %v3_30_2 = scalar.constant -1473730550 : i32
+    %v3_30_3 = scalar.constant -1454069598 : i32
+    %w3_30 = vector.from_elements %v3_30_0, %v3_30_1, %v3_30_2, %v3_30_3 : vector<4xi32>
+    %o3_30 = index.constant 504 : index
+    vector.store %w3_30, %gv[%o3_30] : vector<4xi32>, view<512xi32>
+    %v3_31_0 = scalar.constant -1442272890 : i32
+    %v3_31_1 = scalar.constant -1440699894 : i32
+    %v3_31_2 = scalar.constant -1440175582 : i32
+    %v3_31_3 = scalar.constant -1431655800 : i32
+    %w3_31 = vector.from_elements %v3_31_0, %v3_31_1, %v3_31_2, %v3_31_3 : vector<4xi32>
+    %o3_31 = index.constant 508 : index
+    vector.store %w3_31, %gv[%o3_31] : vector<4xi32>, view<512xi32>
+  }
+  func.return
+}
+
+// IQ2_S: lane l16 owns group l16 / 2, slots 2 (l16 % 2) and +1 (values 32 (l16 / 2) + 16 (l16 % 2) ..
+// +15), which share scale nibble l16 % 2 of scales[g]. Slot s: grid index qs[4 g + s] | (qh[g] << (8 - 2 s)
+// & 0x300), a full sign byte signs[4 g + s] (no parity bit, unlike IQ2_XXS / IQ2_XS).
+func.def inline @ggml_kquant_iq2s_code(%grid: buffer, %index: i32) -> (i32) {
+  %zero_offset = index.constant 0 : offset
+  %gv = buffer.view %grid[%zero_offset] : buffer -> view<512xi32>
+  %c1_i32 = scalar.constant 1 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c65535_i32 = scalar.constant 65535 : i32
+  %w_i32 = scalar.shrui %index, %c1_i32 : i32
+  %w_x = index.cast %w_i32 : i32 to index
+  %w_b = index.assume %w_x [range(%w_x, 0, 511)] : index
+  %word = view.load %gv[%w_b] : view<512xi32> -> i32
+  %odd = scalar.andi %index, %c1_i32 : i32
+  %sh = scalar.shli %odd, %c4_i32 : i32
+  %shifted = scalar.shrui %word, %sh : i32
+  %code = scalar.andi %shifted, %c65535_i32 : i32
+  func.return %code : i32
+}
+
+func.def inline @ggml_kquant_iq2s_slot_values(%code: i32, %signs8: i32) -> (vector<8xf32>) {
+  %c1_i32 = scalar.constant 1 : i32
+  %c7_i32 = scalar.constant 7 : i32
+  %s0 = scalar.constant 0 : i32
+  %s2 = scalar.constant 2 : i32
+  %s3 = scalar.constant 3 : i32
+  %s4 = scalar.constant 4 : i32
+  %s5 = scalar.constant 5 : i32
+  %s6 = scalar.constant 6 : i32
+  %s8 = scalar.constant 8 : i32
+  %s10 = scalar.constant 10 : i32
+  %s12 = scalar.constant 12 : i32
+  %s14 = scalar.constant 14 : i32
+  %shift2 = vector.from_elements %s0, %s2, %s4, %s6, %s8, %s10, %s12, %s14 : vector<8xi32>
+  %shift1 = vector.from_elements %s0, %c1_i32, %s2, %s3, %s4, %s5, %s6, %c7_i32 : vector<8xi32>
+  %three = vector.splat %s3 : vector<8xi32>
+  %one = vector.splat %c1_i32 : vector<8xi32>
+  %c8v = vector.splat %s8 : vector<8xi32>
+  %c17_i32 = scalar.constant 17 : i32
+  %c17v = vector.splat %c17_i32 : vector<8xi32>
+  %cv = vector.splat %code : vector<8xi32>
+  %cs = vector.shrui %cv, %shift2 : vector<8xi32>
+  %c = vector.andi %cs, %three : vector<8xi32>
+  %c17 = vector.muli %c, %c17v : vector<8xi32>
+  %chi = vector.shrui %c, %one : vector<8xi32>
+  %lv0 = vector.addi %c17, %chi : vector<8xi32>
+  %lv = vector.addi %lv0, %c8v : vector<8xi32>
+  %sv = vector.splat %signs8 : vector<8xi32>
+  %sb0 = vector.shrui %sv, %shift1 : vector<8xi32>
+  %sb = vector.andi %sb0, %one : vector<8xi32>
+  %sb2 = vector.shli %sb, %one : vector<8xi32>
+  %sgn = vector.subi %one, %sb2 : vector<8xi32>
+  %v = vector.muli %lv, %sgn : vector<8xi32>
+  %vf = vector.sitofp %v : vector<8xi32> to vector<8xf32>
+  func.return %vf : vector<8xf32>
+}
+
+// IQ2_S (82 bytes: d, qs[32] grid low bits, signs[32], qh[8], scales[8]): value = d * (0.5 + nibble) * 0.25
+// * grid * sign.
+func.def inline @ggml_kquant_iq2s_lane_parts(%grid: buffer, %weight: buffer, %row_base: offset, %block: index, %lane16: index) -> (vector<16xf32>, f32, index) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c34 = index.constant 34 : index
+  %c66 = index.constant 66 : index
+  %c74 = index.constant 74 : index
+  %c2_i32 = scalar.constant 2 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c8_i32 = scalar.constant 8 : i32
+  %c15_i32 = scalar.constant 15 : i32
+  %c768_i32 = scalar.constant 768 : i32
+  %c05 = scalar.constant 0.5 : f32
+  %c025 = scalar.constant 0.25 : f32
+  %block_bytes = index.constant 82 : offset
+  %l = index.assume %lane16 [range(%lane16, 0, 15)] : index
+  %g = index.div %l, %c2 : index
+  %h = index.rem %l, %c2 : index
+  %sa = index.mul %h, %c2 : index
+  %sb = index.add %sa, %c1 : index
+  %block_add = index.scale %block, %block_bytes : index, offset -> offset
+  %block_base = index.add %row_base, %block_add : offset
+  %hv = buffer.view %weight[%block_base] : buffer -> view<41xf16>
+  %bv = buffer.view %weight[%block_base] : buffer -> view<82xi8>
+  %d_f16 = view.load %hv[%c0] : view<41xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %g4 = index.mul %g, %c4 : index
+  %qs0 = index.add %g4, %c2 : index
+  %qa_at = index.add %qs0, %sa : index
+  %qb_at = index.add %qs0, %sb : index
+  %sg0 = index.add %g4, %c34 : index
+  %sa_at = index.add %sg0, %sa : index
+  %sb_at = index.add %sg0, %sb : index
+  %qh_at = index.add %c66, %g : index
+  %sc_at = index.add %c74, %g : index
+  %qa_i8 = view.load %bv[%qa_at] : view<82xi8> -> i8
+  %qb_i8 = view.load %bv[%qb_at] : view<82xi8> -> i8
+  %sga_i8 = view.load %bv[%sa_at] : view<82xi8> -> i8
+  %sgb_i8 = view.load %bv[%sb_at] : view<82xi8> -> i8
+  %qh_i8 = view.load %bv[%qh_at] : view<82xi8> -> i8
+  %sc_i8 = view.load %bv[%sc_at] : view<82xi8> -> i8
+  %qa = scalar.extui %qa_i8 : i8 to i32
+  %qb = scalar.extui %qb_i8 : i8 to i32
+  %sga = scalar.extui %sga_i8 : i8 to i32
+  %sgb = scalar.extui %sgb_i8 : i8 to i32
+  %qh = scalar.extui %qh_i8 : i8 to i32
+  %sc = scalar.extui %sc_i8 : i8 to i32
+  %sa_i32 = index.cast %sa : index to i32
+  %sb_i32 = index.cast %sb : index to i32
+  %sa2 = scalar.muli %sa_i32, %c2_i32 : i32
+  %sb2 = scalar.muli %sb_i32, %c2_i32 : i32
+  %sha = scalar.subi %c8_i32, %sa2 : i32
+  %shb = scalar.subi %c8_i32, %sb2 : i32
+  %ha0 = scalar.shli %qh, %sha : i32
+  %hb0 = scalar.shli %qh, %shb : i32
+  %ha = scalar.andi %ha0, %c768_i32 : i32
+  %hb = scalar.andi %hb0, %c768_i32 : i32
+  %ia = scalar.ori %qa, %ha : i32
+  %ib = scalar.ori %qb, %hb : i32
+  %code_a = func.call @ggml_kquant_iq2s_code(%grid, %ia) : (buffer, i32) -> (i32)
+  %code_b = func.call @ggml_kquant_iq2s_code(%grid, %ib) : (buffer, i32) -> (i32)
+  %h_i32 = index.cast %h : index to i32
+  %nsh = scalar.muli %h_i32, %c4_i32 : i32
+  %nib0 = scalar.shrui %sc, %nsh : i32
+  %nib = scalar.andi %nib0, %c15_i32 : i32
+  %nib_f = scalar.uitofp %nib : i32 to f32
+  %nib_p = scalar.addf %nib_f, %c05 : f32
+  %ds = scalar.mulf %d, %nib_p : f32
+  %scale = scalar.mulf %ds, %c025 : f32
+  %va = func.call @ggml_kquant_iq2s_slot_values(%code_a, %sga) : (i32, i32) -> (vector<8xf32>)
+  %vb = func.call @ggml_kquant_iq2s_slot_values(%code_b, %sgb) : (i32, i32) -> (vector<8xf32>)
+  %v = func.call @ggml_kquant_iq2_join16(%va, %vb) : (vector<8xf32>, vector<8xf32>) -> (vector<16xf32>)
+  %g32 = index.mul %g, %c32 : index
+  %h16 = index.mul %h, %c16 : index
+  %p0 = index.add %g32, %h16 : index
+  func.return %v, %scale, %p0 : vector<16xf32>, f32, index
+}
+
+func.def inline @ggml_kquant_iq2s_lane_dot(%grid: buffer, %weight: buffer, %input: buffer, %row_base: offset, %block: index, %lane16: index) -> (f32) {
+  %zero_scalar = scalar.constant 0.0 : f32
+  %x_block_bytes = index.constant 1024 : offset
+  %v, %scale, %p = func.call @ggml_kquant_iq2s_lane_parts(%grid, %weight, %row_base, %block, %lane16) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, f32, index)
+  %x_base = index.scale %block, %x_block_bytes : index, offset -> offset
+  %xv = buffer.view %input[%x_base] : buffer -> view<256xf32>
+  %x = vector.load %xv[%p] : view<256xf32> -> vector<16xf32>
+  %vx = vector.mulf %v, %x : vector<16xf32>
+  %sum = vector.reduce<addf> %vx, %zero_scalar : vector<16xf32>, f32
+  %result = scalar.mulf %scale, %sum : f32
+  func.return %result : f32
+}
+
+func.def inline @ggml_kquant_iq2s_lane_weights(%grid: buffer, %weight: buffer, %row_base: offset, %block: index, %lane16: index) -> (vector<16xf32>, index, index, index, index) {
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c12 = index.constant 12 : index
+  %v, %scale, %p0 = func.call @ggml_kquant_iq2s_lane_parts(%grid, %weight, %row_base, %block, %lane16) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, f32, index)
+  %sv = vector.splat %scale : vector<16xf32>
+  %w = vector.mulf %v, %sv : vector<16xf32>
+  %p1 = index.add %p0, %c4 : index
+  %p2 = index.add %p0, %c8 : index
+  %p3 = index.add %p0, %c12 : index
+  func.return %w, %p0, %p1, %p2, %p3 : vector<16xf32>, index, index, index, index
+}
+
+// Stage the grid of %format (IQ3_S 21, IQ2_S 22, IQ2_XXS 24, IQ2_XS 25, IQ3_XXS 28) into workgroup memory, chunk %chunk.
 // Callers test the format inline: the barrier after the fill needs a condition Loom can prove
 // workgroup-uniform, which a call result is not (STRUCTURE/038).
 func.def inline @ggml_kquant_grid_fill_for(%format: index, %grid: buffer, %chunk: index) {
@@ -3647,6 +5381,10 @@ func.def inline @ggml_kquant_grid_fill_for(%format: index, %grid: buffer, %chunk
   %is21 = index.cmp eq, %format, %f21 : index
   %is24 = index.cmp eq, %format, %f24 : index
   %is25 = index.cmp eq, %format, %f25 : index
+  %f28 = index.constant 28 : index
+  %is28 = index.cmp eq, %format, %f28 : index
+  %f22 = index.constant 22 : index
+  %is22 = index.cmp eq, %format, %f22 : index
   scf.if %is21 {
     func.call @ggml_kquant_iq3s_grid_fill(%grid, %chunk) : (buffer, index) -> ()
   }
@@ -3655,6 +5393,12 @@ func.def inline @ggml_kquant_grid_fill_for(%format: index, %grid: buffer, %chunk
   }
   scf.if %is25 {
     func.call @ggml_kquant_iq2xs_grid_fill(%grid, %chunk) : (buffer, index) -> ()
+  }
+  scf.if %is28 {
+    func.call @ggml_kquant_iq3xxs_grid_fill(%grid, %chunk) : (buffer, index) -> ()
+  }
+  scf.if %is22 {
+    func.call @ggml_kquant_iq2s_grid_fill(%grid, %chunk) : (buffer, index) -> ()
   }
   func.return
 }
@@ -3696,12 +5440,20 @@ func.def pure inline @ggml_kquant_block_bytes(%format: index) -> (offset) {
   %is24 = index.cmp eq, %format, %f24 : index
   %is25 = index.cmp eq, %format, %f25 : index
   %bytes2 = scf.select %is24, %b66, %bytes1 : offset
-  %bytes = scf.select %is25, %b74, %bytes2 : offset
+  %bytes3 = scf.select %is25, %b74, %bytes2 : offset
+  %f28 = index.constant 28 : index
+  %b98 = index.constant 98 : offset
+  %is28 = index.cmp eq, %format, %f28 : index
+  %bytes4 = scf.select %is28, %b98, %bytes3 : offset
+  %f22 = index.constant 22 : index
+  %b82 = index.constant 82 : offset
+  %is22 = index.cmp eq, %format, %f22 : index
+  %bytes = scf.select %is22, %b82, %bytes4 : offset
   func.return %bytes : offset
 }
 
 // The lane's partial dot product of 256-value block %block of weight row %row with the input.
-// Formats: Q2_K 12, IQ2_XXS 24, IQ2_XS 25, Q3_K 11, IQ3_S 21, Q4_K 4, Q5_K 5, Q6_K 6, IQ4_NL 20, IQ4_XS 23, Q8_0 80.
+// Formats: Q2_K 12, IQ2_S 22, IQ2_XXS 24, IQ2_XS 25, IQ3_XXS 28, Q3_K 11, IQ3_S 21, Q4_K 4, Q5_K 5, Q6_K 6, IQ4_NL 20, IQ4_XS 23, Q8_0 80.
 func.def inline @ggml_kquant_lane_dot(%format: index, %kv_lane: f32, %grid: buffer, %weight: buffer, %input: buffer, %row: index, %blocks: index, %block: index, %lane16: index) -> (f32) {
   %f4 = index.constant 4 : index
   %f5 = index.constant 5 : index
@@ -3766,8 +5518,24 @@ func.def inline @ggml_kquant_lane_dot(%format: index, %kv_lane: f32, %grid: buff
                    %v = func.call @ggml_kquant_iq2xs_lane_dot(%grid, %weight, %input, %row_base, %block, %lane16) : (buffer, buffer, buffer, offset, index, index) -> (f32)
                    scf.yield %v : f32
                   } else {
-                   %v = func.call @ggml_kquant_q8_0_lane_dot(%weight, %input, %row_base, %block, %lane16) : (buffer, buffer, offset, index, index) -> (f32)
-                   scf.yield %v : f32
+                   %f28 = index.constant 28 : index
+                   %is28 = index.cmp eq, %format, %f28 : index
+                   %r28 = scf.if %is28 -> (f32) {
+                    %v = func.call @ggml_kquant_iq3xxs_lane_dot(%grid, %weight, %input, %row_base, %block, %lane16) : (buffer, buffer, buffer, offset, index, index) -> (f32)
+                    scf.yield %v : f32
+                   } else {
+                    %f22 = index.constant 22 : index
+                    %is22 = index.cmp eq, %format, %f22 : index
+                    %r22 = scf.if %is22 -> (f32) {
+                     %v = func.call @ggml_kquant_iq2s_lane_dot(%grid, %weight, %input, %row_base, %block, %lane16) : (buffer, buffer, buffer, offset, index, index) -> (f32)
+                     scf.yield %v : f32
+                    } else {
+                     %v = func.call @ggml_kquant_q8_0_lane_dot(%weight, %input, %row_base, %block, %lane16) : (buffer, buffer, offset, index, index) -> (f32)
+                     scf.yield %v : f32
+                    }
+                    scf.yield %r22 : f32
+                   }
+                   scf.yield %r28 : f32
                   }
                   scf.yield %r25 : f32
                  }
@@ -3844,7 +5612,13 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
   %g_grid_is24 = index.cmp eq, %gate_format, %g_grid_f24 : index
   %g_grid_is25 = index.cmp eq, %gate_format, %g_grid_f25 : index
   %g_grid_a = scalar.ori %g_grid_is21, %g_grid_is24 : i1
-  %g_grid = scalar.ori %g_grid_a, %g_grid_is25 : i1
+  %g_grid_f28 = index.constant 28 : index
+  %g_grid_is28 = index.cmp eq, %gate_format, %g_grid_f28 : index
+  %g_grid_b = scalar.ori %g_grid_a, %g_grid_is25 : i1
+  %g_grid_f22 = index.constant 22 : index
+  %g_grid_is22 = index.cmp eq, %gate_format, %g_grid_f22 : index
+  %g_grid_c = scalar.ori %g_grid_b, %g_grid_is28 : i1
+  %g_grid = scalar.ori %g_grid_c, %g_grid_is22 : i1
   %u_grid_f21 = index.constant 21 : index
   %u_grid_f24 = index.constant 24 : index
   %u_grid_f25 = index.constant 25 : index
@@ -3852,7 +5626,13 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
   %u_grid_is24 = index.cmp eq, %up_format, %u_grid_f24 : index
   %u_grid_is25 = index.cmp eq, %up_format, %u_grid_f25 : index
   %u_grid_a = scalar.ori %u_grid_is21, %u_grid_is24 : i1
-  %u_grid = scalar.ori %u_grid_a, %u_grid_is25 : i1
+  %u_grid_f28 = index.constant 28 : index
+  %u_grid_is28 = index.cmp eq, %up_format, %u_grid_f28 : index
+  %u_grid_b = scalar.ori %u_grid_a, %u_grid_is25 : i1
+  %u_grid_f22 = index.constant 22 : index
+  %u_grid_is22 = index.cmp eq, %up_format, %u_grid_f22 : index
+  %u_grid_c = scalar.ori %u_grid_b, %u_grid_is28 : i1
+  %u_grid = scalar.ori %u_grid_c, %u_grid_is22 : i1
   %needs_grid = scalar.ori %g_grid, %u_grid : i1
   %grid_format = scf.select %g_grid, %gate_format, %up_format : index
   %grid_bytes = index.constant 2048 : offset
@@ -3930,7 +5710,13 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
   %needs_grid_is24 = index.cmp eq, %format, %needs_grid_f24 : index
   %needs_grid_is25 = index.cmp eq, %format, %needs_grid_f25 : index
   %needs_grid_a = scalar.ori %needs_grid_is21, %needs_grid_is24 : i1
-  %needs_grid = scalar.ori %needs_grid_a, %needs_grid_is25 : i1
+  %needs_grid_f28 = index.constant 28 : index
+  %needs_grid_is28 = index.cmp eq, %format, %needs_grid_f28 : index
+  %needs_grid_b = scalar.ori %needs_grid_a, %needs_grid_is25 : i1
+  %needs_grid_f22 = index.constant 22 : index
+  %needs_grid_is22 = index.cmp eq, %format, %needs_grid_f22 : index
+  %needs_grid_c = scalar.ori %needs_grid_b, %needs_grid_is28 : i1
+  %needs_grid = scalar.ori %needs_grid_c, %needs_grid_is22 : i1
   %grid_bytes = index.constant 2048 : offset
   %grid = buffer.alloca<workgroup> align(16) %grid_bytes : buffer
   scf.if %needs_grid {
@@ -4784,8 +6570,24 @@ func.def inline @ggml_kquant_lane_weights(%format: index, %kv_lane: f32, %grid: 
                    %v, %v0, %v1, %v2, %v3 = func.call @ggml_kquant_iq2xs_lane_weights(%grid, %weight, %row_base, %block, %lane16) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, index, index, index, index)
                    scf.yield %v, %v0, %v1, %v2, %v3 : vector<16xf32>, index, index, index, index
                   } else {
-                   %v, %v0, %v1, %v2, %v3 = func.call @ggml_kquant_q8_0_lane_weights(%weight, %row_base, %block, %lane16) : (buffer, offset, index, index) -> (vector<16xf32>, index, index, index, index)
-                   scf.yield %v, %v0, %v1, %v2, %v3 : vector<16xf32>, index, index, index, index
+                   %f28 = index.constant 28 : index
+                   %is28 = index.cmp eq, %format, %f28 : index
+                   %r28, %r28_0, %r28_1, %r28_2, %r28_3 = scf.if %is28 -> (vector<16xf32>, index, index, index, index) {
+                    %v, %v0, %v1, %v2, %v3 = func.call @ggml_kquant_iq3xxs_lane_weights(%grid, %weight, %row_base, %block, %lane16) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, index, index, index, index)
+                    scf.yield %v, %v0, %v1, %v2, %v3 : vector<16xf32>, index, index, index, index
+                   } else {
+                    %f22 = index.constant 22 : index
+                    %is22 = index.cmp eq, %format, %f22 : index
+                    %r22, %r22_0, %r22_1, %r22_2, %r22_3 = scf.if %is22 -> (vector<16xf32>, index, index, index, index) {
+                     %v, %v0, %v1, %v2, %v3 = func.call @ggml_kquant_iq2s_lane_weights(%grid, %weight, %row_base, %block, %lane16) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, index, index, index, index)
+                     scf.yield %v, %v0, %v1, %v2, %v3 : vector<16xf32>, index, index, index, index
+                    } else {
+                     %v, %v0, %v1, %v2, %v3 = func.call @ggml_kquant_q8_0_lane_weights(%weight, %row_base, %block, %lane16) : (buffer, offset, index, index) -> (vector<16xf32>, index, index, index, index)
+                     scf.yield %v, %v0, %v1, %v2, %v3 : vector<16xf32>, index, index, index, index
+                    }
+                    scf.yield %r22, %r22_0, %r22_1, %r22_2, %r22_3 : vector<16xf32>, index, index, index, index
+                   }
+                   scf.yield %r28, %r28_0, %r28_1, %r28_2, %r28_3 : vector<16xf32>, index, index, index, index
                   }
                   scf.yield %r25, %r25_0, %r25_1, %r25_2, %r25_3 : vector<16xf32>, index, index, index, index
                  }
@@ -4889,7 +6691,13 @@ func.def pure inline @ggml_kquant_run_shape(%format: index) -> (index) {
   %is25 = index.cmp eq, %format, %f25 : index
   %a1 = scalar.ori %a0, %is12 : i1
   %a2 = scalar.ori %a1, %is24 : i1
-  %a = scalar.ori %a2, %is25 : i1
+  %a3 = scalar.ori %a2, %is25 : i1
+  %f28 = index.constant 28 : index
+  %is28 = index.cmp eq, %format, %f28 : index
+  %a4 = scalar.ori %a3, %is28 : i1
+  %f22 = index.constant 22 : index
+  %is22 = index.cmp eq, %format, %f22 : index
+  %a = scalar.ori %a4, %is22 : i1
   %run16 = scalar.ori %a, %is80 : i1
   %shape0 = scf.select %run16, %s2, %s1 : index
   %shape = scf.select %is6, %s0, %shape0 : index
@@ -4942,7 +6750,13 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
   %g_grid_is24 = index.cmp eq, %gate_format, %g_grid_f24 : index
   %g_grid_is25 = index.cmp eq, %gate_format, %g_grid_f25 : index
   %g_grid_a = scalar.ori %g_grid_is21, %g_grid_is24 : i1
-  %g_grid = scalar.ori %g_grid_a, %g_grid_is25 : i1
+  %g_grid_f28 = index.constant 28 : index
+  %g_grid_is28 = index.cmp eq, %gate_format, %g_grid_f28 : index
+  %g_grid_b = scalar.ori %g_grid_a, %g_grid_is25 : i1
+  %g_grid_f22 = index.constant 22 : index
+  %g_grid_is22 = index.cmp eq, %gate_format, %g_grid_f22 : index
+  %g_grid_c = scalar.ori %g_grid_b, %g_grid_is28 : i1
+  %g_grid = scalar.ori %g_grid_c, %g_grid_is22 : i1
   %u_grid_f21 = index.constant 21 : index
   %u_grid_f24 = index.constant 24 : index
   %u_grid_f25 = index.constant 25 : index
@@ -4950,7 +6764,13 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
   %u_grid_is24 = index.cmp eq, %up_format, %u_grid_f24 : index
   %u_grid_is25 = index.cmp eq, %up_format, %u_grid_f25 : index
   %u_grid_a = scalar.ori %u_grid_is21, %u_grid_is24 : i1
-  %u_grid = scalar.ori %u_grid_a, %u_grid_is25 : i1
+  %u_grid_f28 = index.constant 28 : index
+  %u_grid_is28 = index.cmp eq, %up_format, %u_grid_f28 : index
+  %u_grid_b = scalar.ori %u_grid_a, %u_grid_is25 : i1
+  %u_grid_f22 = index.constant 22 : index
+  %u_grid_is22 = index.cmp eq, %up_format, %u_grid_f22 : index
+  %u_grid_c = scalar.ori %u_grid_b, %u_grid_is28 : i1
+  %u_grid = scalar.ori %u_grid_c, %u_grid_is22 : i1
   %needs_grid = scalar.ori %g_grid, %u_grid : i1
   %grid_format = scf.select %g_grid, %gate_format, %up_format : index
   %grid_bytes = index.constant 2048 : offset
@@ -5204,7 +7024,13 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
   %needs_grid_is24 = index.cmp eq, %format, %needs_grid_f24 : index
   %needs_grid_is25 = index.cmp eq, %format, %needs_grid_f25 : index
   %needs_grid_a = scalar.ori %needs_grid_is21, %needs_grid_is24 : i1
-  %needs_grid = scalar.ori %needs_grid_a, %needs_grid_is25 : i1
+  %needs_grid_f28 = index.constant 28 : index
+  %needs_grid_is28 = index.cmp eq, %format, %needs_grid_f28 : index
+  %needs_grid_b = scalar.ori %needs_grid_a, %needs_grid_is25 : i1
+  %needs_grid_f22 = index.constant 22 : index
+  %needs_grid_is22 = index.cmp eq, %format, %needs_grid_f22 : index
+  %needs_grid_c = scalar.ori %needs_grid_b, %needs_grid_is28 : i1
+  %needs_grid = scalar.ori %needs_grid_c, %needs_grid_is22 : i1
   %grid_bytes = index.constant 2048 : offset
   %grid = buffer.alloca<workgroup> align(16) %grid_bytes : buffer
   scf.if %needs_grid {

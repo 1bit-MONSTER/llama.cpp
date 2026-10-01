@@ -14,7 +14,7 @@
 // limitations under the License.
 
 // Decode projections (1 token, or 2-8 for MTP / speculative verify batches) on Q2_K, Q3_K, Q4_K, Q5_K,
-// Q6_K, IQ2_XXS, IQ2_XS, IQ3_S, IQ4_NL, IQ4_XS and Q8_0 weights, read in their GGUF block layout
+// Q6_K, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, IQ4_XS and Q8_0 weights, read in their GGUF block layout
 // (ops/kquant_decode_f32.loom): FFN gate/up pairs fused with SwiGLU, and plain projections with an
 // optional following residual ADD. Mixed-quant models (Unsloth UD-Q4_K_XL and similar) pair these
 // types freely per layer; without this they take the generic dequantize-4-values-at-a-time
@@ -48,6 +48,8 @@ bool kquant_format(CommonMulMatWeightFormat format) {
         case CommonMulMatWeightFormat::Q2K:
         case CommonMulMatWeightFormat::IQ2_XXS:
         case CommonMulMatWeightFormat::IQ2_XS:
+        case CommonMulMatWeightFormat::IQ3_XXS:
+        case CommonMulMatWeightFormat::IQ2_S:
         case CommonMulMatWeightFormat::Q3K:
         case CommonMulMatWeightFormat::Q4K:
         case CommonMulMatWeightFormat::Q5K:
@@ -66,7 +68,8 @@ bool kquant_format(CommonMulMatWeightFormat format) {
 // that one buffer, so its two formats may not need different codebooks.
 bool kquant_needs_grid(CommonMulMatWeightFormat format) {
     return format == CommonMulMatWeightFormat::IQ3_S || format == CommonMulMatWeightFormat::IQ2_XXS ||
-           format == CommonMulMatWeightFormat::IQ2_XS;
+           format == CommonMulMatWeightFormat::IQ2_XS || format == CommonMulMatWeightFormat::IQ3_XXS ||
+           format == CommonMulMatWeightFormat::IQ2_S;
 }
 
 // The kernels' config ranges (ops/kquant_decode_f32.loom).
