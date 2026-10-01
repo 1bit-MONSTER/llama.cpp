@@ -28,34 +28,41 @@ namespace ggml::hrx {
 namespace {
 
 // One 256-value block: four Q4_0 blocks per 128-value group, two groups. Returns false if a nibble is not
-// 7, 8 or 9 or a group's four scales differ.
+// 7, 8 or 9 or the blocks of a group that hold a nonzero value disagree on the scale. An all-zero block
+// (every nibble 8) decodes to zeros whatever its scale, so it does not take part in that check; a group
+// with no nonzero value gets scale 0.
 bool pack_block(const block_q4_0 * in, uint8_t * out) {
-    uint16_t scales[2];
+    uint16_t scales[2] = { 0, 0 };
     std::memset(out + 4, 0, 64);
     for (int group = 0; group < 2; ++group) {
-        const block_q4_0 * g = in + 4 * group;
-        uint16_t           d;
-        std::memcpy(&d, &g[0].d, sizeof(d));
+        const block_q4_0 * g          = in + 4 * group;
+        bool               have_scale = false;
         for (int b = 0; b < 4; ++b) {
-            uint16_t db;
-            std::memcpy(&db, &g[b].d, sizeof(db));
-            if (db != d) {
-                return false;
-            }
+            bool nonzero = false;
             for (int j = 0; j < QK4_0 / 2; ++j) {
                 const int lo = g[b].qs[j] & 0x0F;
                 const int hi = g[b].qs[j] >> 4;
                 if (lo < 7 || lo > 9 || hi < 7 || hi > 9) {
                     return false;
                 }
+                nonzero        = nonzero || lo != 8 || hi != 8;
                 // values j and j + 16 of Q4_0 block b: index within the 256-value block
                 const int i_lo = 128 * group + 32 * b + j;
                 const int i_hi = i_lo + 16;
                 out[4 + i_lo / 4] |= static_cast<uint8_t>((lo - 7) << (2 * (i_lo % 4)));
                 out[4 + i_hi / 4] |= static_cast<uint8_t>((hi - 7) << (2 * (i_hi % 4)));
             }
+            if (!nonzero) {
+                continue;
+            }
+            uint16_t d;
+            std::memcpy(&d, &g[b].d, sizeof(d));
+            if (have_scale && d != scales[group]) {
+                return false;
+            }
+            scales[group] = d;
+            have_scale    = true;
         }
-        scales[group] = d;
     }
     std::memcpy(out, scales, sizeof(scales));
     return true;
