@@ -21,8 +21,8 @@
 // The draft pass then reads a K-row head instead of the full one (65,536 of 248,320 rows is
 // 170 MiB instead of 644 MiB at Q8_0, three times per decode step) and its logits are scattered
 // into a full-vocabulary row that is -inf elsewhere. The target verifies every drafted token,
-// so only the acceptance rate can change, never the verified output. The d2t values are
-// checked by the tool that writes them (sorted, unique, < n_vocab); set_rows trusts them.
+// so only the acceptance rate can change, never the verified output. The loader reads the d2t
+// values and refuses a file whose ids are out of range or repeated, since set_rows trusts them.
 
 #include "llama-model-loader.h"
 
@@ -33,7 +33,7 @@ struct ggml_context;
 struct ggml_tensor;
 
 // Rows of the reduced draft head: 0 when the file has no d2t (full head), else d2t's length.
-// Throws if d2t is not I64 or is longer than the vocabulary.
+// Throws if d2t is not I64, is longer than the vocabulary, or holds an id outside it or twice.
 int64_t qwen4exp_draft_vocab_rows(const llama_model_loader & ml, const std::string & d2t_name, int64_t n_vocab);
 
 // logits [K, n_outputs] -> [n_vocab, n_outputs], -inf outside the d2t rows.
