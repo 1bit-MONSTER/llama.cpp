@@ -1,5 +1,7 @@
 #include "dispatch-mul-mat.h"
 
+#include <cstdlib>
+
 #include "dispatch-mul-mat-common.h"
 #include "dispatch-mul-mat-iq3-xxs.h"
 #include "ggml.h"
@@ -779,6 +781,17 @@ static bool match_q5_k_symmetric_i8_prefill_dispatch(const DispatchMatchContext 
 }
 
 
+// Q5_K/IQ4_XS prefill matmuls quantize their own q8_1 activations and may feed a
+// GLU, like Q4_K. Qwen3.8-27B UD-Q4_K_XL on gfx1151: pp512 99 -> 141 tok/s, KLD vs BF16
+// unchanged (0.00717 / 0.00720). GGML_HRX_Q8_PREFILL_RELAX=0 restores the previous policy.
+static bool q8_prefill_relaxed() {
+    static const bool relaxed = [] {
+        const char * env = std::getenv("GGML_HRX_Q8_PREFILL_RELAX");
+        return env == nullptr || std::atoi(env) != 0;
+    }();
+    return relaxed;
+}
+
 static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & context,
                                                   DispatchMatch &              dispatch_match) {
     const CommonMulMatMatch match = common_match_mul_mat_any_format(context.graph, context.root_node,
@@ -792,7 +805,8 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
     }
 
     for (const GraphNode * consumer : context.graph.index().consumers(match.output->id)) {
-        if (match.weight->type != GGML_TYPE_Q4_K && consumer != nullptr && consumer->op == GGML_OP_GLU) {
+        if (!q8_prefill_relaxed() && match.weight->type != GGML_TYPE_Q4_K && consumer != nullptr &&
+            consumer->op == GGML_OP_GLU) {
             return false;
         }
     }
@@ -814,7 +828,7 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
         }
     } else if (!common_prepare_q8_1_x4_input(context, *match.input, match.input_size, match.token_count,
                                              dispatch_match, activation,
-                                             match.weight->type == GGML_TYPE_Q4_K ?
+                                             match.weight->type == GGML_TYPE_Q4_K || q8_prefill_relaxed() ?
                                                  CommonQ8ActivationPolicy::AllowStandaloneQuantize :
                                                  CommonQ8ActivationPolicy::ExistingAlternateOnly)) {
         return false;
