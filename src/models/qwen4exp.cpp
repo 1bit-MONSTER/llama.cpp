@@ -1,4 +1,5 @@
 #include "models.h"
+#include "qwen4exp-draft-vocab.h"
 #include "llama-impl.h"
 #include "llama-memory-hybrid-idx.h"
 #include "llama-memory-recurrent.h"
@@ -294,7 +295,14 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         layer.nextn.hc_head_up   = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_UP,   "weight", il), { hc_lr, hc_dim }, flags);
 
         layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS,     "weight", il), { n_embd, n_vocab }, flags | TENSOR_NOT_REQUIRED);
-        layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", il), { n_embd, n_vocab }, flags | TENSOR_NOT_REQUIRED);
+        // reduced draft vocabulary (qwen4exp-draft-vocab.h): a K-row head plus d2t
+        const int64_t n_draft_rows = mtp_flags == 0 ? qwen4exp_draft_vocab_rows(ml, tn(LLM_TENSOR_D2T).str(), n_vocab) : 0;
+        if (n_draft_rows > 0) {
+            d2t = create_tensor(tn(LLM_TENSOR_D2T), { n_draft_rows }, 0);
+        }
+        layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", il),
+                                                     { n_embd, n_draft_rows > 0 ? n_draft_rows : n_vocab },
+                                                     flags | (n_draft_rows > 0 ? 0 : TENSOR_NOT_REQUIRED));
     }
 }
 
@@ -694,6 +702,9 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_
     }
 
     cur = build_lora_mm(head_w, cur, head_s);
+    if (model.d2t) {
+        cur = qwen4exp_draft_vocab_scatter(ctx0, cur, model.d2t, (int64_t) model.vocab.n_tokens());
+    }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
