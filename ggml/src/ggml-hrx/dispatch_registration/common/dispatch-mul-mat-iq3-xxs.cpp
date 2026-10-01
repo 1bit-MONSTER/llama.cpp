@@ -183,7 +183,9 @@ void register_mul_mat_iq3_xxs_dispatch(DispatchRegistryBuilder & registry) {
         "common.mul_mat.iq3_xxs_matvec_f32",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::SingleOp,
-        200,
+        // below kquant.mul_mat.decode_f32 (85), which reads IQ3_XXS through the shared lane functions;
+        // above the generic common.mul_mat f32 matchers (80/70/60) for shapes the K-quant kernels decline
+        84,
         DispatchSource::Common,
         match_iq3_xxs_matvec_dispatch,
     });

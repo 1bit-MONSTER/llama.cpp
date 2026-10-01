@@ -6556,6 +6556,416 @@ func.def inline @ggml_iq2xs_f16_vector4(%weight: buffer, %row_byte_base: offset,
   %values = vector.fptrunc %values_f32 : vector<4xf32> to vector<4xf16>
   func.return %values : vector<4xf16>
 }
+// iq3xxs_code: 256 grid entries as 12-bit codes (3 bits per value: level L, value 4 + 8 L, 62 for L = 7)
+func.def inline @ggml_iq3xxs_grid_code_i32(%grid_index: i32) -> (i32) {
+  %c5_i32 = scalar.constant 5 : i32
+  %c31_i32 = scalar.constant 31 : i32
+  %chunk_id1 = scalar.constant 1 : i32
+  %chunk_id2 = scalar.constant 2 : i32
+  %chunk_id3 = scalar.constant 3 : i32
+  %chunk_id4 = scalar.constant 4 : i32
+  %chunk_id5 = scalar.constant 5 : i32
+  %chunk_id6 = scalar.constant 6 : i32
+  %chunk_id7 = scalar.constant 7 : i32
+  %chunk_i32 = scalar.shrui %grid_index, %c5_i32 : i32
+  %lane_i32 = scalar.andi %grid_index, %c31_i32 : i32
+  %codes = vector.from_elements %lane_i32 : vector<1xi32>
+  %iq3xxs_code_0_0 = scalar.constant 0.0 : f32
+  %iq3xxs_code_0_1 = scalar.constant 2.0 : f32
+  %iq3xxs_code_0_2 = scalar.constant 4.0 : f32
+  %iq3xxs_code_0_3 = scalar.constant 9.0 : f32
+  %iq3xxs_code_0_4 = scalar.constant 11.0 : f32
+  %iq3xxs_code_0_5 = scalar.constant 15.0 : f32
+  %iq3xxs_code_0_6 = scalar.constant 16.0 : f32
+  %iq3xxs_code_0_7 = scalar.constant 18.0 : f32
+  %iq3xxs_code_0_8 = scalar.constant 25.0 : f32
+  %iq3xxs_code_0_9 = scalar.constant 34.0 : f32
+  %iq3xxs_code_0_10 = scalar.constant 59.0 : f32
+  %iq3xxs_code_0_11 = scalar.constant 61.0 : f32
+  %iq3xxs_code_0_12 = scalar.constant 65.0 : f32
+  %iq3xxs_code_0_13 = scalar.constant 67.0 : f32
+  %iq3xxs_code_0_14 = scalar.constant 72.0 : f32
+  %iq3xxs_code_0_15 = scalar.constant 74.0 : f32
+  %iq3xxs_code_0_16 = scalar.constant 81.0 : f32
+  %iq3xxs_code_0_17 = scalar.constant 85.0 : f32
+  %iq3xxs_code_0_18 = scalar.constant 88.0 : f32
+  %iq3xxs_code_0_19 = scalar.constant 90.0 : f32
+  %iq3xxs_code_0_20 = scalar.constant 97.0 : f32
+  %iq3xxs_code_0_21 = scalar.constant 108.0 : f32
+  %iq3xxs_code_0_22 = scalar.constant 120.0 : f32
+  %iq3xxs_code_0_23 = scalar.constant 128.0 : f32
+  %iq3xxs_code_0_24 = scalar.constant 130.0 : f32
+  %iq3xxs_code_0_25 = scalar.constant 132.0 : f32
+  %iq3xxs_code_0_26 = scalar.constant 137.0 : f32
+  %iq3xxs_code_0_27 = scalar.constant 144.0 : f32
+  %iq3xxs_code_0_28 = scalar.constant 146.0 : f32
+  %iq3xxs_code_0_29 = scalar.constant 153.0 : f32
+  %iq3xxs_code_0_30 = scalar.constant 155.0 : f32
+  %iq3xxs_code_0_31 = scalar.constant 159.0 : f32
+  %iq3xxs_code_0 = vector.from_elements %iq3xxs_code_0_0, %iq3xxs_code_0_1, %iq3xxs_code_0_2, %iq3xxs_code_0_3, %iq3xxs_code_0_4, %iq3xxs_code_0_5, %iq3xxs_code_0_6, %iq3xxs_code_0_7, %iq3xxs_code_0_8, %iq3xxs_code_0_9, %iq3xxs_code_0_10, %iq3xxs_code_0_11, %iq3xxs_code_0_12, %iq3xxs_code_0_13, %iq3xxs_code_0_14, %iq3xxs_code_0_15, %iq3xxs_code_0_16, %iq3xxs_code_0_17, %iq3xxs_code_0_18, %iq3xxs_code_0_19, %iq3xxs_code_0_20, %iq3xxs_code_0_21, %iq3xxs_code_0_22, %iq3xxs_code_0_23, %iq3xxs_code_0_24, %iq3xxs_code_0_25, %iq3xxs_code_0_26, %iq3xxs_code_0_27, %iq3xxs_code_0_28, %iq3xxs_code_0_29, %iq3xxs_code_0_30, %iq3xxs_code_0_31 : vector<32xf32>
+  %iq3xxs_code_1_0 = scalar.constant 169.0 : f32
+  %iq3xxs_code_1_1 = scalar.constant 175.0 : f32
+  %iq3xxs_code_1_2 = scalar.constant 189.0 : f32
+  %iq3xxs_code_1_3 = scalar.constant 193.0 : f32
+  %iq3xxs_code_1_4 = scalar.constant 199.0 : f32
+  %iq3xxs_code_1_5 = scalar.constant 200.0 : f32
+  %iq3xxs_code_1_6 = scalar.constant 202.0 : f32
+  %iq3xxs_code_1_7 = scalar.constant 213.0 : f32
+  %iq3xxs_code_1_8 = scalar.constant 248.0 : f32
+  %iq3xxs_code_1_9 = scalar.constant 267.0 : f32
+  %iq3xxs_code_1_10 = scalar.constant 287.0 : f32
+  %iq3xxs_code_1_11 = scalar.constant 292.0 : f32
+  %iq3xxs_code_1_12 = scalar.constant 303.0 : f32
+  %iq3xxs_code_1_13 = scalar.constant 315.0 : f32
+  %iq3xxs_code_1_14 = scalar.constant 317.0 : f32
+  %iq3xxs_code_1_15 = scalar.constant 321.0 : f32
+  %iq3xxs_code_1_16 = scalar.constant 327.0 : f32
+  %iq3xxs_code_1_17 = scalar.constant 346.0 : f32
+  %iq3xxs_code_1_18 = scalar.constant 362.0 : f32
+  %iq3xxs_code_1_19 = scalar.constant 413.0 : f32
+  %iq3xxs_code_1_20 = scalar.constant 436.0 : f32
+  %iq3xxs_code_1_21 = scalar.constant 456.0 : f32
+  %iq3xxs_code_1_22 = scalar.constant 460.0 : f32
+  %iq3xxs_code_1_23 = scalar.constant 462.0 : f32
+  %iq3xxs_code_1_24 = scalar.constant 483.0 : f32
+  %iq3xxs_code_1_25 = scalar.constant 497.0 : f32
+  %iq3xxs_code_1_26 = scalar.constant 513.0 : f32
+  %iq3xxs_code_1_27 = scalar.constant 515.0 : f32
+  %iq3xxs_code_1_28 = scalar.constant 520.0 : f32
+  %iq3xxs_code_1_29 = scalar.constant 522.0 : f32
+  %iq3xxs_code_1_30 = scalar.constant 529.0 : f32
+  %iq3xxs_code_1_31 = scalar.constant 531.0 : f32
+  %iq3xxs_code_1 = vector.from_elements %iq3xxs_code_1_0, %iq3xxs_code_1_1, %iq3xxs_code_1_2, %iq3xxs_code_1_3, %iq3xxs_code_1_4, %iq3xxs_code_1_5, %iq3xxs_code_1_6, %iq3xxs_code_1_7, %iq3xxs_code_1_8, %iq3xxs_code_1_9, %iq3xxs_code_1_10, %iq3xxs_code_1_11, %iq3xxs_code_1_12, %iq3xxs_code_1_13, %iq3xxs_code_1_14, %iq3xxs_code_1_15, %iq3xxs_code_1_16, %iq3xxs_code_1_17, %iq3xxs_code_1_18, %iq3xxs_code_1_19, %iq3xxs_code_1_20, %iq3xxs_code_1_21, %iq3xxs_code_1_22, %iq3xxs_code_1_23, %iq3xxs_code_1_24, %iq3xxs_code_1_25, %iq3xxs_code_1_26, %iq3xxs_code_1_27, %iq3xxs_code_1_28, %iq3xxs_code_1_29, %iq3xxs_code_1_30, %iq3xxs_code_1_31 : vector<32xf32>
+  %iq3xxs_code_2_0 = scalar.constant 536.0 : f32
+  %iq3xxs_code_2_1 = scalar.constant 538.0 : f32
+  %iq3xxs_code_2_2 = scalar.constant 540.0 : f32
+  %iq3xxs_code_2_3 = scalar.constant 551.0 : f32
+  %iq3xxs_code_2_4 = scalar.constant 552.0 : f32
+  %iq3xxs_code_2_5 = scalar.constant 576.0 : f32
+  %iq3xxs_code_2_6 = scalar.constant 578.0 : f32
+  %iq3xxs_code_2_7 = scalar.constant 585.0 : f32
+  %iq3xxs_code_2_8 = scalar.constant 592.0 : f32
+  %iq3xxs_code_2_9 = scalar.constant 594.0 : f32
+  %iq3xxs_code_2_10 = scalar.constant 641.0 : f32
+  %iq3xxs_code_2_11 = scalar.constant 643.0 : f32
+  %iq3xxs_code_2_12 = scalar.constant 648.0 : f32
+  %iq3xxs_code_2_13 = scalar.constant 650.0 : f32
+  %iq3xxs_code_2_14 = scalar.constant 657.0 : f32
+  %iq3xxs_code_2_15 = scalar.constant 664.0 : f32
+  %iq3xxs_code_2_16 = scalar.constant 698.0 : f32
+  %iq3xxs_code_2_17 = scalar.constant 704.0 : f32
+  %iq3xxs_code_2_18 = scalar.constant 706.0 : f32
+  %iq3xxs_code_2_19 = scalar.constant 720.0 : f32
+  %iq3xxs_code_2_20 = scalar.constant 729.0 : f32
+  %iq3xxs_code_2_21 = scalar.constant 742.0 : f32
+  %iq3xxs_code_2_22 = scalar.constant 758.0 : f32
+  %iq3xxs_code_2_23 = scalar.constant 769.0 : f32
+  %iq3xxs_code_2_24 = scalar.constant 773.0 : f32
+  %iq3xxs_code_2_25 = scalar.constant 808.0 : f32
+  %iq3xxs_code_2_26 = scalar.constant 848.0 : f32
+  %iq3xxs_code_2_27 = scalar.constant 852.0 : f32
+  %iq3xxs_code_2_28 = scalar.constant 870.0 : f32
+  %iq3xxs_code_2_29 = scalar.constant 889.0 : f32
+  %iq3xxs_code_2_30 = scalar.constant 901.0 : f32
+  %iq3xxs_code_2_31 = scalar.constant 978.0 : f32
+  %iq3xxs_code_2 = vector.from_elements %iq3xxs_code_2_0, %iq3xxs_code_2_1, %iq3xxs_code_2_2, %iq3xxs_code_2_3, %iq3xxs_code_2_4, %iq3xxs_code_2_5, %iq3xxs_code_2_6, %iq3xxs_code_2_7, %iq3xxs_code_2_8, %iq3xxs_code_2_9, %iq3xxs_code_2_10, %iq3xxs_code_2_11, %iq3xxs_code_2_12, %iq3xxs_code_2_13, %iq3xxs_code_2_14, %iq3xxs_code_2_15, %iq3xxs_code_2_16, %iq3xxs_code_2_17, %iq3xxs_code_2_18, %iq3xxs_code_2_19, %iq3xxs_code_2_20, %iq3xxs_code_2_21, %iq3xxs_code_2_22, %iq3xxs_code_2_23, %iq3xxs_code_2_24, %iq3xxs_code_2_25, %iq3xxs_code_2_26, %iq3xxs_code_2_27, %iq3xxs_code_2_28, %iq3xxs_code_2_29, %iq3xxs_code_2_30, %iq3xxs_code_2_31 : vector<32xf32>
+  %iq3xxs_code_3_0 = scalar.constant 992.0 : f32
+  %iq3xxs_code_3_1 = scalar.constant 1024.0 : f32
+  %iq3xxs_code_3_2 = scalar.constant 1026.0 : f32
+  %iq3xxs_code_3_3 = scalar.constant 1033.0 : f32
+  %iq3xxs_code_3_4 = scalar.constant 1035.0 : f32
+  %iq3xxs_code_3_5 = scalar.constant 1040.0 : f32
+  %iq3xxs_code_3_6 = scalar.constant 1042.0 : f32
+  %iq3xxs_code_3_7 = scalar.constant 1046.0 : f32
+  %iq3xxs_code_3_8 = scalar.constant 1049.0 : f32
+  %iq3xxs_code_3_9 = scalar.constant 1058.0 : f32
+  %iq3xxs_code_3_10 = scalar.constant 1089.0 : f32
+  %iq3xxs_code_3_11 = scalar.constant 1091.0 : f32
+  %iq3xxs_code_3_12 = scalar.constant 1093.0 : f32
+  %iq3xxs_code_3_13 = scalar.constant 1096.0 : f32
+  %iq3xxs_code_3_14 = scalar.constant 1098.0 : f32
+  %iq3xxs_code_3_15 = scalar.constant 1105.0 : f32
+  %iq3xxs_code_3_16 = scalar.constant 1112.0 : f32
+  %iq3xxs_code_3_17 = scalar.constant 1139.0 : f32
+  %iq3xxs_code_3_18 = scalar.constant 1143.0 : f32
+  %iq3xxs_code_3_19 = scalar.constant 1144.0 : f32
+  %iq3xxs_code_3_20 = scalar.constant 1152.0 : f32
+  %iq3xxs_code_3_21 = scalar.constant 1154.0 : f32
+  %iq3xxs_code_3_22 = scalar.constant 1161.0 : f32
+  %iq3xxs_code_3_23 = scalar.constant 1167.0 : f32
+  %iq3xxs_code_3_24 = scalar.constant 1168.0 : f32
+  %iq3xxs_code_3_25 = scalar.constant 1170.0 : f32
+  %iq3xxs_code_3_26 = scalar.constant 1183.0 : f32
+  %iq3xxs_code_3_27 = scalar.constant 1184.0 : f32
+  %iq3xxs_code_3_28 = scalar.constant 1197.0 : f32
+  %iq3xxs_code_3_29 = scalar.constant 1217.0 : f32
+  %iq3xxs_code_3_30 = scalar.constant 1224.0 : f32
+  %iq3xxs_code_3_31 = scalar.constant 1228.0 : f32
+  %iq3xxs_code_3 = vector.from_elements %iq3xxs_code_3_0, %iq3xxs_code_3_1, %iq3xxs_code_3_2, %iq3xxs_code_3_3, %iq3xxs_code_3_4, %iq3xxs_code_3_5, %iq3xxs_code_3_6, %iq3xxs_code_3_7, %iq3xxs_code_3_8, %iq3xxs_code_3_9, %iq3xxs_code_3_10, %iq3xxs_code_3_11, %iq3xxs_code_3_12, %iq3xxs_code_3_13, %iq3xxs_code_3_14, %iq3xxs_code_3_15, %iq3xxs_code_3_16, %iq3xxs_code_3_17, %iq3xxs_code_3_18, %iq3xxs_code_3_19, %iq3xxs_code_3_20, %iq3xxs_code_3_21, %iq3xxs_code_3_22, %iq3xxs_code_3_23, %iq3xxs_code_3_24, %iq3xxs_code_3_25, %iq3xxs_code_3_26, %iq3xxs_code_3_27, %iq3xxs_code_3_28, %iq3xxs_code_3_29, %iq3xxs_code_3_30, %iq3xxs_code_3_31 : vector<32xf32>
+  %iq3xxs_code_4_0 = scalar.constant 1272.0 : f32
+  %iq3xxs_code_4_1 = scalar.constant 1276.0 : f32
+  %iq3xxs_code_4_2 = scalar.constant 1309.0 : f32
+  %iq3xxs_code_4_3 = scalar.constant 1323.0 : f32
+  %iq3xxs_code_4_4 = scalar.constant 1347.0 : f32
+  %iq3xxs_code_4_5 = scalar.constant 1367.0 : f32
+  %iq3xxs_code_4_6 = scalar.constant 1377.0 : f32
+  %iq3xxs_code_4_7 = scalar.constant 1404.0 : f32
+  %iq3xxs_code_4_8 = scalar.constant 1473.0 : f32
+  %iq3xxs_code_4_9 = scalar.constant 1475.0 : f32
+  %iq3xxs_code_4_10 = scalar.constant 1486.0 : f32
+  %iq3xxs_code_4_11 = scalar.constant 1509.0 : f32
+  %iq3xxs_code_4_12 = scalar.constant 1537.0 : f32
+  %iq3xxs_code_4_13 = scalar.constant 1544.0 : f32
+  %iq3xxs_code_4_14 = scalar.constant 1546.0 : f32
+  %iq3xxs_code_4_15 = scalar.constant 1553.0 : f32
+  %iq3xxs_code_4_16 = scalar.constant 1555.0 : f32
+  %iq3xxs_code_4_17 = scalar.constant 1576.0 : f32
+  %iq3xxs_code_4_18 = scalar.constant 1589.0 : f32
+  %iq3xxs_code_4_19 = scalar.constant 1594.0 : f32
+  %iq3xxs_code_4_20 = scalar.constant 1600.0 : f32
+  %iq3xxs_code_4_21 = scalar.constant 1602.0 : f32
+  %iq3xxs_code_4_22 = scalar.constant 1616.0 : f32
+  %iq3xxs_code_4_23 = scalar.constant 1625.0 : f32
+  %iq3xxs_code_4_24 = scalar.constant 1636.0 : f32
+  %iq3xxs_code_4_25 = scalar.constant 1638.0 : f32
+  %iq3xxs_code_4_26 = scalar.constant 1665.0 : f32
+  %iq3xxs_code_4_27 = scalar.constant 1667.0 : f32
+  %iq3xxs_code_4_28 = scalar.constant 1672.0 : f32
+  %iq3xxs_code_4_29 = scalar.constant 1685.0 : f32
+  %iq3xxs_code_4_30 = scalar.constant 1706.0 : f32
+  %iq3xxs_code_4_31 = scalar.constant 1722.0 : f32
+  %iq3xxs_code_4 = vector.from_elements %iq3xxs_code_4_0, %iq3xxs_code_4_1, %iq3xxs_code_4_2, %iq3xxs_code_4_3, %iq3xxs_code_4_4, %iq3xxs_code_4_5, %iq3xxs_code_4_6, %iq3xxs_code_4_7, %iq3xxs_code_4_8, %iq3xxs_code_4_9, %iq3xxs_code_4_10, %iq3xxs_code_4_11, %iq3xxs_code_4_12, %iq3xxs_code_4_13, %iq3xxs_code_4_14, %iq3xxs_code_4_15, %iq3xxs_code_4_16, %iq3xxs_code_4_17, %iq3xxs_code_4_18, %iq3xxs_code_4_19, %iq3xxs_code_4_20, %iq3xxs_code_4_21, %iq3xxs_code_4_22, %iq3xxs_code_4_23, %iq3xxs_code_4_24, %iq3xxs_code_4_25, %iq3xxs_code_4_26, %iq3xxs_code_4_27, %iq3xxs_code_4_28, %iq3xxs_code_4_29, %iq3xxs_code_4_30, %iq3xxs_code_4_31 : vector<32xf32>
+  %iq3xxs_code_5_0 = scalar.constant 1737.0 : f32
+  %iq3xxs_code_5_1 = scalar.constant 1755.0 : f32
+  %iq3xxs_code_5_2 = scalar.constant 1816.0 : f32
+  %iq3xxs_code_5_3 = scalar.constant 1831.0 : f32
+  %iq3xxs_code_5_4 = scalar.constant 1850.0 : f32
+  %iq3xxs_code_5_5 = scalar.constant 1856.0 : f32
+  %iq3xxs_code_5_6 = scalar.constant 1862.0 : f32
+  %iq3xxs_code_5_7 = scalar.constant 1874.0 : f32
+  %iq3xxs_code_5_8 = scalar.constant 1901.0 : f32
+  %iq3xxs_code_5_9 = scalar.constant 1932.0 : f32
+  %iq3xxs_code_5_10 = scalar.constant 1950.0 : f32
+  %iq3xxs_code_5_11 = scalar.constant 1971.0 : f32
+  %iq3xxs_code_5_12 = scalar.constant 2011.0 : f32
+  %iq3xxs_code_5_13 = scalar.constant 2032.0 : f32
+  %iq3xxs_code_5_14 = scalar.constant 2052.0 : f32
+  %iq3xxs_code_5_15 = scalar.constant 2063.0 : f32
+  %iq3xxs_code_5_16 = scalar.constant 2077.0 : f32
+  %iq3xxs_code_5_17 = scalar.constant 2079.0 : f32
+  %iq3xxs_code_5_18 = scalar.constant 2091.0 : f32
+  %iq3xxs_code_5_19 = scalar.constant 2095.0 : f32
+  %iq3xxs_code_5_20 = scalar.constant 2172.0 : f32
+  %iq3xxs_code_5_21 = scalar.constant 2192.0 : f32
+  %iq3xxs_code_5_22 = scalar.constant 2207.0 : f32
+  %iq3xxs_code_5_23 = scalar.constant 2208.0 : f32
+  %iq3xxs_code_5_24 = scalar.constant 2224.0 : f32
+  %iq3xxs_code_5_25 = scalar.constant 2230.0 : f32
+  %iq3xxs_code_5_26 = scalar.constant 2247.0 : f32
+  %iq3xxs_code_5_27 = scalar.constant 2277.0 : f32
+  %iq3xxs_code_5_28 = scalar.constant 2308.0 : f32
+  %iq3xxs_code_5_29 = scalar.constant 2345.0 : f32
+  %iq3xxs_code_5_30 = scalar.constant 2356.0 : f32
+  %iq3xxs_code_5_31 = scalar.constant 2389.0 : f32
+  %iq3xxs_code_5 = vector.from_elements %iq3xxs_code_5_0, %iq3xxs_code_5_1, %iq3xxs_code_5_2, %iq3xxs_code_5_3, %iq3xxs_code_5_4, %iq3xxs_code_5_5, %iq3xxs_code_5_6, %iq3xxs_code_5_7, %iq3xxs_code_5_8, %iq3xxs_code_5_9, %iq3xxs_code_5_10, %iq3xxs_code_5_11, %iq3xxs_code_5_12, %iq3xxs_code_5_13, %iq3xxs_code_5_14, %iq3xxs_code_5_15, %iq3xxs_code_5_16, %iq3xxs_code_5_17, %iq3xxs_code_5_18, %iq3xxs_code_5_19, %iq3xxs_code_5_20, %iq3xxs_code_5_21, %iq3xxs_code_5_22, %iq3xxs_code_5_23, %iq3xxs_code_5_24, %iq3xxs_code_5_25, %iq3xxs_code_5_26, %iq3xxs_code_5_27, %iq3xxs_code_5_28, %iq3xxs_code_5_29, %iq3xxs_code_5_30, %iq3xxs_code_5_31 : vector<32xf32>
+  %iq3xxs_code_6_0 = scalar.constant 2403.0 : f32
+  %iq3xxs_code_6_1 = scalar.constant 2424.0 : f32
+  %iq3xxs_code_6_2 = scalar.constant 2501.0 : f32
+  %iq3xxs_code_6_3 = scalar.constant 2504.0 : f32
+  %iq3xxs_code_6_4 = scalar.constant 2506.0 : f32
+  %iq3xxs_code_6_5 = scalar.constant 2520.0 : f32
+  %iq3xxs_code_6_6 = scalar.constant 2570.0 : f32
+  %iq3xxs_code_6_7 = scalar.constant 2593.0 : f32
+  %iq3xxs_code_6_8 = scalar.constant 2616.0 : f32
+  %iq3xxs_code_6_9 = scalar.constant 2624.0 : f32
+  %iq3xxs_code_6_10 = scalar.constant 2630.0 : f32
+  %iq3xxs_code_6_11 = scalar.constant 2646.0 : f32
+  %iq3xxs_code_6_12 = scalar.constant 2669.0 : f32
+  %iq3xxs_code_6_13 = scalar.constant 2700.0 : f32
+  %iq3xxs_code_6_14 = scalar.constant 2714.0 : f32
+  %iq3xxs_code_6_15 = scalar.constant 2746.0 : f32
+  %iq3xxs_code_6_16 = scalar.constant 2754.0 : f32
+  %iq3xxs_code_6_17 = scalar.constant 2795.0 : f32
+  %iq3xxs_code_6_18 = scalar.constant 2824.0 : f32
+  %iq3xxs_code_6_19 = scalar.constant 2835.0 : f32
+  %iq3xxs_code_6_20 = scalar.constant 2839.0 : f32
+  %iq3xxs_code_6_21 = scalar.constant 2874.0 : f32
+  %iq3xxs_code_6_22 = scalar.constant 2882.0 : f32
+  %iq3xxs_code_6_23 = scalar.constant 2905.0 : f32
+  %iq3xxs_code_6_24 = scalar.constant 2984.0 : f32
+  %iq3xxs_code_6_25 = scalar.constant 3028.0 : f32
+  %iq3xxs_code_6_26 = scalar.constant 3042.0 : f32
+  %iq3xxs_code_6_27 = scalar.constant 3092.0 : f32
+  %iq3xxs_code_6_28 = scalar.constant 3108.0 : f32
+  %iq3xxs_code_6_29 = scalar.constant 3110.0 : f32
+  %iq3xxs_code_6_30 = scalar.constant 3124.0 : f32
+  %iq3xxs_code_6_31 = scalar.constant 3153.0 : f32
+  %iq3xxs_code_6 = vector.from_elements %iq3xxs_code_6_0, %iq3xxs_code_6_1, %iq3xxs_code_6_2, %iq3xxs_code_6_3, %iq3xxs_code_6_4, %iq3xxs_code_6_5, %iq3xxs_code_6_6, %iq3xxs_code_6_7, %iq3xxs_code_6_8, %iq3xxs_code_6_9, %iq3xxs_code_6_10, %iq3xxs_code_6_11, %iq3xxs_code_6_12, %iq3xxs_code_6_13, %iq3xxs_code_6_14, %iq3xxs_code_6_15, %iq3xxs_code_6_16, %iq3xxs_code_6_17, %iq3xxs_code_6_18, %iq3xxs_code_6_19, %iq3xxs_code_6_20, %iq3xxs_code_6_21, %iq3xxs_code_6_22, %iq3xxs_code_6_23, %iq3xxs_code_6_24, %iq3xxs_code_6_25, %iq3xxs_code_6_26, %iq3xxs_code_6_27, %iq3xxs_code_6_28, %iq3xxs_code_6_29, %iq3xxs_code_6_30, %iq3xxs_code_6_31 : vector<32xf32>
+  %iq3xxs_code_7_0 = scalar.constant 3185.0 : f32
+  %iq3xxs_code_7_1 = scalar.constant 3215.0 : f32
+  %iq3xxs_code_7_2 = scalar.constant 3252.0 : f32
+  %iq3xxs_code_7_3 = scalar.constant 3288.0 : f32
+  %iq3xxs_code_7_4 = scalar.constant 3294.0 : f32
+  %iq3xxs_code_7_5 = scalar.constant 3364.0 : f32
+  %iq3xxs_code_7_6 = scalar.constant 3397.0 : f32
+  %iq3xxs_code_7_7 = scalar.constant 3434.0 : f32
+  %iq3xxs_code_7_8 = scalar.constant 3483.0 : f32
+  %iq3xxs_code_7_9 = scalar.constant 3523.0 : f32
+  %iq3xxs_code_7_10 = scalar.constant 3537.0 : f32
+  %iq3xxs_code_7_11 = scalar.constant 3587.0 : f32
+  %iq3xxs_code_7_12 = scalar.constant 3589.0 : f32
+  %iq3xxs_code_7_13 = scalar.constant 3591.0 : f32
+  %iq3xxs_code_7_14 = scalar.constant 3592.0 : f32
+  %iq3xxs_code_7_15 = scalar.constant 3610.0 : f32
+  %iq3xxs_code_7_16 = scalar.constant 3626.0 : f32
+  %iq3xxs_code_7_17 = scalar.constant 3670.0 : f32
+  %iq3xxs_code_7_18 = scalar.constant 3680.0 : f32
+  %iq3xxs_code_7_19 = scalar.constant 3722.0 : f32
+  %iq3xxs_code_7_20 = scalar.constant 3749.0 : f32
+  %iq3xxs_code_7_21 = scalar.constant 3754.0 : f32
+  %iq3xxs_code_7_22 = scalar.constant 3776.0 : f32
+  %iq3xxs_code_7_23 = scalar.constant 3789.0 : f32
+  %iq3xxs_code_7_24 = scalar.constant 3803.0 : f32
+  %iq3xxs_code_7_25 = scalar.constant 3824.0 : f32
+  %iq3xxs_code_7_26 = scalar.constant 3857.0 : f32
+  %iq3xxs_code_7_27 = scalar.constant 3873.0 : f32
+  %iq3xxs_code_7_28 = scalar.constant 3904.0 : f32
+  %iq3xxs_code_7_29 = scalar.constant 3906.0 : f32
+  %iq3xxs_code_7_30 = scalar.constant 3924.0 : f32
+  %iq3xxs_code_7_31 = scalar.constant 3992.0 : f32
+  %iq3xxs_code_7 = vector.from_elements %iq3xxs_code_7_0, %iq3xxs_code_7_1, %iq3xxs_code_7_2, %iq3xxs_code_7_3, %iq3xxs_code_7_4, %iq3xxs_code_7_5, %iq3xxs_code_7_6, %iq3xxs_code_7_7, %iq3xxs_code_7_8, %iq3xxs_code_7_9, %iq3xxs_code_7_10, %iq3xxs_code_7_11, %iq3xxs_code_7_12, %iq3xxs_code_7_13, %iq3xxs_code_7_14, %iq3xxs_code_7_15, %iq3xxs_code_7_16, %iq3xxs_code_7_17, %iq3xxs_code_7_18, %iq3xxs_code_7_19, %iq3xxs_code_7_20, %iq3xxs_code_7_21, %iq3xxs_code_7_22, %iq3xxs_code_7_23, %iq3xxs_code_7_24, %iq3xxs_code_7_25, %iq3xxs_code_7_26, %iq3xxs_code_7_27, %iq3xxs_code_7_28, %iq3xxs_code_7_29, %iq3xxs_code_7_30, %iq3xxs_code_7_31 : vector<32xf32>
+  %is_chunk1 = scalar.cmpi eq, %chunk_i32, %chunk_id1 : i32
+  %sel1 = scf.select %is_chunk1, %iq3xxs_code_1, %iq3xxs_code_0 : vector<32xf32>
+  %is_chunk2 = scalar.cmpi eq, %chunk_i32, %chunk_id2 : i32
+  %sel2 = scf.select %is_chunk2, %iq3xxs_code_2, %sel1 : vector<32xf32>
+  %is_chunk3 = scalar.cmpi eq, %chunk_i32, %chunk_id3 : i32
+  %sel3 = scf.select %is_chunk3, %iq3xxs_code_3, %sel2 : vector<32xf32>
+  %is_chunk4 = scalar.cmpi eq, %chunk_i32, %chunk_id4 : i32
+  %sel4 = scf.select %is_chunk4, %iq3xxs_code_4, %sel3 : vector<32xf32>
+  %is_chunk5 = scalar.cmpi eq, %chunk_i32, %chunk_id5 : i32
+  %sel5 = scf.select %is_chunk5, %iq3xxs_code_5, %sel4 : vector<32xf32>
+  %is_chunk6 = scalar.cmpi eq, %chunk_i32, %chunk_id6 : i32
+  %sel6 = scf.select %is_chunk6, %iq3xxs_code_6, %sel5 : vector<32xf32>
+  %is_chunk7 = scalar.cmpi eq, %chunk_i32, %chunk_id7 : i32
+  %sel7 = scf.select %is_chunk7, %iq3xxs_code_7, %sel6 : vector<32xf32>
+  %v = vector.table.lookup %sel7[%codes] : vector<32xf32>, vector<1xi32> -> vector<1xf32>
+  %v_f32 = vector.extract %v[0] : vector<1xf32> -> f32
+  %code = scalar.fptoui %v_f32 : f32 to i32
+  func.return %code : i32
+}
+
+// the four values of a 12-bit IQ3_XXS grid code, with sign bits 4 half .. +3 of %signs8, times %scale
+func.def inline @ggml_iq3xxs_code_vector4(%code: i32, %half: i32, %signs8: i32, %scale: f32) -> (vector<4xf32>) {
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c7_i32 = scalar.constant 7 : i32
+  %c8_i32 = scalar.constant 8 : i32
+  %s0 = scalar.constant 0 : i32
+  %s3 = scalar.constant 3 : i32
+  %s6 = scalar.constant 6 : i32
+  %s9 = scalar.constant 9 : i32
+  %shift3 = vector.from_elements %s0, %s3, %s6, %s9 : vector<4xi32>
+  %cv = vector.splat %code : vector<4xi32>
+  %lvs = vector.shrui %cv, %shift3 : vector<4xi32>
+  %seven = vector.splat %c7_i32 : vector<4xi32>
+  %lv = vector.andi %lvs, %seven : vector<4xi32>
+  %eight = vector.splat %c8_i32 : vector<4xi32>
+  %four = vector.splat %c4_i32 : vector<4xi32>
+  %lv8 = vector.muli %lv, %eight : vector<4xi32>
+  %base = vector.addi %lv8, %four : vector<4xi32>
+  // level 7 is the only one with all three bits set: bump = 2 (L & L >> 1 & L >> 2 & 1)
+  %one7 = vector.splat %c1_i32 : vector<4xi32>
+  %two7 = vector.splat %c2_i32 : vector<4xi32>
+  %l1 = vector.shrui %lv, %one7 : vector<4xi32>
+  %l2 = vector.shrui %lv, %two7 : vector<4xi32>
+  %a01 = vector.andi %lv, %l1 : vector<4xi32>
+  %a012 = vector.andi %a01, %l2 : vector<4xi32>
+  %is7 = vector.andi %a012, %one7 : vector<4xi32>
+  %bump = vector.shli %is7, %one7 : vector<4xi32>
+  %mag = vector.addi %base, %bump : vector<4xi32>
+  %sbase = scalar.muli %half, %c4_i32 : i32
+  %c1v = scalar.constant 1 : i32
+  %c2v = scalar.constant 2 : i32
+  %c3v = scalar.constant 3 : i32
+  %sh0 = vector.from_elements %s0, %c1v, %c2v, %c3v : vector<4xi32>
+  %sbv = vector.splat %sbase : vector<4xi32>
+  %sh = vector.addi %sh0, %sbv : vector<4xi32>
+  %sv = vector.splat %signs8 : vector<4xi32>
+  %sb0 = vector.shrui %sv, %sh : vector<4xi32>
+  %one = vector.splat %c1_i32 : vector<4xi32>
+  %sb = vector.andi %sb0, %one : vector<4xi32>
+  %sb2 = vector.shli %sb, %one : vector<4xi32>
+  %sgn = vector.subi %one, %sb2 : vector<4xi32>
+  %signed = vector.muli %mag, %sgn : vector<4xi32>
+  %f = vector.sitofp %signed : vector<4xi32> to vector<4xf32>
+  %scv = vector.splat %scale : vector<4xf32>
+  %result = vector.mulf %f, %scv : vector<4xf32>
+  func.return %result : vector<4xf32>
+}
+
+// IQ3_XXS (98 bytes: d, qs[64] grid indices, 8 x u32 scales and signs; dequantize_row_iq3_xxs). Group g
+// has grid indices qs[8 g .. 8 g + 7] (bytes 2 + 8 g ..) and aux = u32 at byte 66 + 4 g: four 7-bit sign
+// groups (slot l at bit 7 l) and a 4-bit scale on top: value = d * (0.5 + (aux >> 28)) * 0.5 * grid * sign.
+// Packet p covers slot p / 2, grid entry 2 (p / 2) + p % 2 (its four values, sign bits 4 (p % 2) ..).
+func.def inline @ggml_iq3xxs_f32_vector4(%weight: buffer, %row_byte_base: offset, %iq3_block: index, %iq3_group: index, %packet: index) -> (vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c33 = index.constant 33 : index
+  %c7_i32 = scalar.constant 7 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c28_i32 = scalar.constant 28 : i32
+  %c127_i32 = scalar.constant 127 : i32
+  %c05_f32 = scalar.constant 0.5 : f32
+  %block_bytes = index.constant 98 : offset
+  %block_byte_add = index.scale %iq3_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %hv = buffer.view %weight[%block_byte_base] : buffer -> view<49xf16>
+  %wv = buffer.view %weight[%block_byte_base] : buffer -> view<49xi16>
+  %bv = buffer.view %weight[%block_byte_base] : buffer -> view<98xi8>
+  %g = index.assume %iq3_group [range(%iq3_group, 0, 7)] : index
+  %p = index.assume %packet [range(%packet, 0, 7)] : index
+  %slot = index.div %p, %c2 : index
+  %half = index.rem %p, %c2 : index
+  %g8 = index.mul %g, %c8 : index
+  %idx0 = index.add %g8, %c2 : index
+  %idx_at = index.add %idx0, %p : index
+  %g2 = index.add %g, %g : index
+  %aux_w0 = index.add %c33, %g2 : index
+  %aux_w1 = index.add %aux_w0, %c1 : index
+  %d_f16 = view.load %hv[%c0] : view<49xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %gi_i8 = view.load %bv[%idx_at] : view<98xi8> -> i8
+  %gi = scalar.extui %gi_i8 : i8 to i32
+  %w0_i16 = view.load %wv[%aux_w0] : view<49xi16> -> i16
+  %w1_i16 = view.load %wv[%aux_w1] : view<49xi16> -> i16
+  %w0 = scalar.extui %w0_i16 : i16 to i32
+  %w1 = scalar.extui %w1_i16 : i16 to i32
+  %w1s = scalar.shli %w1, %c16_i32 : i32
+  %aux = scalar.ori %w0, %w1s : i32
+  %sc4 = scalar.shrui %aux, %c28_i32 : i32
+  %sc_f = scalar.uitofp %sc4 : i32 to f32
+  %sc_plus = scalar.addf %sc_f, %c05_f32 : f32
+  %ds = scalar.mulf %d, %sc_plus : f32
+  %scale = scalar.mulf %ds, %c05_f32 : f32
+  %slot_i32 = index.cast %slot : index to i32
+  %sshift = scalar.muli %slot_i32, %c7_i32 : i32
+  %sgrp = scalar.shrui %aux, %sshift : i32
+  %signs7 = scalar.andi %sgrp, %c127_i32 : i32
+  %signs8 = func.call @ggml_iq2_signs8(%signs7) : (i32) -> (i32)
+  %code = func.call @ggml_iq3xxs_grid_code_i32(%gi) : (i32) -> (i32)
+  %half_i32 = index.cast %half : index to i32
+  %result = func.call @ggml_iq3xxs_code_vector4(%code, %half_i32, %signs8, %scale) : (i32, i32, i32, f32) -> (vector<4xf32>)
+  func.return %result : vector<4xf32>
+}
+
+func.def inline @ggml_iq3xxs_f16_vector4(%weight: buffer, %row_byte_base: offset, %iq3_block: index, %iq3_group: index, %packet: index) -> (vector<4xf16>) {
+  %values_f32 = func.call @ggml_iq3xxs_f32_vector4(%weight, %row_byte_base, %iq3_block, %iq3_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
+  %values = vector.fptrunc %values_f32 : vector<4xf32> to vector<4xf16>
+  func.return %values : vector<4xf16>
+}
 
 func.def inline @ggml_iq3s_grid_f32_halves() -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>) {
   %grid_low0 = scalar.constant 257.0 : f32
@@ -8163,6 +8573,8 @@ func.def inline @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offse
   %iq2_xs_format = index.constant 25 : index
   %iq2_xxs_tile_bytes = index.constant 66 : offset
   %iq2_xxs_format = index.constant 24 : index
+  %iq3_xxs_tile_bytes = index.constant 98 : offset
+  %iq3_xxs_format = index.constant 28 : index
   %q3_tile_bytes = index.constant 110 : offset
   %q4_tile_bytes = index.constant 144 : offset
   %q5_tile_bytes = index.constant 176 : offset
@@ -8206,7 +8618,9 @@ func.def inline @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offse
   %is_iq2_xs = index.cmp eq, %weight_format, %iq2_xs_format : index
   %selected_iq2_xxs = scf.select %is_iq2_xxs, %iq2_xxs_tile_bytes, %selected_q2 : offset
   %selected_iq2_xs = scf.select %is_iq2_xs, %iq2_xs_tile_bytes, %selected_iq2_xxs : offset
-  %selected_q3 = scf.select %is_q3, %q3_tile_bytes, %selected_iq2_xs : offset
+  %is_iq3_xxs = index.cmp eq, %weight_format, %iq3_xxs_format : index
+  %selected_iq3_xxs = scf.select %is_iq3_xxs, %iq3_xxs_tile_bytes, %selected_iq2_xs : offset
+  %selected_q3 = scf.select %is_q3, %q3_tile_bytes, %selected_iq3_xxs : offset
   %selected_q4 = scf.select %is_q4, %q4_tile_bytes, %selected_q3 : offset
   %selected_q5 = scf.select %is_q5, %q5_tile_bytes, %selected_q4 : offset
   %selected_q6 = scf.select %is_q6, %q6_tile_bytes, %selected_q5 : offset
@@ -8282,7 +8696,10 @@ func.def inline @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_si
   %uses_k_tile10 = index.cmp eq, %weight_format, %iq2_xs_format : index
   %uses_k_tile9_10 = scalar.ori %uses_k_tile9, %uses_k_tile10 : i1
   %uses_k_tile08 = scalar.ori %uses_k_tile07, %uses_k_tile8 : i1
-  %uses_k_tile = scalar.ori %uses_k_tile08, %uses_k_tile9_10 : i1
+  %iq3_xxs_format = index.constant 28 : index
+  %uses_k_tile13 = index.cmp eq, %weight_format, %iq3_xxs_format : index
+  %uses_k_tile0810 = scalar.ori %uses_k_tile08, %uses_k_tile9_10 : i1
+  %uses_k_tile = scalar.ori %uses_k_tile0810, %uses_k_tile13 : i1
   %tile_bytes = func.call @ggml_dequant_weight_tile_bytes(%weight_format) : (index) -> (offset)
   %tile_count = index.div %hidden_size, %c256 : index
   %tile_row_bytes = index.scale %tile_count, %tile_bytes : index, offset -> offset
@@ -8331,7 +8748,7 @@ func.def inline @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_si
 //   10: Q1_0
 //   12/11/4/5/6: Q2_K/Q3_K/Q4_K/Q5_K/Q6_K
 //   40/41/50/51: Q4_0/Q4_1/Q5_0/Q5_1
-//   24/25/22/20/21/23: IQ2_XXS/IQ2_XS/IQ2_S/IQ4_NL/IQ3_S/IQ4_XS
+//   24/25/22/28/20/21/23: IQ2_XXS/IQ2_XS/IQ2_S/IQ3_XXS/IQ4_NL/IQ3_S/IQ4_XS
 //   80/81: Q8_0/Q8_1
 //   16/30/32: F16/BF16/F32
 func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf16>) {
@@ -8362,6 +8779,8 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %iq2_xs_format = index.constant 25 : index
   %is_iq2_xxs = index.cmp eq, %weight_format, %iq2_xxs_format : index
   %is_iq2_xs = index.cmp eq, %weight_format, %iq2_xs_format : index
+  %iq3_xxs_format = index.constant 28 : index
+  %is_iq3_xxs = index.cmp eq, %weight_format, %iq3_xxs_format : index
   %is_q2 = index.cmp eq, %weight_format, %q2_format : index
   %is_q3 = index.cmp eq, %weight_format, %c3 : index
   %is_q4 = index.cmp eq, %weight_format, %c4 : index
@@ -8400,6 +8819,12 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   }
   %iq2_xs_values = scf.if %is_iq2_xs -> (vector<4xf16>) {
     %values = func.call @ggml_iq2xs_f16_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+    scf.yield %values : vector<4xf16>
+  } else {
+    scf.yield %zero : vector<4xf16>
+  }
+  %iq3_xxs_values = scf.if %is_iq3_xxs -> (vector<4xf16>) {
+    %values = func.call @ggml_iq3xxs_f16_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf16>)
     scf.yield %values : vector<4xf16>
   } else {
     scf.yield %zero : vector<4xf16>
@@ -8521,7 +8946,8 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %selected_q2 = scf.select %is_q2, %q2_values, %selected_q1_0 : vector<4xf16>
   %selected_iq2_xxs = scf.select %is_iq2_xxs, %iq2_xxs_values, %selected_q2 : vector<4xf16>
   %selected_iq2_xs = scf.select %is_iq2_xs, %iq2_xs_values, %selected_iq2_xxs : vector<4xf16>
-  %selected_q3 = scf.select %is_q3, %q3_values, %selected_iq2_xs : vector<4xf16>
+  %selected_iq3_xxs = scf.select %is_iq3_xxs, %iq3_xxs_values, %selected_iq2_xs : vector<4xf16>
+  %selected_q3 = scf.select %is_q3, %q3_values, %selected_iq3_xxs : vector<4xf16>
   %selected_q4 = scf.select %is_q4, %q4_values, %selected_q3 : vector<4xf16>
   %selected_q5 = scf.select %is_q5, %q5_values, %selected_q4 : vector<4xf16>
   %selected_q6 = scf.select %is_q6, %q6_values, %selected_q5 : vector<4xf16>
@@ -8569,6 +8995,8 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %iq2_xs_format = index.constant 25 : index
   %is_iq2_xxs = index.cmp eq, %weight_format, %iq2_xxs_format : index
   %is_iq2_xs = index.cmp eq, %weight_format, %iq2_xs_format : index
+  %iq3_xxs_format = index.constant 28 : index
+  %is_iq3_xxs = index.cmp eq, %weight_format, %iq3_xxs_format : index
   %is_q2 = index.cmp eq, %weight_format, %q2_format : index
   %is_q3 = index.cmp eq, %weight_format, %c3 : index
   %is_q4 = index.cmp eq, %weight_format, %c4 : index
@@ -8603,6 +9031,12 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   }
   %iq2_xs_values = scf.if %is_iq2_xs -> (vector<4xf32>) {
     %values = func.call @ggml_iq2xs_f32_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
+    scf.yield %values : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
+  %iq3_xxs_values = scf.if %is_iq3_xxs -> (vector<4xf32>) {
+    %values = func.call @ggml_iq3xxs_f32_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
     scf.yield %values : vector<4xf32>
   } else {
     scf.yield %zero : vector<4xf32>
@@ -8719,7 +9153,8 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %selected_q2 = scf.select %is_q2, %q2_values, %selected_q1_0 : vector<4xf32>
   %selected_iq2_xxs = scf.select %is_iq2_xxs, %iq2_xxs_values, %selected_q2 : vector<4xf32>
   %selected_iq2_xs = scf.select %is_iq2_xs, %iq2_xs_values, %selected_iq2_xxs : vector<4xf32>
-  %selected_q3 = scf.select %is_q3, %q3_values, %selected_iq2_xs : vector<4xf32>
+  %selected_iq3_xxs = scf.select %is_iq3_xxs, %iq3_xxs_values, %selected_iq2_xs : vector<4xf32>
+  %selected_q3 = scf.select %is_q3, %q3_values, %selected_iq3_xxs : vector<4xf32>
   %selected_q4 = scf.select %is_q4, %q4_values, %selected_q3 : vector<4xf32>
   %selected_q5 = scf.select %is_q5, %q5_values, %selected_q4 : vector<4xf32>
   %selected_q6 = scf.select %is_q6, %q6_values, %selected_q5 : vector<4xf32>
