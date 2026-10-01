@@ -14,6 +14,12 @@
 #include <utility>
 #include <vector>
 
+// Q5_K/IQ4_XS prefill matmuls take the q8_1 x4 kernel like Q4_K (default on;
+// GGML_HRX_Q8_PREFILL_RELAX=0 restores the previous policy). Defined in dispatch-mul-mat.cpp.
+namespace ggml::hrx {
+bool common_q8_prefill_relaxed();
+}  // namespace ggml::hrx
+
 namespace ggml::hrx {
 
 struct CommonMulMatMatch {
