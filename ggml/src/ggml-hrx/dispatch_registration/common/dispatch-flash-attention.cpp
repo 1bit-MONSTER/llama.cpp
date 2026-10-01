@@ -50,6 +50,10 @@ static constexpr int64_t kDecodeKvTileSize          = 64;
 // the scheduler falls through to the general flash_attention_f32_f16_wmma dispatch instead (lower
 // priority, still correct here, just not split-parallelized for very long decode contexts).
 static constexpr int64_t kDecodeSplitMaxKeyValueTokenCapacity = 32768;
+// ggml.copy_transpose_f16 declares row_count and column_count in [32, 32768] (copy_f32.loom).
+// Past that the JIT refuses the specialization ("violates constraint 'range'") and the whole
+// prompt batch fails, so a longer context keeps V in the row-major cache layout instead.
+static constexpr int64_t kCopyTransposeF16MaxExtent = 32768;
 static constexpr int64_t kPrefillQkHeadSizeBlock    = 16;
 static constexpr int64_t kPrefillValueHeadSizeBlock = 64;
 static constexpr int64_t kPrefillMinQkHeadSize      = kPrefillQkHeadSizeBlock;
@@ -431,12 +435,13 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
                                                      const FlashAttentionMatch & match,
                                                      DispatchMatch & dispatch_match,
                                                      KernelSpecialization & attention) {
+    const int64_t columns = match.key_value_head_count * match.value_head_size;
     if (match.query_token_count < 256 || match.key_value_token_count < 512 ||
-        match.key_value_token_count % 32 != 0) {
+        match.key_value_token_count % 32 != 0 || match.key_value_token_count > kCopyTransposeF16MaxExtent ||
+        columns % 32 != 0 || columns > kCopyTransposeF16MaxExtent) {
         return { match.value->id, 0, match.value->byte_count };
     }
 
-    const int64_t columns = match.key_value_head_count * match.value_head_size;
     const size_t bytes = static_cast<size_t>(match.key_value_token_count * columns) * sizeof(ggml_fp16_t);
     const ValueId transposed = match_value(context, dispatch_match, 0);
     dispatch_match.transients.push_back({ transposed, "common.flash_attention.transposed_value", bytes, 256 });
