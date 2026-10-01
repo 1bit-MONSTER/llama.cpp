@@ -15,6 +15,7 @@
 
 // Decode projections (1 token, or 2-8 for MTP / speculative verify batches) on Q2_K, Q3_K, Q4_K, Q5_K,
 // Q6_K, IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, IQ4_XS and Q8_0 weights, read in their GGUF block layout
+// (and exact-ternary Q4_0 repacked to 2 bits, see kquant_ternary)
 // (ops/kquant_decode_f32.loom): FFN gate/up pairs fused with SwiGLU, and plain projections with an
 // optional following residual ADD. Mixed-quant models (Unsloth UD-Q4_K_XL and similar) pair these
 // types freely per layer; without this they take the generic dequantize-4-values-at-a-time
@@ -23,6 +24,7 @@
 #include "dispatch-kquant-decode.h"
 
 #include "dispatch-mul-mat-common.h"
+#include "dispatch/ternary-q4-0.h"
 #include "graph/graph-matcher.h"
 
 #include <string>
@@ -64,6 +66,35 @@ bool kquant_format(CommonMulMatWeightFormat format) {
         default:
             return false;
     }
+}
+
+// Q4_0 joins as packed ternary (format 90, dispatch/ternary-q4-0.h) when GGML_HRX_TERNARY_Q4_0 is set: the
+// weight binding asks for the repacked layout, which the upload verifies value by value.
+bool kquant_ternary(const CommonMulMatMatch & match) {
+    return match.weight_format == CommonMulMatWeightFormat::Q4_0 && ternary_q4_0_enabled() &&
+           match.input_size % 256 == 0;
+}
+
+bool kquant_supported(const CommonMulMatMatch & match) {
+    return kquant_format(match.weight_format) || kquant_ternary(match);
+}
+
+int64_t kquant_format_value(const CommonMulMatMatch & match) {
+    return kquant_ternary(match) ? kTernaryQ40K128FormatValue : common_mul_mat_format_config_value(match.weight_format);
+}
+
+DispatchBinding kquant_weight_binding(const CommonMulMatMatch & match) {
+    if (kquant_ternary(match)) {
+        return { match.weight->id,
+                 0,
+                 ternary_q4_0_k128_bytes(match.input_size, match.output_size),
+                 kTernaryQ40K128Layout,
+                 match.weight->type,
+                 match.input_size,
+                 match.output_size,
+                 match.weight->byte_count };
+    }
+    return { match.weight->id, 0, match.weight->byte_count };
 }
 
 // The codebook a format's lane functions read from workgroup memory (IQ1_S and IQ1_M share one),
@@ -153,9 +184,9 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
     }
     const CommonMulMatMatch root =
         match_few_token_mul_mat(graph, context.root_node, kKQuantSwiGLUDecodeKernel);
-    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens ||
-        !kquant_format(root.weight_format) || root.input_size % 256 != 0 || root.input_size > kMaxInputSize ||
-        root.output_size > kMaxOutputSize || !value_ready(context, root.input->id) ||
+    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens || !kquant_supported(root) ||
+        root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize ||
+        !value_ready(context, root.input->id) ||
         has_q8_alternate(context, *root.input, root.input_size, root.token_count)) {
         return false;
     }
@@ -183,7 +214,7 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
         kquant_grid(other.weight_format) != kquant_grid(root.weight_format)) {
         return false;
     }
-    if (!other.matched() || !kquant_format(other.weight_format) || other.input->id != root.input->id ||
+    if (!other.matched() || !kquant_supported(other) || other.input->id != root.input->id ||
         other.input_size != root.input_size || other.output_size != root.output_size ||
         other.token_count != root.token_count) {
         return false;
@@ -214,15 +245,13 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
                                                std::to_string(root.input_size));
     dispatch.kernel.compile_parameters.emplace("ggml.kquant_swiglu_decode.output_size",
                                                std::to_string(root.output_size));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.kquant_swiglu_decode.gate_weight_format",
-        std::to_string(common_mul_mat_format_config_value(gate.weight_format)));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.kquant_swiglu_decode.up_weight_format",
-        std::to_string(common_mul_mat_format_config_value(up.weight_format)));
+    dispatch.kernel.compile_parameters.emplace("ggml.kquant_swiglu_decode.gate_weight_format",
+                                               std::to_string(kquant_format_value(gate)));
+    dispatch.kernel.compile_parameters.emplace("ggml.kquant_swiglu_decode.up_weight_format",
+                                               std::to_string(kquant_format_value(up)));
     dispatch.bindings.push_back({ root.input->id, 0, root.input->byte_count });
-    dispatch.bindings.push_back({ gate.weight->id, 0, gate.weight->byte_count });
-    dispatch.bindings.push_back({ up.weight->id, 0, up.weight->byte_count });
+    dispatch.bindings.push_back(kquant_weight_binding(gate));
+    dispatch.bindings.push_back(kquant_weight_binding(up));
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
     dispatch_match.dispatches.push_back(std::move(dispatch));
     return true;
@@ -237,9 +266,9 @@ bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, Disp
     }
     const CommonMulMatMatch root =
         match_few_token_mul_mat(graph, context.root_node, kKQuantMulMatDecodeKernel);
-    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens ||
-        !kquant_format(root.weight_format) || root.input_size % 256 != 0 || root.input_size > kMaxInputSize ||
-        root.output_size > kMaxOutputSize || !value_ready(context, root.input->id) ||
+    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens || !kquant_supported(root) ||
+        root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize ||
+        !value_ready(context, root.input->id) ||
         has_q8_alternate(context, *root.input, root.input_size, root.token_count)) {
         return false;
     }
@@ -287,12 +316,11 @@ bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, Disp
                                                std::to_string(root.input_size));
     dispatch.kernel.compile_parameters.emplace("ggml.kquant_mul_mat_decode.output_size",
                                                std::to_string(root.output_size));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.kquant_mul_mat_decode.weight_format",
-        std::to_string(common_mul_mat_format_config_value(root.weight_format)));
+    dispatch.kernel.compile_parameters.emplace("ggml.kquant_mul_mat_decode.weight_format",
+                                               std::to_string(kquant_format_value(root)));
     dispatch.kernel.compile_parameters.emplace("ggml.kquant_mul_mat_decode.add", addend != nullptr ? "1" : "0");
     dispatch.bindings.push_back({ root.input->id, 0, root.input->byte_count });
-    dispatch.bindings.push_back({ root.weight->id, 0, root.weight->byte_count });
+    dispatch.bindings.push_back(kquant_weight_binding(root));
     // Without an ADD the addend is never read; bind the input in its place.
     const Value * addend_binding = addend != nullptr ? addend : root.input;
     dispatch.bindings.push_back({ addend_binding->id, 0, addend_binding->byte_count });
