@@ -97,28 +97,6 @@ DispatchBinding kquant_weight_binding(const CommonMulMatMatch & match) {
     return { match.weight->id, 0, match.weight->byte_count };
 }
 
-// The codebook a format's lane functions read from workgroup memory (IQ1_S and IQ1_M share one),
-// or 0. A gate/up pair shares that one buffer, so its two formats may not need different codebooks.
-int kquant_grid(CommonMulMatWeightFormat format) {
-    switch (format) {
-        case CommonMulMatWeightFormat::IQ3_S:
-            return 21;
-        case CommonMulMatWeightFormat::IQ2_XXS:
-            return 24;
-        case CommonMulMatWeightFormat::IQ2_XS:
-            return 25;
-        case CommonMulMatWeightFormat::IQ2_S:
-            return 22;
-        case CommonMulMatWeightFormat::IQ3_XXS:
-            return 28;
-        case CommonMulMatWeightFormat::IQ1_S:
-        case CommonMulMatWeightFormat::IQ1_M:
-            return 26;
-        default:
-            return 0;
-    }
-}
-
 // The kernels' config ranges (ops/kquant_decode_f32.loom).
 constexpr int64_t kMaxInputSize  = 65536;
 constexpr int64_t kMaxOutputSize = 1048576;
@@ -210,10 +188,6 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
         return false;
     }
     const CommonMulMatMatch other = match_few_token_mul_mat(graph, peer, kKQuantSwiGLUDecodeKernel);
-    if (other.matched() && kquant_grid(other.weight_format) != 0 && kquant_grid(root.weight_format) != 0 &&
-        kquant_grid(other.weight_format) != kquant_grid(root.weight_format)) {
-        return false;
-    }
     if (!other.matched() || !kquant_supported(other) || other.input->id != root.input->id ||
         other.input_size != root.input_size || other.output_size != root.output_size ||
         other.token_count != root.token_count) {

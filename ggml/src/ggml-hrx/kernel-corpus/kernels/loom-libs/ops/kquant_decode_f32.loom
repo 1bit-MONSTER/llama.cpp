@@ -29,7 +29,7 @@
 //   Q2_K, Q3_K, Q6_K, IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, Q8_0: see their lane
 //     functions (2-byte aligned blocks, 16-bit loads). IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS and
 //     IQ3_S read their grids from workgroup memory (4 KiB: IQ1's 2048 entries, two per word), written
-//     once per workgroup.
+//     once per workgroup; the SwiGLU kernels keep separate gate and up grids.
 // Weight format config values follow dispatch-mul-mat-weight-format.h (Q2_K 12, Q3_K 11, Q4_K 4, Q5_K 5,
 // Q6_K 6, IQ1_S 26, IQ1_M 27, IQ2_S 22, IQ2_XXS 24, IQ2_XS 25, IQ3_XXS 28, IQ3_S 21, IQ4_NL 20, IQ4_XS 23,
 // Q8_0 80, packed ternary 90: see @ggml_kquant_t2_lane_parts).
@@ -7884,18 +7884,24 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
   %u_grid_e = scalar.ori %u_grid_d, %u_grid_is26 : i1
   %u_grid = scalar.ori %u_grid_e, %u_grid_is27 : i1
   %needs_grid = scalar.ori %g_grid, %u_grid : i1
-  %grid_format = scf.select %g_grid, %gate_format, %up_format : index
+  // Gate and up each get their own codebook buffer, so a pair whose two formats need different grids runs here.
   %grid_bytes = index.constant 4096 : offset
   %grid = buffer.alloca<workgroup> align(16) %grid_bytes : buffer
+  %grid_u = buffer.alloca<workgroup> align(16) %grid_bytes : buffer
   scf.if %needs_grid {
-    func.call @ggml_kquant_grid_fill_for(%grid_format, %grid, %subgroup) : (index, buffer, index) -> ()
+    scf.if %g_grid {
+      func.call @ggml_kquant_grid_fill_for(%gate_format, %grid, %subgroup) : (index, buffer, index) -> ()
+    }
+    scf.if %u_grid {
+      func.call @ggml_kquant_grid_fill_for(%up_format, %grid_u, %subgroup) : (index, buffer, index) -> ()
+    }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   }
   %valid = index.cmp ult, %row, %output_size : index
   scf.if %valid {
     %g_part, %u_part = scf.for %block = [%first_block to %blocks step %c4](%g_acc = %zero : f32, %u_acc = %zero : f32) -> (f32, f32) {
       %g = func.call @ggml_kquant_lane_dot(%gate_format, %kv_lane, %grid, %gate, %input, %row, %blocks, %block, %lane16) : (index, f32, buffer, buffer, buffer, index, index, index, index) -> (f32)
-      %u = func.call @ggml_kquant_lane_dot(%up_format, %kv_lane, %grid, %up, %input, %row, %blocks, %block, %lane16) : (index, f32, buffer, buffer, buffer, index, index, index, index) -> (f32)
+      %u = func.call @ggml_kquant_lane_dot(%up_format, %kv_lane, %grid_u, %up, %input, %row, %blocks, %block, %lane16) : (index, f32, buffer, buffer, buffer, index, index, index, index) -> (f32)
       %g_next = scalar.addf %g_acc, %g : f32
       %u_next = scalar.addf %u_acc, %u : f32
       scf.yield %g_next, %u_next : f32, f32
@@ -9073,11 +9079,17 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
   %u_grid_e = scalar.ori %u_grid_d, %u_grid_is26 : i1
   %u_grid = scalar.ori %u_grid_e, %u_grid_is27 : i1
   %needs_grid = scalar.ori %g_grid, %u_grid : i1
-  %grid_format = scf.select %g_grid, %gate_format, %up_format : index
+  // Gate and up each get their own codebook buffer, so a pair whose two formats need different grids runs here.
   %grid_bytes = index.constant 4096 : offset
   %grid = buffer.alloca<workgroup> align(16) %grid_bytes : buffer
+  %grid_u = buffer.alloca<workgroup> align(16) %grid_bytes : buffer
   scf.if %needs_grid {
-    func.call @ggml_kquant_grid_fill_for(%grid_format, %grid, %subgroup) : (index, buffer, index) -> ()
+    scf.if %g_grid {
+      func.call @ggml_kquant_grid_fill_for(%gate_format, %grid, %subgroup) : (index, buffer, index) -> ()
+    }
+    scf.if %u_grid {
+      func.call @ggml_kquant_grid_fill_for(%up_format, %grid_u, %subgroup) : (index, buffer, index) -> ()
+    }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   }
   %c0t = index.constant 0 : index
@@ -9102,7 +9114,7 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
       %gshape = func.call pure @ggml_kquant_run_shape(%gate_format) : (index) -> (index)
       %gw, %gp0, %gp1, %gp2, %gp3 = func.call @ggml_kquant_lane_weights(%gate_format, %kv_lane, %grid, %gate, %row, %blocks, %block, %lane16) : (index, f32, buffer, buffer, index, index, index, index) -> (vector<16xf32>, index, index, index, index)
       %ushape = func.call pure @ggml_kquant_run_shape(%up_format) : (index) -> (index)
-      %uw, %up0, %up1, %up2, %up3 = func.call @ggml_kquant_lane_weights(%up_format, %kv_lane, %grid, %up, %row, %blocks, %block, %lane16) : (index, f32, buffer, buffer, index, index, index, index) -> (vector<16xf32>, index, index, index, index)
+      %uw, %up0, %up1, %up2, %up3 = func.call @ggml_kquant_lane_weights(%up_format, %kv_lane, %grid_u, %up, %row, %blocks, %block, %lane16) : (index, f32, buffer, buffer, index, index, index, index) -> (vector<16xf32>, index, index, index, index)
       %g0_next, %u0_next = scf.if %tv0 -> (vector<4xf32>, vector<4xf32>) {
         %g0_s = func.call @ggml_kquant_token_fma(%gshape, %gw, %gp0, %gp1, %gp2, %gp3, %input, %c0t, %blocks, %block, %g0_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
         %u0_s = func.call @ggml_kquant_token_fma(%ushape, %uw, %up0, %up1, %up2, %up3, %input, %c0t, %blocks, %block, %u0_acc) : (index, vector<16xf32>, index, index, index, index, buffer, index, index, index, vector<4xf32>) -> (vector<4xf32>)
