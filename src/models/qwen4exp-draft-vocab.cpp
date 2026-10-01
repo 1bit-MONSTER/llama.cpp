@@ -15,11 +15,14 @@
 #include "qwen4exp-draft-vocab.h"
 
 #include "llama-impl.h"
+#include "llama-mmap.h"
 
 #include "ggml.h"
 
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
+#include <vector>
 
 int64_t qwen4exp_draft_vocab_rows(const llama_model_loader & ml, const std::string & d2t_name, int64_t n_vocab) {
     const auto * w = ml.get_weight(d2t_name.c_str());
@@ -34,7 +37,25 @@ int64_t qwen4exp_draft_vocab_rows(const llama_model_loader & ml, const std::stri
         throw std::runtime_error(format("QWEN4EXP MTP: d2t has %lld rows for a %lld-token vocabulary",
                                         (long long) d2t->ne[0], (long long) n_vocab));
     }
-    return d2t->ne[0];
+    // set_rows scatters each draft row to its d2t id, so every id must be a distinct token: read the K ids from
+    // the file now (K int64s), before any graph uses them, and refuse the file otherwise.
+    const int64_t        k = d2t->ne[0];
+    std::vector<int64_t> ids(k);
+    llama_file &         file = *ml.files.at(w->idx);
+    file.seek(w->offs, SEEK_SET);
+    file.read_raw(ids.data(), ids.size() * sizeof(int64_t));
+    std::vector<bool> seen(n_vocab, false);
+    for (int64_t i = 0; i < k; ++i) {
+        if (ids[i] < 0 || ids[i] >= n_vocab) {
+            throw std::runtime_error(format("QWEN4EXP MTP: d2t[%lld] = %lld is outside the %lld-token vocabulary",
+                                            (long long) i, (long long) ids[i], (long long) n_vocab));
+        }
+        if (seen[ids[i]]) {
+            throw std::runtime_error(format("QWEN4EXP MTP: d2t repeats token id %lld", (long long) ids[i]));
+        }
+        seen[ids[i]] = true;
+    }
+    return k;
 }
 
 ggml_tensor * qwen4exp_draft_vocab_scatter(ggml_context * ctx, ggml_tensor * logits, ggml_tensor * d2t, int64_t n_vocab) {
