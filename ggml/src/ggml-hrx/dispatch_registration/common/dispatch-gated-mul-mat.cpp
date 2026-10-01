@@ -680,6 +680,19 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
         return false;
     }
 
+    // Prompt chunks whose gate and up weights the q8_1 x4 prefill kernel takes are left to it:
+    // two q8_1 x4 matmuls plus a separate GLU beat this f32 WMMA body (Qwen3.8-27B UD-Q4_K_XL
+    // pp512 143 -> 363 tok/s, KLD vs BF16 0.00720 -> 0.00711).
+    const auto q8_x4_format = [](CommonMulMatWeightFormat f) {
+        return f == CommonMulMatWeightFormat::Q4K || f == CommonMulMatWeightFormat::Q5K ||
+               f == CommonMulMatWeightFormat::IQ4_XS;
+    };
+    if (common_q8_prefill_relaxed() && q8_x4_format(match.gate_format) && q8_x4_format(match.up_format) &&
+        match.token_count >= 256 && match.token_count <= 2048 && match.token_count % 256 == 0 &&
+        match.input_size % 256 == 0 && match.output_size % 64 == 0) {
+        return false;
+    }
+
     const bool pack_q4 = match.token_count <= 5 && match.output_size % 64 == 0 &&
                          match.gate_weight->alias_source.value < 0 && match.up_weight->alias_source.value < 0 &&
                          match.gate_format == CommonMulMatWeightFormat::Q4K &&
