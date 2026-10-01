@@ -14,7 +14,7 @@
 // limitations under the License.
 
 // Decode projections (1 token, or 2-8 for MTP / speculative verify batches) on Q2_K, Q3_K, Q4_K, Q5_K,
-// Q6_K, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, IQ4_XS and Q8_0 weights, read in their GGUF block layout
+// Q6_K, IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, IQ4_XS and Q8_0 weights, read in their GGUF block layout
 // (ops/kquant_decode_f32.loom): FFN gate/up pairs fused with SwiGLU, and plain projections with an
 // optional following residual ADD. Mixed-quant models (Unsloth UD-Q4_K_XL and similar) pair these
 // types freely per layer; without this they take the generic dequantize-4-values-at-a-time
@@ -46,6 +46,8 @@ static constexpr KernelCatalogRef kKQuantMulMatDecodeTokensKernel =
 bool kquant_format(CommonMulMatWeightFormat format) {
     switch (format) {
         case CommonMulMatWeightFormat::Q2K:
+        case CommonMulMatWeightFormat::IQ1_S:
+        case CommonMulMatWeightFormat::IQ1_M:
         case CommonMulMatWeightFormat::IQ2_XXS:
         case CommonMulMatWeightFormat::IQ2_XS:
         case CommonMulMatWeightFormat::IQ3_XXS:
@@ -64,12 +66,26 @@ bool kquant_format(CommonMulMatWeightFormat format) {
     }
 }
 
-// Formats whose lane functions read a codebook staged in workgroup memory. A gate/up pair shares
-// that one buffer, so its two formats may not need different codebooks.
-bool kquant_needs_grid(CommonMulMatWeightFormat format) {
-    return format == CommonMulMatWeightFormat::IQ3_S || format == CommonMulMatWeightFormat::IQ2_XXS ||
-           format == CommonMulMatWeightFormat::IQ2_XS || format == CommonMulMatWeightFormat::IQ3_XXS ||
-           format == CommonMulMatWeightFormat::IQ2_S;
+// The codebook a format's lane functions read from workgroup memory (IQ1_S and IQ1_M share one),
+// or 0. A gate/up pair shares that one buffer, so its two formats may not need different codebooks.
+int kquant_grid(CommonMulMatWeightFormat format) {
+    switch (format) {
+        case CommonMulMatWeightFormat::IQ3_S:
+            return 21;
+        case CommonMulMatWeightFormat::IQ2_XXS:
+            return 24;
+        case CommonMulMatWeightFormat::IQ2_XS:
+            return 25;
+        case CommonMulMatWeightFormat::IQ2_S:
+            return 22;
+        case CommonMulMatWeightFormat::IQ3_XXS:
+            return 28;
+        case CommonMulMatWeightFormat::IQ1_S:
+        case CommonMulMatWeightFormat::IQ1_M:
+            return 26;
+        default:
+            return 0;
+    }
 }
 
 // The kernels' config ranges (ops/kquant_decode_f32.loom).
@@ -163,8 +179,8 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
         return false;
     }
     const CommonMulMatMatch other = match_few_token_mul_mat(graph, peer, kKQuantSwiGLUDecodeKernel);
-    if (other.matched() && kquant_needs_grid(other.weight_format) && kquant_needs_grid(root.weight_format) &&
-        other.weight_format != root.weight_format) {
+    if (other.matched() && kquant_grid(other.weight_format) != 0 && kquant_grid(root.weight_format) != 0 &&
+        kquant_grid(other.weight_format) != kquant_grid(root.weight_format)) {
         return false;
     }
     if (!other.matched() || !kquant_format(other.weight_format) || other.input->id != root.input->id ||
