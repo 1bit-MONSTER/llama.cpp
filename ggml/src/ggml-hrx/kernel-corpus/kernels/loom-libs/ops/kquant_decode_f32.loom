@@ -8138,6 +8138,224 @@ func.def inline @ggml_kquant_q5k_lane_weights(%weight: buffer, %row_base: offset
   func.return %w, %p0, %p1, %p2, %p3 : vector<16xf32>, index, index, index, index
 }
 
+// --- int8 dot4i decode path for Q4_K / Q5_K (ggml_kquant_mul_mat_decode_tokens_f32 and
+// ggml_kquant_swiglu_decode_tokens_f32): instead of dequantizing each code to f32 once per block
+// and then doing an f32 multiply-add per token (ggml_kquant_token_fma), keep the lane's raw 4-/5-bit
+// codes as bytes, quantize each token's own activation run to int8 with a lane-local scale (no
+// cross-lane reduction: each lane already owns a disjoint 8-value run, so the quantization block is
+// just those 8 values), and use the native dot4i instruction for the multiply-add. One dot4i<u8s8>
+// of width 8 (two i32 lanes, horizontally summed) replaces four f32 FMAs per sub-block per token.
+
+// codes dotted against an 8-value int8 activation chunk as an unscaled integer sum (in f32): the
+// caller multiplies by (code scale * activation scale) and applies the K-quant min correction
+// separately, same algebra as ggml_kquant_q45k_lane_finish's d*sc*sum(q*x) - dmin*m*sum(x).
+func.def inline @ggml_kquant_dot_u8_s8_vector8_f32(%codes: vector<2xi32>, %activation: vector<8xi8>) -> (f32) {
+  %zero2 = vector.constant 0 : vector<2xi32>
+  %seed = scalar.constant 0 : i32
+  %w = vector.bitcast %codes : vector<2xi32> to vector<8xi8>
+  %d = vector.dot4i<u8s8> %w, %activation, %zero2 : vector<8xi8>, vector<8xi8>, vector<2xi32>
+  %sum = vector.reduce<addi> %d, %seed : vector<2xi32>, i32
+  %result = scalar.sitofp %sum : i32 to f32
+  func.return %result : f32
+}
+
+// Per-block (shared by every token) raw codes and scale terms for the dot4i path: low/high are the
+// lane's two 8-value runs of unsigned 4-/5-bit codes, still packed as ggml_kquant_q45k_lane_finish
+// extracts them (2 x i32 words, one byte per code); d_sc_* is d*scale and mn_* is dmin*min for each
+// half. p0/p2 are the same activation offsets ggml_kquant_token_fma's is_run8 branch uses.
+func.def inline @ggml_kquant_q45k_lane_codes_finish(%dm: vector<2xf16>, %header: vector<4xi32>, %low: vector<2xi32>, %high: vector<2xi32>, %group: index, %packet: index) -> (vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %d_f16 = vector.extract %dm[0] : vector<2xf16> -> f16
+  %dmin_f16 = vector.extract %dm[1] : vector<2xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %dmin = scalar.extf %dmin_f16 : f16 to f32
+  %s0 = vector.extract %header[1] : vector<4xi32> -> i32
+  %s1 = vector.extract %header[2] : vector<4xi32> -> i32
+  %s2 = vector.extract %header[3] : vector<4xi32> -> i32
+  %sub_lo = index.mul %group, %c2 : index
+  %sub_hi = index.add %sub_lo, %c1 : index
+  %sc_lo_i, %m_lo_i = func.call @ggml_kquant_scale_min(%s0, %s1, %s2, %sub_lo) : (i32, i32, i32, index) -> (i32, i32)
+  %sc_hi_i, %m_hi_i = func.call @ggml_kquant_scale_min(%s0, %s1, %s2, %sub_hi) : (i32, i32, i32, index) -> (i32, i32)
+  %sub_base = index.mul %group, %c64 : index
+  %pos = index.mul %packet, %c8 : index
+  %p0 = index.add %sub_base, %pos : index
+  %p2 = index.add %p0, %c32 : index
+  %sc_lo_f = scalar.uitofp %sc_lo_i : i32 to f32
+  %sc_hi_f = scalar.uitofp %sc_hi_i : i32 to f32
+  %m_lo_f = scalar.uitofp %m_lo_i : i32 to f32
+  %m_hi_f = scalar.uitofp %m_hi_i : i32 to f32
+  %d_sc_lo = scalar.mulf %d, %sc_lo_f : f32
+  %d_sc_hi = scalar.mulf %d, %sc_hi_f : f32
+  %mn_lo = scalar.mulf %dmin, %m_lo_f : f32
+  %mn_hi = scalar.mulf %dmin, %m_hi_f : f32
+  func.return %low, %high, %d_sc_lo, %d_sc_hi, %mn_lo, %mn_hi, %p0, %p2 : vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index
+}
+
+func.def inline @ggml_kquant_q4k_lane_codes(%weight: buffer, %row_base: offset, %block: index, %lane16: index) -> (vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index) {
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %nibble_mask = vector.constant 252645135 : vector<2xi32>
+  %four = vector.constant 4 : vector<2xi32>
+  %block_bytes = index.constant 144 : offset
+  %l = index.assume %lane16 [range(%lane16, 0, 15)] : index
+  %group = index.div %l, %c4 : index
+  %packet = index.rem %l, %c4 : index
+  %block_add = index.scale %block, %block_bytes : index, offset -> offset
+  %block_base = index.add %row_base, %block_add : offset
+  %wv = buffer.view %weight[%block_base] : buffer -> view<36xi32>
+  %hv = buffer.view %weight[%block_base] : buffer -> view<2xf16>
+  %dm = vector.load %hv[%c0] : view<2xf16> -> vector<2xf16>
+  %header = vector.load %wv[%c0] : view<36xi32> -> vector<4xi32>
+  %group_words = index.mul %group, %c8 : index
+  %packet_words = index.mul %packet, %c2 : index
+  %code_rel = index.add %group_words, %packet_words : index
+  %code_word = index.add %c4, %code_rel : index
+  %codes = vector.load %wv[%code_word] : view<36xi32> -> vector<2xi32>
+  %low = vector.andi %codes, %nibble_mask : vector<2xi32>
+  %codes_shr = vector.shrui %codes, %four : vector<2xi32>
+  %high = vector.andi %codes_shr, %nibble_mask : vector<2xi32>
+  %low_out, %high_out, %d_sc_lo, %d_sc_hi, %mn_lo, %mn_hi, %p0, %p2 = func.call @ggml_kquant_q45k_lane_codes_finish(%dm, %header, %low, %high, %group, %packet) : (vector<2xf16>, vector<4xi32>, vector<2xi32>, vector<2xi32>, index, index) -> (vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index)
+  func.return %low_out, %high_out, %d_sc_lo, %d_sc_hi, %mn_lo, %mn_hi, %p0, %p2 : vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index
+}
+
+func.def inline @ggml_kquant_q5k_lane_codes(%weight: buffer, %row_base: offset, %block: index, %lane16: index) -> (vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c12 = index.constant 12 : index
+  %nibble_mask = vector.constant 252645135 : vector<2xi32>
+  %bit_mask = vector.constant 16843009 : vector<2xi32>
+  %four = vector.constant 4 : vector<2xi32>
+  %block_bytes = index.constant 176 : offset
+  %l = index.assume %lane16 [range(%lane16, 0, 15)] : index
+  %group = index.div %l, %c4 : index
+  %packet = index.rem %l, %c4 : index
+  %block_add = index.scale %block, %block_bytes : index, offset -> offset
+  %block_base = index.add %row_base, %block_add : offset
+  %wv = buffer.view %weight[%block_base] : buffer -> view<44xi32>
+  %hv = buffer.view %weight[%block_base] : buffer -> view<2xf16>
+  %dm = vector.load %hv[%c0] : view<2xf16> -> vector<2xf16>
+  %header = vector.load %wv[%c0] : view<44xi32> -> vector<4xi32>
+  %group_words = index.mul %group, %c8 : index
+  %packet_words = index.mul %packet, %c2 : index
+  %code_rel = index.add %group_words, %packet_words : index
+  %code_word = index.add %c12, %code_rel : index
+  %codes = vector.load %wv[%code_word] : view<44xi32> -> vector<2xi32>
+  %qh_word = index.add %c4, %packet_words : index
+  %qh = vector.load %wv[%qh_word] : view<44xi32> -> vector<2xi32>
+  %sub_lo = index.mul %group, %c2 : index
+  %sub_hi = index.add %sub_lo, %c1 : index
+  %shift_lo_i = index.cast %sub_lo : index to i32
+  %shift_hi_i = index.cast %sub_hi : index to i32
+  %shift_lo = vector.splat %shift_lo_i : vector<2xi32>
+  %shift_hi = vector.splat %shift_hi_i : vector<2xi32>
+  %qh_lo0 = vector.shrui %qh, %shift_lo : vector<2xi32>
+  %qh_hi0 = vector.shrui %qh, %shift_hi : vector<2xi32>
+  %qh_lo1 = vector.andi %qh_lo0, %bit_mask : vector<2xi32>
+  %qh_hi1 = vector.andi %qh_hi0, %bit_mask : vector<2xi32>
+  %qh_lo = vector.shli %qh_lo1, %four : vector<2xi32>
+  %qh_hi = vector.shli %qh_hi1, %four : vector<2xi32>
+  %low4 = vector.andi %codes, %nibble_mask : vector<2xi32>
+  %codes_shr = vector.shrui %codes, %four : vector<2xi32>
+  %high4 = vector.andi %codes_shr, %nibble_mask : vector<2xi32>
+  %low = vector.ori %low4, %qh_lo : vector<2xi32>
+  %high = vector.ori %high4, %qh_hi : vector<2xi32>
+  %low_out, %high_out, %d_sc_lo, %d_sc_hi, %mn_lo, %mn_hi, %p0, %p2 = func.call @ggml_kquant_q45k_lane_codes_finish(%dm, %header, %low, %high, %group, %packet) : (vector<2xf16>, vector<4xi32>, vector<2xi32>, vector<2xi32>, index, index) -> (vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index)
+  func.return %low_out, %high_out, %d_sc_lo, %d_sc_hi, %mn_lo, %mn_hi, %p0, %p2 : vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index
+}
+
+// Dispatches Q4_K (4) / Q5_K (5) to their int8 code extraction; the caller has already checked the
+// format is one of these two (see ggml_kquant_lane_weights for the row_base derivation this mirrors).
+func.def inline @ggml_kquant_q45k_lane_codes(%format: index, %weight: buffer, %row: index, %blocks: index, %block: index, %lane16: index) -> (vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index) {
+  %f4 = index.constant 4 : index
+  %block_bytes = func.call pure @ggml_kquant_block_bytes(%format) : (index) -> (offset)
+  %row_bytes = index.scale %blocks, %block_bytes : index, offset -> offset
+  %row_base = index.scale %row, %row_bytes : index, offset -> offset
+  %is4 = index.cmp eq, %format, %f4 : index
+  %low, %high, %d_sc_lo, %d_sc_hi, %mn_lo, %mn_hi, %p0, %p2 = scf.if %is4 -> (vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index) {
+    %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 = func.call @ggml_kquant_q4k_lane_codes(%weight, %row_base, %block, %lane16) : (buffer, offset, index, index) -> (vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index)
+    scf.yield %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 : vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index
+  } else {
+    %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 = func.call @ggml_kquant_q5k_lane_codes(%weight, %row_base, %block, %lane16) : (buffer, offset, index, index) -> (vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index)
+    scf.yield %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 : vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index
+  }
+  func.return %low, %high, %d_sc_lo, %d_sc_hi, %mn_lo, %mn_hi, %p0, %p2 : vector<2xi32>, vector<2xi32>, f32, f32, f32, f32, index, index
+}
+
+// Per-token int8 dot4i contribution for one Q4_K/Q5_K block (see ggml_kquant_q45k_lane_codes and
+// the file header comment). Quantizes this token's own two 8-value activation runs to int8 with a
+// lane-local scale (max-abs/127, no cross-lane shuffle needed), dot4i's them against the lane's raw
+// weight codes, descales, and applies the K-quant min correction. Folds the result into lane 0 of
+// %acc so callers keep using the same vector<4xf32> accumulate-and-reduce-once machinery as
+// ggml_kquant_token_fma.
+func.def inline @ggml_kquant_token_fma_q45k_dot4i(%low: vector<2xi32>, %high: vector<2xi32>, %d_sc_lo: f32, %d_sc_hi: f32, %mn_lo: f32, %mn_hi: f32, %p0: index, %p2: index, %input: buffer, %t: index, %blocks: index, %block: index, %acc: vector<4xf32>) -> (vector<4xf32>) {
+  %zero_scalar = scalar.constant 0.0 : f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %c127 = scalar.constant 127.0 : f32
+  %x_block_bytes = index.constant 1024 : offset
+  %row_blocks = index.mul %t, %blocks : index
+  %x_block = index.add %row_blocks, %block : index
+  %x_base = index.scale %x_block, %x_block_bytes : index, offset -> offset
+  %xv = buffer.view %input[%x_base] : buffer -> view<256xf32>
+  %q0 = index.assume %p0 [range(%p0, 0, 248)] : index
+  %q2 = index.assume %p2 [range(%p2, 0, 248)] : index
+  %x_lo = vector.load %xv[%q0] : view<256xf32> -> vector<8xf32>
+  %x_hi = vector.load %xv[%q2] : view<256xf32> -> vector<8xf32>
+  %sum_lo = vector.reduce<addf> %x_lo, %zero_scalar : vector<8xf32>, f32
+  %sum_hi = vector.reduce<addf> %x_hi, %zero_scalar : vector<8xf32>, f32
+  %abs_lo = vector.absf %x_lo : vector<8xf32>
+  %abs_hi = vector.absf %x_hi : vector<8xf32>
+  %max_lo = vector.reduce<maxnumf> %abs_lo, %zero_scalar : vector<8xf32>, f32
+  %max_hi = vector.reduce<maxnumf> %abs_hi, %zero_scalar : vector<8xf32>, f32
+  %act_d_lo = scalar.divf %max_lo, %c127 : f32
+  %act_d_hi = scalar.divf %max_hi, %c127 : f32
+  %lo_nonzero = scalar.cmpf one, %act_d_lo, %zero_scalar : f32
+  %hi_nonzero = scalar.cmpf one, %act_d_hi, %zero_scalar : f32
+  %inv_lo = scf.if %lo_nonzero -> (f32) {
+    %v = scalar.divf %c1_f32, %act_d_lo : f32
+    scf.yield %v : f32
+  } else {
+    scf.yield %zero_scalar : f32
+  }
+  %inv_hi = scf.if %hi_nonzero -> (f32) {
+    %v = scalar.divf %c1_f32, %act_d_hi : f32
+    scf.yield %v : f32
+  } else {
+    scf.yield %zero_scalar : f32
+  }
+  %inv_lo_v = vector.splat %inv_lo : vector<8xf32>
+  %inv_hi_v = vector.splat %inv_hi : vector<8xf32>
+  %scaled_lo = vector.mulf %x_lo, %inv_lo_v : vector<8xf32>
+  %scaled_hi = vector.mulf %x_hi, %inv_hi_v : vector<8xf32>
+  %rounded_lo = vector.roundf %scaled_lo : vector<8xf32>
+  %rounded_hi = vector.roundf %scaled_hi : vector<8xf32>
+  %q8_lo = vector.fptosi %rounded_lo : vector<8xf32> to vector<8xi8>
+  %q8_hi = vector.fptosi %rounded_hi : vector<8xf32> to vector<8xi8>
+  %sumi_lo_f = func.call @ggml_kquant_dot_u8_s8_vector8_f32(%low, %q8_lo) : (vector<2xi32>, vector<8xi8>) -> (f32)
+  %sumi_hi_f = func.call @ggml_kquant_dot_u8_s8_vector8_f32(%high, %q8_hi) : (vector<2xi32>, vector<8xi8>) -> (f32)
+  %scale_lo = scalar.mulf %d_sc_lo, %act_d_lo : f32
+  %scale_hi = scalar.mulf %d_sc_hi, %act_d_hi : f32
+  %term_lo = scalar.mulf %scale_lo, %sumi_lo_f : f32
+  %term_hi = scalar.mulf %scale_hi, %sumi_hi_f : f32
+  %corr_lo = scalar.mulf %mn_lo, %sum_lo : f32
+  %corr_hi = scalar.mulf %mn_hi, %sum_hi : f32
+  %part_lo = scalar.subf %term_lo, %corr_lo : f32
+  %part_hi = scalar.subf %term_hi, %corr_hi : f32
+  %result = scalar.addf %part_lo, %part_hi : f32
+  %acc0 = vector.extract %acc[0] : vector<4xf32> -> f32
+  %acc0_new = scalar.addf %acc0, %result : f32
+  %acc_new = vector.insert %acc0_new into %acc[0] : f32, vector<4xf32>
+  func.return %acc_new : vector<4xf32>
+}
+
 func.def inline @ggml_kquant_iq4_codes_weights(%kv_lane: f32, %codes: vector<2xi32>) -> (vector<16xf32>) {
   %c15_i32 = scalar.constant 15 : i32
   %c16w = scalar.constant 16 : i32
@@ -9097,6 +9315,10 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
   %c7t = index.constant 7 : index
   %tv7 = index.cmp ult, %c7t, %tokens : index
   %valid = index.cmp ult, %row, %output_size : index
+  // See the matching comment in ggml_kquant_mul_mat_decode_tokens_f32: the int8 dot4i path below
+  // (ggml_kquant_q45k_lane_codes / ggml_kquant_token_fma_q45k_dot4i) is correct but not wired in
+  // here, since quantizing each token's activation inline, once per output row, measured as a net
+  // decode regression on Qwen3.8-27B + MTP rather than a win.
   scf.if %valid {
     %g0_part, %u0_part, %g1_part, %u1_part, %g2_part, %u2_part, %g3_part, %u3_part, %g4_part, %u4_part, %g5_part, %u5_part, %g6_part, %u6_part, %g7_part, %u7_part = scf.for %block = [%first_block to %blocks step %c4](%g0_acc = %zero4 : vector<4xf32>, %u0_acc = %zero4 : vector<4xf32>, %g1_acc = %zero4 : vector<4xf32>, %u1_acc = %zero4 : vector<4xf32>, %g2_acc = %zero4 : vector<4xf32>, %u2_acc = %zero4 : vector<4xf32>, %g3_acc = %zero4 : vector<4xf32>, %u3_acc = %zero4 : vector<4xf32>, %g4_acc = %zero4 : vector<4xf32>, %u4_acc = %zero4 : vector<4xf32>, %g5_acc = %zero4 : vector<4xf32>, %u5_acc = %zero4 : vector<4xf32>, %g6_acc = %zero4 : vector<4xf32>, %u6_acc = %zero4 : vector<4xf32>, %g7_acc = %zero4 : vector<4xf32>, %u7_acc = %zero4 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
       %gshape = func.call pure @ggml_kquant_run_shape(%gate_format) : (index) -> (index)
@@ -9361,6 +9583,17 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
   %c7t = index.constant 7 : index
   %tv7 = index.cmp ult, %c7t, %tokens : index
   %valid = index.cmp ult, %row, %output_size : index
+  // The int8 dot4i path for Q4_K/Q5_K (ggml_kquant_q45k_lane_codes +
+  // ggml_kquant_token_fma_q45k_dot4i, below) is not wired in here: measured on Qwen3.8-27B
+  // UD-Q4_K_XL + MTP (n3) on HRX0, quantizing each token's activation run inline, once per
+  // output row, cost more than the dot4i instruction saved (abs/max-reduce/round/convert per
+  // lane per token per block, redundantly repeated for every row that reads the same block) and
+  // regressed decode by about a third (code 19.5 -> 12.9, prose 15.1 -> 9.9, translate 20.5 ->
+  // 12.3 tok/s). The functions are correct (test-backend-ops -o MUL_MAT -b HRX0 passes Q4_K and
+  // Q5_K at n=1..9) and are left here for a follow-up that quantizes the activation once per
+  // block and shares it across rows (workgroup-shared, or by consuming the Q8_1 alternate that
+  // fused MoE producers already publish; see has_q8_alternate in dispatch-kquant-decode.cpp),
+  // instead of recomputing it inline on every row as this first pass did.
   scf.if %valid {
     %m0_part, %m1_part, %m2_part, %m3_part, %m4_part, %m5_part, %m6_part, %m7_part = scf.for %block = [%first_block to %blocks step %c4](%m0_acc = %zero4 : vector<4xf32>, %m1_acc = %zero4 : vector<4xf32>, %m2_acc = %zero4 : vector<4xf32>, %m3_acc = %zero4 : vector<4xf32>, %m4_acc = %zero4 : vector<4xf32>, %m5_acc = %zero4 : vector<4xf32>, %m6_acc = %zero4 : vector<4xf32>, %m7_acc = %zero4 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
       %mshape = func.call pure @ggml_kquant_run_shape(%format) : (index) -> (index)
