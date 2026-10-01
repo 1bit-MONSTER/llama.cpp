@@ -288,6 +288,9 @@ ggml_add_backend_library(ggml-hrx
     runtime/graph-program-cache.h
     runtime/host-memory.cpp
     runtime/host-memory.h
+    runtime/host-memory-ternary.cpp
+    runtime/host-memory-ternary.h
+    dispatch/ternary-q4-0.h
     runtime/kernel-executable-cache.cpp
     runtime/kernel-executable-cache.h
     runtime/loom-kernel-jit.cpp

@@ -3,6 +3,7 @@
 #include "ggml-quants.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
+#include "runtime/host-memory-ternary.h"
 
 #include <algorithm>
 #include <array>
@@ -1151,6 +1152,14 @@ static Status materialize_weight(const HostWeightSource & source,
     }
     if (source.layout == kQ5KSymmetricI8K256Row64Layout) {
         status = materialize_symmetric_i8_k256_row64(source, transformed);
+        if (status.success()) {
+            upload_data = transformed.data();
+            upload_size = transformed.size();
+        }
+        return status;
+    }
+    if (source.layout == kTernaryQ40K128Layout) {
+        status = materialize_ternary_q4_0_k128(source, transformed);
         if (status.success()) {
             upload_data = transformed.data();
             upload_size = transformed.size();
