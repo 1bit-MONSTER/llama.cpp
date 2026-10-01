@@ -87,6 +87,7 @@ struct llama_hadamard {
     std::map<uint32_t, std::vector<int32_t>>  sign_data;       // input width -> signs
     bool gdn_v_grouped = false;
     bool tied_output   = false;
+    bool onebit_q4_0   = false;  // from onebit.hadamard_q4_0: the Q4_0 matmul weights, MTP ones only if loaded
 
     // bound to the model's tensors (setup)
     std::unordered_map<const ggml_tensor *, llama_hadamard_transform> rotations;
