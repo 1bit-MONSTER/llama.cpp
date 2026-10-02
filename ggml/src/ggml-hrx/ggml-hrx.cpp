@@ -1068,10 +1068,6 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (supported_unary) {
         return true;
     }
-    if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr &&
-        (op->src[0]->type == GGML_TYPE_IQ3_S || op->src[0]->type == GGML_TYPE_IQ4_NL)) {
-        return false;
-    }
     if (op->op == GGML_OP_NONE) {
         return true;
     }

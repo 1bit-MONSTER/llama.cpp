@@ -172,10 +172,9 @@ static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * no
     const Value *            weight = graph_value(graph, node->inputs[0]);
     const Value *            ids    = graph_value(graph, node->inputs[1]);
     const Value *            output = graph_value(graph, node->output);
-    if (weight == nullptr || ids == nullptr || output == nullptr || weight->type == GGML_TYPE_IQ3_S ||
-        weight->type == GGML_TYPE_IQ4_NL || ids->type != GGML_TYPE_I32 || output->type != GGML_TYPE_F32 ||
-        !weight->contiguous || !ids->contiguous || !output->contiguous || !is_2d(*weight) ||
-        !is_1d_or_2d_column(*ids) || !is_2d(*output)) {
+    if (weight == nullptr || ids == nullptr || output == nullptr || ids->type != GGML_TYPE_I32 ||
+        output->type != GGML_TYPE_F32 || !weight->contiguous || !ids->contiguous || !output->contiguous ||
+        !is_2d(*weight) || !is_1d_or_2d_column(*ids) || !is_2d(*output)) {
         return {};
     }
 
