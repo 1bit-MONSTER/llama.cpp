@@ -23,6 +23,7 @@
 #include "dispatch-kquant-decode.h"
 #include "dispatch-add-id.h"
 #include "dispatch-softplus.h"
+#include "dispatch-swiglu-oai.h"
 #include "dispatch-unary.h"
 
 namespace ggml::hrx {
@@ -50,6 +51,7 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_kquant_decode_dispatches(registry);
     register_softplus_dispatches(registry);
     register_add_id_dispatches(registry);
+    register_swiglu_oai_dispatches(registry);
     register_unary_dispatch(registry);
     register_rmsnorm_dispatches(registry);
 }

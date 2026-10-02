@@ -256,6 +256,9 @@
     },
     {
       "path": "ops/add_id_f32.loom"
+    },
+    {
+      "path": "ops/swiglu_oai_f32.loom"
     }
   ],
   "exports": [
@@ -8027,6 +8030,43 @@
         "mode": "direct",
         "primary_sources": [
           "ops/add_id_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_swiglu_oai_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_swiglu_oai_f32",
+      "source": "ops/swiglu_oai_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "gate",
+        "up",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/swiglu_oai_f32.loom"
         ],
         "library_sources": []
       },

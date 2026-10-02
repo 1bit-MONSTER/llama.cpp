@@ -52,7 +52,8 @@ static bool glu_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const GluParams * lhs_params = op_params_as<GluParams>(lhs);
     const GluParams * rhs_params = op_params_as<GluParams>(rhs);
     return lhs_params != nullptr && rhs_params != nullptr && lhs_params->op == rhs_params->op &&
-           lhs_params->swapped == rhs_params->swapped;
+           lhs_params->swapped == rhs_params->swapped && lhs_params->alpha == rhs_params->alpha &&
+           lhs_params->limit == rhs_params->limit;
 }
 
 static bool scale_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
@@ -280,7 +281,8 @@ OpParams import_op_params(const ggml_tensor & tensor) {
                 ggml_get_op_params_f32(&tensor, 1),
             };
         case GGML_OP_GLU:
-            return GluParams{ ggml_get_glu_op(&tensor), ggml_get_op_params_i32(&tensor, 1) != 0 };
+            return GluParams{ ggml_get_glu_op(&tensor), ggml_get_op_params_i32(&tensor, 1) != 0,
+                              ggml_get_op_params_f32(&tensor, 2), ggml_get_op_params_f32(&tensor, 3) };
         case GGML_OP_MUL_MAT:
             if (ggml_get_op_params_i32(&tensor, 1) != 0) {
                 return MulMatParams{ ggml_get_op_params_i32(&tensor, 1) };

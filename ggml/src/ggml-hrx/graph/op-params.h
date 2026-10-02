@@ -38,6 +38,8 @@ struct ClampParams {
 struct GluParams {
     ggml_glu_op op = GGML_GLU_OP_REGLU;
     bool        swapped = false;
+    float       alpha   = 0.0f;  // GGML_GLU_OP_SWIGLU_OAI
+    float       limit   = 0.0f;  // GGML_GLU_OP_SWIGLU_OAI
 };
 
 struct ScaleParams {
