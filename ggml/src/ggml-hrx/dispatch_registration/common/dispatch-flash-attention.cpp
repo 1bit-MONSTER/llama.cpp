@@ -436,7 +436,11 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
                                                      DispatchMatch & dispatch_match,
                                                      KernelSpecialization & attention) {
     const int64_t columns = match.key_value_head_count * match.value_head_size;
-    if (match.query_token_count < 256 || match.key_value_token_count < 512 ||
+    // ggml_copy_transpose_f16 reads `columns`-wide contiguous rows. MLA (deepseek2/GLM) stores V with the QK
+    // head-size stride (the matcher accepts that layout, #95), so its rows are wider than `columns`: transposing
+    // would read misaligned rows. Such a V keeps the row-major layout, whose kernel takes the real row stride.
+    const bool contiguous_rows = match.value->nb[1] == static_cast<size_t>(columns) * sizeof(ggml_fp16_t);
+    if (!contiguous_rows || match.query_token_count < 256 || match.key_value_token_count < 512 ||
         match.key_value_token_count % 32 != 0 || match.key_value_token_count > kCopyTransposeF16MaxExtent ||
         columns % 32 != 0 || columns > kCopyTransposeF16MaxExtent) {
         return { match.value->id, 0, match.value->byte_count };
