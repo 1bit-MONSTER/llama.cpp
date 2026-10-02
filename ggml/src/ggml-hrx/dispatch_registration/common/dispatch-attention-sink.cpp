@@ -38,6 +38,19 @@ std::string index_config(int64_t value) {
     return std::to_string(value);
 }
 
+// True when the two values share storage and their byte ranges intersect.
+bool overlaps(const Graph & graph, const Value & lhs, const Value & rhs) {
+    if (lhs.id == rhs.id) {
+        return true;
+    }
+    if (!graph.values().same_storage(lhs.id, rhs.id)) {
+        return false;
+    }
+    const size_t lhs_end = lhs.storage_offset + lhs.byte_count;
+    const size_t rhs_end = rhs.storage_offset + rhs.byte_count;
+    return lhs.storage_offset < rhs_end && rhs.storage_offset < lhs_end;
+}
+
 }  // namespace
 
 bool attention_sinks_supported(const Graph & graph, const GraphNode & node) {
@@ -81,9 +94,10 @@ bool append_attention_sink_dispatch(const Graph & graph, const GraphNode & node,
         value_head_size % 16 != 0 || qk_head_size > 576 || value_head_size > 576) {
         return false;
     }
-    // The output is rewritten in place after FlashAttention wrote it; no input may share its storage.
+    // The output is rewritten in place after FlashAttention wrote it; no input may overlap its bytes (views of one
+    // allocation share a storage root but are distinct values, so compare storage, not value ids).
     for (const Value * input : { query, key, mask, sinks }) {
-        if (input->id == output->id) {
+        if (overlaps(graph, *input, *output)) {
             return false;
         }
     }
