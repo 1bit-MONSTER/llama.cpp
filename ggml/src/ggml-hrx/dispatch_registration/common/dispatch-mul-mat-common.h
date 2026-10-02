@@ -171,6 +171,10 @@ inline ggml_type common_mul_mat_format_type(CommonMulMatWeightFormat format) {
     switch (format) {
         case CommonMulMatWeightFormat::Q1_0:
             return GGML_TYPE_Q1_0;
+        case CommonMulMatWeightFormat::PQ2_0:
+            return GGML_TYPE_PQ2_0;
+        case CommonMulMatWeightFormat::PTQ1_0:
+            return GGML_TYPE_PTQ1_0;
         case CommonMulMatWeightFormat::Q2K:
             return GGML_TYPE_Q2_K;
         case CommonMulMatWeightFormat::Q3K:

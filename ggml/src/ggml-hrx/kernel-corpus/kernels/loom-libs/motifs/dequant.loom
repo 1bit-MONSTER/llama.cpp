@@ -1,3 +1,8 @@
+func.decl @ggml_pq2_0_f32_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf32>)
+func.decl @ggml_pq2_0_f16_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf16>)
+func.decl @ggml_ptq1_0_f32_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf32>)
+func.decl @ggml_ptq1_0_f16_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf16>)
+
 func.def inline @ggml_paired_weight_words(%half_packet: i1, %paired: i1, %load_up: i1, %weight: buffer, %peer: buffer, %offset: offset) -> (vector<4xi32>) {
   %zero = index.constant 0 : index
   %padding = vector.constant 0 : vector<2xi32>
@@ -11275,7 +11280,17 @@ func.def inline @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_si
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_row_bytes, %selected_q8_0 : offset
   %selected_f16 = scf.select %is_f16, %f16_row_bytes, %selected_q8_1 : offset
   %selected_bf16 = scf.select %is_bf16, %f16_row_bytes, %selected_f16 : offset
-  %selected = scf.select %is_f32, %f32_row_bytes, %selected_bf16 : offset
+  %selected0 = scf.select %is_f32, %f32_row_bytes, %selected_bf16 : offset
+  %prism_pq2_format = index.constant 72 : index
+  %prism_ptq1_format = index.constant 73 : index
+  %is_prism_pq2 = index.cmp eq, %weight_format, %prism_pq2_format : index
+  %is_prism_ptq1 = index.cmp eq, %weight_format, %prism_ptq1_format : index
+  %prism_pq2_block_bytes = index.constant 34 : offset
+  %prism_ptq1_block_bytes = index.constant 28 : offset
+  %prism_pq2_row_bytes = index.scale %q1_0_block_count, %prism_pq2_block_bytes : index, offset -> offset
+  %prism_ptq1_row_bytes = index.scale %q1_0_block_count, %prism_ptq1_block_bytes : index, offset -> offset
+  %selected1 = scf.select %is_prism_pq2, %prism_pq2_row_bytes, %selected0 : offset
+  %selected = scf.select %is_prism_ptq1, %prism_ptq1_row_bytes, %selected1 : offset
   func.return %selected : offset
 }
 
@@ -11519,7 +11534,25 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_values, %selected_q8_0 : vector<4xf16>
   %selected_f16 = scf.select %is_f16, %f16_values, %selected_q8_1 : vector<4xf16>
   %selected_bf16 = scf.select %is_bf16, %bf16_values, %selected_f16 : vector<4xf16>
-  %selected = scf.select %is_f32, %f32_values, %selected_bf16 : vector<4xf16>
+  %selected0 = scf.select %is_f32, %f32_values, %selected_bf16 : vector<4xf16>
+  %prism_pq2_format = index.constant 72 : index
+  %prism_ptq1_format = index.constant 73 : index
+  %is_prism_pq2 = index.cmp eq, %weight_format, %prism_pq2_format : index
+  %is_prism_ptq1 = index.cmp eq, %weight_format, %prism_ptq1_format : index
+  %prism_pq2_values = scf.if %is_prism_pq2 -> (vector<4xf16>) {
+    %values = func.call @ggml_pq2_0_f16_vector4(%weight, %row_byte_base, %k) : (buffer, offset, index) -> (vector<4xf16>)
+    scf.yield %values : vector<4xf16>
+  } else {
+    scf.yield %zero : vector<4xf16>
+  }
+  %prism_ptq1_values = scf.if %is_prism_ptq1 -> (vector<4xf16>) {
+    %values = func.call @ggml_ptq1_0_f16_vector4(%weight, %row_byte_base, %k) : (buffer, offset, index) -> (vector<4xf16>)
+    scf.yield %values : vector<4xf16>
+  } else {
+    scf.yield %zero : vector<4xf16>
+  }
+  %selected1 = scf.select %is_prism_pq2, %prism_pq2_values, %selected0 : vector<4xf16>
+  %selected = scf.select %is_prism_ptq1, %prism_ptq1_values, %selected1 : vector<4xf16>
   func.return %selected : vector<4xf16>
 }
 
@@ -11744,6 +11777,24 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_values, %selected_q8_0 : vector<4xf32>
   %selected_f16 = scf.select %is_f16, %f16_values, %selected_q8_1 : vector<4xf32>
   %selected_bf16 = scf.select %is_bf16, %bf16_values, %selected_f16 : vector<4xf32>
-  %selected = scf.select %is_f32, %f32_values, %selected_bf16 : vector<4xf32>
+  %selected0 = scf.select %is_f32, %f32_values, %selected_bf16 : vector<4xf32>
+  %prism_pq2_format = index.constant 72 : index
+  %prism_ptq1_format = index.constant 73 : index
+  %is_prism_pq2 = index.cmp eq, %weight_format, %prism_pq2_format : index
+  %is_prism_ptq1 = index.cmp eq, %weight_format, %prism_ptq1_format : index
+  %prism_pq2_values = scf.if %is_prism_pq2 -> (vector<4xf32>) {
+    %values = func.call @ggml_pq2_0_f32_vector4(%weight, %row_byte_base, %k) : (buffer, offset, index) -> (vector<4xf32>)
+    scf.yield %values : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
+  %prism_ptq1_values = scf.if %is_prism_ptq1 -> (vector<4xf32>) {
+    %values = func.call @ggml_ptq1_0_f32_vector4(%weight, %row_byte_base, %k) : (buffer, offset, index) -> (vector<4xf32>)
+    scf.yield %values : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
+  %selected1 = scf.select %is_prism_pq2, %prism_pq2_values, %selected0 : vector<4xf32>
+  %selected = scf.select %is_prism_ptq1, %prism_ptq1_values, %selected1 : vector<4xf32>
   func.return %selected : vector<4xf32>
 }

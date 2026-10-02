@@ -8,6 +8,8 @@ namespace ggml::hrx {
 
 enum class CommonMulMatWeightFormat {
     Q1_0,
+    PQ2_0,   // PrismML group-128 2-bit (ggml-prism.h)
+    PTQ1_0,  // PrismML group-128 ternary
     Q2K,
     Q3K,
     Q4K,
@@ -39,6 +41,12 @@ inline bool common_mul_mat_format_for_type(ggml_type type, CommonMulMatWeightFor
     switch (type) {
         case GGML_TYPE_Q1_0:
             format = CommonMulMatWeightFormat::Q1_0;
+            return true;
+        case GGML_TYPE_PQ2_0:
+            format = CommonMulMatWeightFormat::PQ2_0;
+            return true;
+        case GGML_TYPE_PTQ1_0:
+            format = CommonMulMatWeightFormat::PTQ1_0;
             return true;
         case GGML_TYPE_Q2_K:
             format = CommonMulMatWeightFormat::Q2K;
@@ -118,6 +126,10 @@ inline int64_t common_mul_mat_format_config_value(CommonMulMatWeightFormat forma
     switch (format) {
         case CommonMulMatWeightFormat::Q1_0:
             return 10;
+        case CommonMulMatWeightFormat::PQ2_0:
+            return 72;
+        case CommonMulMatWeightFormat::PTQ1_0:
+            return 73;
         case CommonMulMatWeightFormat::Q2K:
             return 12;
         case CommonMulMatWeightFormat::Q3K:
@@ -180,6 +192,8 @@ inline bool common_mul_mat_dense_float_format(CommonMulMatWeightFormat format) {
 inline bool common_mul_mat_supported_dense_input_size(CommonMulMatWeightFormat format, int64_t input_size) {
     switch (format) {
         case CommonMulMatWeightFormat::Q1_0:
+        case CommonMulMatWeightFormat::PQ2_0:
+        case CommonMulMatWeightFormat::PTQ1_0:
             return input_size >= 256 && input_size <= 32768 && input_size % 128 == 0;
         case CommonMulMatWeightFormat::Q4_0:
         case CommonMulMatWeightFormat::Q4_1:
