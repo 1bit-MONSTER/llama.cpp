@@ -1,3 +1,4 @@
+#include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
 #include "ggml-hrx-dmabuf.h"
 
@@ -1033,6 +1034,9 @@ static bool supported_unary_f32_tensor(const ggml_tensor * op) {
 
 static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op) {
     if (op == nullptr) {
+        return false;
+    }
+    if (!ggml::hrx::moe_tail_claimable(device, op)) {
         return false;
     }
     // GET_ROWS gives wrong rows for batched IQ3_S sources (test-backend-ops GET_ROWS)
