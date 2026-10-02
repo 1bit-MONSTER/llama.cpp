@@ -11185,7 +11185,17 @@ func.def inline @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offse
   %is_tq2_t = index.cmp eq, %weight_format, %tq2_format_t : index
   %selected_tq1_t = scf.select %is_tq1_t, %tq1_tile_bytes, %selected_mxfp4_t : offset
   %selected_tq2_t = scf.select %is_tq2_t, %tq2_tile_bytes, %selected_tq1_t : offset
-  %selected_iq3_s = scf.select %is_iq3_s, %iq3_s_tile_bytes, %selected_tq2_t : offset
+  // PrismML group-128 formats: two 34-byte PQ2_0 blocks or two 28-byte PTQ1_0 blocks per 256 values. Without them
+  // the tile size was 0 and the low-token SwiGLU (row bytes = K/256 x tile bytes) read row 0 for every row.
+  %pq2_format_t = index.constant 72 : index
+  %ptq1_format_t = index.constant 73 : index
+  %pq2_tile_bytes = index.constant 68 : offset
+  %ptq1_tile_bytes = index.constant 56 : offset
+  %is_pq2_t = index.cmp eq, %weight_format, %pq2_format_t : index
+  %is_ptq1_t = index.cmp eq, %weight_format, %ptq1_format_t : index
+  %selected_pq2_t = scf.select %is_pq2_t, %pq2_tile_bytes, %selected_tq2_t : offset
+  %selected_ptq1_t = scf.select %is_ptq1_t, %ptq1_tile_bytes, %selected_pq2_t : offset
+  %selected_iq3_s = scf.select %is_iq3_s, %iq3_s_tile_bytes, %selected_ptq1_t : offset
   %selected_iq4_xs = scf.select %is_iq4_xs, %iq4_xs_tile_bytes, %selected_iq3_s : offset
   %selected_q8_0 = scf.select %is_q8_0, %q8_0_tile_bytes, %selected_iq4_xs : offset
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_tile_bytes, %selected_q8_0 : offset
