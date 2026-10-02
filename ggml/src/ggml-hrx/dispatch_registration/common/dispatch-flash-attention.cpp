@@ -1,3 +1,4 @@
+#include "dispatch-attention-sink.h"
 #include "dispatch-flash-attention.h"
 
 #include "ggml.h"
@@ -210,7 +211,8 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
                                                          const CommandPlan & plan,
                                                          const GraphNode *   node) {
     FlashAttentionMatch match;
-    if (node == nullptr || node->op != GGML_OP_FLASH_ATTN_EXT || node->inputs.size() != 4) {
+    if (node == nullptr || node->op != GGML_OP_FLASH_ATTN_EXT ||
+        (node->inputs.size() != 4 && !attention_sinks_supported(graph, *node))) {
         return match;
     }
 
@@ -463,7 +465,8 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
 
 static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.plan, context.root_node);
-    if (!match.matched() || match.output_layout == nullptr || match.output_layout->op != GGML_OP_RESHAPE) {
+    if (!match.matched() || context.root_node->inputs.size() != 4 || match.output_layout == nullptr ||
+        match.output_layout->op != GGML_OP_RESHAPE) {
         return false;
     }
 
@@ -574,6 +577,10 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
         }
     }
     dispatch_match.dispatches.push_back(std::move(dispatch));
+    if (context.root_node->inputs.size() == 5 &&
+        !append_attention_sink_dispatch(context.graph, *context.root_node, dispatch_match)) {
+        return false;
+    }
     return true;
 }
 

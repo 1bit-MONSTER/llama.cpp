@@ -259,6 +259,9 @@
     },
     {
       "path": "ops/swiglu_oai_f32.loom"
+    },
+    {
+      "path": "ops/attention_sink_f32.loom"
     }
   ],
   "exports": [
@@ -8067,6 +8070,63 @@
         "mode": "direct",
         "primary_sources": [
           "ops/swiglu_oai_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_attention_sink_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_attention_sink_f32",
+      "source": "ops/attention_sink_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "tokens",
+          "type": "index"
+        },
+        {
+          "name": "key_count",
+          "type": "index"
+        },
+        {
+          "name": "key_capacity",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "tokens",
+          "type": "index"
+        },
+        {
+          "name": "key_count",
+          "type": "index"
+        },
+        {
+          "name": "key_capacity",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "query",
+        "key",
+        "mask",
+        "sinks",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/attention_sink_f32.loom"
         ],
         "library_sources": []
       },
