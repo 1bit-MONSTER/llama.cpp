@@ -52,8 +52,7 @@ inline bool common_mul_mat_id_same_shape(const Value & lhs, const Value & rhs) {
 }
 
 inline bool common_mul_mat_id_supported_dense_input_size(CommonMulMatWeightFormat format, int64_t input_size) {
-    // the MUL_MAT_ID kernels declare input_size mul(256), also for the 32-value block formats
-    return common_mul_mat_supported_dense_input_size(format, input_size) && input_size % 256 == 0;
+    return common_mul_mat_supported_dense_input_size(format, input_size);
 }
 
 inline bool common_mul_mat_id_supported_dense_output_size(int64_t output_size) {
