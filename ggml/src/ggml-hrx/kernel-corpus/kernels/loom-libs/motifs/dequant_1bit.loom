@@ -83,14 +83,21 @@ func.def inline @ggml_mxfp4_table_i8() -> (vector<16xi8>) {
   func.return %table : vector<16xi8>
 }
 
-// 2^(e - 127) / 2 = exp((e - 128) ln 2): the E8M0 half scale from ops the corpus already uses (sitofp, expf).
+// 2^(e - 127) / 2, exact, built from its f32 bits as ggml's GGML_E8M0_TO_FP32_HALF: (e - 1) << 23 for e >= 2,
+// the subnormals 0x00200000 << e below that.
 func.def inline @ggml_mxfp4_half_scale(%e: i32) -> (f32) {
-  %c128_i32 = scalar.constant 128 : i32
-  %ln2 = scalar.constant 0.693147180559945 : f32
-  %k_i32 = scalar.subi %e, %c128_i32 : i32
-  %k = scalar.sitofp %k_i32 : i32 to f32
-  %x = scalar.mulf %k, %ln2 : f32
-  %scale = scalar.expf<afn> %x : f32
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c23_i32 = scalar.constant 23 : i32
+  %sub_unit = scalar.constant 2097152 : i32
+  %is_small = scalar.cmpi ult, %e, %c2_i32 : i32
+  %e_m1 = scalar.subi %e, %c1_i32 : i32
+  %normal_bits = scalar.shli %e_m1, %c23_i32 : i32
+  %sub_bits = scalar.shli %sub_unit, %e : i32
+  %bits = scf.select %is_small, %sub_bits, %normal_bits : i32
+  %bits_v = vector.from_elements %bits : vector<1xi32>
+  %scale_v = vector.bitcast %bits_v : vector<1xi32> to vector<1xf32>
+  %scale = vector.extract %scale_v[0] : vector<1xf32> -> f32
   func.return %scale : f32
 }
 
