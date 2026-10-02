@@ -63,6 +63,22 @@ void sleep_ns(int64_t ns) {
     nanosleep(&interval, nullptr);
 }
 
+// HYPERLOOM_HRX_SLICED_WAIT=1: sleep the same budget, but in short slices with a completion query between
+// them. The budget comes from the shortest of the last four waits at the call site, and those can all be
+// long prefill waits (llama-bench: pp512 reps, or the 16k-token depth prefill before every tg rep), so the
+// first decode tokens after a prefill would otherwise sleep ~80% of a 1-2 s prefill wait each, decaying by
+// x0.8 per token. Slicing bounds any oversleep to one slice; in steady-state decode the budget ends before
+// the stream completes, so the extra queries change nothing there.
+bool sliced_wait() {
+    static const bool sliced = [] {
+        const char * value = std::getenv("HYPERLOOM_HRX_SLICED_WAIT");
+        return value != nullptr && value[0] == '1';
+    }();
+    return sliced;
+}
+
+constexpr int64_t kSleepSliceNs = 1000000;
+
 int64_t expected_ns(const WaitHistory & history) {
     if (history.count == 0) {
         return 0;
@@ -86,7 +102,23 @@ hrx_status_t stream_wait_sleeping(hrx_stream_t stream, WaitHistory & history) {
             return status;
         }
         if (!complete) {
-            sleep_ns(expected * 4 / 5);
+            if (sliced_wait()) {
+                const auto deadline = start + std::chrono::nanoseconds(expected * 4 / 5);
+                while (!complete) {
+                    const int64_t remaining =
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - Clock::now()).count();
+                    if (remaining <= 0) {
+                        break;
+                    }
+                    sleep_ns(std::min(remaining, kSleepSliceNs));
+                    status = hrx_stream_query(stream, &complete);
+                    if (!hrx_status_is_ok(status)) {
+                        return status;
+                    }
+                }
+            } else {
+                sleep_ns(expected * 4 / 5);
+            }
         }
     }
     hrx_status_t status = hrx_stream_wait(stream);
