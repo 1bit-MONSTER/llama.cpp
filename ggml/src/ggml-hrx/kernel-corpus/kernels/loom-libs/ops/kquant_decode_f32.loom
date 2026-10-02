@@ -11714,8 +11714,9 @@ check.case public @ggml_kquant_swiglu_decode_ptq1_iq3s_case {
 
 // TQ1_0 (34), TQ2_0 (35), MXFP4 (39) against ggml_kquant_ref_value_1bit. Weight words per case at
 // input_size 512, output_size 6: TQ1_0 6 x 2 x 54 B = 162, TQ2_0 6 x 2 x 66 B = 198, MXFP4 6 x 2 x 136 B
-// = 408. The MXFP4 cases fill bytes 124..129 so every E8M0 scale is normal and between 2^-3 and 2^2
-// (the GPU flushes subnormals; tiny scales would also pass the tolerance whatever the codes decode to).
+// = 408. The MXFP4 cases fill bytes 121..127 (0x79797979 + k * 0x01010101 stays a positive i32) so every
+// E8M0 scale is normal and between 2^-7 and 2^-1 (the GPU flushes subnormals; tiny scales would also pass
+// the tolerance whatever the codes decode to).
 
 // --config=ggml.kquant_mul_mat_decode.input_size=512 --config=ggml.kquant_mul_mat_decode.output_size=6
 // --config=ggml.kquant_mul_mat_decode.weight_format=34 --config=ggml.kquant_mul_mat_decode.add=1
@@ -11751,7 +11752,7 @@ check.case public @ggml_kquant_mul_mat_decode_tq2_0_case {
 check.case public @ggml_kquant_mul_mat_decode_mxfp4_case {
   %x_seed = check.param.seed base(7300000000000031304) count(1) : i64
   %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<512xf32>
-  %weight = check.generate.iota offset(2088533116) step(16843009) period(6) : tensor<408xi32>
+  %weight = check.generate.iota offset(2038003065) step(16843009) period(7) : tensor<408xi32>
   %addend = check.generate.fill value(100.0) : tensor<6xf32>
   %output = check.generate.fill value(-7.0) : tensor<6xf32>
   %expected = check.generate.fill value(7.0) : tensor<6xf32>
@@ -11794,7 +11795,7 @@ check.case public @ggml_kquant_mul_mat_decode_tokens_tq2_0_case {
 check.case public @ggml_kquant_mul_mat_decode_tokens_mxfp4_case {
   %x_seed = check.param.seed base(7300000000000031308) count(1) : i64
   %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<1536xf32>
-  %weight = check.generate.iota offset(2088533116) step(16843009) period(6) : tensor<408xi32>
+  %weight = check.generate.iota offset(2038003065) step(16843009) period(7) : tensor<408xi32>
   %addend = check.generate.fill value(100.0) : tensor<18xf32>
   %output = check.generate.fill value(-7.0) : tensor<18xf32>
   %expected = check.generate.fill value(7.0) : tensor<18xf32>
