@@ -287,6 +287,8 @@ ggml_add_backend_library(ggml-hrx
     runtime/graph-executor.cpp
     runtime/graph-executor.h
     runtime/graph-program-cache.cpp
+    runtime/graph-program-cache-limit.cpp
+    runtime/graph-program-cache-limit.h
     runtime/graph-program-cache.h
     runtime/host-memory.cpp
     runtime/host-memory.h
