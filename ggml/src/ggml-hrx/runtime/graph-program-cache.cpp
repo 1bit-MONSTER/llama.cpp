@@ -794,6 +794,20 @@ GraphProgramCacheStats GraphProgramCache::stats() const {
     return stats;
 }
 
+size_t GraphProgramCache::size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return programs_.size();
+}
+
+void GraphProgramCache::retain_only(const GraphProgram * keep) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto it = programs_.begin(); it != programs_.end();) {
+        it = it->second.get() == keep ? std::next(it) : programs_.erase(it);
+    }
+    validated_matches_.clear();
+    last_program_ = programs_.empty() ? nullptr : programs_.begin()->second.get();
+}
+
 void GraphProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     validated_matches_.clear();

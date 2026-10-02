@@ -2,6 +2,7 @@
 
 #include "backend-buffer-binding.h"
 #include "ggml-impl.h"
+#include "runtime/graph-program-cache-limit.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
@@ -83,7 +84,11 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     }
 
     const KernelCorpus & corpus = get_qwen_kernel_corpus();
+    const uint64_t       builds_before = context_.graph_programs.stats().builds;
     GraphProgramLookup   lookup = context_.graph_programs.get_or_build(graph, corpus, context_.device->architecture);
+    if (lookup.valid()) {
+        trim_graph_programs(context_, lookup.program, builds_before);  // graph-program-cache-limit.h
+    }
     if (!lookup.valid()) {
         result.status.append(lookup.status);
         result.status.append(lookup.match.status);

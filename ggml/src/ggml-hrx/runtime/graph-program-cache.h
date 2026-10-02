@@ -138,6 +138,10 @@ class GraphProgramCache {
 
     GraphProgramCacheStats stats() const;
 
+    size_t size() const;
+    // drop every cached program except `keep` (graph-program-cache-limit.h)
+    void   retain_only(const GraphProgram * keep);
+
     void clear();
 
   private:
