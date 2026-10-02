@@ -16,8 +16,8 @@
 // Known-answer check for MXFP4 weights on HRX: GET_ROWS of MXFP4 rows must equal ggml's dequantize_row_mxfp4
 // bit for bit (the E8M0 half scale is a power of two and every E2M1 value is exact). Rows use the exponents
 // 120, 127, 134 and the edges 0, 1, 2, 254; every block holds all 16 codes in both nibbles. Exponents 0 and 1
-// give f32 subnormal weights (scales 2^-128 and 2^-127), which the GPU kernels flush to zero: a subnormal
-// expected value may come back as a zero of the same sign, every other value must match exactly. The graph runs on the HRX device itself (no scheduler, so no CPU fallback), and the HRX
+// have f32 subnormal scales (2^-128 and 2^-127), which the GPU kernels flush to zero, so those rows' values
+// (at most 12 * 2^-127) may come back as zeros of the same sign; every other value must match exactly. The graph runs on the HRX device itself (no scheduler, so no CPU fallback), and the HRX
 // dispatch plan for it must contain the get_rows kernel.
 
 #include "dispatch/dispatch-scheduler.h"
@@ -143,8 +143,7 @@ int main() {
             if (std::memcmp(&value, &expected[k], sizeof(float)) == 0) {
                 continue;
             }
-            if (std::fpclassify(expected[k]) == FP_SUBNORMAL && value == 0.0f &&
-                std::signbit(value) == std::signbit(expected[k])) {
+            if (kExponents[source] < 2 && value == 0.0f && std::signbit(value) == std::signbit(expected[k])) {
                 ++flushed;
                 continue;
             }
@@ -160,7 +159,7 @@ int main() {
     ggml_free(ctx);
     ggml_backend_free(backend);
     REQUIRE(mismatches == 0);
-    std::printf("test-hrx-mxfp4: %d rows x %d values bit-exact (%d subnormal values flushed to zero)\n", kRows,
-                kValues, flushed);
+    std::printf("test-hrx-mxfp4: %d rows x %d values bit-exact (%d values with a subnormal scale flushed to zero)\n",
+                kRows, kValues, flushed);
     return 0;
 }
