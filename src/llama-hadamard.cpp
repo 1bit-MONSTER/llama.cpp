@@ -129,30 +129,53 @@ void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
     const gguf_context * meta = ml.metadata;
     uint32_t version = 0;
     gguf_bool(meta, "prism.hadamard.tied_output", tied_output);
+    // The engine's tools/hadamard_q4_0.py stamps onebit.hadamard_q4_0 = 32 instead: every Q4_0 weight of
+    // the file is rotated by the normalized 32-point Sylvester Walsh-Hadamard matrix per block along
+    // its input dimension, without signs, which is the prism.hadamard transform with block_size 32 and
+    // sign_mode identity. It names no weights: the Q4_0 tensors are the rotated ones.
+    bool onebit = false;
     if (!gguf_u32(meta, "prism.hadamard.version", version, false)) {
         if (tied_output) {
             throw std::runtime_error("prism.hadamard.tied_output without prism.hadamard.version");
         }
-        return;
-    }
-    if (version != 1 && version != 2) {
+        const int64_t kid = gguf_find_key(meta, "onebit.hadamard_q4_0");
+        if (kid < 0) {
+            return;
+        }
+        const gguf_type kt = gguf_get_kv_type(meta, kid);
+        const int64_t stamp = kt == GGUF_TYPE_INT32  ? gguf_get_val_i32(meta, kid) :
+                              kt == GGUF_TYPE_UINT32 ? (int64_t) gguf_get_val_u32(meta, kid) : -1;
+        if (stamp != 32) {
+            throw std::runtime_error(format("unsupported onebit.hadamard_q4_0: %lld", (long long) stamp));
+        }
+        onebit = true;
+        onebit_q4_0 = true;
+    } else if (version != 1 && version != 2) {
         throw std::runtime_error(format("unsupported prism.hadamard.version: %u", version));
     }
     if ((version == 2) != tied_output) {
         throw std::runtime_error("prism.hadamard version 2 requires tied_output=true; version 1 forbids it");
     }
-    if (tied_output && ml.get_weight("output.weight")) {
+    if (!onebit && tied_output && ml.get_weight("output.weight")) {
         throw std::runtime_error("prism.hadamard.tied_output requires output.weight to be absent");
     }
 
     uint32_t block_size = 0;
     std::string transform, axis, sign_mode;
     std::vector<std::string> weight_names;
-    gguf_u32(meta, "prism.hadamard.block_size", block_size, true);
-    gguf_str(meta, "prism.hadamard.transform", transform);
-    gguf_str(meta, "prism.hadamard.axis", axis);
-    gguf_str(meta, "prism.hadamard.sign_mode", sign_mode);
-    gguf_strings(meta, "prism.hadamard.weight_names", weight_names, true);
+    if (onebit) {
+        block_size = 32;
+        transform  = "normalized-sylvester-walsh-hadamard";
+        axis       = "input-last-dimension";
+        sign_mode  = "identity";
+        // the names are collected below, from the Q4_0 tensors on a verified matmul path
+    } else {
+        gguf_u32(meta, "prism.hadamard.block_size", block_size, true);
+        gguf_str(meta, "prism.hadamard.transform", transform);
+        gguf_str(meta, "prism.hadamard.axis", axis);
+        gguf_str(meta, "prism.hadamard.sign_mode", sign_mode);
+        gguf_strings(meta, "prism.hadamard.weight_names", weight_names, true);
+    }
 
     if (block_size == 0 || (block_size & (block_size - 1)) != 0) {
         throw std::runtime_error(format("invalid prism.hadamard.block_size: %u", block_size));
@@ -166,7 +189,7 @@ void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
     if (sign_mode != "identity" && sign_mode != "explicit") {
         throw std::runtime_error(format("unsupported prism.hadamard.sign_mode: %s", sign_mode.c_str()));
     }
-    if (weight_names.empty()) {
+    if (!onebit && weight_names.empty()) {
         throw std::runtime_error("prism.hadamard.weight_names is empty");
     }
 
@@ -221,7 +244,7 @@ void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
             "ffn_gate", "ffn_up", "ffn_down",
             "ffn_gate_exps", "ffn_up_exps", "ffn_down_exps", "ffn_gate_up_exps",
             "ffn_gate_shexp", "ffn_up_shexp", "ffn_down_shexp",
-            "ssm_out",
+            "ssm_out", "ssm_alpha", "ssm_beta",
         };
         if (name == "output.weight") {
             return true;  // the output head goes through build_lora_mm in every arch
@@ -244,6 +267,18 @@ void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
         }
         return false;
     };
+    if (onebit) {
+        // tools/hadamard_q4_0.py rotates the Q4_0 matmul weights; a Q4_0 lookup table (token_embd)
+        // is written in the plain basis and needs no transform
+        for (const auto & [name, w] : ml.weights_map) {
+            if (w.tensor->type == GGML_TYPE_Q4_0 && foldable(name)) {
+                weight_names.push_back(name);
+            }
+        }
+        if (weight_names.empty()) {
+            throw std::runtime_error("onebit.hadamard_q4_0: the file has no Q4_0 matmul weights");
+        }
+    }
     for (const auto & name : weight_names) {
         if (!foldable(name)) {
             throw std::runtime_error(format("prism.hadamard: weight '%s' is not on a verified Hadamard-aware matmul path", name.c_str()));
@@ -320,6 +355,9 @@ void llama_hadamard::setup(const llama_model & model) {
                 if (!w || strcmp(w->name, "token_embd.weight") != 0) {
                     throw std::runtime_error("prism.hadamard.tied_output is not bound to the token embedding");
                 }
+            }
+            if (!w && onebit_q4_0) {
+                continue;  // a weight of the file the model does not load (the MTP layer without --mtp)
             }
             if (!w) {
                 throw std::runtime_error(format("prism.hadamard weight not found: %s", name.c_str()));
