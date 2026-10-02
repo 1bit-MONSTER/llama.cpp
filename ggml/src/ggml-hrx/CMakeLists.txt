@@ -212,6 +212,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-mul-mat.cpp
     dispatch_registration/common/dispatch-mul-mat-iq3-xxs.cpp
     dispatch_registration/common/dispatch-mul-mat-iq3-xxs.h
+    dispatch_registration/common/dispatch-mul-mat-tail.cpp
+    dispatch_registration/common/dispatch-mul-mat-tail.h
     dispatch_registration/common/dispatch-mul-mat-common.h
     dispatch_registration/common/dispatch-mul-mat-weight-format.h
     dispatch_registration/common/dispatch-mul-mat.h

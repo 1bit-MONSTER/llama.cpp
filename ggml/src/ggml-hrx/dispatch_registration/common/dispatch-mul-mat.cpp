@@ -4,6 +4,7 @@
 
 #include "dispatch-mul-mat-common.h"
 #include "dispatch-mul-mat-iq3-xxs.h"
+#include "dispatch-mul-mat-tail.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -785,13 +786,22 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
                                                   DispatchMatch &              dispatch_match) {
     const CommonMulMatMatch match = common_match_mul_mat_any_format(context.graph, context.root_node,
                                                                     kMulMatQ5KIQ4XSQ8_1X4WmmaToken256Kernel, false);
+    // A chunk with a remainder runs its 256-aligned head here and the rest on the generic
+    // kernel (common_append_mul_mat_token_tail), when the relaxed policy is on. Q4_K is left
+    // out: its head binds the weight in the packed Row64 layout, and one weight cannot be
+    // resident in two layouts ("conflicting resident layout requests").
+    const int64_t tail_tokens = match.matched() ? match.token_count % 256 : 0;
+    const bool    split_tail  = common_q8_prefill_relaxed() && tail_tokens >= 2 &&
+                              match.matched() && match.weight->type != GGML_TYPE_Q4_K;
     if (!match.matched() || !context.graph.has_index() ||
         (match.weight->type != GGML_TYPE_Q4_K && match.weight->type != GGML_TYPE_Q5_K &&
          match.weight->type != GGML_TYPE_IQ4_XS) ||
-        match.token_count < 256 || match.token_count > 2048 || match.token_count % 256 != 0 ||
+        match.token_count < 256 || match.token_count > 2048 ||
+        (match.token_count % 256 != 0 && !split_tail) ||
         match.input_size % 256 != 0 || match.output_size % 64 != 0) {
         return false;
     }
+    const int64_t q8_tokens = match.token_count - (split_tail ? tail_tokens : 0);
 
     for (const GraphNode * consumer : context.graph.index().consumers(match.output->id)) {
         if (!common_q8_prefill_relaxed() && match.weight->type != GGML_TYPE_Q4_K && consumer != nullptr &&
@@ -800,8 +810,8 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
         }
     }
 
-    const bool use_f16 = match.weight->type == GGML_TYPE_Q4_K && match.weight->alias_source.value < 0 &&
-                         match.output_size >= match.input_size / 4;
+    const bool use_f16 = !split_tail && match.weight->type == GGML_TYPE_Q4_K &&
+                         match.weight->alias_source.value < 0 && match.output_size >= match.input_size / 4;
     DispatchBinding activation;
     const bool packed_input = use_f16 && common_mul_mat_uses_k16_major_f16(
         match.weight_format, match.input_size, match.output_size, match.token_count,
@@ -815,7 +825,7 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
         if (!prepared) {
             return false;
         }
-    } else if (!common_prepare_q8_1_x4_input(context, *match.input, match.input_size, match.token_count,
+    } else if (!common_prepare_q8_1_x4_input(context, *match.input, match.input_size, q8_tokens,
                                              dispatch_match, activation,
                                              match.weight->type == GGML_TYPE_Q4_K || common_q8_prefill_relaxed() ?
                                                  CommonQ8ActivationPolicy::AllowStandaloneQuantize :
@@ -826,7 +836,7 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(use_f16 ? kMulMatQ4KF16WmmaPrefillWave32Kernel :
                                                             kMulMatQ5KIQ4XSQ8_1X4WmmaToken256Kernel);
-    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
+    dispatch.kernel.integer_parameters.emplace("token_count", q8_tokens);
     dispatch.kernel.compile_parameters.emplace(use_f16 ? "ggml.mul_mat.input_size" :
                                                          "ggml.mul_mat_q8_1_x4.input_size",
                                                common_to_config_value(match.input_size));
@@ -835,7 +845,7 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
                                                common_to_config_value(match.output_size));
     dispatch.kernel.compile_parameters.emplace(use_f16 ? "ggml.workload.token_capacity" :
                                                          "ggml.mul_mat_q8_1_x4.token_capacity",
-                                               common_to_config_value(match.token_count));
+                                               common_to_config_value(q8_tokens));
     const bool pack_q4 = match.weight_format == CommonMulMatWeightFormat::Q4K &&
                          match.weight->alias_source.value < 0;
     if (use_f16) {
@@ -854,10 +864,16 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
     } else {
         dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     }
-    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    dispatch.bindings.push_back(
+        { match.output->id, 0,
+          split_tail ? static_cast<size_t>(q8_tokens) * static_cast<size_t>(match.output_size) * sizeof(float) :
+                       match.output->byte_count });
 
     dispatch_match.covered_nodes.push_back(context.root_index);
     dispatch_match.dispatches.push_back(std::move(dispatch));
+    if (split_tail && !common_append_mul_mat_token_tail(match, q8_tokens, dispatch_match)) {
+        return false;
+    }
     return true;
 }
 

@@ -687,8 +687,12 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
         return f == CommonMulMatWeightFormat::Q4K || f == CommonMulMatWeightFormat::Q5K ||
                f == CommonMulMatWeightFormat::IQ4_XS;
     };
+    // A chunk with a remainder is split by the q8_1 x4 matcher only for Q5_K/IQ4_XS weights.
+    const int64_t tail = match.token_count % 256;
+    const bool    tail_ok = tail == 0 || (tail >= 2 && match.gate_format != CommonMulMatWeightFormat::Q4K &&
+                                          match.up_format != CommonMulMatWeightFormat::Q4K);
     if (common_q8_prefill_relaxed() && q8_x4_format(match.gate_format) && q8_x4_format(match.up_format) &&
-        match.token_count >= 256 && match.token_count <= 2048 && match.token_count % 256 == 0 &&
+        match.token_count >= 256 && match.token_count <= 2048 && tail_ok &&
         match.input_size % 256 == 0 && match.output_size % 64 == 0) {
         return false;
     }
