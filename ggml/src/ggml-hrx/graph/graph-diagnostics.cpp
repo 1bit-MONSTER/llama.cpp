@@ -159,6 +159,11 @@ json op_params_json(const OpParams & params) {
                     { "kind", "unary"                    },
                     { "op",   static_cast<int>(value.op) }
                 };
+            } else if constexpr (std::is_same_v<T, MulMatParams>) {
+                return {
+                    { "kind", "mul_mat"  },
+                    { "hint", value.hint }
+                };
             } else if constexpr (std::is_same_v<T, RopeParams>) {
                 return {
                     { "kind",        "rope"            },
@@ -207,6 +212,9 @@ OpParams parse_op_params(const json & item) {
     if (kind == "glu") {
         return GluParams{ static_cast<ggml_glu_op>(item.value("op", static_cast<int>(GGML_GLU_OP_REGLU))),
                           item.value("swapped", false) };
+    }
+    if (kind == "mul_mat") {
+        return MulMatParams{ item.value("hint", 0) };
     }
     if (kind == "scale") {
         return ScaleParams{ item.value("scale", 0.0f), item.value("bias", 0.0f) };

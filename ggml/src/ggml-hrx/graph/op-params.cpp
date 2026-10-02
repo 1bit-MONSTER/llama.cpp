@@ -281,6 +281,11 @@ OpParams import_op_params(const ggml_tensor & tensor) {
             };
         case GGML_OP_GLU:
             return GluParams{ ggml_get_glu_op(&tensor), ggml_get_op_params_i32(&tensor, 1) != 0 };
+        case GGML_OP_MUL_MAT:
+            if (ggml_get_op_params_i32(&tensor, 1) != 0) {
+                return MulMatParams{ ggml_get_op_params_i32(&tensor, 1) };
+            }
+            return {};
         case GGML_OP_SCALE:
             return ScaleParams{
                 ggml_get_op_params_f32(&tensor, 0),
