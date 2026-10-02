@@ -174,6 +174,9 @@
       "path": "motifs/dequant_prism.loom"
     },
     {
+      "path": "motifs/dequant_1bit.loom"
+    },
+    {
       "path": "motifs/mul_mat_f32_f32_wmma_core.loom"
     },
     {
@@ -1297,6 +1300,7 @@
           "motifs/mul_mat_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -1313,6 +1317,7 @@
         "motifs/mul_mat_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -1368,6 +1373,7 @@
           "motifs/mul_mat_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -1384,6 +1390,7 @@
         "motifs/mul_mat_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -1433,6 +1440,7 @@
           "motifs/mul_mat_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -1449,6 +1457,7 @@
         "motifs/mul_mat_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -1498,6 +1507,7 @@
           "motifs/mul_mat_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -1514,6 +1524,7 @@
         "motifs/mul_mat_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -1567,6 +1578,7 @@
           "motifs/mul_mat_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -1583,6 +1595,7 @@
         "motifs/mul_mat_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -1640,6 +1653,7 @@
           "motifs/rope_f32.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -1656,6 +1670,7 @@
         "motifs/rope_f32.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -1713,6 +1728,7 @@
           "motifs/rope_f32.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -1729,6 +1745,7 @@
         "motifs/rope_f32.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -1779,6 +1796,7 @@
           "motifs/llm_attention_qkv_matmul_postops.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -1794,6 +1812,7 @@
         "motifs/llm_attention_qkv_matmul_postops.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -1848,6 +1867,7 @@
           "motifs/rope_f32.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -1862,6 +1882,7 @@
         "motifs/rope_f32.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -1917,6 +1938,7 @@
           "motifs/rope_f32.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -1931,6 +1953,7 @@
         "motifs/rope_f32.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -1979,6 +2002,7 @@
           "ops/mul_mat_f32_f32_decode.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -1992,6 +2016,7 @@
         "ops/mul_mat_f32_f32_decode.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2042,6 +2067,7 @@
           "motifs/mul_mat_id_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2055,6 +2081,7 @@
         "motifs/mul_mat_id_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2149,6 +2176,7 @@
         "library_sources": [
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2161,6 +2189,7 @@
       "compile_dependencies": [
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2217,6 +2246,7 @@
           "motifs/mul_mat_id_q6k_f16_wmma_projection.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2234,6 +2264,7 @@
         "motifs/mul_mat_id_q6k_f16_wmma_projection.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2289,6 +2320,7 @@
           "motifs/mul_mat_id_f32_f32_postops.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2303,6 +2335,7 @@
         "motifs/mul_mat_id_f32_f32_postops.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2364,6 +2397,7 @@
           "motifs/mul_mat_id_f32_f32_postops.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2378,6 +2412,7 @@
         "motifs/mul_mat_id_f32_f32_postops.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2543,6 +2578,7 @@
           "motifs/mul_mat_f32_f32_postops.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2557,6 +2593,7 @@
         "motifs/mul_mat_f32_f32_postops.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2606,6 +2643,7 @@
           "motifs/mul_mat_f32_f32_postops.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2620,6 +2658,7 @@
         "motifs/mul_mat_f32_f32_postops.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2669,6 +2708,7 @@
           "motifs/mul_mat_f32_f32_postops.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2683,6 +2723,7 @@
         "motifs/mul_mat_f32_f32_postops.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2734,6 +2775,7 @@
           "motifs/mul_mat_f32_f32_postops.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2748,6 +2790,7 @@
         "motifs/mul_mat_f32_f32_postops.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2805,6 +2848,7 @@
           "motifs/mul_mat_f32_f32_postops.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2819,6 +2863,7 @@
         "motifs/mul_mat_f32_f32_postops.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2859,6 +2904,7 @@
           "ops/mul_mat_f32_f32_decode.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2872,6 +2918,7 @@
         "ops/mul_mat_f32_f32_decode.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -2933,6 +2980,7 @@
         "library_sources": [
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -2945,6 +2993,7 @@
       "compile_dependencies": [
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -3009,6 +3058,7 @@
           "ops/mul_mat_f32_f32_decode.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -3022,6 +3072,7 @@
         "ops/mul_mat_f32_f32_decode.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -3070,6 +3121,7 @@
           "motifs/mul_mat_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -3087,6 +3139,7 @@
         "motifs/mul_mat_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -3141,6 +3194,7 @@
           "motifs/mul_mat_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -3158,6 +3212,7 @@
         "motifs/mul_mat_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -3210,6 +3265,7 @@
           "motifs/mul_mat_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -3227,6 +3283,7 @@
         "motifs/mul_mat_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -3281,6 +3338,7 @@
           "motifs/mul_mat_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -3298,6 +3356,7 @@
         "motifs/mul_mat_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -3350,6 +3409,7 @@
           "motifs/mul_mat_f32_f32_wmma_core.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/unary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -3367,6 +3427,7 @@
         "motifs/mul_mat_f32_f32_wmma_core.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/unary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -3419,6 +3480,7 @@
           "ops/mul_mat_f32_f32_decode.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/binary_f32_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -3433,6 +3495,7 @@
         "ops/mul_mat_f32_f32_decode.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/binary_f32_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -4266,6 +4329,7 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/binary_f32_apply.loom"
         ]
@@ -4274,6 +4338,7 @@
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/binary_f32_apply.loom"
       ]
@@ -4315,6 +4380,7 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/binary_f32_apply.loom"
         ]
@@ -4323,6 +4389,7 @@
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/binary_f32_apply.loom"
       ]
@@ -4364,6 +4431,7 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/binary_f32_apply.loom"
         ]
@@ -4372,6 +4440,7 @@
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/binary_f32_apply.loom"
       ]
@@ -4413,6 +4482,7 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/binary_f32_apply.loom"
         ]
@@ -4421,6 +4491,7 @@
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/binary_f32_apply.loom"
       ]
@@ -4450,6 +4521,7 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/binary_f32_apply.loom"
         ]
@@ -4458,6 +4530,7 @@
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/binary_f32_apply.loom"
       ]
@@ -4493,6 +4566,7 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/binary_f32_apply.loom"
         ]
@@ -4501,6 +4575,7 @@
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/binary_f32_apply.loom"
       ]
@@ -4542,6 +4617,7 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/binary_f32_apply.loom"
         ]
@@ -4550,6 +4626,7 @@
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/binary_f32_apply.loom"
       ]
@@ -4593,6 +4670,7 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/binary_f32_apply.loom"
         ]
@@ -4601,6 +4679,7 @@
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/binary_f32_apply.loom"
       ]
@@ -4638,6 +4717,7 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/binary_f32_apply.loom"
         ]
@@ -4646,6 +4726,7 @@
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/binary_f32_apply.loom"
       ]
@@ -4699,6 +4780,7 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/binary_f32_apply.loom"
         ]
@@ -4707,6 +4789,7 @@
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/binary_f32_apply.loom"
       ]
@@ -4869,6 +4952,7 @@
         "library_sources": [
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/publish_f32.loom",
           "motifs/quantize_q8_1_x4.loom",
           "motifs/q4_k_f16.loom",
@@ -4883,6 +4967,7 @@
       "compile_dependencies": [
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
         "motifs/q4_k_f16.loom",
@@ -4948,6 +5033,7 @@
         "library_sources": [
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/publish_f32.loom",
           "motifs/quantize_q8_1_x4.loom",
           "motifs/q4_k_f16.loom",
@@ -4962,6 +5048,7 @@
       "compile_dependencies": [
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
         "motifs/q4_k_f16.loom",
@@ -7532,6 +7619,7 @@
           "ops/mul_mat_f32_f32_decode.loom",
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -7545,6 +7633,7 @@
         "ops/mul_mat_f32_f32_decode.loom",
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
