@@ -7708,6 +7708,64 @@
       "compile_dependencies": []
     },
     {
+      "name": "ggml_kquant_swiglu_decode_tokens_q8_1",
+      "family": "loom_libs",
+      "symbol": "ggml_kquant_swiglu_decode_tokens_q8_1",
+      "source": "ops/kquant_decode_f32.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "input_q8",
+        "gate",
+        "up",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/kquant_decode_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_kquant_mul_mat_decode_tokens_q8_1",
+      "family": "loom_libs",
+      "symbol": "ggml_kquant_mul_mat_decode_tokens_q8_1",
+      "source": "ops/kquant_decode_f32.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "input_q8",
+        "weight",
+        "addend",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/kquant_decode_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
       "name": "ggml_softplus_f32",
       "family": "loom_libs",
       "symbol": "ggml_softplus_f32",

@@ -9097,6 +9097,7 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
   %c7t = index.constant 7 : index
   %tv7 = index.cmp ult, %c7t, %tokens : index
   %valid = index.cmp ult, %row, %output_size : index
+  // Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS and Q8_0 pairs take ggml_kquant_swiglu_decode_tokens_q8_1 instead.
   scf.if %valid {
     %g0_part, %u0_part, %g1_part, %u1_part, %g2_part, %u2_part, %g3_part, %u3_part, %g4_part, %u4_part, %g5_part, %u5_part, %g6_part, %u6_part, %g7_part, %u7_part = scf.for %block = [%first_block to %blocks step %c4](%g0_acc = %zero4 : vector<4xf32>, %u0_acc = %zero4 : vector<4xf32>, %g1_acc = %zero4 : vector<4xf32>, %u1_acc = %zero4 : vector<4xf32>, %g2_acc = %zero4 : vector<4xf32>, %u2_acc = %zero4 : vector<4xf32>, %g3_acc = %zero4 : vector<4xf32>, %u3_acc = %zero4 : vector<4xf32>, %g4_acc = %zero4 : vector<4xf32>, %u4_acc = %zero4 : vector<4xf32>, %g5_acc = %zero4 : vector<4xf32>, %u5_acc = %zero4 : vector<4xf32>, %g6_acc = %zero4 : vector<4xf32>, %u6_acc = %zero4 : vector<4xf32>, %g7_acc = %zero4 : vector<4xf32>, %u7_acc = %zero4 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
       %gshape = func.call pure @ggml_kquant_run_shape(%gate_format) : (index) -> (index)
@@ -9361,6 +9362,7 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
   %c7t = index.constant 7 : index
   %tv7 = index.cmp ult, %c7t, %tokens : index
   %valid = index.cmp ult, %row, %output_size : index
+  // Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS and Q8_0 weights take ggml_kquant_mul_mat_decode_tokens_q8_1 instead.
   scf.if %valid {
     %m0_part, %m1_part, %m2_part, %m3_part, %m4_part, %m5_part, %m6_part, %m7_part = scf.for %block = [%first_block to %blocks step %c4](%m0_acc = %zero4 : vector<4xf32>, %m1_acc = %zero4 : vector<4xf32>, %m2_acc = %zero4 : vector<4xf32>, %m3_acc = %zero4 : vector<4xf32>, %m4_acc = %zero4 : vector<4xf32>, %m5_acc = %zero4 : vector<4xf32>, %m6_acc = %zero4 : vector<4xf32>, %m7_acc = %zero4 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
       %mshape = func.call pure @ggml_kquant_run_shape(%format) : (index) -> (index)
@@ -9576,6 +9578,979 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_
         %ov7 = buffer.view %output[%zero_offset] : buffer -> view<[%o7_bound]xf32>
         view.store %v7, %ov7[%o7] : f32, view<[%o7_bound]xf32>
       }
+    }
+  }
+  kernel.return
+}
+
+// --- Multi-token decode on Q8_1 x4 activations (2..8 tokens: MTP / speculative verify batches) ---
+// The F32 tokens kernels above take one f32 FMA per weight and token. These two kernels read the
+// activation already quantized to GGML's block_q8_1_x4 layout (qwen_moe/ggml/quantize_q8_1_x4.loom,
+// emitted by the matcher once per input and shared by the kquant projections of that input; the
+// F32 input is not bound),
+// keep each lane's 32 weights of a block as eight words of int8 codes, and take one dot4i per word
+// and token. Both kernels take Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS and Q8_0 weights only (the matcher
+// keeps other formats, and SwiGLU pairs with one, on the F32 tokens kernels). One wave64 per row as
+// in the F32 kernels, but 8 lanes per 256-value block (32 values per lane): with 16 values per lane
+// the per-token Q8_1 loads and scale math cost as many instructions as the f32 FMAs they replaced.
+// Q8_1 x4, per token row: 144-byte groups of 128 values; f16 (d, d * sum(q)) for each of the
+// group's four 32-value blocks, then 32 words of four int8 values. Value P (0..255) of 256-block b
+// sits in group 2b + P/128, word (P%128)/4, with its (d, s) pair at f16 index 2((P%128)/32).
+// Q4_K / Q5_K: d*sc*sum(q*x) - dmin*m*sum(x) per 32-value sub-block, with sum(x) taken from the Q8_1
+// s term: the two lanes that share a sub-block split the codes, and only the first adds the min term.
+// An earlier attempt quantized the activation inside the block loop, once per output row, and was
+// slower than the f32 path (branch 1bit/hrx-kquant-decode-dot4i, 15cea6efa).
+
+// The 16 IQ4 codes of a lane (two words of nibble pairs, as ggml_kquant_iq4_codes_weights reads
+// them) as int8 table values: words 0-1 are the 8 low-nibble values, words 2-3 the 8 high-nibble
+// values. Lane c of each 16-lane group holds kvalues_iq4nl[c] in %kv_lane_i.
+func.def inline @ggml_kquant_iq4_codes_i8(%kv_lane_i: i32, %codes: vector<2xi32>) -> (vector<4xi32>) {
+  %c15_i32 = scalar.constant 15 : i32
+  %c16w = scalar.constant 16 : i32
+  %s0 = scalar.constant 0 : i32
+  %s4 = scalar.constant 4 : i32
+  %s8 = scalar.constant 8 : i32
+  %s12 = scalar.constant 12 : i32
+  %s16 = scalar.constant 16 : i32
+  %s20 = scalar.constant 20 : i32
+  %s24 = scalar.constant 24 : i32
+  %s28 = scalar.constant 28 : i32
+  %w0 = vector.extract %codes[0] : vector<2xi32> -> i32
+  %w1 = vector.extract %codes[1] : vector<2xi32> -> i32
+  %c_lo00 = scalar.shrui %w0, %s0 : i32
+  %c_lo0 = scalar.andi %c_lo00, %c15_i32 : i32
+  %k_lo0, %k_lo0_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_lo0, %c16w : i32, i32, i32
+  %c_lo10 = scalar.shrui %w0, %s8 : i32
+  %c_lo1 = scalar.andi %c_lo10, %c15_i32 : i32
+  %k_lo1, %k_lo1_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_lo1, %c16w : i32, i32, i32
+  %c_lo20 = scalar.shrui %w0, %s16 : i32
+  %c_lo2 = scalar.andi %c_lo20, %c15_i32 : i32
+  %k_lo2, %k_lo2_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_lo2, %c16w : i32, i32, i32
+  %c_lo30 = scalar.shrui %w0, %s24 : i32
+  %c_lo3 = scalar.andi %c_lo30, %c15_i32 : i32
+  %k_lo3, %k_lo3_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_lo3, %c16w : i32, i32, i32
+  %c_lo40 = scalar.shrui %w1, %s0 : i32
+  %c_lo4 = scalar.andi %c_lo40, %c15_i32 : i32
+  %k_lo4, %k_lo4_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_lo4, %c16w : i32, i32, i32
+  %c_lo50 = scalar.shrui %w1, %s8 : i32
+  %c_lo5 = scalar.andi %c_lo50, %c15_i32 : i32
+  %k_lo5, %k_lo5_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_lo5, %c16w : i32, i32, i32
+  %c_lo60 = scalar.shrui %w1, %s16 : i32
+  %c_lo6 = scalar.andi %c_lo60, %c15_i32 : i32
+  %k_lo6, %k_lo6_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_lo6, %c16w : i32, i32, i32
+  %c_lo70 = scalar.shrui %w1, %s24 : i32
+  %c_lo7 = scalar.andi %c_lo70, %c15_i32 : i32
+  %k_lo7, %k_lo7_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_lo7, %c16w : i32, i32, i32
+  %c_hi00 = scalar.shrui %w0, %s4 : i32
+  %c_hi0 = scalar.andi %c_hi00, %c15_i32 : i32
+  %k_hi0, %k_hi0_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_hi0, %c16w : i32, i32, i32
+  %c_hi10 = scalar.shrui %w0, %s12 : i32
+  %c_hi1 = scalar.andi %c_hi10, %c15_i32 : i32
+  %k_hi1, %k_hi1_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_hi1, %c16w : i32, i32, i32
+  %c_hi20 = scalar.shrui %w0, %s20 : i32
+  %c_hi2 = scalar.andi %c_hi20, %c15_i32 : i32
+  %k_hi2, %k_hi2_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_hi2, %c16w : i32, i32, i32
+  %c_hi30 = scalar.shrui %w0, %s28 : i32
+  %c_hi3 = scalar.andi %c_hi30, %c15_i32 : i32
+  %k_hi3, %k_hi3_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_hi3, %c16w : i32, i32, i32
+  %c_hi40 = scalar.shrui %w1, %s4 : i32
+  %c_hi4 = scalar.andi %c_hi40, %c15_i32 : i32
+  %k_hi4, %k_hi4_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_hi4, %c16w : i32, i32, i32
+  %c_hi50 = scalar.shrui %w1, %s12 : i32
+  %c_hi5 = scalar.andi %c_hi50, %c15_i32 : i32
+  %k_hi5, %k_hi5_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_hi5, %c16w : i32, i32, i32
+  %c_hi60 = scalar.shrui %w1, %s20 : i32
+  %c_hi6 = scalar.andi %c_hi60, %c15_i32 : i32
+  %k_hi6, %k_hi6_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_hi6, %c16w : i32, i32, i32
+  %c_hi70 = scalar.shrui %w1, %s28 : i32
+  %c_hi7 = scalar.andi %c_hi70, %c15_i32 : i32
+  %k_hi7, %k_hi7_ok = kernel.subgroup.shuffle<index> %kv_lane_i, %c_hi7, %c16w : i32, i32, i32
+  %b_lo0 = scalar.trunci %k_lo0 : i32 to i8
+  %b_lo1 = scalar.trunci %k_lo1 : i32 to i8
+  %b_lo2 = scalar.trunci %k_lo2 : i32 to i8
+  %b_lo3 = scalar.trunci %k_lo3 : i32 to i8
+  %b_lo4 = scalar.trunci %k_lo4 : i32 to i8
+  %b_lo5 = scalar.trunci %k_lo5 : i32 to i8
+  %b_lo6 = scalar.trunci %k_lo6 : i32 to i8
+  %b_lo7 = scalar.trunci %k_lo7 : i32 to i8
+  %b_hi0 = scalar.trunci %k_hi0 : i32 to i8
+  %b_hi1 = scalar.trunci %k_hi1 : i32 to i8
+  %b_hi2 = scalar.trunci %k_hi2 : i32 to i8
+  %b_hi3 = scalar.trunci %k_hi3 : i32 to i8
+  %b_hi4 = scalar.trunci %k_hi4 : i32 to i8
+  %b_hi5 = scalar.trunci %k_hi5 : i32 to i8
+  %b_hi6 = scalar.trunci %k_hi6 : i32 to i8
+  %b_hi7 = scalar.trunci %k_hi7 : i32 to i8
+  %bytes = vector.from_elements %b_lo0, %b_lo1, %b_lo2, %b_lo3, %b_lo4, %b_lo5, %b_lo6, %b_lo7, %b_hi0, %b_hi1, %b_hi2, %b_hi3, %b_hi4, %b_hi5, %b_hi6, %b_hi7 : vector<16xi8>
+  %words = vector.bitcast %bytes : vector<16xi8> to vector<4xi32>
+  func.return %words : vector<4xi32>
+}
+
+
+
+
+// One Q6_K quarter (4 values) as signed int8 codes q - 32: the 6-bit codes are 0..63, so
+// ((q | 0x80) - 0x20) ^ 0x80 per byte subtracts 32 without borrowing across bytes.
+func.def inline @ggml_kquant_q6k_quarter_i8(%ql: i32, %qh: i32, %nibble_shift: i32, %high_shift: i32) -> (i32) {
+  %c4_i32 = scalar.constant 4 : i32
+  %mask4 = scalar.constant 252645135 : i32
+  %mask2 = scalar.constant 50529027 : i32
+  %high_bits = scalar.constant -2139062144 : i32
+  %bias = scalar.constant 538976288 : i32
+  %low0 = scalar.shrui %ql, %nibble_shift : i32
+  %low = scalar.andi %low0, %mask4 : i32
+  %high0 = scalar.shrui %qh, %high_shift : i32
+  %high1 = scalar.andi %high0, %mask2 : i32
+  %high = scalar.shli %high1, %c4_i32 : i32
+  %q_word = scalar.ori %low, %high : i32
+  %q_set = scalar.ori %q_word, %high_bits : i32
+  %q_sub = scalar.subi %q_set, %bias : i32
+  %q = scalar.xori %q_sub, %high_bits : i32
+  func.return %q : i32
+}
+
+
+
+
+
+
+
+
+
+
+// Q4_K / Q5_K lane: sub-block pair g = l8 / 2, half h = l8 % 2; bytes 16h..16h+15 of the pair's 32
+// code bytes, i.e. 16 values of sub-block 2g (low nibbles, at p0 = 64g + 16h) and the same 16
+// positions of sub-block 2g + 1 (high nibbles, at p0 + 32). Q5_K adds bit 2g / 2g + 1 of qh bytes
+// 16h..16h+15. Only h = 0 carries the min terms (the Q8_1 s term covers the whole sub-block).
+func.def inline @ggml_kquant_q45k_lane_q8w(%is5: i1, %weight: buffer, %row_base: offset, %block: index, %l8: index) -> (vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c12 = index.constant 12 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %zero = scalar.constant 0.0 : f32
+  %nibble_mask = vector.constant 252645135 : vector<4xi32>
+  %bit_mask = vector.constant 16843009 : vector<4xi32>
+  %four = vector.constant 4 : vector<4xi32>
+  %bytes4 = index.constant 144 : offset
+  %bytes5 = index.constant 176 : offset
+  %block_bytes = scf.select %is5, %bytes5, %bytes4 : offset
+  %l = index.assume %l8 [range(%l8, 0, 7)] : index
+  %g = index.div %l, %c2 : index
+  %h = index.rem %l, %c2 : index
+  %block_add = index.scale %block, %block_bytes : index, offset -> offset
+  %block_base = index.add %row_base, %block_add : offset
+  %hdr = buffer.view %weight[%block_base] : buffer -> view<4xi32>
+  %hv = buffer.view %weight[%block_base] : buffer -> view<2xf16>
+  %dm = vector.load %hv[%c0] : view<2xf16> -> vector<2xf16>
+  %header = vector.load %hdr[%c0] : view<4xi32> -> vector<4xi32>
+  %g8 = index.mul %g, %c8 : index
+  %h4 = index.mul %h, %c4 : index
+  %code_rel = index.add %g8, %h4 : index
+  %sub_lo = index.mul %g, %c2 : index
+  %sub_hi = index.add %sub_lo, %c1 : index
+  %low, %high = scf.if %is5 -> (vector<4xi32>, vector<4xi32>) {
+    %wv = buffer.view %weight[%block_base] : buffer -> view<44xi32>
+    %code_word0 = index.add %c12, %code_rel : index
+    %code_word = index.assume %code_word0 [range(%code_word0, 12, 40)] : index
+    %codes = vector.load %wv[%code_word] : view<44xi32> -> vector<4xi32>
+    %low4 = vector.andi %codes, %nibble_mask : vector<4xi32>
+    %codes_shr = vector.shrui %codes, %four : vector<4xi32>
+    %high4 = vector.andi %codes_shr, %nibble_mask : vector<4xi32>
+    %qh_word = index.add %c4, %h4 : index
+    %qh = vector.load %wv[%qh_word] : view<44xi32> -> vector<4xi32>
+    %shift_lo_i = index.cast %sub_lo : index to i32
+    %shift_hi_i = index.cast %sub_hi : index to i32
+    %shift_lo = vector.splat %shift_lo_i : vector<4xi32>
+    %shift_hi = vector.splat %shift_hi_i : vector<4xi32>
+    %qh_lo0 = vector.shrui %qh, %shift_lo : vector<4xi32>
+    %qh_hi0 = vector.shrui %qh, %shift_hi : vector<4xi32>
+    %qh_lo1 = vector.andi %qh_lo0, %bit_mask : vector<4xi32>
+    %qh_hi1 = vector.andi %qh_hi0, %bit_mask : vector<4xi32>
+    %qh_lo = vector.shli %qh_lo1, %four : vector<4xi32>
+    %qh_hi = vector.shli %qh_hi1, %four : vector<4xi32>
+    %lo = vector.ori %low4, %qh_lo : vector<4xi32>
+    %hi = vector.ori %high4, %qh_hi : vector<4xi32>
+    scf.yield %lo, %hi : vector<4xi32>, vector<4xi32>
+  } else {
+    %wv = buffer.view %weight[%block_base] : buffer -> view<36xi32>
+    %code_word0 = index.add %c4, %code_rel : index
+    %code_word = index.assume %code_word0 [range(%code_word0, 4, 32)] : index
+    %codes = vector.load %wv[%code_word] : view<36xi32> -> vector<4xi32>
+    %low4 = vector.andi %codes, %nibble_mask : vector<4xi32>
+    %codes_shr = vector.shrui %codes, %four : vector<4xi32>
+    %high4 = vector.andi %codes_shr, %nibble_mask : vector<4xi32>
+    scf.yield %low4, %high4 : vector<4xi32>, vector<4xi32>
+  }
+  %d_f16 = vector.extract %dm[0] : vector<2xf16> -> f16
+  %dmin_f16 = vector.extract %dm[1] : vector<2xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %dmin = scalar.extf %dmin_f16 : f16 to f32
+  %s0 = vector.extract %header[1] : vector<4xi32> -> i32
+  %s1 = vector.extract %header[2] : vector<4xi32> -> i32
+  %s2 = vector.extract %header[3] : vector<4xi32> -> i32
+  %sc_lo_i, %m_lo_i = func.call @ggml_kquant_scale_min(%s0, %s1, %s2, %sub_lo) : (i32, i32, i32, index) -> (i32, i32)
+  %sc_hi_i, %m_hi_i = func.call @ggml_kquant_scale_min(%s0, %s1, %s2, %sub_hi) : (i32, i32, i32, index) -> (i32, i32)
+  %sc_lo_f = scalar.uitofp %sc_lo_i : i32 to f32
+  %sc_hi_f = scalar.uitofp %sc_hi_i : i32 to f32
+  %m_lo_f = scalar.uitofp %m_lo_i : i32 to f32
+  %m_hi_f = scalar.uitofp %m_hi_i : i32 to f32
+  %d_sc_lo = scalar.mulf %d, %sc_lo_f : f32
+  %d_sc_hi = scalar.mulf %d, %sc_hi_f : f32
+  %mn_lo0 = scalar.mulf %dmin, %m_lo_f : f32
+  %mn_hi0 = scalar.mulf %dmin, %m_hi_f : f32
+  %first = index.cmp eq, %h, %c0 : index
+  %mn_lo = scf.select %first, %mn_lo0, %zero : f32
+  %mn_hi = scf.select %first, %mn_hi0, %zero : f32
+  %words = vector.concat<0> %low, %high : vector<4xi32>, vector<4xi32> -> vector<8xi32>
+  %scales = vector.from_elements %d_sc_lo, %d_sc_hi, %zero, %zero : vector<4xf32>
+  %mins = vector.from_elements %mn_lo, %mn_hi : vector<2xf32>
+  %g64 = index.mul %g, %c64 : index
+  %h16 = index.mul %h, %c16 : index
+  %p0 = index.add %g64, %h16 : index
+  %p2 = index.add %p0, %c32 : index
+  func.return %words, %scales, %mins, %p0, %p2 : vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index
+}
+
+// 32 IQ4 codes (16 bytes, ggml order: low nibbles are values 0..15, high nibbles 16..31) as int8
+// table values in value order.
+func.def inline @ggml_kquant_iq4_codes32_i8(%kv_lane_i: i32, %codes: vector<4xi32>) -> (vector<8xi32>) {
+  %c01 = vector.slice %codes[0] : vector<4xi32> -> vector<2xi32>
+  %c23 = vector.slice %codes[2] : vector<4xi32> -> vector<2xi32>
+  %a = func.call @ggml_kquant_iq4_codes_i8(%kv_lane_i, %c01) : (i32, vector<2xi32>) -> (vector<4xi32>)
+  %b = func.call @ggml_kquant_iq4_codes_i8(%kv_lane_i, %c23) : (i32, vector<2xi32>) -> (vector<4xi32>)
+  %a_lo = vector.slice %a[0] : vector<4xi32> -> vector<2xi32>
+  %a_hi = vector.slice %a[2] : vector<4xi32> -> vector<2xi32>
+  %b_lo = vector.slice %b[0] : vector<4xi32> -> vector<2xi32>
+  %b_hi = vector.slice %b[2] : vector<4xi32> -> vector<2xi32>
+  %lo = vector.concat<0> %a_lo, %b_lo : vector<2xi32>, vector<2xi32> -> vector<4xi32>
+  %hi = vector.concat<0> %a_hi, %b_hi : vector<2xi32>, vector<2xi32> -> vector<4xi32>
+  %words = vector.concat<0> %lo, %hi : vector<4xi32>, vector<4xi32> -> vector<8xi32>
+  func.return %words : vector<8xi32>
+}
+
+// IQ4_XS lane: sub-block l8 (32 values at p0 = 32 l8).
+func.def inline @ggml_kquant_iq4xs_lane_q8w(%kv_lane_i: i32, %weight: buffer, %row_base: offset, %block: index, %l8: index) -> (vector<8xi32>, f32, index) {
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c32 = index.constant 32 : index
+  %c2_i32 = scalar.constant 2 : i32
+  %c3_i32 = scalar.constant 3 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c15_i32 = scalar.constant 15 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c32_i32 = scalar.constant 32 : i32
+  %block_bytes = index.constant 136 : offset
+  %sub = index.assume %l8 [range(%l8, 0, 7)] : index
+  %block_add = index.scale %block, %block_bytes : index, offset -> offset
+  %block_base = index.add %row_base, %block_add : offset
+  %wv = buffer.view %weight[%block_base] : buffer -> view<34xi32>
+  %hv = buffer.view %weight[%block_base] : buffer -> view<2xf16>
+  %dh = vector.load %hv[%c0] : view<2xf16> -> vector<2xf16>
+  %d_f16 = vector.extract %dh[0] : vector<2xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %header = vector.load %wv[%c0] : view<34xi32> -> vector<2xi32>
+  %word0 = vector.extract %header[0] : vector<2xi32> -> i32
+  %scales_l = vector.extract %header[1] : vector<2xi32> -> i32
+  %sub_i32 = index.cast %sub : index to i32
+  %low_shift = scalar.muli %sub_i32, %c4_i32 : i32
+  %high_shift0 = scalar.muli %sub_i32, %c2_i32 : i32
+  %high_shift = scalar.addi %high_shift0, %c16_i32 : i32
+  %ls_low0 = scalar.shrui %scales_l, %low_shift : i32
+  %ls_low = scalar.andi %ls_low0, %c15_i32 : i32
+  %ls_high0 = scalar.shrui %word0, %high_shift : i32
+  %ls_high1 = scalar.andi %ls_high0, %c3_i32 : i32
+  %ls_high = scalar.shli %ls_high1, %c4_i32 : i32
+  %ls = scalar.ori %ls_low, %ls_high : i32
+  %ls_centered = scalar.subi %ls, %c32_i32 : i32
+  %ls_f = scalar.sitofp %ls_centered : i32 to f32
+  %dl = scalar.mulf %d, %ls_f : f32
+  %sub_words = index.mul %sub, %c4 : index
+  %code_word = index.add %c2, %sub_words : index
+  %codes = vector.load %wv[%code_word] : view<34xi32> -> vector<4xi32>
+  %words = func.call @ggml_kquant_iq4_codes32_i8(%kv_lane_i, %codes) : (i32, vector<4xi32>) -> (vector<8xi32>)
+  %p0 = index.mul %sub, %c32 : index
+  func.return %words, %dl, %p0 : vector<8xi32>, f32, index
+}
+
+// IQ4_NL lane: 32-value block l8 of the 256-value span (18-byte blocks).
+func.def inline @ggml_kquant_iq4nl_lane_q8w(%kv_lane_i: i32, %weight: buffer, %row_base: offset, %block: index, %l8: index) -> (vector<8xi32>, f32, index) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  %super_bytes = index.constant 144 : offset
+  %qblock_bytes = index.constant 18 : offset
+  %qb = index.assume %l8 [range(%l8, 0, 7)] : index
+  %super_add = index.scale %block, %super_bytes : index, offset -> offset
+  %qb_add = index.scale %qb, %qblock_bytes : index, offset -> offset
+  %super_base = index.add %row_base, %super_add : offset
+  %qb_base = index.add %super_base, %qb_add : offset
+  %hv = buffer.view %weight[%qb_base] : buffer -> view<9xf16>
+  %iv = buffer.view %weight[%qb_base] : buffer -> view<9xi16>
+  %d_f16 = view.load %hv[%c0] : view<9xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %codes16 = vector.load %iv[%c1] : view<9xi16> -> vector<8xi16>
+  %codes = vector.bitcast %codes16 : vector<8xi16> to vector<4xi32>
+  %words = func.call @ggml_kquant_iq4_codes32_i8(%kv_lane_i, %codes) : (i32, vector<4xi32>) -> (vector<8xi32>)
+  %p0 = index.mul %qb, %c32 : index
+  func.return %words, %d, %p0 : vector<8xi32>, f32, index
+}
+
+// Q8_0 lane: 32-value block l8 (34-byte blocks).
+func.def inline @ggml_kquant_q8_0_lane_q8w(%weight: buffer, %row_base: offset, %block: index, %l8: index) -> (vector<8xi32>, f32, index) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  %super_bytes = index.constant 272 : offset
+  %qblock_bytes = index.constant 34 : offset
+  %qb = index.assume %l8 [range(%l8, 0, 7)] : index
+  %super_add = index.scale %block, %super_bytes : index, offset -> offset
+  %qb_add = index.scale %qb, %qblock_bytes : index, offset -> offset
+  %super_base = index.add %row_base, %super_add : offset
+  %qb_base = index.add %super_base, %qb_add : offset
+  %hv = buffer.view %weight[%qb_base] : buffer -> view<17xf16>
+  %iv = buffer.view %weight[%qb_base] : buffer -> view<17xi16>
+  %d_f16 = view.load %hv[%c0] : view<17xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %codes16 = vector.load %iv[%c1] : view<17xi16> -> vector<16xi16>
+  %words = vector.bitcast %codes16 : vector<16xi16> to vector<8xi32>
+  %p0 = index.mul %qb, %c32 : index
+  func.return %words, %d, %p0 : vector<8xi32>, f32, index
+}
+
+// Q6_K lane: half n = l8 / 4, value offset 8m (m = l8 % 4): four 8-value runs at
+// p0 + 32r (p0 = 128n + 8m), each with its own 16-value scale.
+func.def inline @ggml_kquant_q6k_lane_q8w(%weight: buffer, %row_base: offset, %block: index, %l8: index) -> (vector<8xi32>, vector<4xf32>, index) {
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c96 = index.constant 96 : index
+  %c104 = index.constant 104 : index
+  %c128 = index.constant 128 : index
+  %s0 = scalar.constant 0 : i32
+  %s2 = scalar.constant 2 : i32
+  %s4 = scalar.constant 4 : i32
+  %s6 = scalar.constant 6 : i32
+  %block_bytes = index.constant 210 : offset
+  %l = index.assume %l8 [range(%l8, 0, 7)] : index
+  %n = index.div %l, %c4 : index
+  %m = index.rem %l, %c4 : index
+  %block_add = index.scale %block, %block_bytes : index, offset -> offset
+  %block_base = index.add %row_base, %block_add : offset
+  %iv = buffer.view %weight[%block_base] : buffer -> view<105xi16>
+  %hv = buffer.view %weight[%block_base] : buffer -> view<105xf16>
+  %n32 = index.mul %n, %c32 : index
+  %m4 = index.mul %m, %c4 : index
+  %ql_a_at = index.add %n32, %m4 : index
+  %ql_b_at = index.add %ql_a_at, %c16 : index
+  %n16 = index.mul %n, %c16 : index
+  %qh_rel = index.add %n16, %m4 : index
+  %qh_at = index.add %c64, %qh_rel : index
+  %n4 = index.mul %n, %c4 : index
+  %sc_at = index.add %c96, %n4 : index
+  %ql_a4 = vector.load %iv[%ql_a_at] : view<105xi16> -> vector<4xi16>
+  %ql_b4 = vector.load %iv[%ql_b_at] : view<105xi16> -> vector<4xi16>
+  %qh4 = vector.load %iv[%qh_at] : view<105xi16> -> vector<4xi16>
+  %sc4 = vector.load %iv[%sc_at] : view<105xi16> -> vector<4xi16>
+  %ql_a2 = vector.bitcast %ql_a4 : vector<4xi16> to vector<2xi32>
+  %ql_b2 = vector.bitcast %ql_b4 : vector<4xi16> to vector<2xi32>
+  %qh2 = vector.bitcast %qh4 : vector<4xi16> to vector<2xi32>
+  %sc8 = vector.bitcast %sc4 : vector<4xi16> to vector<8xi8>
+  %d_f16 = view.load %hv[%c104] : view<105xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %ql_a0 = vector.extract %ql_a2[0] : vector<2xi32> -> i32
+  %ql_a1 = vector.extract %ql_a2[1] : vector<2xi32> -> i32
+  %ql_b0 = vector.extract %ql_b2[0] : vector<2xi32> -> i32
+  %ql_b1 = vector.extract %ql_b2[1] : vector<2xi32> -> i32
+  %qh0 = vector.extract %qh2[0] : vector<2xi32> -> i32
+  %qh1 = vector.extract %qh2[1] : vector<2xi32> -> i32
+  %r0w0 = func.call @ggml_kquant_q6k_quarter_i8(%ql_a0, %qh0, %s0, %s0) : (i32, i32, i32, i32) -> (i32)
+  %r0w1 = func.call @ggml_kquant_q6k_quarter_i8(%ql_a1, %qh1, %s0, %s0) : (i32, i32, i32, i32) -> (i32)
+  %r1w0 = func.call @ggml_kquant_q6k_quarter_i8(%ql_b0, %qh0, %s0, %s2) : (i32, i32, i32, i32) -> (i32)
+  %r1w1 = func.call @ggml_kquant_q6k_quarter_i8(%ql_b1, %qh1, %s0, %s2) : (i32, i32, i32, i32) -> (i32)
+  %r2w0 = func.call @ggml_kquant_q6k_quarter_i8(%ql_a0, %qh0, %s4, %s4) : (i32, i32, i32, i32) -> (i32)
+  %r2w1 = func.call @ggml_kquant_q6k_quarter_i8(%ql_a1, %qh1, %s4, %s4) : (i32, i32, i32, i32) -> (i32)
+  %r3w0 = func.call @ggml_kquant_q6k_quarter_i8(%ql_b0, %qh0, %s4, %s6) : (i32, i32, i32, i32) -> (i32)
+  %r3w1 = func.call @ggml_kquant_q6k_quarter_i8(%ql_b1, %qh1, %s4, %s6) : (i32, i32, i32, i32) -> (i32)
+  %words = vector.from_elements %r0w0, %r0w1, %r1w0, %r1w1, %r2w0, %r2w1, %r3w0, %r3w1 : vector<8xi32>
+  %second = index.cmp uge, %m, %c2 : index
+  %sc0_a = vector.extract %sc8[0] : vector<8xi8> -> i8
+  %sc0_b = vector.extract %sc8[1] : vector<8xi8> -> i8
+  %sc0_i8 = scf.select %second, %sc0_b, %sc0_a : i8
+  %sc0_i32 = scalar.extsi %sc0_i8 : i8 to i32
+  %sc0 = scalar.sitofp %sc0_i32 : i32 to f32
+  %ds0 = scalar.mulf %d, %sc0 : f32
+  %sc1_a = vector.extract %sc8[2] : vector<8xi8> -> i8
+  %sc1_b = vector.extract %sc8[3] : vector<8xi8> -> i8
+  %sc1_i8 = scf.select %second, %sc1_b, %sc1_a : i8
+  %sc1_i32 = scalar.extsi %sc1_i8 : i8 to i32
+  %sc1 = scalar.sitofp %sc1_i32 : i32 to f32
+  %ds1 = scalar.mulf %d, %sc1 : f32
+  %sc2_a = vector.extract %sc8[4] : vector<8xi8> -> i8
+  %sc2_b = vector.extract %sc8[5] : vector<8xi8> -> i8
+  %sc2_i8 = scf.select %second, %sc2_b, %sc2_a : i8
+  %sc2_i32 = scalar.extsi %sc2_i8 : i8 to i32
+  %sc2 = scalar.sitofp %sc2_i32 : i32 to f32
+  %ds2 = scalar.mulf %d, %sc2 : f32
+  %sc3_a = vector.extract %sc8[6] : vector<8xi8> -> i8
+  %sc3_b = vector.extract %sc8[7] : vector<8xi8> -> i8
+  %sc3_i8 = scf.select %second, %sc3_b, %sc3_a : i8
+  %sc3_i32 = scalar.extsi %sc3_i8 : i8 to i32
+  %sc3 = scalar.sitofp %sc3_i32 : i32 to f32
+  %ds3 = scalar.mulf %d, %sc3 : f32
+  %scales = vector.from_elements %ds0, %ds1, %ds2, %ds3 : vector<4xf32>
+  %n128 = index.mul %n, %c128 : index
+  %m8 = index.mul %m, %c8 : index
+  %p0 = index.add %n128, %m8 : index
+  func.return %words, %scales, %p0 : vector<8xi32>, vector<4xf32>, index
+}
+
+// Q8_1 shape of a format for ggml_kquant_q8w_token: 0 = Q6_K, 1 = Q4_K/Q5_K, 2 = 32 contiguous values
+// (IQ4_XS, IQ4_NL, Q8_0).
+func.def pure inline @ggml_kquant_q8w_shape(%format: index) -> (index) {
+  %f4 = index.constant 4 : index
+  %f5 = index.constant 5 : index
+  %f6 = index.constant 6 : index
+  %s0 = index.constant 0 : index
+  %s1 = index.constant 1 : index
+  %s2 = index.constant 2 : index
+  %is4 = index.cmp eq, %format, %f4 : index
+  %is5 = index.cmp eq, %format, %f5 : index
+  %is6 = index.cmp eq, %format, %f6 : index
+  %is45 = scalar.ori %is4, %is5 : i1
+  %a = scf.select %is45, %s1, %s2 : index
+  %r = scf.select %is6, %s0, %a : index
+  func.return %r : index
+}
+
+// Per-block lane data, shared by every token: eight int8 code words, weight scales, min terms
+// (Q4_K/Q5_K only) and run positions.
+func.def inline @ggml_kquant_lane_q8w(%format: index, %kv_lane_i: i32, %weight: buffer, %row: index, %blocks: index, %block: index, %l8: index) -> (vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index) {
+  %f4 = index.constant 4 : index
+  %f5 = index.constant 5 : index
+  %f6 = index.constant 6 : index
+  %f20 = index.constant 20 : index
+  %f23 = index.constant 23 : index
+  %zero2 = vector.constant 0.0 : vector<2xf32>
+  %block_bytes = func.call pure @ggml_kquant_block_bytes(%format) : (index) -> (offset)
+  %row_bytes = index.scale %blocks, %block_bytes : index, offset -> offset
+  %row_base = index.scale %row, %row_bytes : index, offset -> offset
+  %is4 = index.cmp eq, %format, %f4 : index
+  %is5 = index.cmp eq, %format, %f5 : index
+  %is45 = scalar.ori %is4, %is5 : i1
+  %is6 = index.cmp eq, %format, %f6 : index
+  %is20 = index.cmp eq, %format, %f20 : index
+  %is23 = index.cmp eq, %format, %f23 : index
+  %words, %scales, %mins, %p0, %p2 = scf.if %is45 -> (vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index) {
+    %w, %s, %m, %q0, %q2 = func.call @ggml_kquant_q45k_lane_q8w(%is5, %weight, %row_base, %block, %l8) : (i1, buffer, offset, index, index) -> (vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index)
+    scf.yield %w, %s, %m, %q0, %q2 : vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index
+  } else {
+    %r_w, %r_s, %r_p0 = scf.if %is6 -> (vector<8xi32>, vector<4xf32>, index) {
+      %w, %s, %q0 = func.call @ggml_kquant_q6k_lane_q8w(%weight, %row_base, %block, %l8) : (buffer, offset, index, index) -> (vector<8xi32>, vector<4xf32>, index)
+      scf.yield %w, %s, %q0 : vector<8xi32>, vector<4xf32>, index
+    } else {
+      %w, %dl, %q0 = scf.if %is23 -> (vector<8xi32>, f32, index) {
+        %a, %b, %c = func.call @ggml_kquant_iq4xs_lane_q8w(%kv_lane_i, %weight, %row_base, %block, %l8) : (i32, buffer, offset, index, index) -> (vector<8xi32>, f32, index)
+        scf.yield %a, %b, %c : vector<8xi32>, f32, index
+      } else {
+        %a2, %b2, %c2 = scf.if %is20 -> (vector<8xi32>, f32, index) {
+          %a, %b, %c = func.call @ggml_kquant_iq4nl_lane_q8w(%kv_lane_i, %weight, %row_base, %block, %l8) : (i32, buffer, offset, index, index) -> (vector<8xi32>, f32, index)
+          scf.yield %a, %b, %c : vector<8xi32>, f32, index
+        } else {
+          %a, %b, %c = func.call @ggml_kquant_q8_0_lane_q8w(%weight, %row_base, %block, %l8) : (buffer, offset, index, index) -> (vector<8xi32>, f32, index)
+          scf.yield %a, %b, %c : vector<8xi32>, f32, index
+        }
+        scf.yield %a2, %b2, %c2 : vector<8xi32>, f32, index
+      }
+      %s = vector.from_elements %dl, %dl, %dl, %dl : vector<4xf32>
+      scf.yield %w, %s, %q0 : vector<8xi32>, vector<4xf32>, index
+    }
+    scf.yield %r_w, %r_s, %zero2, %r_p0, %r_p0 : vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index
+  }
+  func.return %words, %scales, %mins, %p0, %p2 : vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index
+}
+
+func.def inline @ggml_kquant_dot_s8_words4(%w: vector<4xi32>, %x: vector<4xi32>) -> (i32) {
+  %zero1 = vector.constant 0 : vector<1xi32>
+  %w0 = vector.slice %w[0] : vector<4xi32> -> vector<1xi32>
+  %w1 = vector.slice %w[1] : vector<4xi32> -> vector<1xi32>
+  %w2 = vector.slice %w[2] : vector<4xi32> -> vector<1xi32>
+  %w3 = vector.slice %w[3] : vector<4xi32> -> vector<1xi32>
+  %x0 = vector.slice %x[0] : vector<4xi32> -> vector<1xi32>
+  %x1 = vector.slice %x[1] : vector<4xi32> -> vector<1xi32>
+  %x2 = vector.slice %x[2] : vector<4xi32> -> vector<1xi32>
+  %x3 = vector.slice %x[3] : vector<4xi32> -> vector<1xi32>
+  %wb0 = vector.bitcast %w0 : vector<1xi32> to vector<4xi8>
+  %wb1 = vector.bitcast %w1 : vector<1xi32> to vector<4xi8>
+  %wb2 = vector.bitcast %w2 : vector<1xi32> to vector<4xi8>
+  %wb3 = vector.bitcast %w3 : vector<1xi32> to vector<4xi8>
+  %xb0 = vector.bitcast %x0 : vector<1xi32> to vector<4xi8>
+  %xb1 = vector.bitcast %x1 : vector<1xi32> to vector<4xi8>
+  %xb2 = vector.bitcast %x2 : vector<1xi32> to vector<4xi8>
+  %xb3 = vector.bitcast %x3 : vector<1xi32> to vector<4xi8>
+  %d0 = vector.dot4i<s8s8> %wb0, %xb0, %zero1 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+  %d1 = vector.dot4i<s8s8> %wb1, %xb1, %d0 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+  %d2 = vector.dot4i<s8s8> %wb2, %xb2, %d1 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+  %d3 = vector.dot4i<s8s8> %wb3, %xb3, %d2 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+  %sum = vector.extract %d3[0] : vector<1xi32> -> i32
+  func.return %sum : i32
+}
+
+func.def inline @ggml_kquant_dot_s8_words2i(%w: vector<2xi32>, %x: vector<2xi32>) -> (i32) {
+  %zero1 = vector.constant 0 : vector<1xi32>
+  %w0 = vector.slice %w[0] : vector<2xi32> -> vector<1xi32>
+  %w1 = vector.slice %w[1] : vector<2xi32> -> vector<1xi32>
+  %x0 = vector.slice %x[0] : vector<2xi32> -> vector<1xi32>
+  %x1 = vector.slice %x[1] : vector<2xi32> -> vector<1xi32>
+  %wb0 = vector.bitcast %w0 : vector<1xi32> to vector<4xi8>
+  %wb1 = vector.bitcast %w1 : vector<1xi32> to vector<4xi8>
+  %xb0 = vector.bitcast %x0 : vector<1xi32> to vector<4xi8>
+  %xb1 = vector.bitcast %x1 : vector<1xi32> to vector<4xi8>
+  %d0 = vector.dot4i<s8s8> %wb0, %xb0, %zero1 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+  %d1 = vector.dot4i<s8s8> %wb1, %xb1, %d0 : vector<4xi8>, vector<4xi8>, vector<1xi32>
+  %sum = vector.extract %d1[0] : vector<1xi32> -> i32
+  func.return %sum : i32
+}
+
+// Token %t's contribution for one block (32 values per lane), added into %acc.
+func.def inline @ggml_kquant_q8w_token(%shape: index, %words: vector<8xi32>, %scales: vector<4xf32>, %mins: vector<2xf32>, %p0: index, %p2: index, %input_q8: buffer, %t: index, %blocks: index, %block: index, %acc: f32) -> (f32) {
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c24 = index.constant 24 : index
+  %c32 = index.constant 32 : index
+  %c128 = index.constant 128 : index
+  %s1 = index.constant 1 : index
+  %s2 = index.constant 2 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_add = index.constant 16 : offset
+  %row_blocks = index.mul %t, %blocks : index
+  %x_block = index.add %row_blocks, %block : index
+  %x_group0 = index.mul %x_block, %c2 : index
+  %q0 = index.assume %p0 [range(%p0, 0, 255)] : index
+  %g = index.div %q0, %c128 : index
+  %x_group = index.add %x_group0, %g : index
+  %group_base = index.scale %x_group, %group_bytes : index, offset -> offset
+  %payload_base = index.add %group_base, %payload_add : offset
+  %dsv = buffer.view %input_q8[%group_base] : buffer -> view<8xf16>
+  %qv = buffer.view %input_q8[%payload_base] : buffer -> view<32xi32>
+  %r0 = index.rem %q0, %c128 : index
+  %w0_raw = index.div %r0, %c4 : index
+  %b0 = index.div %r0, %c32 : index
+  %is_q45 = index.cmp eq, %shape, %s1 : index
+  %is_run32 = index.cmp eq, %shape, %s2 : index
+  %next = scf.if %is_q45 -> (f32) {
+    %w_lo = index.assume %w0_raw [range(%w0_raw, 0, 20)] : index
+    %w_hi = index.add %w_lo, %c8 : index
+    %x_lo = vector.load %qv[%w_lo] : view<32xi32> -> vector<4xi32>
+    %x_hi = vector.load %qv[%w_hi] : view<32xi32> -> vector<4xi32>
+    %d_at0 = index.mul %b0, %c2 : index
+    %d_at = index.assume %d_at0 [range(%d_at0, 0, 4)] : index
+    %ds = vector.load %dsv[%d_at] : view<8xf16> -> vector<4xf16>
+    %dsf = vector.extf %ds : vector<4xf16> to vector<4xf32>
+    %w_l = vector.slice %words[0] : vector<8xi32> -> vector<4xi32>
+    %w_h = vector.slice %words[4] : vector<8xi32> -> vector<4xi32>
+    %si_lo = func.call @ggml_kquant_dot_s8_words4(%w_l, %x_lo) : (vector<4xi32>, vector<4xi32>) -> (i32)
+    %si_hi = func.call @ggml_kquant_dot_s8_words4(%w_h, %x_hi) : (vector<4xi32>, vector<4xi32>) -> (i32)
+    %sumi_lo = scalar.sitofp %si_lo : i32 to f32
+    %sumi_hi = scalar.sitofp %si_hi : i32 to f32
+    %d8_lo = vector.extract %dsf[0] : vector<4xf32> -> f32
+    %s8_lo = vector.extract %dsf[1] : vector<4xf32> -> f32
+    %d8_hi = vector.extract %dsf[2] : vector<4xf32> -> f32
+    %s8_hi = vector.extract %dsf[3] : vector<4xf32> -> f32
+    %sc_lo = vector.extract %scales[0] : vector<4xf32> -> f32
+    %sc_hi = vector.extract %scales[1] : vector<4xf32> -> f32
+    %mn_lo = vector.extract %mins[0] : vector<2xf32> -> f32
+    %mn_hi = vector.extract %mins[1] : vector<2xf32> -> f32
+    %f_lo = scalar.mulf %sc_lo, %d8_lo : f32
+    %f_hi = scalar.mulf %sc_hi, %d8_hi : f32
+    %a0 = scalar.fmaf %f_lo, %sumi_lo, %acc : f32
+    %a1 = scalar.fmaf %f_hi, %sumi_hi, %a0 : f32
+    %m_lo = scalar.mulf %mn_lo, %s8_lo : f32
+    %m = scalar.fmaf %mn_hi, %s8_hi, %m_lo : f32
+    %r = scalar.subf %a1, %m : f32
+    scf.yield %r : f32
+  } else {
+    %r32 = scf.if %is_run32 -> (f32) {
+      %w_at = index.assume %w0_raw [range(%w0_raw, 0, 24)] : index
+      %x = vector.load %qv[%w_at] : view<32xi32> -> vector<8xi32>
+      %d_at0 = index.mul %b0, %c2 : index
+      %d_at = index.assume %d_at0 [range(%d_at0, 0, 6)] : index
+      %d8_h = view.load %dsv[%d_at] : view<8xf16> -> f16
+      %d8 = scalar.extf %d8_h : f16 to f32
+      %w_l = vector.slice %words[0] : vector<8xi32> -> vector<4xi32>
+      %w_h = vector.slice %words[4] : vector<8xi32> -> vector<4xi32>
+      %x_l = vector.slice %x[0] : vector<8xi32> -> vector<4xi32>
+      %x_h = vector.slice %x[4] : vector<8xi32> -> vector<4xi32>
+      %sa = func.call @ggml_kquant_dot_s8_words4(%w_l, %x_l) : (vector<4xi32>, vector<4xi32>) -> (i32)
+      %sb = func.call @ggml_kquant_dot_s8_words4(%w_h, %x_h) : (vector<4xi32>, vector<4xi32>) -> (i32)
+      %si = scalar.addi %sa, %sb : i32
+      %sumi = scalar.sitofp %si : i32 to f32
+      %sc = vector.extract %scales[0] : vector<4xf32> -> f32
+      %f = scalar.mulf %sc, %d8 : f32
+      %r = scalar.fmaf %f, %sumi, %acc : f32
+      scf.yield %r : f32
+    } else {
+      // Q6_K: p0 = 128n + 8m; run r is words 8r + 2m, 8r + 2m + 1 of group n.
+      %j = index.assume %w0_raw [range(%w0_raw, 0, 6)] : index
+      %j8 = index.add %j, %c8 : index
+      %j16 = index.add %j, %c16 : index
+      %j24 = index.add %j, %c24 : index
+      %ds = vector.load %dsv[%c0] : view<8xf16> -> vector<8xf16>
+      %dsf = vector.extf %ds : vector<8xf16> to vector<8xf32>
+      %x0 = vector.load %qv[%j] : view<32xi32> -> vector<2xi32>
+      %x1 = vector.load %qv[%j8] : view<32xi32> -> vector<2xi32>
+      %x2 = vector.load %qv[%j16] : view<32xi32> -> vector<2xi32>
+      %x3 = vector.load %qv[%j24] : view<32xi32> -> vector<2xi32>
+      %w0 = vector.slice %words[0] : vector<8xi32> -> vector<2xi32>
+      %w1 = vector.slice %words[2] : vector<8xi32> -> vector<2xi32>
+      %w2 = vector.slice %words[4] : vector<8xi32> -> vector<2xi32>
+      %w3 = vector.slice %words[6] : vector<8xi32> -> vector<2xi32>
+      %i0 = func.call @ggml_kquant_dot_s8_words2i(%w0, %x0) : (vector<2xi32>, vector<2xi32>) -> (i32)
+      %i1 = func.call @ggml_kquant_dot_s8_words2i(%w1, %x1) : (vector<2xi32>, vector<2xi32>) -> (i32)
+      %i2 = func.call @ggml_kquant_dot_s8_words2i(%w2, %x2) : (vector<2xi32>, vector<2xi32>) -> (i32)
+      %i3 = func.call @ggml_kquant_dot_s8_words2i(%w3, %x3) : (vector<2xi32>, vector<2xi32>) -> (i32)
+      %f_i0 = scalar.sitofp %i0 : i32 to f32
+      %f_i1 = scalar.sitofp %i1 : i32 to f32
+      %f_i2 = scalar.sitofp %i2 : i32 to f32
+      %f_i3 = scalar.sitofp %i3 : i32 to f32
+      %d0 = vector.extract %dsf[0] : vector<8xf32> -> f32
+      %d1 = vector.extract %dsf[2] : vector<8xf32> -> f32
+      %d2 = vector.extract %dsf[4] : vector<8xf32> -> f32
+      %d3 = vector.extract %dsf[6] : vector<8xf32> -> f32
+      %sc0 = vector.extract %scales[0] : vector<4xf32> -> f32
+      %sc1 = vector.extract %scales[1] : vector<4xf32> -> f32
+      %sc2 = vector.extract %scales[2] : vector<4xf32> -> f32
+      %sc3 = vector.extract %scales[3] : vector<4xf32> -> f32
+      %f0 = scalar.mulf %sc0, %d0 : f32
+      %f1 = scalar.mulf %sc1, %d1 : f32
+      %f2 = scalar.mulf %sc2, %d2 : f32
+      %f3 = scalar.mulf %sc3, %d3 : f32
+      %a0 = scalar.fmaf %f0, %f_i0, %acc : f32
+      %a1 = scalar.fmaf %f1, %f_i1, %a0 : f32
+      %a2 = scalar.fmaf %f2, %f_i2, %a1 : f32
+      %a3 = scalar.fmaf %f3, %f_i3, %a2 : f32
+      scf.yield %a3 : f32
+    }
+    scf.yield %r32 : f32
+  }
+  func.return %next : f32
+}
+
+// One block of one projection side for every token (up to 8; %tokens is the folded config value).
+// %in_range false: a lane past the row's last block; it reads block 0 and adds zero, so that every
+// lane of the wave runs every step (the IQ4 table shuffles read other lanes' registers, and a
+// 16-lane group spans two blocks).
+func.def inline @ggml_kquant_block_tokens_q8w(%format: index, %kv_lane_i: i32, %weight: buffer, %input_q8: buffer, %row: index, %blocks: index, %block: index, %in_range: i1, %l8: index, %tokens: index, %a0: f32, %a1: f32, %a2: f32, %a3: f32, %a4: f32, %a5: f32, %a6: f32, %a7: f32) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+  %c0t = index.constant 0 : index
+  %c1t = index.constant 1 : index
+  %c2t = index.constant 2 : index
+  %c3t = index.constant 3 : index
+  %c4t = index.constant 4 : index
+  %c5t = index.constant 5 : index
+  %c6t = index.constant 6 : index
+  %c7t = index.constant 7 : index
+  %tv0 = index.cmp ult, %c0t, %tokens : index
+  %tv1 = index.cmp ult, %c1t, %tokens : index
+  %tv2 = index.cmp ult, %c2t, %tokens : index
+  %tv3 = index.cmp ult, %c3t, %tokens : index
+  %tv4 = index.cmp ult, %c4t, %tokens : index
+  %tv5 = index.cmp ult, %c5t, %tokens : index
+  %tv6 = index.cmp ult, %c6t, %tokens : index
+  %tv7 = index.cmp ult, %c7t, %tokens : index
+  %shape = func.call pure @ggml_kquant_q8w_shape(%format) : (index) -> (index)
+  %w, %s_raw, %m_raw, %p0, %p2 = func.call @ggml_kquant_lane_q8w(%format, %kv_lane_i, %weight, %row, %blocks, %block, %l8) : (index, i32, buffer, index, index, index, index) -> (vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index)
+  %one = scalar.constant 1.0 : f32
+  %nil = scalar.constant 0.0 : f32
+  %keep = scf.select %in_range, %one, %nil : f32
+  %keep4 = vector.splat %keep : vector<4xf32>
+  %keep2 = vector.splat %keep : vector<2xf32>
+  %s = vector.mulf %s_raw, %keep4 : vector<4xf32>
+  %m = vector.mulf %m_raw, %keep2 : vector<2xf32>
+  %n0 = scf.if %tv0 -> (f32) {
+    %v = func.call @ggml_kquant_q8w_token(%shape, %w, %s, %m, %p0, %p2, %input_q8, %c0t, %blocks, %block, %a0) : (index, vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index, buffer, index, index, index, f32) -> (f32)
+    scf.yield %v : f32
+  } else {
+    scf.yield %a0 : f32
+  }
+  %n1 = scf.if %tv1 -> (f32) {
+    %v = func.call @ggml_kquant_q8w_token(%shape, %w, %s, %m, %p0, %p2, %input_q8, %c1t, %blocks, %block, %a1) : (index, vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index, buffer, index, index, index, f32) -> (f32)
+    scf.yield %v : f32
+  } else {
+    scf.yield %a1 : f32
+  }
+  %n2 = scf.if %tv2 -> (f32) {
+    %v = func.call @ggml_kquant_q8w_token(%shape, %w, %s, %m, %p0, %p2, %input_q8, %c2t, %blocks, %block, %a2) : (index, vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index, buffer, index, index, index, f32) -> (f32)
+    scf.yield %v : f32
+  } else {
+    scf.yield %a2 : f32
+  }
+  %n3 = scf.if %tv3 -> (f32) {
+    %v = func.call @ggml_kquant_q8w_token(%shape, %w, %s, %m, %p0, %p2, %input_q8, %c3t, %blocks, %block, %a3) : (index, vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index, buffer, index, index, index, f32) -> (f32)
+    scf.yield %v : f32
+  } else {
+    scf.yield %a3 : f32
+  }
+  %n4 = scf.if %tv4 -> (f32) {
+    %v = func.call @ggml_kquant_q8w_token(%shape, %w, %s, %m, %p0, %p2, %input_q8, %c4t, %blocks, %block, %a4) : (index, vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index, buffer, index, index, index, f32) -> (f32)
+    scf.yield %v : f32
+  } else {
+    scf.yield %a4 : f32
+  }
+  %n5 = scf.if %tv5 -> (f32) {
+    %v = func.call @ggml_kquant_q8w_token(%shape, %w, %s, %m, %p0, %p2, %input_q8, %c5t, %blocks, %block, %a5) : (index, vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index, buffer, index, index, index, f32) -> (f32)
+    scf.yield %v : f32
+  } else {
+    scf.yield %a5 : f32
+  }
+  %n6 = scf.if %tv6 -> (f32) {
+    %v = func.call @ggml_kquant_q8w_token(%shape, %w, %s, %m, %p0, %p2, %input_q8, %c6t, %blocks, %block, %a6) : (index, vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index, buffer, index, index, index, f32) -> (f32)
+    scf.yield %v : f32
+  } else {
+    scf.yield %a6 : f32
+  }
+  %n7 = scf.if %tv7 -> (f32) {
+    %v = func.call @ggml_kquant_q8w_token(%shape, %w, %s, %m, %p0, %p2, %input_q8, %c7t, %blocks, %block, %a7) : (index, vector<8xi32>, vector<4xf32>, vector<2xf32>, index, index, buffer, index, index, index, f32) -> (f32)
+    scf.yield %v : f32
+  } else {
+    scf.yield %a7 : f32
+  }
+  func.return %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7 : f32, f32, f32, f32, f32, f32, f32, f32
+}
+
+func.def inline @ggml_kquant_q8w_store_mul_mat(%part: f32, %t: index, %row: index, %output_size: index, %tokens: index, %add: index, %lane: index, %addend: buffer, %output: buffer) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %zero_offset = index.constant 0 : offset
+  %sum = kernel.subgroup.reduce<addf> %part : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %n_total = index.mul %tokens, %output_size : index
+    %o_row = index.mul %t, %output_size : index
+    %o_raw = index.add %o_row, %row : index
+    %o, %o_bound = index.assume %o_raw, %n_total [lt(%o_raw, %n_total)] : index, index
+    %has_add = index.cmp eq, %add, %c1 : index
+    %v = scf.if %has_add -> (f32) {
+      %av = buffer.view %addend[%zero_offset] : buffer -> view<[%o_bound]xf32>
+      %a = view.load %av[%o] : view<[%o_bound]xf32> -> f32
+      %s = scalar.addf %sum, %a : f32
+      scf.yield %s : f32
+    } else {
+      scf.yield %sum : f32
+    }
+    %ov = buffer.view %output[%zero_offset] : buffer -> view<[%o_bound]xf32>
+    view.store %v, %ov[%o] : f32, view<[%o_bound]xf32>
+  }
+  func.return
+}
+
+func.def inline @ggml_kquant_q8w_store_swiglu(%gpart: f32, %upart: f32, %t: index, %row: index, %output_size: index, %tokens: index, %lane: index, %output: buffer) {
+  %c0 = index.constant 0 : index
+  %zero_offset = index.constant 0 : offset
+  %g_sum = kernel.subgroup.reduce<addf> %gpart : f32
+  %u_sum = kernel.subgroup.reduce<addf> %upart : f32
+  %leader = index.cmp eq, %lane, %c0 : index
+  scf.if %leader {
+    %n_total = index.mul %tokens, %output_size : index
+    %o_row = index.mul %t, %output_size : index
+    %o_raw = index.add %o_row, %row : index
+    %o, %o_bound = index.assume %o_raw, %n_total [lt(%o_raw, %n_total)] : index, index
+    %v = func.call @ggml_kquant_silu_mul(%g_sum, %u_sum) : (f32, f32) -> (f32)
+    %ov = buffer.view %output[%zero_offset] : buffer -> view<[%o_bound]xf32>
+    view.store %v, %ov[%o] : f32, view<[%o_bound]xf32>
+  }
+  func.return
+}
+
+// Lane c of each 16-lane group holds kvalues_iq4nl[c] (as i32) for the IQ4 lookups.
+func.def inline @ggml_kquant_kv_lane_i32(%lane: index) -> (i32) {
+  %c16 = index.constant 16 : index
+  %table = func.call @ggml_kquant_iq4nl_table() : () -> (vector<16xi8>)
+  %lane16 = index.rem %lane, %c16 : index
+  %lane16_i32 = index.cast %lane16 : index to i32
+  %lane16_i8 = scalar.trunci %lane16_i32 : i32 to i8
+  %lane16_v = vector.splat %lane16_i8 : vector<4xi8>
+  %kv_v = vector.table.lookup %table[%lane16_v] : vector<16xi8>, vector<4xi8> -> vector<4xi8>
+  %kv_i8 = vector.extract %kv_v[0] : vector<4xi8> -> i8
+  %kv_i32 = scalar.extsi %kv_i8 : i8 to i32
+  func.return %kv_i32 : i32
+}
+
+// SwiGLU pair on Q8_1 activations (gate and up both Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS or Q8_0). One
+// wave64 per output row, four rows per workgroup; 8 lanes per 256-value block, 32 values per lane.
+kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_decode_tokens_q8_1") @ggml_kquant_swiglu_decode_tokens_q8_1() {
+  %output_size = config.get @ggml.kquant_swiglu_decode.output_size : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %last = index.add %output_size, %c3 : index
+  %groups = index.div %last, %c4 : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%input_q8: buffer, %gate: buffer, %up: buffer, %output: buffer) {
+  %input_size = config.get @ggml.kquant_swiglu_decode.input_size : index
+  %output_size = config.get @ggml.kquant_swiglu_decode.output_size : index
+  %tokens = config.get @ggml.kquant_decode.token_count : index
+  %gate_format = config.get @ggml.kquant_swiglu_decode.gate_weight_format : index
+  %up_format = config.get @ggml.kquant_swiglu_decode.up_weight_format : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %zero = scalar.constant 0.0 : f32
+  %blocks = index.div %input_size, %c256 : index
+  %wg = kernel.workgroup.id<x> : index
+  %subgroup = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %wg_row = index.mul %wg, %c4 : index
+  %row = index.add %wg_row, %subgroup : index
+  %first_block = index.div %lane, %c8 : index
+  %l8 = index.rem %lane, %c8 : index
+  %kv_lane_i = func.call @ggml_kquant_kv_lane_i32(%lane) : (index) -> (i32)
+  %valid = index.cmp ult, %row, %output_size : index
+  scf.if %valid {
+    %steps0 = index.add %blocks, %c7 : index
+    %steps = index.div %steps0, %c8 : index
+    %g0, %g1, %g2, %g3, %g4, %g5, %g6, %g7, %u0, %u1, %u2, %u3, %u4, %u5, %u6, %u7 = scf.for %step = [%c0 to %steps step %c1](%g0_acc = %zero : f32, %g1_acc = %zero : f32, %g2_acc = %zero : f32, %g3_acc = %zero : f32, %g4_acc = %zero : f32, %g5_acc = %zero : f32, %g6_acc = %zero : f32, %g7_acc = %zero : f32, %u0_acc = %zero : f32, %u1_acc = %zero : f32, %u2_acc = %zero : f32, %u3_acc = %zero : f32, %u4_acc = %zero : f32, %u5_acc = %zero : f32, %u6_acc = %zero : f32, %u7_acc = %zero : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+      %step8 = index.mul %step, %c8 : index
+      %block_raw = index.add %step8, %first_block : index
+      %in_range = index.cmp ult, %block_raw, %blocks : index
+      %block = scf.select %in_range, %block_raw, %c0 : index
+      %gn0, %gn1, %gn2, %gn3, %gn4, %gn5, %gn6, %gn7 = func.call @ggml_kquant_block_tokens_q8w(%gate_format, %kv_lane_i, %gate, %input_q8, %row, %blocks, %block, %in_range, %l8, %tokens, %g0_acc, %g1_acc, %g2_acc, %g3_acc, %g4_acc, %g5_acc, %g6_acc, %g7_acc) : (index, i32, buffer, buffer, index, index, index, i1, index, index, f32, f32, f32, f32, f32, f32, f32, f32) -> (f32, f32, f32, f32, f32, f32, f32, f32)
+      %un0, %un1, %un2, %un3, %un4, %un5, %un6, %un7 = func.call @ggml_kquant_block_tokens_q8w(%up_format, %kv_lane_i, %up, %input_q8, %row, %blocks, %block, %in_range, %l8, %tokens, %u0_acc, %u1_acc, %u2_acc, %u3_acc, %u4_acc, %u5_acc, %u6_acc, %u7_acc) : (index, i32, buffer, buffer, index, index, index, i1, index, index, f32, f32, f32, f32, f32, f32, f32, f32) -> (f32, f32, f32, f32, f32, f32, f32, f32)
+      scf.yield %gn0, %gn1, %gn2, %gn3, %gn4, %gn5, %gn6, %gn7, %un0, %un1, %un2, %un3, %un4, %un5, %un6, %un7 : f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32
+    }
+    %tv0 = index.cmp ult, %c0, %tokens : index
+    %tv1 = index.cmp ult, %c1, %tokens : index
+    %tv2 = index.cmp ult, %c2, %tokens : index
+    %tv3 = index.cmp ult, %c3, %tokens : index
+    %tv4 = index.cmp ult, %c4, %tokens : index
+    %tv5 = index.cmp ult, %c5, %tokens : index
+    %tv6 = index.cmp ult, %c6, %tokens : index
+    %tv7 = index.cmp ult, %c7, %tokens : index
+    scf.if %tv0 {
+      func.call @ggml_kquant_q8w_store_swiglu(%g0, %u0, %c0, %row, %output_size, %tokens, %lane, %output) : (f32, f32, index, index, index, index, index, buffer) -> ()
+    }
+    scf.if %tv1 {
+      func.call @ggml_kquant_q8w_store_swiglu(%g1, %u1, %c1, %row, %output_size, %tokens, %lane, %output) : (f32, f32, index, index, index, index, index, buffer) -> ()
+    }
+    scf.if %tv2 {
+      func.call @ggml_kquant_q8w_store_swiglu(%g2, %u2, %c2, %row, %output_size, %tokens, %lane, %output) : (f32, f32, index, index, index, index, index, buffer) -> ()
+    }
+    scf.if %tv3 {
+      func.call @ggml_kquant_q8w_store_swiglu(%g3, %u3, %c3, %row, %output_size, %tokens, %lane, %output) : (f32, f32, index, index, index, index, index, buffer) -> ()
+    }
+    scf.if %tv4 {
+      func.call @ggml_kquant_q8w_store_swiglu(%g4, %u4, %c4, %row, %output_size, %tokens, %lane, %output) : (f32, f32, index, index, index, index, index, buffer) -> ()
+    }
+    scf.if %tv5 {
+      func.call @ggml_kquant_q8w_store_swiglu(%g5, %u5, %c5, %row, %output_size, %tokens, %lane, %output) : (f32, f32, index, index, index, index, index, buffer) -> ()
+    }
+    scf.if %tv6 {
+      func.call @ggml_kquant_q8w_store_swiglu(%g6, %u6, %c6, %row, %output_size, %tokens, %lane, %output) : (f32, f32, index, index, index, index, index, buffer) -> ()
+    }
+    scf.if %tv7 {
+      func.call @ggml_kquant_q8w_store_swiglu(%g7, %u7, %c7, %row, %output_size, %tokens, %lane, %output) : (f32, f32, index, index, index, index, index, buffer) -> ()
+    }
+  }
+  kernel.return
+}
+
+// Projection (+ optional residual addend) on Q8_1 activations; same layout as the SwiGLU kernel.
+kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_mul_mat_decode_tokens_q8_1") @ggml_kquant_mul_mat_decode_tokens_q8_1() {
+  %output_size = config.get @ggml.kquant_mul_mat_decode.output_size : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %last = index.add %output_size, %c3 : index
+  %groups = index.div %last, %c4 : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%input_q8: buffer, %weight: buffer, %addend: buffer, %output: buffer) {
+  %input_size = config.get @ggml.kquant_mul_mat_decode.input_size : index
+  %output_size = config.get @ggml.kquant_mul_mat_decode.output_size : index
+  %tokens = config.get @ggml.kquant_decode.token_count : index
+  %format = config.get @ggml.kquant_mul_mat_decode.weight_format : index
+  %add = config.get @ggml.kquant_mul_mat_decode.add : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %zero = scalar.constant 0.0 : f32
+  %blocks = index.div %input_size, %c256 : index
+  %wg = kernel.workgroup.id<x> : index
+  %subgroup = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %wg_row = index.mul %wg, %c4 : index
+  %row = index.add %wg_row, %subgroup : index
+  %first_block = index.div %lane, %c8 : index
+  %l8 = index.rem %lane, %c8 : index
+  %kv_lane_i = func.call @ggml_kquant_kv_lane_i32(%lane) : (index) -> (i32)
+  %valid = index.cmp ult, %row, %output_size : index
+  scf.if %valid {
+    %steps0 = index.add %blocks, %c7 : index
+    %steps = index.div %steps0, %c8 : index
+    %m0, %m1, %m2, %m3, %m4, %m5, %m6, %m7 = scf.for %step = [%c0 to %steps step %c1](%m0_acc = %zero : f32, %m1_acc = %zero : f32, %m2_acc = %zero : f32, %m3_acc = %zero : f32, %m4_acc = %zero : f32, %m5_acc = %zero : f32, %m6_acc = %zero : f32, %m7_acc = %zero : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+      %step8 = index.mul %step, %c8 : index
+      %block_raw = index.add %step8, %first_block : index
+      %in_range = index.cmp ult, %block_raw, %blocks : index
+      %block = scf.select %in_range, %block_raw, %c0 : index
+      %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7 = func.call @ggml_kquant_block_tokens_q8w(%format, %kv_lane_i, %weight, %input_q8, %row, %blocks, %block, %in_range, %l8, %tokens, %m0_acc, %m1_acc, %m2_acc, %m3_acc, %m4_acc, %m5_acc, %m6_acc, %m7_acc) : (index, i32, buffer, buffer, index, index, index, i1, index, index, f32, f32, f32, f32, f32, f32, f32, f32) -> (f32, f32, f32, f32, f32, f32, f32, f32)
+      scf.yield %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7 : f32, f32, f32, f32, f32, f32, f32, f32
+    }
+    %tv0 = index.cmp ult, %c0, %tokens : index
+    %tv1 = index.cmp ult, %c1, %tokens : index
+    %tv2 = index.cmp ult, %c2, %tokens : index
+    %tv3 = index.cmp ult, %c3, %tokens : index
+    %tv4 = index.cmp ult, %c4, %tokens : index
+    %tv5 = index.cmp ult, %c5, %tokens : index
+    %tv6 = index.cmp ult, %c6, %tokens : index
+    %tv7 = index.cmp ult, %c7, %tokens : index
+    scf.if %tv0 {
+      func.call @ggml_kquant_q8w_store_mul_mat(%m0, %c0, %row, %output_size, %tokens, %add, %lane, %addend, %output) : (f32, index, index, index, index, index, index, buffer, buffer) -> ()
+    }
+    scf.if %tv1 {
+      func.call @ggml_kquant_q8w_store_mul_mat(%m1, %c1, %row, %output_size, %tokens, %add, %lane, %addend, %output) : (f32, index, index, index, index, index, index, buffer, buffer) -> ()
+    }
+    scf.if %tv2 {
+      func.call @ggml_kquant_q8w_store_mul_mat(%m2, %c2, %row, %output_size, %tokens, %add, %lane, %addend, %output) : (f32, index, index, index, index, index, index, buffer, buffer) -> ()
+    }
+    scf.if %tv3 {
+      func.call @ggml_kquant_q8w_store_mul_mat(%m3, %c3, %row, %output_size, %tokens, %add, %lane, %addend, %output) : (f32, index, index, index, index, index, index, buffer, buffer) -> ()
+    }
+    scf.if %tv4 {
+      func.call @ggml_kquant_q8w_store_mul_mat(%m4, %c4, %row, %output_size, %tokens, %add, %lane, %addend, %output) : (f32, index, index, index, index, index, index, buffer, buffer) -> ()
+    }
+    scf.if %tv5 {
+      func.call @ggml_kquant_q8w_store_mul_mat(%m5, %c5, %row, %output_size, %tokens, %add, %lane, %addend, %output) : (f32, index, index, index, index, index, index, buffer, buffer) -> ()
+    }
+    scf.if %tv6 {
+      func.call @ggml_kquant_q8w_store_mul_mat(%m6, %c6, %row, %output_size, %tokens, %add, %lane, %addend, %output) : (f32, index, index, index, index, index, index, buffer, buffer) -> ()
+    }
+    scf.if %tv7 {
+      func.call @ggml_kquant_q8w_store_mul_mat(%m7, %c7, %row, %output_size, %tokens, %add, %lane, %addend, %output) : (f32, index, index, index, index, index, index, buffer, buffer) -> ()
     }
   }
   kernel.return
@@ -10397,6 +11372,317 @@ check.case public @ggml_kquant_mul_mat_decode_tokens_iq4nl_case {
   %expected = check.generate.fill value(7.0) : tensor<18xf32>
   kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%input, %weight, %addend, %expected) : [](tensor<1536xf32>, tensor<432xi32>, tensor<18xf32>, tensor<18xf32>)
   kernel.launch @ggml_kquant_mul_mat_decode_tokens_f32[](%input, %weight, %addend, %output) : [](tensor<1536xf32>, tensor<432xi32>, tensor<18xf32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// Check-case helpers for the Q8_1 tokens kernels: a plain Q8_1 x4 quantizer (one 32-value block per
+// workgroup, one thread, d = amax / 127 rounded to f16, q = round(x / d), s = d * sum(q), the math of
+// ggml_quantize_q8_1_x4_f32) and its inverse (x' = d * q), so a case can compare the Q8_1 kernels
+// against the F32 reference kernels on the dequantized activations.
+config.decl @ggml.kquant_q8_case.block_count : %value: index where [range(%value, 1, 4096)]
+
+kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_q8_1_x4_case_quantize") @ggml_kquant_q8_1_x4_case_quantize() {
+  %n = config.get @ggml.kquant_q8_case.block_count : index
+  %c1 = index.constant 1 : index
+  kernel.launch.config workgroups(%n, %c1, %c1) workgroup_size(%c1, %c1, %c1) : index
+} launch(%input: buffer, %output: buffer) {
+  %n = config.get @ggml.kquant_q8_case.block_count : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c9 = index.constant 9 : index
+  %c18 = index.constant 18 : index
+  %c32 = index.constant 32 : index
+  %c36 = index.constant 36 : index
+  %c72 = index.constant 72 : index
+  %zero_offset = index.constant 0 : offset
+  %zero = scalar.constant 0.0 : f32
+  %one = scalar.constant 1.0 : f32
+  %c127 = scalar.constant 127.0 : f32
+  %b0 = kernel.workgroup.id<x> : index
+  %b, %b_bound = index.assume %b0, %n [lt(%b0, %n)] : index, index
+  %n_values = index.mul %n, %c32 : index
+  %n_words = index.mul %n, %c9 : index
+  %n_halves = index.mul %n, %c18 : index
+  %xv = buffer.view %input[%zero_offset] : buffer -> view<[%n_values]xf32>
+  %wv = buffer.view %output[%zero_offset] : buffer -> view<[%n_words]xi32>
+  %hv = buffer.view %output[%zero_offset] : buffer -> view<[%n_halves]xf16>
+  %x_base = index.mul %b, %c32 : index
+  %amax = scf.for %w = [%c0 to %c8 step %c1](%m = %zero : f32) -> (f32) {
+    %w4 = index.mul %w, %c4 : index
+    %at0 = index.add %x_base, %w4 : index
+    %at = index.assume %at0 [lt(%at0, %n_values)] : index
+    %x = vector.load %xv[%at] : view<[%n_values]xf32> -> vector<4xf32>
+    %a = vector.absf %x : vector<4xf32>
+    %mx = vector.reduce<maxnumf> %a, %m : vector<4xf32>, f32
+    scf.yield %mx : f32
+  }
+  %d = scalar.divf %amax, %c127 : f32
+  %nz = scalar.cmpf one, %d, %zero : f32
+  %inv = scf.if %nz -> (f32) {
+    %v = scalar.divf %one, %d : f32
+    scf.yield %v : f32
+  } else {
+    scf.yield %zero : f32
+  }
+  %inv_v = vector.splat %inv : vector<4xf32>
+  %group = index.div %b, %c4 : index
+  %inner = index.rem %b, %c4 : index
+  %g_words = index.mul %group, %c36 : index
+  %i_words = index.mul %inner, %c8 : index
+  %p_words0 = index.add %g_words, %c4 : index
+  %p_words = index.add %p_words0, %i_words : index
+  %qsum = scf.for %w = [%c0 to %c8 step %c1](%s = %zero : f32) -> (f32) {
+    %w4 = index.mul %w, %c4 : index
+    %at0 = index.add %x_base, %w4 : index
+    %at = index.assume %at0 [lt(%at0, %n_values)] : index
+    %x = vector.load %xv[%at] : view<[%n_values]xf32> -> vector<4xf32>
+    %sc = vector.mulf %x, %inv_v : vector<4xf32>
+    %r = vector.roundf %sc : vector<4xf32>
+    %q = vector.fptosi %r : vector<4xf32> to vector<4xi8>
+    %qw = vector.bitcast %q : vector<4xi8> to vector<1xi32>
+    %word = vector.extract %qw[0] : vector<1xi32> -> i32
+    %wat0 = index.add %p_words, %w : index
+    %wat = index.assume %wat0 [lt(%wat0, %n_words)] : index
+    view.store %word, %wv[%wat] : i32, view<[%n_words]xi32>
+    %rs = vector.reduce<addf> %r, %s : vector<4xf32>, f32
+    scf.yield %rs : f32
+  }
+  %s = scalar.mulf %qsum, %d : f32
+  %d16 = scalar.fptrunc %d : f32 to f16
+  %s16 = scalar.fptrunc %s : f32 to f16
+  %g_halves = index.mul %group, %c72 : index
+  %i_halves = index.mul %inner, %c2 : index
+  %d_at0 = index.add %g_halves, %i_halves : index
+  %d_at = index.assume %d_at0 [lt(%d_at0, %n_halves)] : index
+  %s_at0 = index.add %d_at, %c1 : index
+  %s_at = index.assume %s_at0 [lt(%s_at0, %n_halves)] : index
+  view.store %d16, %hv[%d_at] : f16, view<[%n_halves]xf16>
+  view.store %s16, %hv[%s_at] : f16, view<[%n_halves]xf16>
+  kernel.return
+}
+
+kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_q8_1_x4_case_dequantize") @ggml_kquant_q8_1_x4_case_dequantize() {
+  %n = config.get @ggml.kquant_q8_case.block_count : index
+  %c1 = index.constant 1 : index
+  kernel.launch.config workgroups(%n, %c1, %c1) workgroup_size(%c1, %c1, %c1) : index
+} launch(%input_q8: buffer, %output: buffer) {
+  %n = config.get @ggml.kquant_q8_case.block_count : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c9 = index.constant 9 : index
+  %c18 = index.constant 18 : index
+  %c32 = index.constant 32 : index
+  %c36 = index.constant 36 : index
+  %c72 = index.constant 72 : index
+  %zero_offset = index.constant 0 : offset
+  %b0 = kernel.workgroup.id<x> : index
+  %b, %b_bound = index.assume %b0, %n [lt(%b0, %n)] : index, index
+  %n_values = index.mul %n, %c32 : index
+  %n_words = index.mul %n, %c9 : index
+  %n_halves = index.mul %n, %c18 : index
+  %xv = buffer.view %output[%zero_offset] : buffer -> view<[%n_values]xf32>
+  %wv = buffer.view %input_q8[%zero_offset] : buffer -> view<[%n_words]xi32>
+  %hv = buffer.view %input_q8[%zero_offset] : buffer -> view<[%n_halves]xf16>
+  %group = index.div %b, %c4 : index
+  %inner = index.rem %b, %c4 : index
+  %g_halves = index.mul %group, %c72 : index
+  %i_halves = index.mul %inner, %c2 : index
+  %d_at0 = index.add %g_halves, %i_halves : index
+  %d_at = index.assume %d_at0 [lt(%d_at0, %n_halves)] : index
+  %d16 = view.load %hv[%d_at] : view<[%n_halves]xf16> -> f16
+  %d = scalar.extf %d16 : f16 to f32
+  %d_v = vector.splat %d : vector<4xf32>
+  %g_words = index.mul %group, %c36 : index
+  %i_words = index.mul %inner, %c8 : index
+  %p_words0 = index.add %g_words, %c4 : index
+  %p_words = index.add %p_words0, %i_words : index
+  %x_base = index.mul %b, %c32 : index
+  scf.for %w = [%c0 to %c8 step %c1] {
+    %wat0 = index.add %p_words, %w : index
+    %wat = index.assume %wat0 [lt(%wat0, %n_words)] : index
+    %word = view.load %wv[%wat] : view<[%n_words]xi32> -> i32
+    %wvec = vector.from_elements %word : vector<1xi32>
+    %q = vector.bitcast %wvec : vector<1xi32> to vector<4xi8>
+    %qf = vector.sitofp %q : vector<4xi8> to vector<4xf32>
+    %x = vector.mulf %qf, %d_v : vector<4xf32>
+    %w4 = index.mul %w, %c4 : index
+    %at0 = index.add %x_base, %w4 : index
+    %at = index.assume %at0 [lt(%at0, %n_values)] : index
+    vector.store %x, %xv[%at] : vector<4xf32>, view<[%n_values]xf32>
+  }
+  kernel.return
+}
+
+// Q8_1 tokens cases: 3 tokens, 512 inputs (two blocks per row), 6 rows. Run with
+// --config=ggml.kquant_decode.token_count=3 --config=ggml.kquant_q8_case.block_count=48, the
+// input/output sizes of the kernel (512 / 6) and the formats named in each case. Inputs are random;
+// the reference reads the Q8_1 activations dequantized back to f32, so the only difference left is
+// the f16 s = d * sum(q) term the Q4_K/Q5_K min correction uses (hence the looser tolerances; the
+// SwiGLU product of two such sums needs rtol 1e-2 on the Q5_K case: 153457.9 against 154102.9). The
+// exact cases below have no such term and hold every format to rtol 1e-4.
+
+// swiglu: gate_weight_format=5 up_weight_format=23 (Q5_K / IQ4_XS)
+check.case public @ggml_kquant_swiglu_decode_tokens_q8_q5k_iq4xs_case {
+  %x_seed = check.param.seed base(7300000000000031201) count(1) : i64
+  %x = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<1536xf32>
+  %q8 = check.generate.fill value(-1) : tensor<432xi32>
+  %xd = check.generate.fill value(9.0) : tensor<1536xf32>
+  %gate = check.generate.iota offset(0) step(16843009) period(64) : tensor<528xi32>
+  %up = check.generate.iota offset(0) step(16843009) period(64) : tensor<408xi32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_q8_1_x4_case_quantize[](%x, %q8) : [](tensor<1536xf32>, tensor<432xi32>)
+  kernel.launch @ggml_kquant_q8_1_x4_case_dequantize[](%q8, %xd) : [](tensor<432xi32>, tensor<1536xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_reference_f32[](%xd, %gate, %up, %expected) : [](tensor<1536xf32>, tensor<528xi32>, tensor<408xi32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_tokens_q8_1[](%q8, %gate, %up, %output) : [](tensor<432xi32>, tensor<528xi32>, tensor<408xi32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(2.0e-2) rtol(1.0e-2) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// swiglu: gate_weight_format=4 up_weight_format=6 (Q4_K / Q6_K)
+check.case public @ggml_kquant_swiglu_decode_tokens_q8_q4k_q6k_case {
+  %x_seed = check.param.seed base(7300000000000031202) count(1) : i64
+  %x = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<1536xf32>
+  %q8 = check.generate.fill value(-1) : tensor<432xi32>
+  %xd = check.generate.fill value(9.0) : tensor<1536xf32>
+  %gate = check.generate.iota offset(0) step(16843009) period(64) : tensor<432xi32>
+  %up = check.generate.iota offset(0) step(16843009) period(64) : tensor<630xi32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_q8_1_x4_case_quantize[](%x, %q8) : [](tensor<1536xf32>, tensor<432xi32>)
+  kernel.launch @ggml_kquant_q8_1_x4_case_dequantize[](%q8, %xd) : [](tensor<432xi32>, tensor<1536xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_reference_f32[](%xd, %gate, %up, %expected) : [](tensor<1536xf32>, tensor<432xi32>, tensor<630xi32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_tokens_q8_1[](%q8, %gate, %up, %output) : [](tensor<432xi32>, tensor<432xi32>, tensor<630xi32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(2.0e-2) rtol(1.0e-3) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// swiglu: gate_weight_format=20 up_weight_format=80 (IQ4_NL / Q8_0)
+check.case public @ggml_kquant_swiglu_decode_tokens_q8_iq4nl_q80_case {
+  %x_seed = check.param.seed base(7300000000000031203) count(1) : i64
+  %x = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<1536xf32>
+  %q8 = check.generate.fill value(-1) : tensor<432xi32>
+  %xd = check.generate.fill value(9.0) : tensor<1536xf32>
+  %gate = check.generate.iota offset(0) step(16843009) period(64) : tensor<432xi32>
+  %up = check.generate.iota offset(0) step(16843009) period(64) : tensor<816xi32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_q8_1_x4_case_quantize[](%x, %q8) : [](tensor<1536xf32>, tensor<432xi32>)
+  kernel.launch @ggml_kquant_q8_1_x4_case_dequantize[](%q8, %xd) : [](tensor<432xi32>, tensor<1536xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_reference_f32[](%xd, %gate, %up, %expected) : [](tensor<1536xf32>, tensor<432xi32>, tensor<816xi32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_tokens_q8_1[](%q8, %gate, %up, %output) : [](tensor<432xi32>, tensor<432xi32>, tensor<816xi32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(2.0e-2) rtol(1.0e-3) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// mul_mat: weight_format=5 add=1 (Q5_K)
+check.case public @ggml_kquant_mul_mat_decode_tokens_q8_q5k_add_case {
+  %x_seed = check.param.seed base(7300000000000031204) count(1) : i64
+  %a_seed = check.param.seed base(7300000000000031205) count(1) : i64
+  %x = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<1536xf32>
+  %q8 = check.generate.fill value(-1) : tensor<432xi32>
+  %xd = check.generate.fill value(9.0) : tensor<1536xf32>
+  %weight = check.generate.iota offset(0) step(16843009) period(64) : tensor<528xi32>
+  %addend = check.generate.random.uniform seed(%a_seed) range(-1.0 to 1.0) : tensor<18xf32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_q8_1_x4_case_quantize[](%x, %q8) : [](tensor<1536xf32>, tensor<432xi32>)
+  kernel.launch @ggml_kquant_q8_1_x4_case_dequantize[](%q8, %xd) : [](tensor<432xi32>, tensor<1536xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%xd, %weight, %addend, %expected) : [](tensor<1536xf32>, tensor<528xi32>, tensor<18xf32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_tokens_q8_1[](%q8, %weight, %addend, %output) : [](tensor<432xi32>, tensor<528xi32>, tensor<18xf32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(2.0e-2) rtol(1.0e-3) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// mul_mat: weight_format=80 add=0 (Q8_0, 6 rows x 2 x 272 B) and weight_format=23 (IQ4_XS, 408
+// words; the Q8_0 tensor is larger, so the same case covers both with the larger weight buffer).
+check.case public @ggml_kquant_mul_mat_decode_tokens_q8_q80_case {
+  %x_seed = check.param.seed base(7300000000000031206) count(1) : i64
+  %x = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<1536xf32>
+  %q8 = check.generate.fill value(-1) : tensor<432xi32>
+  %xd = check.generate.fill value(9.0) : tensor<1536xf32>
+  %weight = check.generate.iota offset(0) step(16843009) period(64) : tensor<816xi32>
+  %addend = check.generate.fill value(100.0) : tensor<18xf32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_q8_1_x4_case_quantize[](%x, %q8) : [](tensor<1536xf32>, tensor<432xi32>)
+  kernel.launch @ggml_kquant_q8_1_x4_case_dequantize[](%q8, %xd) : [](tensor<432xi32>, tensor<1536xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%xd, %weight, %addend, %expected) : [](tensor<1536xf32>, tensor<816xi32>, tensor<18xf32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_tokens_q8_1[](%q8, %weight, %addend, %output) : [](tensor<432xi32>, tensor<816xi32>, tensor<18xf32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(2.0e-2) rtol(1.0e-3) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// Exact-activation cases: every 32-value block holds -127/128, 0 and 127/128 (period 3), so the
+// Q8_1 scale is 1/128 exactly, every code is exact and d * sum(q) is exact in f16: the Q8_1 kernels
+// must match the F32 reference on the original input up to summation order.
+// swiglu: gate_weight_format=5 up_weight_format=23 (Q5_K / IQ4_XS)
+check.case public @ggml_kquant_swiglu_decode_tokens_q8_exact_q5k_iq4xs_case {
+  %x = check.generate.iota offset(-0.9921875) step(0.9921875) period(3) : tensor<1536xf32>
+  %q8 = check.generate.fill value(-1) : tensor<432xi32>
+  %gate = check.generate.iota offset(0) step(16843009) period(64) : tensor<528xi32>
+  %up = check.generate.iota offset(0) step(16843009) period(64) : tensor<408xi32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_q8_1_x4_case_quantize[](%x, %q8) : [](tensor<1536xf32>, tensor<432xi32>)
+  kernel.launch @ggml_kquant_swiglu_decode_reference_f32[](%x, %gate, %up, %expected) : [](tensor<1536xf32>, tensor<528xi32>, tensor<408xi32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_tokens_q8_1[](%q8, %gate, %up, %output) : [](tensor<432xi32>, tensor<528xi32>, tensor<408xi32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// swiglu: gate_weight_format=4 up_weight_format=6 (Q4_K / Q6_K)
+check.case public @ggml_kquant_swiglu_decode_tokens_q8_exact_q4k_q6k_case {
+  %x = check.generate.iota offset(-0.9921875) step(0.9921875) period(3) : tensor<1536xf32>
+  %q8 = check.generate.fill value(-1) : tensor<432xi32>
+  %gate = check.generate.iota offset(0) step(16843009) period(64) : tensor<432xi32>
+  %up = check.generate.iota offset(0) step(16843009) period(64) : tensor<630xi32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_q8_1_x4_case_quantize[](%x, %q8) : [](tensor<1536xf32>, tensor<432xi32>)
+  kernel.launch @ggml_kquant_swiglu_decode_reference_f32[](%x, %gate, %up, %expected) : [](tensor<1536xf32>, tensor<432xi32>, tensor<630xi32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_tokens_q8_1[](%q8, %gate, %up, %output) : [](tensor<432xi32>, tensor<432xi32>, tensor<630xi32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// mul_mat, any Q8_1 format (weight buffer sized for Q8_0, the largest): weight_format=4/5/6/20/23/80
+check.case public @ggml_kquant_mul_mat_decode_tokens_q8_exact_case {
+  %a_seed = check.param.seed base(7300000000000031207) count(1) : i64
+  %x = check.generate.iota offset(-0.9921875) step(0.9921875) period(3) : tensor<1536xf32>
+  %q8 = check.generate.fill value(-1) : tensor<432xi32>
+  %weight = check.generate.iota offset(0) step(16843009) period(64) : tensor<816xi32>
+  %addend = check.generate.random.uniform seed(%a_seed) range(-1.0 to 1.0) : tensor<18xf32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_q8_1_x4_case_quantize[](%x, %q8) : [](tensor<1536xf32>, tensor<432xi32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%x, %weight, %addend, %expected) : [](tensor<1536xf32>, tensor<816xi32>, tensor<18xf32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_tokens_q8_1[](%q8, %weight, %addend, %output) : [](tensor<432xi32>, tensor<816xi32>, tensor<18xf32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// IQ4_XS projection over 3 blocks (768 inputs): the last step's 16-lane group 1 spans an in-range
+// and an out-of-range block (the IQ4 shuffles read the other half's registers). Run with
+// --config=ggml.kquant_decode.token_count=3 --config=ggml.kquant_q8_case.block_count=72
+// --config=ggml.kquant_mul_mat_decode.input_size=768 output_size=6 weight_format=23 add=0
+check.case public @ggml_kquant_mul_mat_decode_tokens_q8_iq4xs_3block_case {
+  %x = check.generate.iota offset(-0.9921875) step(0.9921875) period(3) : tensor<2304xf32>
+  %q8 = check.generate.fill value(-1) : tensor<648xi32>
+  %weight = check.generate.iota offset(0) step(16843009) period(64) : tensor<612xi32>
+  %addend = check.generate.fill value(100.0) : tensor<18xf32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_q8_1_x4_case_quantize[](%x, %q8) : [](tensor<2304xf32>, tensor<648xi32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%x, %weight, %addend, %expected) : [](tensor<2304xf32>, tensor<612xi32>, tensor<18xf32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_tokens_q8_1[](%q8, %weight, %addend, %output) : [](tensor<648xi32>, tensor<612xi32>, tensor<18xf32>, tensor<18xf32>)
   check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<18xf32>
   check.return
 }

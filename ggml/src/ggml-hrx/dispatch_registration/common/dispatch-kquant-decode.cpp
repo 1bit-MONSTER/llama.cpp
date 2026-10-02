@@ -27,6 +27,8 @@
 #include "dispatch/ternary-q4-0.h"
 #include "graph/graph-matcher.h"
 
+#include <cstdlib>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -44,6 +46,12 @@ static constexpr KernelCatalogRef kKQuantSwiGLUDecodeTokensKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_kquant_swiglu_decode_tokens_f32");
 static constexpr KernelCatalogRef kKQuantMulMatDecodeTokensKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_kquant_mul_mat_decode_tokens_f32");
+// The same 2..8 token kernels reading a Q8_1 x4 copy of the input for Q4_K, Q5_K, Q6_K, IQ4_NL,
+// IQ4_XS and Q8_0 weights (dot4i per word and token instead of an f32 FMA per weight and token).
+static constexpr KernelCatalogRef kKQuantSwiGLUDecodeTokensQ8Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_kquant_swiglu_decode_tokens_q8_1");
+static constexpr KernelCatalogRef kKQuantMulMatDecodeTokensQ8Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_kquant_mul_mat_decode_tokens_q8_1");
 
 bool kquant_format(CommonMulMatWeightFormat format) {
     switch (format) {
@@ -77,6 +85,82 @@ bool kquant_ternary(const CommonMulMatMatch & match) {
 
 bool kquant_supported(const CommonMulMatMatch & match) {
     return kquant_format(match.weight_format) || kquant_ternary(match);
+}
+
+// Formats the Q8_1 tokens kernels read (ggml_kquant_lane_q8w in the .loom).
+bool kquant_q8_format(const CommonMulMatMatch & match) {
+    if (kquant_ternary(match)) {
+        return false;
+    }
+    switch (match.weight_format) {
+        case CommonMulMatWeightFormat::Q4K:
+        case CommonMulMatWeightFormat::Q5K:
+        case CommonMulMatWeightFormat::Q6K:
+        case CommonMulMatWeightFormat::IQ4_NL:
+        case CommonMulMatWeightFormat::IQ4_XS:
+        case CommonMulMatWeightFormat::Q8_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// GGML_HRX_KQUANT_TOKENS_Q8=0 keeps 2..8 token projections on the F32 tokens kernels.
+bool kquant_tokens_q8_enabled() {
+    static const bool enabled = [] {
+        const char * env = std::getenv("GGML_HRX_KQUANT_TOKENS_Q8");
+        return env == nullptr || std::strcmp(env, "0") != 0;
+    }();
+    return enabled;
+}
+
+// ggml_quantize_q8_1_x4_f32 takes input_size 128..32768.
+constexpr int64_t kMaxQ8InputSize = 32768;
+
+bool use_tokens_q8(int64_t token_count, int64_t input_size, bool q8_formats) {
+    return kquant_tokens_q8_enabled() && token_count > 1 && q8_formats && input_size <= kMaxQ8InputSize;
+}
+
+// The Q8_1 x4 copy of a 2..8 token input, quantized once (ggml_quantize_q8_1_x4_f32) and shared by
+// every kquant projection of that input. It is published under its own name and not as a
+// GGML_TYPE_Q8_1 alternate, so the other matchers (which pick q8 kernels whenever a Q8_1 copy of
+// their input exists) route exactly as before.
+constexpr const char * kTokensQ8AlternateName = "kquant.tokens.q8_1_x4";
+
+bool prepare_tokens_q8_input(const DispatchMatchContext & context, const Value & input, int64_t input_size,
+                             int64_t token_count, DispatchMatch & match, DispatchBinding & binding) {
+    const size_t bytes = static_cast<size_t>(token_count) * ggml_row_size(GGML_TYPE_Q8_1, input_size);
+    const CommandPlanAlternateValue * alternate =
+        find_alternate_value(context.graph, context.plan, input.id, GGML_TYPE_COUNT, bytes);
+    if (alternate != nullptr) {
+        if (alternate->name != kTokensQ8AlternateName) {
+            return false;
+        }
+        binding = { alternate->alternate_value, 0, bytes };
+        return true;
+    }
+
+    constexpr KernelCatalogRef kernel     = GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_quantize_q8_1_x4_f32");
+    const ValueId              activation = context.next_plan_value;
+    match.transients.push_back({ activation, kTokensQ8AlternateName, bytes, 256 });
+    Dispatch quantize;
+    quantize.kernel = make_kernel_specialization(kernel);
+    quantize.kernel.integer_parameters.emplace("token_count", token_count);
+    quantize.kernel.integer_parameters.emplace("input_size", input_size);
+    quantize.kernel.compile_parameters.emplace("ggml.quantize_q8_1_x4.group_capacity",
+                                                std::to_string(token_count * input_size / 128));
+    quantize.bindings.push_back({ input.id, 0, input.byte_count });
+    quantize.bindings.push_back({ activation, 0, bytes });
+    match.dispatches.push_back(std::move(quantize));
+
+    Status status;
+    if (!match.metadata.append_alternate_value({ input.id, activation, GGML_TYPE_COUNT, bytes, kTokensQ8AlternateName },
+                                               status)) {
+        match.status.append(status);
+        return false;
+    }
+    binding = { activation, 0, bytes };
+    return true;
 }
 
 int64_t kquant_format_value(const CommonMulMatMatch & match) {
@@ -164,7 +248,8 @@ bool value_ready(const DispatchMatchContext & context, ValueId id) {
 
 // Some fused producers (e.g. qwen3_moe's routed down + next-layer norm) publish the next input only
 // as a Q8_1 alternate and never write the F32 value when every consumer reads the alternate.
-// These kernels read F32, so leave such inputs to the q8 consumers.
+// These kernels (F32 and the Q8_1 tokens kernels, which quantize their own copy) leave such inputs
+// to the q8 consumers.
 bool has_q8_alternate(const DispatchMatchContext & context, const Value & input, int64_t input_size,
                       int64_t token_count) {
     const size_t bytes = static_cast<size_t>(token_count) * ggml_row_size(GGML_TYPE_Q8_1, input_size);
@@ -186,8 +271,7 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
         match_few_token_mul_mat(graph, context.root_node, kKQuantSwiGLUDecodeKernel);
     if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens || !kquant_supported(root) ||
         root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize ||
-        !value_ready(context, root.input->id) ||
-        has_q8_alternate(context, *root.input, root.input_size, root.token_count)) {
+        !value_ready(context, root.input->id)) {
         return false;
     }
 
@@ -227,6 +311,11 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
 
     const CommonMulMatMatch & gate = root_is_gate ? root : other;
     const CommonMulMatMatch & up   = root_is_gate ? other : root;
+    const bool q8_path =
+        use_tokens_q8(root.token_count, root.input_size, kquant_q8_format(gate) && kquant_q8_format(up));
+    if (has_q8_alternate(context, *root.input, root.input_size, root.token_count)) {
+        return false;
+    }
     for (const GraphNode * node : { context.root_node, peer, glu }) {
         if (!append_covered_node_index_once(graph, context.covered_nodes, node, dispatch_match.covered_nodes)) {
             dispatch_match.covered_nodes.clear();
@@ -234,8 +323,19 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
         }
     }
 
+    // 2..8 tokens with Q8_1 formats on both sides: quantize the input once (or reuse the copy an
+    // earlier kquant projection of the same input made) for the Q8_1 tokens kernel.
+    DispatchBinding q8_binding{};
+    const bool      q8 = q8_path && prepare_tokens_q8_input(context, *root.input, root.input_size,
+                                                            root.token_count, dispatch_match, q8_binding);
+    if (!dispatch_match.status.success()) {
+        dispatch_match.covered_nodes.clear();
+        return false;
+    }
+
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(root.token_count == 1 ? kKQuantSwiGLUDecodeKernel :
+                                                 q8                    ? kKQuantSwiGLUDecodeTokensQ8Kernel :
                                                                          kKQuantSwiGLUDecodeTokensKernel);
     if (root.token_count > 1) {
         dispatch.kernel.compile_parameters.emplace("ggml.kquant_decode.token_count",
@@ -249,7 +349,11 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
                                                std::to_string(kquant_format_value(gate)));
     dispatch.kernel.compile_parameters.emplace("ggml.kquant_swiglu_decode.up_weight_format",
                                                std::to_string(kquant_format_value(up)));
-    dispatch.bindings.push_back({ root.input->id, 0, root.input->byte_count });
+    if (q8) {
+        dispatch.bindings.push_back(q8_binding);
+    } else {
+        dispatch.bindings.push_back({ root.input->id, 0, root.input->byte_count });
+    }
     dispatch.bindings.push_back(kquant_weight_binding(gate));
     dispatch.bindings.push_back(kquant_weight_binding(up));
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
@@ -268,8 +372,11 @@ bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, Disp
         match_few_token_mul_mat(graph, context.root_node, kKQuantMulMatDecodeKernel);
     if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens || !kquant_supported(root) ||
         root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize ||
-        !value_ready(context, root.input->id) ||
-        has_q8_alternate(context, *root.input, root.input_size, root.token_count)) {
+        !value_ready(context, root.input->id)) {
+        return false;
+    }
+    const bool q8_path = use_tokens_q8(root.token_count, root.input_size, kquant_q8_format(root));
+    if (has_q8_alternate(context, *root.input, root.input_size, root.token_count)) {
         return false;
     }
 
@@ -305,8 +412,17 @@ bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, Disp
         return false;
     }
 
+    DispatchBinding q8_binding{};
+    const bool      q8 = q8_path && prepare_tokens_q8_input(context, *root.input, root.input_size,
+                                                            root.token_count, dispatch_match, q8_binding);
+    if (!dispatch_match.status.success()) {
+        dispatch_match.covered_nodes.clear();
+        return false;
+    }
+
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(root.token_count == 1 ? kKQuantMulMatDecodeKernel :
+                                                 q8                    ? kKQuantMulMatDecodeTokensQ8Kernel :
                                                                          kKQuantMulMatDecodeTokensKernel);
     if (root.token_count > 1) {
         dispatch.kernel.compile_parameters.emplace("ggml.kquant_decode.token_count",
@@ -319,11 +435,20 @@ bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, Disp
     dispatch.kernel.compile_parameters.emplace("ggml.kquant_mul_mat_decode.weight_format",
                                                std::to_string(kquant_format_value(root)));
     dispatch.kernel.compile_parameters.emplace("ggml.kquant_mul_mat_decode.add", addend != nullptr ? "1" : "0");
-    dispatch.bindings.push_back({ root.input->id, 0, root.input->byte_count });
+    if (q8) {
+        dispatch.bindings.push_back(q8_binding);
+    } else {
+        dispatch.bindings.push_back({ root.input->id, 0, root.input->byte_count });
+    }
     dispatch.bindings.push_back(kquant_weight_binding(root));
-    // Without an ADD the addend is never read; bind the input in its place.
-    const Value * addend_binding = addend != nullptr ? addend : root.input;
-    dispatch.bindings.push_back({ addend_binding->id, 0, addend_binding->byte_count });
+    // Without an ADD the addend is never read; bind the (Q8_1 or F32) input in its place.
+    if (addend != nullptr) {
+        dispatch.bindings.push_back({ addend->id, 0, addend->byte_count });
+    } else if (q8) {
+        dispatch.bindings.push_back(q8_binding);
+    } else {
+        dispatch.bindings.push_back({ root.input->id, 0, root.input->byte_count });
+    }
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
     dispatch_match.dispatches.push_back(std::move(dispatch));
     return true;
