@@ -8179,7 +8179,8 @@ func.def inline @ggml_kquant_tq1_lane_parts(%weight: buffer, %row_base: offset, 
   %qh_words = vector.splat %qh : vector<4xi32>
   %qh_bytes = func.call @ggml_kquant_run16_bytes(%qh_words) : (vector<4xi32>) -> (vector<16xi32>)
   %n_low = index.div %l, %c2 : index
-  %n_mid = index.sub %l, %c10 : index
+  %l_mid = scf.select %low, %c10, %l : index
+  %n_mid = index.sub %l_mid, %c10 : index
   %n = scf.select %low, %n_low, %n_mid : index
   %n_i32 = index.cast %n : index to i32
   %p1 = scalar.constant 1 : i32

@@ -219,7 +219,8 @@ func.def inline @ggml_tq1_0_f32_vector4(%weight: buffer, %row_byte_base: offset,
   // groups 0..4: qs[4p..], power g
   %first = index.cmp ult, %g, %c5 : index
   // groups 5, 6: k = 32 (g - 5) + 4p in 0..60, power k / 16, byte 32 + k % 16
-  %g5 = index.sub %g, %c5 : index
+  %g_mid = scf.select %first, %c5, %g : index
+  %g5 = index.sub %g_mid, %c5 : index
   %g5_32 = index.mul %g5, %c32 : index
   %k = index.add %g5_32, %p4 : index
   %mid_n = index.div %k, %c16 : index
@@ -229,7 +230,8 @@ func.def inline @ggml_tq1_0_f32_vector4(%weight: buffer, %row_byte_base: offset,
   // group 7: packets 0..3 = qs[32 + 4p..], power 4; packets 4..7 = qh[0..3], power p - 4
   %low_half = index.cmp ult, %p, %c4 : index
   %last_byte_lo = index.add %c32, %p4 : index
-  %last_n_hi = index.sub %p, %c4 : index
+  %p_hi = scf.select %low_half, %c4, %p : index
+  %last_n_hi = index.sub %p_hi, %c4 : index
   %last_byte = scf.select %low_half, %last_byte_lo, %c48 : index
   %last_n = scf.select %low_half, %c4, %last_n_hi : index
   %rest_byte = scf.select %middle, %mid_byte, %last_byte : index
