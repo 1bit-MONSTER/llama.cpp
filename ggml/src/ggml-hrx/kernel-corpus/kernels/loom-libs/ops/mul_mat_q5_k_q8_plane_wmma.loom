@@ -1,14 +1,14 @@
 template.decl @ggml.mul_mat_q8_1_x4.entry(%token_count: index, %paired_weights: i1, %q8_input: buffer, %weight: buffer, %peer_weight: buffer, %output: buffer)
 
-// NVFP4 (format 43): motifs/nvfp4_q8_1_x4.loom
-func.decl @ggml_nvfp4_x4_stage(%is_nvfp4: i1, %weight: buffer, %scratch: buffer, %w_off: offset, %ws_off: offset, %wc_off: offset, %input_size: index, %row_base: index, %tid: index, %rows: index, %chunk: index) -> (i1)
+// NVFP4 (format 43) and Q2_0 (format 42): motifs/nvfp4_q8_1_x4.loom
+func.decl @ggml_own_x4_stage(%is_nvfp4: i1, %is_q2_0: i1, %weight: buffer, %scratch: buffer, %w_off: offset, %ws_off: offset, %wc_off: offset, %input_size: index, %row_base: index, %tid: index, %rows: index, %chunk: index) -> (i1)
 func.decl @ggml_nvfp4_x4_tile(%is_nvfp4: i1, %affine: vector<8xf32>, %low: vector<8xi32>, %lhs1: vector<4xi32>, %rhs1: vector<4xi32>, %zero: vector<8xi32>, %scale0: vector<8xf32>, %scale1: vector<8xf32>, %activation_scale: vector<8xf32>, %accumulator: vector<8xf32>) -> (vector<8xf32>)
 
 // Generic Q5_K projection consuming the Q8_1 plane published by the fused
 // gate/up path. Weights use the backend-resident symmetric-I5/K32 carrier;
 // input, output, and token dimensions are all JIT configuration values.
 
-template.decl @ggml.mul_mat_q5_k_q8_plane.wmmai8.body(%is_iq4xs: i1, %token256: i1, %q8_plane: i1, %paired_weights: i1, %peer_weight: buffer, %src0_na: buffer, %dst_na: buffer, %q8_na: buffer, %base: offset, %lds_bytes: offset, %w_off: offset, %as_off: offset, %ws_off: offset, %asum_off: offset, %wc_off: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index, %is_symi5: i1, %is_q4: i1, %is_q4_packed: i1, %is_nvfp4: i1)
+template.decl @ggml.mul_mat_q5_k_q8_plane.wmmai8.body(%is_iq4xs: i1, %token256: i1, %q8_plane: i1, %paired_weights: i1, %peer_weight: buffer, %src0_na: buffer, %dst_na: buffer, %q8_na: buffer, %base: offset, %lds_bytes: offset, %w_off: offset, %as_off: offset, %ws_off: offset, %asum_off: offset, %wc_off: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index, %is_symi5: i1, %is_q4: i1, %is_q4_packed: i1, %is_nvfp4: i1, %is_q2_0: i1)
 
 amdgpu.target<gfx11-generic> @ggml_q5_plane_dense_gfx11_wave32 {subgroup_size = 32}
 
@@ -308,7 +308,7 @@ func.def inline @ggml_q8_1_x4_affine_rhs_tile(%scratch: buffer, %weight_offset: 
   func.return %result : vector<8xf32>
 }
 
-template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_q8_plane_wmmai8_body(%is_iq4xs: i1, %token256: i1, %q8_plane: i1, %paired_weights: i1, %peer_weight: buffer, %src0_na: buffer, %dst_na: buffer, %q8_na: buffer, %base: offset, %lds_bytes: offset, %w_off: offset, %as_off: offset, %ws_off: offset, %asum_off: offset, %wc_off: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index, %is_symi5: i1, %is_q4: i1, %is_q4_packed: i1, %is_nvfp4: i1) {
+template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_q8_plane_wmmai8_body(%is_iq4xs: i1, %token256: i1, %q8_plane: i1, %paired_weights: i1, %peer_weight: buffer, %src0_na: buffer, %dst_na: buffer, %q8_na: buffer, %base: offset, %lds_bytes: offset, %w_off: offset, %as_off: offset, %ws_off: offset, %asum_off: offset, %wc_off: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index, %is_symi5: i1, %is_q4: i1, %is_q4_packed: i1, %is_nvfp4: i1, %is_q2_0: i1) {
   %c64_wide = index.constant 64 : index
   %weight_elements = index.mul %k_n, %k_wstride : index
   %weight_metadata = index.mul %k_n, %c2 : index
@@ -333,7 +333,8 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
   %signed_rhs_schema = encoding.define #encoding.operand<element_format=i8, payload_elements=16, payload_registers=4> : encoding<schema>
   %unsigned_rhs_schema = encoding.define #encoding.operand<element_format=u8, payload_elements=16, payload_registers=4> : encoding<schema>
   %is_signed_rhs0 = scalar.ori %is_iq4xs, %is_symi5 : i1
-  %is_signed_rhs = scalar.ori %is_signed_rhs0, %is_nvfp4 : i1
+  %is_signed_rhs1 = scalar.ori %is_signed_rhs0, %is_nvfp4 : i1
+  %is_signed_rhs = scalar.ori %is_signed_rhs1, %is_q2_0 : i1
   %u8_schema = scf.select %is_signed_rhs, %signed_rhs_schema, %unsigned_rhs_schema : encoding<schema>
   %rhs_layout = encoding.layout.strided [1, 80] : encoding<layout>
   %wl_view = buffer.view %scratch[%w_off] : buffer -> view<64x[%k_n]xi8, %rhs_layout>
@@ -478,7 +479,7 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
     }
     // One lane decodes two adjacent Q5_K groups; each selects its bits from the shared 32-byte fifth-bit plane.
     %q5_weight_lane_count = index.add %k_n, %c0 : index
-    %q5_weight_lane_active = func.call @ggml_nvfp4_x4_stage(%is_nvfp4, %src0_na, %scratch, %w_off, %ws_off, %wc_off, %k_b, %row_base, %tid, %q5_weight_lane_count, %chunk) : (i1, buffer, buffer, offset, offset, offset, index, index, index, index, index) -> (i1)
+    %q5_weight_lane_active = func.call @ggml_own_x4_stage(%is_nvfp4, %is_q2_0, %src0_na, %scratch, %w_off, %ws_off, %wc_off, %k_b, %row_base, %tid, %q5_weight_lane_count, %chunk) : (i1, i1, buffer, buffer, offset, offset, offset, index, index, index, index, index) -> (i1)
     scf.if %q5_weight_lane_active {
       scf.if %is_iq4xs {
         %iq4_block_bytes = index.constant 136 : offset
@@ -1273,6 +1274,7 @@ kernel.def target(@ggml_q5_plane_dense_gfx11_wave32) @ggml_mul_mat_q5_k_q8_plane
   %is_q4 = scalar.constant false : i1
   %is_q4_packed = scalar.constant false : i1
   %is_nvfp4 = scalar.constant false : i1
+  %is_q2_0 = scalar.constant false : i1
   %token256 = scalar.constant true : i1
   %q8_plane = scalar.constant true : i1
   %paired_weights = scalar.constant false : i1
@@ -1299,7 +1301,7 @@ kernel.def target(@ggml_q5_plane_dense_gfx11_wave32) @ggml_mul_mat_q5_k_q8_plane
   %q8_g = buffer.assume.memory_space<global> %q8_input : buffer
   %weight_noalias, %output_noalias, %q8_noalias = buffer.assume.noalias %weight_g, %output_g, %q8_g : buffer, buffer, buffer
 
-  template.apply<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body>(%is_iq4xs, %token256, %q8_plane, %paired_weights, %weight_noalias, %weight_noalias, %output_noalias, %q8_noalias, %base, %lds_bytes, %w_off, %as_off, %ws_off, %asum_off, %wc_off, %c0, %c1, %c2, %c4, %c8, %c16, %c32, %c17, %c34, %k_kc, %k_astride, %k_wstride, %k_m, %k_n, %k_blocks, %k_wave, %k_wm, %fzero, %izero, %input_size, %output_size, %bounded_token_count, %nchunks, %kblocks, %col_tile, %row_tile, %tid, %wave, %is_symi5, %is_q4, %is_q4_packed, %is_nvfp4) : (i1, i1, i1, i1, buffer, buffer, buffer, buffer, offset, offset, offset, offset, offset, offset, offset, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, vector<8xf32>, vector<8xi32>, index, index, index, index, index, index, index, index, index, i1, i1, i1, i1)
+  template.apply<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body>(%is_iq4xs, %token256, %q8_plane, %paired_weights, %weight_noalias, %weight_noalias, %output_noalias, %q8_noalias, %base, %lds_bytes, %w_off, %as_off, %ws_off, %asum_off, %wc_off, %c0, %c1, %c2, %c4, %c8, %c16, %c32, %c17, %c34, %k_kc, %k_astride, %k_wstride, %k_m, %k_n, %k_blocks, %k_wave, %k_wm, %fzero, %izero, %input_size, %output_size, %bounded_token_count, %nchunks, %kblocks, %col_tile, %row_tile, %tid, %wave, %is_symi5, %is_q4, %is_q4_packed, %is_nvfp4, %is_q2_0) : (i1, i1, i1, i1, buffer, buffer, buffer, buffer, offset, offset, offset, offset, offset, offset, offset, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, vector<8xf32>, vector<8xi32>, index, index, index, index, index, index, index, index, index, i1, i1, i1, i1, i1)
   kernel.return
 }
 
@@ -1360,6 +1362,8 @@ template.def<@ggml.mul_mat_q8_1_x4.entry> device @ggml_mul_mat_q8_1_x4_entry(%to
   %is_q4 = scalar.ori %q4_native, %is_q4_packed : i1
   %nvfp4_format = index.constant 43 : index
   %is_nvfp4 = index.cmp eq, %weight_format, %nvfp4_format : index
+  %q2_0_format = index.constant 42 : index
+  %is_q2_0 = index.cmp eq, %weight_format, %q2_0_format : index
 
   %input_size0 = config.get @ggml.mul_mat_q8_1_x4.input_size : index
   %output_size0 = config.get @ggml.mul_mat_q8_1_x4.output_size : index
@@ -1396,7 +1400,7 @@ template.def<@ggml.mul_mat_q8_1_x4.entry> device @ggml_mul_mat_q8_1_x4_entry(%to
   %q8_g = buffer.assume.memory_space<global> %q8_input : buffer
   %weight_noalias, %output_noalias, %q8_noalias = buffer.assume.noalias %weight_g, %output_g, %q8_g : buffer, buffer, buffer
 
-  template.apply<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body>(%is_iq4xs, %token256, %q8_plane, %paired_weights, %peer_global, %weight_noalias, %output_noalias, %q8_noalias, %base, %lds_bytes, %w_off, %as_off, %ws_off, %asum_off, %wc_off, %c0, %c1, %c2, %c4, %c8, %c16, %c32, %c17, %c34, %k_kc, %k_astride, %k_wstride, %k_m, %k_n, %k_blocks, %k_wave, %k_wm, %fzero, %izero, %input_size, %output_size, %bounded_token_count, %nchunks, %kblocks, %col_tile, %row_tile, %tid, %wave, %is_symi5, %is_q4, %is_q4_packed, %is_nvfp4) : (i1, i1, i1, i1, buffer, buffer, buffer, buffer, offset, offset, offset, offset, offset, offset, offset, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, vector<8xf32>, vector<8xi32>, index, index, index, index, index, index, index, index, index, i1, i1, i1, i1)
+  template.apply<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body>(%is_iq4xs, %token256, %q8_plane, %paired_weights, %peer_global, %weight_noalias, %output_noalias, %q8_noalias, %base, %lds_bytes, %w_off, %as_off, %ws_off, %asum_off, %wc_off, %c0, %c1, %c2, %c4, %c8, %c16, %c32, %c17, %c34, %k_kc, %k_astride, %k_wstride, %k_m, %k_n, %k_blocks, %k_wave, %k_wm, %fzero, %izero, %input_size, %output_size, %bounded_token_count, %nchunks, %kblocks, %col_tile, %row_tile, %tid, %wave, %is_symi5, %is_q4, %is_q4_packed, %is_nvfp4, %is_q2_0) : (i1, i1, i1, i1, buffer, buffer, buffer, buffer, offset, offset, offset, offset, offset, offset, offset, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, vector<8xf32>, vector<8xi32>, index, index, index, index, index, index, index, index, index, i1, i1, i1, i1, i1)
   template.return
 }
 
