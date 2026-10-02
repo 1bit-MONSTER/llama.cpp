@@ -10795,6 +10795,191 @@ func.def inline @ggml_kquant_ref_value_iq3s(%grid_buf: buffer, %format: index, %
 }
 
 // Q6_K, IQ4_NL and Q8_0 weights for the reference, from single bytes.
+// Scalar reference for TQ1_0 (34), TQ2_0 (35) and MXFP4 (39), written from ggml's dequantize_row_tq1_0,
+// dequantize_row_tq2_0 and dequantize_row_mxfp4, independent of motifs/dequant_1bit.loom.
+// %block_base is the first byte of the 256-value group; %i is 0..255 within it.
+func.def pure inline @ggml_kquant_ref_1bit_format(%format: index) -> (i1) {
+  %f34 = index.constant 34 : index
+  %f35 = index.constant 35 : index
+  %f39 = index.constant 39 : index
+  %is34 = index.cmp eq, %format, %f34 : index
+  %is35 = index.cmp eq, %format, %f35 : index
+  %is39 = index.cmp eq, %format, %f39 : index
+  %is3435 = scalar.ori %is34, %is35 : i1
+  %is = scalar.ori %is3435, %is39 : i1
+  func.return %is : i1
+}
+
+func.def inline @ggml_kquant_ref_value_1bit(%format: index, %weight: buffer, %block_base: offset, %i: index) -> (f32) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %c17 = index.constant 17 : index
+  %c32 = index.constant 32 : index
+  %c128 = index.constant 128 : index
+  %c160 = index.constant 160 : index
+  %c240 = index.constant 240 : index
+  %f35 = index.constant 35 : index
+  %f39 = index.constant 39 : index
+  %is35 = index.cmp eq, %format, %f35 : index
+  %is39 = index.cmp eq, %format, %f39 : index
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c3_i32 = scalar.constant 3 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c5_i32 = scalar.constant 5 : i32
+  %c6_i32 = scalar.constant 6 : i32
+  %c7_i32 = scalar.constant 7 : i32
+  %c8_i32 = scalar.constant 8 : i32
+  %c9_i32 = scalar.constant 9 : i32
+  %c12_i32 = scalar.constant 12 : i32
+  %c15_i32 = scalar.constant 15 : i32
+  %c23_i32 = scalar.constant 23 : i32
+  %c27_i32 = scalar.constant 27 : i32
+  %c81_i32 = scalar.constant 81 : i32
+  %c255_i32 = scalar.constant 255 : i32
+  %c0_i32 = scalar.constant 0 : i32
+  %value = scf.if %is39 -> (f32) {
+    // MXFP4: eight 17-byte blocks of 32 values (E8M0 e, then qs[16]). Value j is the low nibble of
+    // qs[j], value j + 16 the high nibble; kvalues {0,1,2,3,4,6,8,12} with sign bit 8, times the
+    // E8M0 half scale 2^(e - 127) / 2 built from its f32 bits ((e - 1) << 23, or 0x00200000 << e).
+    %mb = index.div %i, %c32 : index
+    %j = index.rem %i, %c32 : index
+    %bv = buffer.view %weight[%block_base] : buffer -> view<136xi8>
+    %e_at0 = index.mul %mb, %c17 : index
+    %e_at = index.assume %e_at0 [range(%e_at0, 0, 119)] : index
+    %e_i8 = view.load %bv[%e_at] : view<136xi8> -> i8
+    %e = scalar.extui %e_i8 : i8 to i32
+    %hi = index.cmp uge, %j, %c16 : index
+    %jq = index.rem %j, %c16 : index
+    %q_at0 = index.add %e_at0, %c1 : index
+    %q_at1 = index.add %q_at0, %jq : index
+    %q_at = index.assume %q_at1 [range(%q_at1, 1, 135)] : index
+    %q_i8 = view.load %bv[%q_at] : view<136xi8> -> i8
+    %q = scalar.extui %q_i8 : i8 to i32
+    %q_high = scalar.shrui %q, %c4_i32 : i32
+    %q_sel = scf.select %hi, %q_high, %q : i32
+    %code = scalar.andi %q_sel, %c15_i32 : i32
+    %mag3 = scalar.andi %code, %c7_i32 : i32
+    %is5 = scalar.cmpi eq, %mag3, %c5_i32 : i32
+    %is6 = scalar.cmpi eq, %mag3, %c6_i32 : i32
+    %is7 = scalar.cmpi eq, %mag3, %c7_i32 : i32
+    %mag_a = scf.select %is5, %c6_i32, %mag3 : i32
+    %mag_b = scf.select %is6, %c8_i32, %mag_a : i32
+    %mag = scf.select %is7, %c12_i32, %mag_b : i32
+    %sign_bit = scalar.andi %code, %c8_i32 : i32
+    %negative = scalar.cmpi ne, %sign_bit, %c0_i32 : i32
+    %mag_f = scalar.sitofp %mag : i32 to f32
+    %neg_mag_f = scalar.negf %mag_f : f32
+    %kv = scf.select %negative, %neg_mag_f, %mag_f : f32
+    %is_small = scalar.cmpi ult, %e, %c2_i32 : i32
+    %e_m1 = scalar.subi %e, %c1_i32 : i32
+    %normal_bits = scalar.shli %e_m1, %c23_i32 : i32
+    %sub_unit = scalar.constant 2097152 : i32
+    %sub_bits = scalar.shli %sub_unit, %e : i32
+    %bits = scf.select %is_small, %sub_bits, %normal_bits : i32
+    %bits_v = vector.from_elements %bits : vector<1xi32>
+    %scale_v = vector.bitcast %bits_v : vector<1xi32> to vector<1xf32>
+    %scale = vector.extract %scale_v[0] : vector<1xf32> -> f32
+    %r = scalar.mulf %kv, %scale : f32
+    scf.yield %r : f32
+  } else {
+    %value_tq = scf.if %is35 -> (f32) {
+      // TQ2_0: qs[64] then d (f16, byte 64). Value i: byte (i / 128) * 32 + i % 32, 2-bit field (i % 128) / 32,
+      // (q - 1) * d.
+      %bv = buffer.view %weight[%block_base] : buffer -> view<66xi8>
+      %hv = buffer.view %weight[%block_base] : buffer -> view<33xf16>
+      %d_at = index.constant 32 : index
+      %d_f16 = view.load %hv[%d_at] : view<33xf16> -> f16
+      %d = scalar.extf %d_f16 : f16 to f32
+      %half = index.div %i, %c128 : index
+      %r128 = index.rem %i, %c128 : index
+      %field = index.div %r128, %c32 : index
+      %m = index.rem %i, %c32 : index
+      %b0 = index.mul %half, %c32 : index
+      %b1 = index.add %b0, %m : index
+      %b = index.assume %b1 [range(%b1, 0, 63)] : index
+      %byte_i8 = view.load %bv[%b] : view<66xi8> -> i8
+      %byte = scalar.extui %byte_i8 : i8 to i32
+      %field_i32 = index.cast %field : index to i32
+      %shift = scalar.muli %field_i32, %c2_i32 : i32
+      %shifted = scalar.shrui %byte, %shift : i32
+      %q = scalar.andi %shifted, %c3_i32 : i32
+      %t = scalar.subi %q, %c1_i32 : i32
+      %t_f = scalar.sitofp %t : i32 to f32
+      %r = scalar.mulf %t_f, %d : f32
+      scf.yield %r : f32
+    } else {
+      // TQ1_0: qs[48], qh[4], then d (f16, byte 52). Values 0..159 use qs[i % 32] with n = i / 32, values
+      // 160..239 qs[32 + (i - 160) % 16] with n = (i - 160) / 16, values 240..255 qh[(i - 240) % 4] with
+      // n = (i - 240) / 4; q = (byte * 3^n) mod 256, xi = (q * 3) >> 8, value (xi - 1) * d.
+      %bv = buffer.view %weight[%block_base] : buffer -> view<54xi8>
+      %hv = buffer.view %weight[%block_base] : buffer -> view<27xf16>
+      %d_at = index.constant 26 : index
+      %d_f16 = view.load %hv[%d_at] : view<27xf16> -> f16
+      %d = scalar.extf %d_f16 : f16 to f32
+      %in_a = index.cmp ult, %i, %c160 : index
+      %in_b = index.cmp ult, %i, %c240 : index
+      %a_byte = index.rem %i, %c32 : index
+      %a_n = index.div %i, %c32 : index
+      // Select before subtracting: index arithmetic is no-wrap, so an unconditional i - 160 would let the
+      // compiler assume i >= 160 and fold the first region away.
+      %i_b_in = scf.select %in_a, %c160, %i : index
+      %i_b = index.sub %i_b_in, %c160 : index
+      %b_r = index.rem %i_b, %c16 : index
+      %b_byte = index.add %b_r, %c32 : index
+      %b_n = index.div %i_b, %c16 : index
+      %i_c_in = scf.select %in_b, %c240, %i : index
+      %i_c = index.sub %i_c_in, %c240 : index
+      %c_r = index.rem %i_c, %c4 : index
+      %c48 = index.constant 48 : index
+      %c_byte = index.add %c_r, %c48 : index
+      %c_n = index.div %i_c, %c4 : index
+      %bc_byte = scf.select %in_b, %b_byte, %c_byte : index
+      %bc_n = scf.select %in_b, %b_n, %c_n : index
+      %byte_at0 = scf.select %in_a, %a_byte, %bc_byte : index
+      %n = scf.select %in_a, %a_n, %bc_n : index
+      %byte_at = index.assume %byte_at0 [range(%byte_at0, 0, 51)] : index
+      %byte_i8 = view.load %bv[%byte_at] : view<54xi8> -> i8
+      %byte = scalar.extui %byte_i8 : i8 to i32
+      %n_i32 = index.cast %n : index to i32
+      %n1 = scalar.cmpi eq, %n_i32, %c1_i32 : i32
+      %n2 = scalar.cmpi eq, %n_i32, %c2_i32 : i32
+      %n3 = scalar.cmpi eq, %n_i32, %c3_i32 : i32
+      %n4 = scalar.cmpi eq, %n_i32, %c4_i32 : i32
+      %p1 = scf.select %n1, %c3_i32, %c1_i32 : i32
+      %p2 = scf.select %n2, %c9_i32, %p1 : i32
+      %p3 = scf.select %n3, %c27_i32, %p2 : i32
+      %pow3 = scf.select %n4, %c81_i32, %p3 : i32
+      %prod = scalar.muli %byte, %pow3 : i32
+      %q = scalar.andi %prod, %c255_i32 : i32
+      %q3 = scalar.muli %q, %c3_i32 : i32
+      %xi = scalar.shrui %q3, %c8_i32 : i32
+      %t = scalar.subi %xi, %c1_i32 : i32
+      %t_f = scalar.sitofp %t : i32 to f32
+      %r = scalar.mulf %t_f, %d : f32
+      scf.yield %r : f32
+    }
+    scf.yield %value_tq : f32
+  }
+  func.return %value : f32
+}
+
+// The reference values of the formats above go to ggml_kquant_ref_value_1bit, the rest to the PrismML
+// g128 reference.
+func.def inline @ggml_kquant_ref_value_alt(%format: index, %weight: buffer, %block_base: offset, %i: index) -> (f32) {
+  %is_1bit = func.call pure @ggml_kquant_ref_1bit_format(%format) : (index) -> (i1)
+  %v = scf.if %is_1bit -> (f32) {
+    %t = func.call @ggml_kquant_ref_value_1bit(%format, %weight, %block_base, %i) : (index, buffer, offset, index) -> (f32)
+    scf.yield %t : f32
+  } else {
+    %g = func.call @ggml_kquant_g128_ref_value(%format, %weight, %block_base, %i) : (index, buffer, offset, index) -> (f32)
+    scf.yield %g : f32
+  }
+  func.return %v : f32
+}
+
 func.def inline @ggml_kquant_ref_value(%grid: buffer, %format: index, %table: vector<16xi8>, %weight: buffer, %row_base: offset, %k: index) -> (f32) {
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
@@ -10825,9 +11010,11 @@ func.def inline @ggml_kquant_ref_value(%grid: buffer, %format: index, %table: ve
   %is11 = index.cmp eq, %format, %f11 : index
   %f21r = index.constant 21 : index
   %is21r = index.cmp eq, %format, %f21r : index
-  %is_prism_ref = func.call pure @ggml_kquant_g128_format(%format) : (index) -> (i1)
+  %is_g128_ref = func.call pure @ggml_kquant_g128_format(%format) : (index) -> (i1)
+  %is_1bit_ref = func.call pure @ggml_kquant_ref_1bit_format(%format) : (index) -> (i1)
+  %is_prism_ref = scalar.ori %is_g128_ref, %is_1bit_ref : i1
   %value = scf.if %is_prism_ref -> (f32) {
-    %pv = func.call @ggml_kquant_g128_ref_value(%format, %weight, %block_base, %i) : (index, buffer, offset, index) -> (f32)
+    %pv = func.call @ggml_kquant_ref_value_alt(%format, %weight, %block_base, %i) : (index, buffer, offset, index) -> (f32)
     scf.yield %pv : f32
   } else {
   %value_k = scf.if %is11 -> (f32) {
@@ -11522,5 +11709,97 @@ check.case public @ggml_kquant_swiglu_decode_ptq1_iq3s_case {
   kernel.launch @ggml_kquant_swiglu_decode_reference_f32[](%input, %gate, %up, %expected) : [](tensor<512xf32>, tensor<168xi32>, tensor<330xi32>, tensor<6xf32>)
   kernel.launch @ggml_kquant_swiglu_decode_f32[](%input, %gate, %up, %output) : [](tensor<512xf32>, tensor<168xi32>, tensor<330xi32>, tensor<6xf32>)
   check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<6xf32>
+  check.return
+}
+
+// TQ1_0 (34), TQ2_0 (35), MXFP4 (39) against ggml_kquant_ref_value_1bit. Weight words per case at
+// input_size 512, output_size 6: TQ1_0 6 x 2 x 54 B = 162, TQ2_0 6 x 2 x 66 B = 198, MXFP4 6 x 2 x 136 B
+// = 408. The MXFP4 cases fill bytes 124..129 so every E8M0 scale is normal and between 2^-3 and 2^2
+// (the GPU flushes subnormals; tiny scales would also pass the tolerance whatever the codes decode to).
+
+// --config=ggml.kquant_mul_mat_decode.input_size=512 --config=ggml.kquant_mul_mat_decode.output_size=6
+// --config=ggml.kquant_mul_mat_decode.weight_format=34 --config=ggml.kquant_mul_mat_decode.add=1
+check.case public @ggml_kquant_mul_mat_decode_tq1_0_add_case {
+  %x_seed = check.param.seed base(7300000000000031301) count(1) : i64
+  %a_seed = check.param.seed base(7300000000000031302) count(1) : i64
+  %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<512xf32>
+  %weight = check.generate.iota offset(0) step(16843009) period(64) : tensor<162xi32>
+  %addend = check.generate.random.uniform seed(%a_seed) range(-1.0 to 1.0) : tensor<6xf32>
+  %output = check.generate.fill value(-7.0) : tensor<6xf32>
+  %expected = check.generate.fill value(7.0) : tensor<6xf32>
+  kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%input, %weight, %addend, %expected) : [](tensor<512xf32>, tensor<162xi32>, tensor<6xf32>, tensor<6xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_f32[](%input, %weight, %addend, %output) : [](tensor<512xf32>, tensor<162xi32>, tensor<6xf32>, tensor<6xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<6xf32>
+  check.return
+}
+
+// --config ... ggml.kquant_mul_mat_decode.weight_format=35 add=0
+check.case public @ggml_kquant_mul_mat_decode_tq2_0_case {
+  %x_seed = check.param.seed base(7300000000000031303) count(1) : i64
+  %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<512xf32>
+  %weight = check.generate.iota offset(0) step(16843009) period(64) : tensor<198xi32>
+  %addend = check.generate.fill value(100.0) : tensor<6xf32>
+  %output = check.generate.fill value(-7.0) : tensor<6xf32>
+  %expected = check.generate.fill value(7.0) : tensor<6xf32>
+  kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%input, %weight, %addend, %expected) : [](tensor<512xf32>, tensor<198xi32>, tensor<6xf32>, tensor<6xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_f32[](%input, %weight, %addend, %output) : [](tensor<512xf32>, tensor<198xi32>, tensor<6xf32>, tensor<6xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<6xf32>
+  check.return
+}
+
+// --config ... ggml.kquant_mul_mat_decode.weight_format=39 add=0
+check.case public @ggml_kquant_mul_mat_decode_mxfp4_case {
+  %x_seed = check.param.seed base(7300000000000031304) count(1) : i64
+  %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<512xf32>
+  %weight = check.generate.iota offset(2088533116) step(16843009) period(6) : tensor<408xi32>
+  %addend = check.generate.fill value(100.0) : tensor<6xf32>
+  %output = check.generate.fill value(-7.0) : tensor<6xf32>
+  %expected = check.generate.fill value(7.0) : tensor<6xf32>
+  kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%input, %weight, %addend, %expected) : [](tensor<512xf32>, tensor<408xi32>, tensor<6xf32>, tensor<6xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_f32[](%input, %weight, %addend, %output) : [](tensor<512xf32>, tensor<408xi32>, tensor<6xf32>, tensor<6xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<6xf32>
+  check.return
+}
+
+// Multi-token: ggml.kquant_mul_mat_decode.weight_format=34 add=1
+check.case public @ggml_kquant_mul_mat_decode_tokens_tq1_0_case {
+  %x_seed = check.param.seed base(7300000000000031305) count(1) : i64
+  %a_seed = check.param.seed base(7300000000000031306) count(1) : i64
+  %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<1536xf32>
+  %weight = check.generate.iota offset(0) step(16843009) period(64) : tensor<162xi32>
+  %addend = check.generate.random.uniform seed(%a_seed) range(-1.0 to 1.0) : tensor<18xf32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%input, %weight, %addend, %expected) : [](tensor<1536xf32>, tensor<162xi32>, tensor<18xf32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_tokens_f32[](%input, %weight, %addend, %output) : [](tensor<1536xf32>, tensor<162xi32>, tensor<18xf32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// Multi-token: ggml.kquant_mul_mat_decode.weight_format=35 add=0
+check.case public @ggml_kquant_mul_mat_decode_tokens_tq2_0_case {
+  %x_seed = check.param.seed base(7300000000000031307) count(1) : i64
+  %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<1536xf32>
+  %weight = check.generate.iota offset(0) step(16843009) period(64) : tensor<198xi32>
+  %addend = check.generate.fill value(100.0) : tensor<18xf32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%input, %weight, %addend, %expected) : [](tensor<1536xf32>, tensor<198xi32>, tensor<18xf32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_tokens_f32[](%input, %weight, %addend, %output) : [](tensor<1536xf32>, tensor<198xi32>, tensor<18xf32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// Multi-token: ggml.kquant_mul_mat_decode.weight_format=39 add=0
+check.case public @ggml_kquant_mul_mat_decode_tokens_mxfp4_case {
+  %x_seed = check.param.seed base(7300000000000031308) count(1) : i64
+  %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<1536xf32>
+  %weight = check.generate.iota offset(2088533116) step(16843009) period(6) : tensor<408xi32>
+  %addend = check.generate.fill value(100.0) : tensor<18xf32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_mul_mat_decode_reference_f32[](%input, %weight, %addend, %expected) : [](tensor<1536xf32>, tensor<408xi32>, tensor<18xf32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_mul_mat_decode_tokens_f32[](%input, %weight, %addend, %output) : [](tensor<1536xf32>, tensor<408xi32>, tensor<18xf32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<18xf32>
   check.return
 }
