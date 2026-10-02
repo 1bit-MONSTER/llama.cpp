@@ -244,7 +244,7 @@ void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
             "ffn_gate", "ffn_up", "ffn_down",
             "ffn_gate_exps", "ffn_up_exps", "ffn_down_exps", "ffn_gate_up_exps",
             "ffn_gate_shexp", "ffn_up_shexp", "ffn_down_shexp",
-            "ssm_out", "ssm_alpha", "ssm_beta",
+            "ssm_out", "ssm_alpha", "ssm_beta", "ssm_ba",
         };
         if (name == "output.weight") {
             return true;  // the output head goes through build_lora_mm in every arch
@@ -270,10 +270,26 @@ void llama_hadamard::load_keys(llama_model_loader & ml, llm_arch arch) {
     if (onebit) {
         // tools/hadamard_q4_0.py rotates the Q4_0 matmul weights; a Q4_0 lookup table (token_embd)
         // is written in the plain basis and needs no transform
+        // Every other Q4_0 tensor in a stamped file is rotated (the tool checks that before it writes the
+        // stamp), so a Q4_0 weight this whitelist does not cover would run without its activation transform
+        // and answer wrongly. Refuse the file instead.
+        std::vector<std::string> unfoldable;
         for (const auto & [name, w] : ml.weights_map) {
-            if (w.tensor->type == GGML_TYPE_Q4_0 && foldable(name)) {
-                weight_names.push_back(name);
+            if (w.tensor->type != GGML_TYPE_Q4_0 || name == "token_embd.weight") {
+                continue;
             }
+            if (foldable(name)) {
+                weight_names.push_back(name);
+            } else {
+                unfoldable.push_back(name);
+            }
+        }
+        if (!unfoldable.empty()) {
+            std::sort(unfoldable.begin(), unfoldable.end());
+            throw std::runtime_error(format(
+                "onebit.hadamard_q4_0: %zu rotated Q4_0 weights are not on a verified Hadamard-aware matmul path "
+                "(first: %s), so arch '%s' can't run this file here",
+                unfoldable.size(), unfoldable.front().c_str(), llm_arch_name(arch)));
         }
         if (weight_names.empty()) {
             throw std::runtime_error("onebit.hadamard_q4_0: the file has no Q4_0 matmul weights");
