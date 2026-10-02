@@ -1,0 +1,141 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// GGML_GLU_OP_SWIGLU_OAI on F32 (gpt-oss's clamped SwiGLU), gate and up as two contiguous tensors of the same shape:
+//   x = min(gate, limit), y = clamp(up, -limit, limit), output = x / (1 + exp(-alpha x)) * (y + 1)
+// (ggml-cpu ggml_compute_forward_swiglu_oai_f32). Element-wise over the flat tensors, four values per workitem.
+
+amdgpu.target<gfx11-generic> @ggml_swiglu_oai_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.swiglu_oai.alpha : f32
+
+config.decl @ggml.swiglu_oai.limit : f32
+
+func.def inline @ggml_swiglu_oai_value(%gate: f32, %up: f32, %alpha: f32, %limit: f32) -> (f32) {
+  %one = scalar.constant 1.0 : f32
+  %gate_over = scalar.cmpf ogt, %gate, %limit : f32
+  %x = scf.select %gate_over, %limit, %gate : f32
+  %neg_limit = scalar.negf %limit : f32
+  %up_over = scalar.cmpf ogt, %up, %limit : f32
+  %up_under = scalar.cmpf olt, %up, %neg_limit : f32
+  %y0 = scf.select %up_over, %limit, %up : f32
+  %y = scf.select %up_under, %neg_limit, %y0 : f32
+  %neg_x = scalar.negf %x : f32
+  %ax = scalar.mulf %alpha, %neg_x : f32
+  %e = scalar.expf<afn> %ax : f32
+  %den = scalar.addf %one, %e : f32
+  %glu = scalar.divf %x, %den : f32
+  %y1 = scalar.addf %y, %one : f32
+  %out = scalar.mulf %glu, %y1 : f32
+  func.return %out : f32
+}
+
+kernel.def target(@ggml_swiglu_oai_gfx11_wave32) export("ggml_swiglu_oai_f32") @ggml_swiglu_oai_f32(%element_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  %c1023 = index.constant 1023 : index
+  %c1024 = index.constant 1024 : index
+  %padded = index.add %element_count, %c1023 : index
+  %groups = index.div %padded, %c1024 : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%element_count: index, %gate: buffer, %up: buffer, %output: buffer) where [range(%element_count, 1, 134217728)] {
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c1024 = index.constant 1024 : index
+  %c0_offset = index.constant 0 : offset
+  %zero4 = vector.constant 0.0 : vector<4xf32>
+  %alpha = config.get @ggml.swiglu_oai.alpha : f32
+  %limit = config.get @ggml.swiglu_oai.limit : f32
+  %group = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %group_base = index.mul %group, %c1024 : index
+  %item_offset = index.mul %workitem, %c4 : index
+  %first = index.add %group_base, %item_offset : index
+  %in_range = index.cmp ult, %first, %element_count : index
+  %gate_noalias, %up_noalias, %output_noalias = buffer.assume.noalias %gate, %up, %output : buffer, buffer, buffer
+  %gate_view = buffer.view %gate_noalias[%c0_offset] : buffer -> view<[%element_count]xf32>
+  %up_view = buffer.view %up_noalias[%c0_offset] : buffer -> view<[%element_count]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%element_count]xf32>
+  scf.if %in_range {
+    %mask = vector.mask.range [%first to %element_count step %c1] : index -> vector<4xi1>
+    %g = vector.load.mask %gate_view[%first], %mask, %zero4 : view<[%element_count]xf32>, vector<4xi1>, vector<4xf32>
+    %u = vector.load.mask %up_view[%first], %mask, %zero4 : view<[%element_count]xf32>, vector<4xi1>, vector<4xf32>
+    %g0 = vector.extract %g[0] : vector<4xf32> -> f32
+    %g1 = vector.extract %g[1] : vector<4xf32> -> f32
+    %g2 = vector.extract %g[2] : vector<4xf32> -> f32
+    %g3 = vector.extract %g[3] : vector<4xf32> -> f32
+    %u0 = vector.extract %u[0] : vector<4xf32> -> f32
+    %u1 = vector.extract %u[1] : vector<4xf32> -> f32
+    %u2 = vector.extract %u[2] : vector<4xf32> -> f32
+    %u3 = vector.extract %u[3] : vector<4xf32> -> f32
+    %o0 = func.call @ggml_swiglu_oai_value(%g0, %u0, %alpha, %limit) : (f32, f32, f32, f32) -> (f32)
+    %o1 = func.call @ggml_swiglu_oai_value(%g1, %u1, %alpha, %limit) : (f32, f32, f32, f32) -> (f32)
+    %o2 = func.call @ggml_swiglu_oai_value(%g2, %u2, %alpha, %limit) : (f32, f32, f32, f32) -> (f32)
+    %o3 = func.call @ggml_swiglu_oai_value(%g3, %u3, %alpha, %limit) : (f32, f32, f32, f32) -> (f32)
+    %o = vector.from_elements %o0, %o1, %o2, %o3 : vector<4xf32>
+    vector.store.mask %o, %output_view[%first], %mask : vector<4xf32>, view<[%element_count]xf32>, vector<4xi1>
+  }
+  kernel.return
+}
+
+// Reference for the case: one workitem per value, written out without the shared helper.
+kernel.def target(@ggml_swiglu_oai_gfx11_wave32) export("ggml_swiglu_oai_reference_f32") @ggml_swiglu_oai_reference_f32(%element_count: index) {
+  %one = index.constant 1 : index
+  kernel.launch.config workgroups(%element_count, %one, %one) workgroup_size(%one, %one, %one) : index
+} launch(%element_count: index, %gate: buffer, %up: buffer, %output: buffer) where [range(%element_count, 1, 134217728)] {
+  %c0_offset = index.constant 0 : offset
+  %one = scalar.constant 1.0 : f32
+  %alpha = config.get @ggml.swiglu_oai.alpha : f32
+  %limit = config.get @ggml.swiglu_oai.limit : f32
+  %i0 = kernel.workgroup.id<x> : index
+  %i, %bound = index.assume %i0, %element_count [lt(%i0, %element_count)] : index, index
+  %gv = buffer.view %gate[%c0_offset] : buffer -> view<[%bound]xf32>
+  %uv = buffer.view %up[%c0_offset] : buffer -> view<[%bound]xf32>
+  %ov = buffer.view %output[%c0_offset] : buffer -> view<[%bound]xf32>
+  %g = view.load %gv[%i] : view<[%bound]xf32> -> f32
+  %u = view.load %uv[%i] : view<[%bound]xf32> -> f32
+  %g_low = scalar.cmpf ole, %g, %limit : f32
+  %x = scf.select %g_low, %g, %limit : f32
+  %neg_limit = scalar.negf %limit : f32
+  %u_low = scalar.cmpf ole, %u, %limit : f32
+  %y0 = scf.select %u_low, %u, %limit : f32
+  %y_high = scalar.cmpf oge, %y0, %neg_limit : f32
+  %y = scf.select %y_high, %y0, %neg_limit : f32
+  %nx = scalar.negf %x : f32
+  %ax = scalar.mulf %alpha, %nx : f32
+  %e = scalar.expf<afn> %ax : f32
+  %den = scalar.addf %one, %e : f32
+  %glu = scalar.divf %x, %den : f32
+  %y1 = scalar.addf %y, %one : f32
+  %out = scalar.mulf %glu, %y1 : f32
+  view.store %out, %ov[%i] : f32, view<[%bound]xf32>
+  kernel.return
+}
+
+// 2050 values (the last workgroup partial, the last vector partial), inputs past +-limit on both sides.
+// Run with --config=ggml.swiglu_oai.alpha=1.702 --config=ggml.swiglu_oai.limit=7.0 (gpt-oss).
+check.case public @ggml_swiglu_oai_f32_case {
+  %gate_seed = check.param.seed base(7300000000000067001) count(1) : i64
+  %up_seed = check.param.seed base(7300000000000067002) count(1) : i64
+  %count = check.literal value(2050) : index
+  %gate = check.generate.random.uniform seed(%gate_seed) range(-12.0 to 12.0) : tensor<2050xf32>
+  %up = check.generate.random.uniform seed(%up_seed) range(-12.0 to 12.0) : tensor<2050xf32>
+  %output = check.generate.fill value(-7.0) : tensor<2050xf32>
+  %expected = check.generate.fill value(7.0) : tensor<2050xf32>
+  kernel.launch @ggml_swiglu_oai_reference_f32[%count](%count, %gate, %up, %expected) : [index](index, tensor<2050xf32>, tensor<2050xf32>, tensor<2050xf32>)
+  kernel.launch @ggml_swiglu_oai_f32[%count](%count, %gate, %up, %output) : [index](index, tensor<2050xf32>, tensor<2050xf32>, tensor<2050xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-6) rtol(1.0e-6) nan(same) : tensor<2050xf32>
+  check.return
+}

@@ -608,6 +608,7 @@ static bool eager_capability_declared(enum ggml_op op) {
         // full decision.
         case GGML_OP_NONE:
         case GGML_OP_ADD:
+        case GGML_OP_ADD_ID:
         case GGML_OP_ARGSORT:
         case GGML_OP_CLAMP:
         case GGML_OP_CONCAT:
