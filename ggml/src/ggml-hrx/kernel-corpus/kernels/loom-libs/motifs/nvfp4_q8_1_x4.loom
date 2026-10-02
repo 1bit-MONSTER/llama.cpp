@@ -19,7 +19,7 @@
 // values), then qs[32]; sub-block s reads qs[8 s .. 8 s + 7], low nibbles first.
 //
 // The staged weights are the signed E2M1 codes of ggml's kvalues_mxfp4 (-12..12, exact in i8). A K32 block holds two
-// NVFP4 scale groups, so the kernel scales its two 16-wide WMMA products separately (each by its own halved UE4M3
+// NVFP4 scale groups, so its two 16-wide WMMA products are scaled separately here (@ggml_nvfp4_x4_tile) (each by its own halved UE4M3
 // scale) before the q8_1 activation scale of the K32 block is applied. NVFP4 has no minimum, so the kernel's per-K32
 // correction slots carry the second 16-value scale of each K32 block and the activation-sum term is not used.
 
@@ -172,4 +172,38 @@ func.def inline @ggml_nvfp4_x4_stage_row(%weight: buffer, %scratch: buffer, %w_o
   view.store %s1, %second_scales[%meta0] : f32, view<128xf32>
   view.store %s3, %second_scales[%meta1] : f32, view<128xf32>
   func.return
+}
+
+// The q8_1 x4 kernel's weight staging hook: at NVFP4, staging threads (tid < rows) stage their row of the chunk
+// here. Returns whether the kernel's own staging runs (tid < rows and not NVFP4).
+func.def inline @ggml_nvfp4_x4_stage(%is_nvfp4: i1, %weight: buffer, %scratch: buffer, %w_off: offset, %ws_off: offset, %wc_off: offset, %input_size: index, %row_base: index, %tid: index, %rows: index, %chunk: index) -> (i1) {
+  %true = scalar.constant true : i1
+  %lane_active = index.cmp ult, %tid, %rows : index
+  %stage = scalar.andi %lane_active, %is_nvfp4 : i1
+  scf.if %stage {
+    %row0 = index.add %row_base, %tid : index
+    %row = index.assume %row0 [range(%row0, 0, 262143)] : index
+    func.call @ggml_nvfp4_x4_stage_row(%weight, %scratch, %w_off, %ws_off, %wc_off, %input_size, %row, %tid, %chunk) : (buffer, buffer, offset, offset, offset, index, index, index, index)
+  }
+  %other = scalar.xori %is_nvfp4, %true : i1
+  %own = scalar.andi %lane_active, %other : i1
+  func.return %own : i1
+}
+
+// The q8_1 x4 kernel's contraction hook for one 16 x 16 output tile of a K32 block: at NVFP4, the low 16-wide
+// product (%low) and the high one (%lhs1 x %rhs1, recomputed unchained) are scaled by their own 16-value scales
+// (%scale0, %scale1), then by the q8_1 activation scale, onto %accumulator. Other formats keep %affine.
+func.def inline @ggml_nvfp4_x4_tile(%is_nvfp4: i1, %affine: vector<8xf32>, %low: vector<8xi32>, %lhs1: vector<4xi32>, %rhs1: vector<4xi32>, %zero: vector<8xi32>, %scale0: vector<8xf32>, %scale1: vector<8xf32>, %activation_scale: vector<8xf32>, %accumulator: vector<8xf32>) -> (vector<8xf32>) {
+  %result = scf.if %is_nvfp4 -> (vector<8xf32>) {
+    %high = vector.mma %lhs1, %rhs1, %zero : vector<4xi32>, vector<4xi32>, vector<8xi32>
+    %low_f32 = vector.sitofp %low : vector<8xi32> to vector<8xf32>
+    %high_f32 = vector.sitofp %high : vector<8xi32> to vector<8xf32>
+    %weighted_high = vector.mulf %high_f32, %scale1 : vector<8xf32>
+    %weighted = vector.fmaf %low_f32, %scale0, %weighted_high : vector<8xf32>
+    %value = vector.fmaf %weighted, %activation_scale, %accumulator : vector<8xf32>
+    scf.yield %value : vector<8xf32>
+  } else {
+    scf.yield %affine : vector<8xf32>
+  }
+  func.return %result : vector<8xf32>
 }
