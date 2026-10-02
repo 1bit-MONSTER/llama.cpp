@@ -372,6 +372,11 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-nvfp4 PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-nvfp4 COMMAND test-hrx-nvfp4)
 
+    add_executable(test-hrx-q2_0 test-hrx-q2_0.cpp)
+    target_link_libraries(test-hrx-q2_0 PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-q2_0 PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-q2_0 COMMAND test-hrx-q2_0)
+
     add_executable(test-hrx-decode-stride test-hrx-decode-stride.cpp)
     target_link_libraries(test-hrx-decode-stride PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-decode-stride PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)

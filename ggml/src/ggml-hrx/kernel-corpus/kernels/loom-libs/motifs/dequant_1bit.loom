@@ -23,6 +23,8 @@
 //
 // NVFP4 (format 43): see its decoder below.
 //
+// Q2_0 (format 42): ggml's 2-bit type, see its decoder at the end.
+//
 // TQ1_0 (format 34) and TQ2_0 (format 35): ggml ternary types, 256 values per block; see their decoders below.
 
 // Nibble unpacking: four codes from four bytes, low nibbles or (uses_high) high nibbles.
@@ -378,6 +380,56 @@ func.def inline @ggml_tq1_0_f16_vector4(%weight: buffer, %row_byte_base: offset,
 
 func.def inline @ggml_tq2_0_f16_vector4(%weight: buffer, %row_byte_base: offset, %tq_block: index, %tq_group: index, %packet: index) -> (vector<4xf16>) {
   %values_f32 = func.call @ggml_tq2_0_f32_vector4(%weight, %row_byte_base, %tq_block, %tq_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
+  %values = vector.fptrunc %values_f32 : vector<4xf32> to vector<4xf16>
+  func.return %values : vector<4xf16>
+}
+
+// Q2_0 (format 42, ggml's 2-bit type): 18 bytes per 64 values = d (f16), qs[16]; value j is
+// ((qs[j / 4] >> 2 (j % 4)) & 3) - 1 times d (dequantize_row_q2_0: 00 = -1, 01 = 0, 10 = +1, 11 = +2). %k is the
+// value's index in the row; the four values k..k+3 (k % 4 == 0) are the four 2-bit fields of one byte.
+func.def inline @ggml_q2_0_f32_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c64 = index.constant 64 : index
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c3_i32 = scalar.constant 3 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c6_i32 = scalar.constant 6 : i32
+  %block_bytes = index.constant 18 : offset
+  %code_offset = index.constant 2 : offset
+  %block = index.div %k, %c64 : index
+  %k_in_block = index.rem %k, %c64 : index
+  %byte_index0 = index.div %k_in_block, %c4 : index
+  %byte_index = index.assume %byte_index0 [range(%byte_index0, 0, 15)] : index
+  %block_byte_add = index.scale %block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %code_byte_base = index.add %block_byte_base, %code_offset : offset
+  %d_view = buffer.view %weight[%block_byte_base] : buffer -> view<1xf16>
+  %code_view = buffer.view %weight[%code_byte_base] : buffer -> view<16xi8>
+  %d_vector = vector.load %d_view[%c0] : view<1xf16> -> vector<1xf16>
+  %d_f16 = vector.extract %d_vector[0] : vector<1xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %q_i8 = view.load %code_view[%byte_index] : view<16xi8> -> i8
+  %q = scalar.extui %q_i8 : i8 to i32
+  %q1_shift = scalar.shrui %q, %c2_i32 : i32
+  %q2_shift = scalar.shrui %q, %c4_i32 : i32
+  %q3_shift = scalar.shrui %q, %c6_i32 : i32
+  %q0 = scalar.andi %q, %c3_i32 : i32
+  %q1 = scalar.andi %q1_shift, %c3_i32 : i32
+  %q2 = scalar.andi %q2_shift, %c3_i32 : i32
+  %q3 = scalar.andi %q3_shift, %c3_i32 : i32
+  %qv = vector.from_elements %q0, %q1, %q2, %q3 : vector<4xi32>
+  %one = vector.splat %c1_i32 : vector<4xi32>
+  %t = vector.subi %qv, %one : vector<4xi32>
+  %tf = vector.sitofp %t : vector<4xi32> to vector<4xf32>
+  %dv = vector.splat %d : vector<4xf32>
+  %result = vector.mulf %dv, %tf : vector<4xf32>
+  func.return %result : vector<4xf32>
+}
+
+func.def inline @ggml_q2_0_f16_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf16>) {
+  %values_f32 = func.call @ggml_q2_0_f32_vector4(%weight, %row_byte_base, %k) : (buffer, offset, index) -> (vector<4xf32>)
   %values = vector.fptrunc %values_f32 : vector<4xf32> to vector<4xf16>
   func.return %values : vector<4xf16>
 }
