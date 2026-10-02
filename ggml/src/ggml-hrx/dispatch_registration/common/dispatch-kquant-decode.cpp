@@ -15,7 +15,8 @@
 
 // Decode projections (1 token, or 2-8 for MTP / speculative verify batches) on Q2_K, Q3_K, Q4_K, Q5_K,
 // Q6_K, IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, IQ4_XS and Q8_0 weights, read in their GGUF block layout
-// (and exact-ternary Q4_0 repacked to 2 bits, see kquant_ternary)
+// (and exact-ternary Q4_0 repacked to 2 bits, see kquant_ternary; Q1_0 and PrismML's PQ2_0 / PTQ1_0 in their
+// group-128 GGUF layout)
 // (ops/kquant_decode_f32.loom): FFN gate/up pairs fused with SwiGLU, and plain projections with an
 // optional following residual ADD. Mixed-quant models (Unsloth UD-Q4_K_XL and similar) pair these
 // types freely per layer; without this they take the generic dequantize-4-values-at-a-time
@@ -62,6 +63,9 @@ bool kquant_format(CommonMulMatWeightFormat format) {
         case CommonMulMatWeightFormat::IQ4_NL:
         case CommonMulMatWeightFormat::IQ4_XS:
         case CommonMulMatWeightFormat::Q8_0:
+        case CommonMulMatWeightFormat::Q1_0:
+        case CommonMulMatWeightFormat::PQ2_0:
+        case CommonMulMatWeightFormat::PTQ1_0:
             return true;
         default:
             return false;
