@@ -357,4 +357,8 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-ops PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-ops COMMAND test-hrx-ops)
+
+    add_executable(test-hrx-hadamard test-hrx-hadamard.cpp)
+    target_link_libraries(test-hrx-hadamard PRIVATE ggml)
+    add_test(NAME test-hrx-hadamard COMMAND test-hrx-hadamard)
 endif()

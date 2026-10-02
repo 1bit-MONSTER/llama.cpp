@@ -98,6 +98,10 @@ struct UnaryParams {
     UnaryKind op = UnaryKind::Abs;
 };
 
+struct MulMatParams {
+    int32_t hint = 0;  // ggml_mul_mat_set_hint: GGML_HINT_SRC0_IS_HADAMARD
+};
+
 struct RopeParams {
     int   n_dims      = 0;
     int   mode        = 0;
@@ -123,7 +127,8 @@ using OpParams = std::variant<
     ScaleParams,
     BinaryParams,
     UnaryParams,
-    RopeParams>;
+    RopeParams,
+    MulMatParams>;
 // clang-format on
 
 template <typename T> const T * op_params_as(const OpParams & params) {

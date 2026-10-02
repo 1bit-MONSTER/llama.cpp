@@ -17,6 +17,7 @@
 #include "dispatch-small-rows.h"
 #include "dispatch-mul-mat-id-decode.h"
 #include "dispatch-res-scale-pair.h"
+#include "dispatch-hadamard.h"
 #include "dispatch-zaya-cca-conv.h"
 #include "dispatch-zaya-cca-qk-norm.h"
 #include "dispatch-kquant-decode.h"
@@ -42,6 +43,7 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_small_rows_dispatches(registry);
     register_mul_mat_id_decode_dispatches(registry);
     register_res_scale_pair_dispatches(registry);
+    register_hadamard_dispatches(registry);
     register_zaya_cca_conv_dispatches(registry);
     register_zaya_cca_qk_norm_dispatches(registry);
     register_kquant_decode_dispatches(registry);
