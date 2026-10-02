@@ -79,6 +79,7 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   %c0_f32 = scalar.constant 0.0 : f32
   %negative_large = scalar.constant -1e+30 : f32
   %c0_i32 = scalar.constant 0 : i32
+  %masked_value_stage_bytes = index.constant 1024 : offset
   %c1_i32 = scalar.constant 1 : i32
   %attention_scale = config.get @ggml.flash_attention.attention_scale : f32
   %c0_f16 = scalar.constant 0.0 : f16
@@ -153,6 +154,13 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   %probability_stage = buffer.alloca<workgroup> align(16) %probability_stage_bytes : buffer
   %product_stage = buffer.alloca<workgroup> align(16) %product_stage_bytes : buffer
   %tail_value_stage = buffer.alloca<workgroup> align(16) %product_stage_bytes : buffer
+  %visibility_stage_bytes = index.constant 256 : offset
+  %visibility_stage = buffer.alloca<workgroup> align(16) %visibility_stage_bytes : buffer
+  %visibility_view = buffer.view %visibility_stage[%c0_offset] : buffer -> view<64xf32>
+  // Per-subgroup 16x32 V panels for key tiles that mix visible and masked
+  // keys; the score stage is free once probabilities are published.
+  %masked_value_stage_offset = index.scale %subgroup, %masked_value_stage_bytes : index, offset -> offset
+  %masked_value_stage_view = buffer.view %score_stage[%masked_value_stage_offset] : buffer -> view<16x32xf16>
   %query_stage_view = buffer.view %query_stage[%c0_offset] : buffer -> view<16x[%query_stage_stride]xf16>
   %query_transposed_view = buffer.view %query_stage[%c0_offset] : buffer -> view<[%qk_head_size]x16xf16, %query_transposed_layout>
   %score_stage_view = buffer.view %score_stage[%c0_offset] : buffer -> view<64x24xf32>
@@ -274,6 +282,19 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   view.store %probability1, %probability_stage_view[%query_row1, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
   view.store %probability2, %probability_stage_view[%query_row2, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
   view.store %probability3, %probability_stage_view[%query_row3, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+  // Masked keys must reach P*V as V = +0, not just P = 0. The F16 WMMA
+  // result depended on the sign of V at keys whose probability is zero
+  // (measured: flipping the sign of one masked V row changed one output
+  // element by one F16 ulp). Rows past the sequence end hold whatever an
+  // earlier request left there, so identical requests gave different logits.
+  // Key tiles with every key visible read V directly, fully masked tiles
+  // use a zero V fragment, and mixed tiles stage V with masked rows zeroed.
+  %is_first_subgroup = index.cmp eq, %subgroup, %c0 : index
+  scf.if %is_first_subgroup {
+    view.store %lane_mask, %visibility_view[%lane] : f32, view<64xf32>
+  }
+  %lane_key_visible = scalar.cmpf ogt, %lane_mask, %negative_large : f32
+  %lane_key_tile = index.div %lane, %c16 : index
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   scf.for %output_tile = [%c0 to %output_tile_count step %c1] unroll {
     %output_tile_channel = index.mul %output_tile, %c128 : index
@@ -319,10 +340,59 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
         %value_token, %value_token_end = index.assume %value_token0, %value_token_end0 [le(%value_token_end0, %bounded_key_value_token_count)] : index, index
         %full_value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%value_token_end]x[%value_width]xf16>
         %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_transposed_layout> -> vector<16xf16>
-        %value_fragment0 = vector.fragment.load<rhs> %full_value_view[%value_token, %clamped_value_channel0] shape [%k, %n] : view<[%value_token_end]x[%value_width]xf16> -> vector<16xf16>
-        %value_fragment1 = vector.fragment.load<rhs> %full_value_view[%value_token, %clamped_value_channel1] shape [%k, %n] : view<[%value_token_end]x[%value_width]xf16> -> vector<16xf16>
-        %next_product_accumulator0 = vector.mma %probability_fragment, %value_fragment0, %product_accumulator0 : vector<16xf16>, vector<16xf16>, vector<8xf16>
-        %next_product_accumulator1 = vector.mma %probability_fragment, %value_fragment1, %product_accumulator1 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+        %key_tile_ordinal = index.div %key_tile, %c16 : index
+        %lane_in_key_tile = index.cmp eq, %lane_key_tile, %key_tile_ordinal : index
+        %lane_outside_key_tile = index.cmp ne, %lane_key_tile, %key_tile_ordinal : index
+        %lane_tile_visible = scalar.ori %lane_outside_key_tile, %lane_key_visible : i1
+        %lane_tile_has_visible = scalar.andi %lane_in_key_tile, %lane_key_visible : i1
+        %key_tile_all_visible = kernel.subgroup.vote.all %lane_tile_visible : i1
+        %key_tile_any_visible = kernel.subgroup.vote.any %lane_tile_has_visible : i1
+        %next_product_accumulator0, %next_product_accumulator1 = scf.if %key_tile_all_visible -> (vector<8xf16>, vector<8xf16>) {
+          %value_fragment0 = vector.fragment.load<rhs> %full_value_view[%value_token, %clamped_value_channel0] shape [%k, %n] : view<[%value_token_end]x[%value_width]xf16> -> vector<16xf16>
+          %value_fragment1 = vector.fragment.load<rhs> %full_value_view[%value_token, %clamped_value_channel1] shape [%k, %n] : view<[%value_token_end]x[%value_width]xf16> -> vector<16xf16>
+          %direct_accumulator0 = vector.mma %probability_fragment, %value_fragment0, %product_accumulator0 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+          %direct_accumulator1 = vector.mma %probability_fragment, %value_fragment1, %product_accumulator1 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+          scf.yield %direct_accumulator0, %direct_accumulator1 : vector<8xf16>, vector<8xf16>
+        } else {
+          %masked_accumulator0, %masked_accumulator1 = scf.if %key_tile_any_visible -> (vector<8xf16>, vector<8xf16>) {
+            scf.for %stage_iteration = [%c0 to %c8 step %c1] unroll {
+              %stage_linear = index.madd %stage_iteration, %c64, %lane : index
+              %stage_key_row = index.div %stage_linear, %c32 : index
+              %stage_column = index.rem %stage_linear, %c32 : index
+              %stage_second_fragment = index.cmp uge, %stage_column, %c16 : index
+              %stage_fragment_column = index.rem %stage_column, %c16 : index
+              %stage_channel_base = scf.select %stage_second_fragment, %clamped_value_channel1, %clamped_value_channel0 : index
+              %stage_channel0 = index.add %stage_channel_base, %stage_fragment_column : index
+              %stage_channel = index.assume %stage_channel0 [lt(%stage_channel0, %value_width)] : index
+              %stage_block_key0 = index.add %key_tile, %stage_key_row : index
+              %stage_block_key = index.min %stage_block_key0, %c63 : index
+              %stage_key_mask = view.load %visibility_view[%stage_block_key] : view<64xf32> -> f32
+              %stage_key_visible = scalar.cmpf ogt, %stage_key_mask, %negative_large : f32
+              %stage_value = scf.if %stage_key_visible -> (f16) {
+                %stage_token0 = index.add %value_token, %stage_key_row : index
+                %stage_token = index.assume %stage_token0 [lt(%stage_token0, %value_token_end)] : index
+                %loaded = view.load %full_value_view[%stage_token, %stage_channel] : view<[%value_token_end]x[%value_width]xf16> -> f16
+                scf.yield %loaded : f16
+              } else {
+                scf.yield %c0_f16 : f16
+              }
+              view.store %stage_value, %masked_value_stage_view[%stage_key_row, %stage_column] : f16, view<16x32xf16>
+            }
+            kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+            %staged_value_fragment0 = vector.fragment.load<rhs> %masked_value_stage_view[%c0, %c0] shape [%k, %n] : view<16x32xf16> -> vector<16xf16>
+            %staged_value_fragment1 = vector.fragment.load<rhs> %masked_value_stage_view[%c0, %c16] shape [%k, %n] : view<16x32xf16> -> vector<16xf16>
+            %staged_accumulator0 = vector.mma %probability_fragment, %staged_value_fragment0, %product_accumulator0 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+            %staged_accumulator1 = vector.mma %probability_fragment, %staged_value_fragment1, %product_accumulator1 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+            kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+            scf.yield %staged_accumulator0, %staged_accumulator1 : vector<8xf16>, vector<8xf16>
+          } else {
+            %zero_value_fragment = vector.fragment<rhs> %c0_f16x16 shape [%k, %n] : vector<16xf16>
+            %zero_accumulator0 = vector.mma %probability_fragment, %zero_value_fragment, %product_accumulator0 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+            %zero_accumulator1 = vector.mma %probability_fragment, %zero_value_fragment, %product_accumulator1 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+            scf.yield %zero_accumulator0, %zero_accumulator1 : vector<8xf16>, vector<8xf16>
+          }
+          scf.yield %masked_accumulator0, %masked_accumulator1 : vector<8xf16>, vector<8xf16>
+        }
         scf.yield %next_product_accumulator0, %next_product_accumulator1 : vector<8xf16>, vector<8xf16>
       }
       scf.yield %full_product_fragment0, %full_product_fragment1 : vector<8xf16>, vector<8xf16>
@@ -337,7 +407,12 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
           %value_token = index.add %value_token0, %key_row : index
           %value_token_valid = index.cmp ult, %value_token, %bounded_key_value_token_count : index
           %value_channel_valid = index.cmp ult, %value_channel, %value_head_size : index
-          %value_valid = scalar.andi %value_token_valid, %value_channel_valid : i1
+          %value_valid0 = scalar.andi %value_token_valid, %value_channel_valid : i1
+          %block_value_key0 = index.add %key_tile, %key_row : index
+          %block_value_key = index.min %block_value_key0, %c63 : index
+          %value_key_mask = view.load %visibility_view[%block_value_key] : view<64xf32> -> f32
+          %value_key_visible = scalar.cmpf ogt, %value_key_mask, %negative_large : f32
+          %value_valid = scalar.andi %value_valid0, %value_key_visible : i1
           %value_element = scf.if %value_valid -> (f16) {
             %global_value_channel = index.add %value_head_base, %value_channel : index
             %loaded = view.load %value_view[%value_token, %global_value_channel] : view<[%bounded_key_value_token_count]x[%value_width]xf16> -> f16
