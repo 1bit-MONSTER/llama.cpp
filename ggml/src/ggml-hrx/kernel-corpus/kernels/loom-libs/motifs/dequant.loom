@@ -3,6 +3,8 @@ func.decl @ggml_pq2_0_f16_vector4(%weight: buffer, %row_byte_base: offset, %k: i
 func.decl @ggml_ptq1_0_f32_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf32>)
 func.decl @ggml_ptq1_0_f16_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf16>)
 
+func.decl @ggml_mxfp4_f16_vector4(%weight: buffer, %row_byte_base: offset, %mx_block: index, %packet: index) -> (vector<4xf16>)
+func.decl @ggml_mxfp4_f32_vector4(%weight: buffer, %row_byte_base: offset, %mx_block: index, %packet: index) -> (vector<4xf32>)
 func.def inline @ggml_paired_weight_words(%half_packet: i1, %paired: i1, %load_up: i1, %weight: buffer, %peer: buffer, %offset: offset) -> (vector<4xi32>) {
   %zero = index.constant 0 : index
   %padding = vector.constant 0 : vector<2xi32>
@@ -11167,7 +11169,11 @@ func.def inline @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offse
   %selected_q5_1 = scf.select %is_q5_1, %q5_1_tile_bytes, %selected_q5_0 : offset
   %selected_iq2_s = scf.select %is_iq2_s, %iq2_s_tile_bytes, %selected_q5_1 : offset
   %selected_iq4_nl = scf.select %is_iq4_nl, %iq4_nl_tile_bytes, %selected_iq2_s : offset
-  %selected_iq3_s = scf.select %is_iq3_s, %iq3_s_tile_bytes, %selected_iq4_nl : offset
+  %mxfp4_format_t = index.constant 39 : index
+  %mxfp4_tile_bytes = index.constant 136 : offset
+  %is_mxfp4_t = index.cmp eq, %weight_format, %mxfp4_format_t : index
+  %selected_mxfp4_t = scf.select %is_mxfp4_t, %mxfp4_tile_bytes, %selected_iq4_nl : offset
+  %selected_iq3_s = scf.select %is_iq3_s, %iq3_s_tile_bytes, %selected_mxfp4_t : offset
   %selected_iq4_xs = scf.select %is_iq4_xs, %iq4_xs_tile_bytes, %selected_iq3_s : offset
   %selected_q8_0 = scf.select %is_q8_0, %q8_0_tile_bytes, %selected_iq4_xs : offset
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_tile_bytes, %selected_q8_0 : offset
@@ -11276,7 +11282,12 @@ func.def inline @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_si
   %selected_q5_0 = scf.select %is_q5_0, %q5_0_row_bytes, %selected_q4_1 : offset
   %selected_q5_1 = scf.select %is_q5_1, %q5_1_row_bytes, %selected_q5_0 : offset
   %selected_iq4_nl = scf.select %is_iq4_nl, %iq4_nl_row_bytes, %selected_q5_1 : offset
-  %selected_q8_0 = scf.select %is_q8_0, %q8_0_row_bytes, %selected_iq4_nl : offset
+  %mxfp4_format_r = index.constant 39 : index
+  %mxfp4_block_bytes = index.constant 17 : offset
+  %is_mxfp4_r = index.cmp eq, %weight_format, %mxfp4_format_r : index
+  %mxfp4_row_bytes = index.scale %legacy_block_count, %mxfp4_block_bytes : index, offset -> offset
+  %selected_mxfp4_r = scf.select %is_mxfp4_r, %mxfp4_row_bytes, %selected_iq4_nl : offset
+  %selected_q8_0 = scf.select %is_q8_0, %q8_0_row_bytes, %selected_mxfp4_r : offset
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_row_bytes, %selected_q8_0 : offset
   %selected_f16 = scf.select %is_f16, %f16_row_bytes, %selected_q8_1 : offset
   %selected_bf16 = scf.select %is_bf16, %f16_row_bytes, %selected_f16 : offset
@@ -11460,6 +11471,14 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   } else {
     scf.yield %zero : vector<4xf16>
   }
+  %mxfp4_format_v = index.constant 39 : index
+  %is_mxfp4_v = index.cmp eq, %weight_format, %mxfp4_format_v : index
+  %mxfp4_values = scf.if %is_mxfp4_v -> (vector<4xf16>) {
+    %values = func.call @ggml_mxfp4_f16_vector4(%weight, %row_byte_base, %q8_block, %packet) : (buffer, offset, index, index) -> (vector<4xf16>)
+    scf.yield %values : vector<4xf16>
+  } else {
+    scf.yield %zero : vector<4xf16>
+  }
   %iq4_nl_values = scf.if %is_iq4_nl -> (vector<4xf16>) {
     %values = func.call @ggml_iq4nl_f16_vector4(%iq4nl_table, %weight, %row_byte_base, %q8_block, %packet) : (vector<16xi8>, buffer, offset, index, index) -> (vector<4xf16>)
     scf.yield %values : vector<4xf16>
@@ -11528,7 +11547,8 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %selected_q5_1 = scf.select %is_q5_1, %q5_1_values, %selected_q5_0 : vector<4xf16>
   %selected_iq2_s = scf.select %is_iq2_s, %iq2_s_values, %selected_q5_1 : vector<4xf16>
   %selected_iq4_nl = scf.select %is_iq4_nl, %iq4_nl_values, %selected_iq2_s : vector<4xf16>
-  %selected_iq3_s = scf.select %is_iq3_s, %iq3_s_values, %selected_iq4_nl : vector<4xf16>
+  %selected_mxfp4_v = scf.select %is_mxfp4_v, %mxfp4_values, %selected_iq4_nl : vector<4xf16>
+  %selected_iq3_s = scf.select %is_iq3_s, %iq3_s_values, %selected_mxfp4_v : vector<4xf16>
   %selected_iq4_xs = scf.select %is_iq4_xs, %iq4_xs_values, %selected_iq3_s : vector<4xf16>
   %selected_q8_0 = scf.select %is_q8_0, %q8_0_values, %selected_iq4_xs : vector<4xf16>
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_values, %selected_q8_0 : vector<4xf16>
@@ -11706,6 +11726,14 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   } else {
     scf.yield %zero : vector<4xf32>
   }
+  %mxfp4_format_v = index.constant 39 : index
+  %is_mxfp4_v = index.cmp eq, %weight_format, %mxfp4_format_v : index
+  %mxfp4_values = scf.if %is_mxfp4_v -> (vector<4xf32>) {
+    %values = func.call @ggml_mxfp4_f32_vector4(%weight, %row_byte_base, %q8_block, %packet) : (buffer, offset, index, index) -> (vector<4xf32>)
+    scf.yield %values : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
   %iq4_nl_values = scf.if %is_iq4_nl -> (vector<4xf32>) {
     %values = func.call @ggml_iq4nl_f32_vector4(%iq4nl_table, %weight, %row_byte_base, %q8_block, %packet) : (vector<16xi8>, buffer, offset, index, index) -> (vector<4xf32>)
     scf.yield %values : vector<4xf32>
@@ -11771,7 +11799,8 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %selected_q5_1 = scf.select %is_q5_1, %q5_1_values, %selected_q5_0 : vector<4xf32>
   %selected_iq2_s = scf.select %is_iq2_s, %iq2_s_values, %selected_q5_1 : vector<4xf32>
   %selected_iq4_nl = scf.select %is_iq4_nl, %iq4_nl_values, %selected_iq2_s : vector<4xf32>
-  %selected_iq3_s = scf.select %is_iq3_s, %iq3_s_values, %selected_iq4_nl : vector<4xf32>
+  %selected_mxfp4_v = scf.select %is_mxfp4_v, %mxfp4_values, %selected_iq4_nl : vector<4xf32>
+  %selected_iq3_s = scf.select %is_iq3_s, %iq3_s_values, %selected_mxfp4_v : vector<4xf32>
   %selected_iq4_xs = scf.select %is_iq4_xs, %iq4_xs_values, %selected_iq3_s : vector<4xf32>
   %selected_q8_0 = scf.select %is_q8_0, %q8_0_values, %selected_iq4_xs : vector<4xf32>
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_values, %selected_q8_0 : vector<4xf32>
