@@ -1,0 +1,107 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// GGML_OP_ADD_ID on F32 (gpt-oss's per-expert biases after MUL_MAT_ID):
+//   output[t][r][i] = input[t][r][i] + bias[ids[t][r]][i]
+// input / output are contiguous [tokens][rows][width], bias is [expert_count][width], ids is [tokens][ids_stride] i32
+// with the first `rows` entries of each token used (llama.cpp passes a view of the argsort, so ids_stride is the
+// expert count). One workgroup per (row, token); an id outside 0..expert_count-1 reads expert 0.
+
+amdgpu.target<gfx11-generic> @ggml_add_id_gfx11_wave32 {subgroup_size = 32}
+
+kernel.def target(@ggml_add_id_gfx11_wave32) export("ggml_add_id_f32") @ggml_add_id_f32(%width: index, %rows: index, %tokens: index, %ids_stride: index, %expert_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%rows, %tokens, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%width: index, %rows: index, %tokens: index, %ids_stride: index, %expert_count: index, %input: buffer, %bias: buffer, %ids: buffer, %output: buffer) where [range(%width, 1, 1048576), range(%rows, 1, 4096), range(%tokens, 1, 65536), range(%ids_stride, 1, 4096), range(%expert_count, 1, 4096)] {
+  %c0 = index.constant 0 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %row0 = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %workitem = kernel.workitem.id<x> : index
+  %row, %launch_rows = index.assume %row0, %rows [lt(%row0, %rows)] : index, index
+  %token, %launch_tokens = index.assume %token0, %tokens [lt(%token0, %tokens)] : index, index
+  %ids_row, %launch_ids_stride = index.assume %row, %ids_stride [lt(%row, %ids_stride)] : index, index
+  %input_noalias, %bias_noalias, %ids_noalias, %output_noalias = buffer.assume.noalias %input, %bias, %ids, %output : buffer, buffer, buffer, buffer
+  %ids_view = buffer.view %ids_noalias[%c0_offset] : buffer -> view<[%launch_tokens]x[%launch_ids_stride]xi32>
+  %expert_i32 = view.load %ids_view[%token, %ids_row] : view<[%launch_tokens]x[%launch_ids_stride]xi32> -> i32
+  %expert_raw = index.cast %expert_i32 : i32 to index
+  %expert_valid = index.cmp ult, %expert_raw, %expert_count : index
+  %expert0 = scf.select %expert_valid, %expert_raw, %c0 : index
+  %expert, %launch_experts = index.assume %expert0, %expert_count [lt(%expert0, %expert_count)] : index, index
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_tokens]x[%launch_rows]x[%width]xf32>
+  %bias_view = buffer.view %bias_noalias[%c0_offset] : buffer -> view<[%launch_experts]x[%width]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_tokens]x[%launch_rows]x[%width]xf32>
+  scf.for %i = [%workitem to %width step %c256] {
+    %a = view.load %input_view[%token, %row, %i] : view<[%launch_tokens]x[%launch_rows]x[%width]xf32> -> f32
+    %b = view.load %bias_view[%expert, %i] : view<[%launch_experts]x[%width]xf32> -> f32
+    %sum = scalar.addf %a, %b : f32
+    view.store %sum, %output_view[%token, %row, %i] : f32, view<[%launch_tokens]x[%launch_rows]x[%width]xf32>
+  }
+  kernel.return
+}
+
+// Reference for the cases: one workitem per output value, from flat buffers.
+kernel.def target(@ggml_add_id_gfx11_wave32) export("ggml_add_id_reference_f32") @ggml_add_id_reference_f32(%width: index, %rows: index, %tokens: index, %ids_stride: index, %expert_count: index) {
+  %c1 = index.constant 1 : index
+  kernel.launch.config workgroups(%width, %rows, %tokens) workgroup_size(%c1, %c1, %c1) : index
+} launch(%width: index, %rows: index, %tokens: index, %ids_stride: index, %expert_count: index, %input: buffer, %bias: buffer, %ids: buffer, %output: buffer) where [range(%width, 1, 1048576), range(%rows, 1, 4096), range(%tokens, 1, 65536), range(%ids_stride, 1, 4096), range(%expert_count, 1, 4096)] {
+  %c0 = index.constant 0 : index
+  %c0_offset = index.constant 0 : offset
+  %i0 = kernel.workgroup.id<x> : index
+  %row0 = kernel.workgroup.id<y> : index
+  %token0 = kernel.workgroup.id<z> : index
+  %i, %launch_width = index.assume %i0, %width [lt(%i0, %width)] : index, index
+  %row, %launch_rows = index.assume %row0, %rows [lt(%row0, %rows)] : index, index
+  %token, %launch_tokens = index.assume %token0, %tokens [lt(%token0, %tokens)] : index, index
+  %ids_row, %launch_ids_stride = index.assume %row, %ids_stride [lt(%row, %ids_stride)] : index, index
+  %ids_view = buffer.view %ids[%c0_offset] : buffer -> view<[%launch_tokens]x[%launch_ids_stride]xi32>
+  %expert_i32 = view.load %ids_view[%token, %ids_row] : view<[%launch_tokens]x[%launch_ids_stride]xi32> -> i32
+  %expert_raw = index.cast %expert_i32 : i32 to index
+  %expert_valid = index.cmp ult, %expert_raw, %expert_count : index
+  %expert0 = scf.select %expert_valid, %expert_raw, %c0 : index
+  %expert, %launch_experts = index.assume %expert0, %expert_count [lt(%expert0, %expert_count)] : index, index
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%launch_tokens]x[%launch_rows]x[%launch_width]xf32>
+  %bias_view = buffer.view %bias[%c0_offset] : buffer -> view<[%launch_experts]x[%launch_width]xf32>
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%launch_tokens]x[%launch_rows]x[%launch_width]xf32>
+  %a = view.load %input_view[%token, %row, %i] : view<[%launch_tokens]x[%launch_rows]x[%launch_width]xf32> -> f32
+  %b = view.load %bias_view[%expert, %i] : view<[%launch_experts]x[%launch_width]xf32> -> f32
+  %sum = scalar.addf %a, %b : f32
+  view.store %sum, %output_view[%token, %row, %i] : f32, view<[%launch_tokens]x[%launch_rows]x[%launch_width]xf32>
+  kernel.return
+}
+
+// gpt-oss shape in small: width 300 (not a multiple of 256: the strided loop's last pass is partial), 4 of 8
+// experts per token through an ids view of stride 8, 3 tokens.
+check.case public @ggml_add_id_f32_case {
+  %input_seed = check.param.seed base(7300000000000066001) count(1) : i64
+  %bias_seed = check.param.seed base(7300000000000066002) count(1) : i64
+  %ids_seed = check.param.seed base(7300000000000066003) count(1) : i64
+  %width = check.literal value(300) : index
+  %rows = check.literal value(4) : index
+  %tokens = check.literal value(3) : index
+  %ids_stride = check.literal value(8) : index
+  %experts = check.literal value(8) : index
+  %input = check.generate.random.uniform seed(%input_seed) range(-4.0 to 4.0) : tensor<3600xf32>
+  %bias = check.generate.random.uniform seed(%bias_seed) range(-4.0 to 4.0) : tensor<2400xf32>
+  %ids = check.generate.random.uniform seed(%ids_seed) range(0 to 7) : tensor<24xi32>
+  %output = check.generate.fill value(-7.0) : tensor<3600xf32>
+  %expected = check.generate.fill value(7.0) : tensor<3600xf32>
+  kernel.launch @ggml_add_id_reference_f32[%width, %rows, %tokens, %ids_stride, %experts](%width, %rows, %tokens, %ids_stride, %experts, %input, %bias, %ids, %expected) : [index, index, index, index, index](index, index, index, index, index, tensor<3600xf32>, tensor<2400xf32>, tensor<24xi32>, tensor<3600xf32>)
+  kernel.launch @ggml_add_id_f32[%width, %rows, %tokens, %ids_stride, %experts](%width, %rows, %tokens, %ids_stride, %experts, %input, %bias, %ids, %output) : [index, index, index, index, index](index, index, index, index, index, tensor<3600xf32>, tensor<2400xf32>, tensor<24xi32>, tensor<3600xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<3600xf32>
+  check.return
+}

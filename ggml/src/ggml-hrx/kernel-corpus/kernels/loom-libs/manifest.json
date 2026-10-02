@@ -253,6 +253,9 @@
     },
     {
       "path": "ops/hadamard_f32.loom"
+    },
+    {
+      "path": "ops/add_id_f32.loom"
     }
   ],
   "exports": [
@@ -7953,6 +7956,77 @@
         "mode": "direct",
         "primary_sources": [
           "ops/hadamard_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_add_id_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_add_id_f32",
+      "source": "ops/add_id_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "width",
+          "type": "index"
+        },
+        {
+          "name": "rows",
+          "type": "index"
+        },
+        {
+          "name": "tokens",
+          "type": "index"
+        },
+        {
+          "name": "ids_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "width",
+          "type": "index"
+        },
+        {
+          "name": "rows",
+          "type": "index"
+        },
+        {
+          "name": "tokens",
+          "type": "index"
+        },
+        {
+          "name": "ids_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "bias",
+        "ids",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/add_id_f32.loom"
         ],
         "library_sources": []
       },
