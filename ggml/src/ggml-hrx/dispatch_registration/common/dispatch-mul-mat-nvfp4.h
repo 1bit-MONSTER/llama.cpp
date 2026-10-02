@@ -19,7 +19,7 @@
 
 namespace ggml::hrx {
 
-// NVFP4 prompt matmuls on the int8 q8_1 x4 WMMA kernel (motifs/nvfp4_q8_1_x4.loom).
+// NVFP4 and Q2_0 prompt matmuls on the int8 q8_1 x4 WMMA kernel (motifs/nvfp4_q8_1_x4.loom).
 void register_nvfp4_prefill_dispatches(DispatchRegistryBuilder & registry);
 
 }  // namespace ggml::hrx
