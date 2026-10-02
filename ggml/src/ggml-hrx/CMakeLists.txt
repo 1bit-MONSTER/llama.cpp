@@ -241,6 +241,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-add-id.h
     dispatch_registration/common/dispatch-swiglu-oai.cpp
     dispatch_registration/common/dispatch-swiglu-oai.h
+    dispatch_registration/common/moe-placement-guard.cpp
+    dispatch_registration/common/moe-placement-guard.h
     dispatch_registration/common/dispatch-softplus.cpp
     dispatch_registration/common/dispatch-softplus.h
     dispatch_registration/common/dispatch-scale.h

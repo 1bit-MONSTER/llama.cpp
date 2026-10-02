@@ -376,4 +376,8 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-mul-mat-id-k32 PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-mul-mat-id-k32 PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-mul-mat-id-k32 COMMAND test-hrx-mul-mat-id-k32)
+
+    add_executable(test-hrx-moe-split test-hrx-moe-split.cpp)
+    target_link_libraries(test-hrx-moe-split PRIVATE ggml)
+    add_test(NAME test-hrx-moe-split COMMAND test-hrx-moe-split)
 endif()
