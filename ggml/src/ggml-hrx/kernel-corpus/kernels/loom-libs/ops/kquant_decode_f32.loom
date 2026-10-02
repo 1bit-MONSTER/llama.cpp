@@ -11181,3 +11181,46 @@ check.case public @ggml_kquant_swiglu_decode_tokens_q1_0_ptq1_case {
   check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<18xf32>
   check.return
 }
+
+// Mixed pairs with a codebook format (two-buffer staging of #60): input_size=512 output_size=6.
+// gate_weight_format=21 up_weight_format=73 (IQ3_S gate grid; the PTQ1_0 up lanes read no grid)
+check.case public @ggml_kquant_swiglu_decode_iq3s_ptq1_case {
+  %x_seed = check.param.seed base(7300000000000031211) count(1) : i64
+  %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<512xf32>
+  %gate = check.generate.iota offset(0) step(16843009) period(64) : tensor<330xi32>
+  %up = check.generate.iota offset(0) step(16843009) period(64) : tensor<168xi32>
+  %output = check.generate.fill value(-7.0) : tensor<6xf32>
+  %expected = check.generate.fill value(7.0) : tensor<6xf32>
+  kernel.launch @ggml_kquant_swiglu_decode_reference_f32[](%input, %gate, %up, %expected) : [](tensor<512xf32>, tensor<330xi32>, tensor<168xi32>, tensor<6xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_f32[](%input, %gate, %up, %output) : [](tensor<512xf32>, tensor<330xi32>, tensor<168xi32>, tensor<6xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<6xf32>
+  check.return
+}
+
+// gate_weight_format=73 up_weight_format=21 (the IQ3_S up fills its own grid buffer); token_count=3
+check.case public @ggml_kquant_swiglu_decode_tokens_ptq1_iq3s_case {
+  %x_seed = check.param.seed base(7300000000000031212) count(1) : i64
+  %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<1536xf32>
+  %gate = check.generate.iota offset(0) step(16843009) period(64) : tensor<168xi32>
+  %up = check.generate.iota offset(0) step(16843009) period(64) : tensor<330xi32>
+  %output = check.generate.fill value(-7.0) : tensor<18xf32>
+  %expected = check.generate.fill value(7.0) : tensor<18xf32>
+  kernel.launch @ggml_kquant_swiglu_decode_reference_f32[](%input, %gate, %up, %expected) : [](tensor<1536xf32>, tensor<168xi32>, tensor<330xi32>, tensor<18xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_tokens_f32[](%input, %gate, %up, %output) : [](tensor<1536xf32>, tensor<168xi32>, tensor<330xi32>, tensor<18xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<18xf32>
+  check.return
+}
+
+// gate_weight_format=73 up_weight_format=21, single token
+check.case public @ggml_kquant_swiglu_decode_ptq1_iq3s_case {
+  %x_seed = check.param.seed base(7300000000000031213) count(1) : i64
+  %input = check.generate.random.uniform seed(%x_seed) range(-1.0 to 1.0) : tensor<512xf32>
+  %gate = check.generate.iota offset(0) step(16843009) period(64) : tensor<168xi32>
+  %up = check.generate.iota offset(0) step(16843009) period(64) : tensor<330xi32>
+  %output = check.generate.fill value(-7.0) : tensor<6xf32>
+  %expected = check.generate.fill value(7.0) : tensor<6xf32>
+  kernel.launch @ggml_kquant_swiglu_decode_reference_f32[](%input, %gate, %up, %expected) : [](tensor<512xf32>, tensor<168xi32>, tensor<330xi32>, tensor<6xf32>)
+  kernel.launch @ggml_kquant_swiglu_decode_f32[](%input, %gate, %up, %output) : [](tensor<512xf32>, tensor<168xi32>, tensor<330xi32>, tensor<6xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(1.0e-3) rtol(1.0e-4) nan(same) : tensor<6xf32>
+  check.return
+}
