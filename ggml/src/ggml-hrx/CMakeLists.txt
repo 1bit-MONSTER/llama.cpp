@@ -237,6 +237,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-zaya-cca-qk-norm.h
     dispatch_registration/common/dispatch-kquant-decode.cpp
     dispatch_registration/common/dispatch-kquant-decode.h
+    dispatch_registration/common/dispatch-mul-mat-nvfp4.cpp
+    dispatch_registration/common/dispatch-mul-mat-nvfp4.h
     dispatch_registration/common/dispatch-add-id.cpp
     dispatch_registration/common/dispatch-add-id.h
     dispatch_registration/common/dispatch-swiglu-oai.cpp

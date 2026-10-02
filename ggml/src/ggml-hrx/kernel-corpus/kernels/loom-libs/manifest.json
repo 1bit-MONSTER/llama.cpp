@@ -114,6 +114,9 @@
       "path": "ops/mul_mat_q5_k_q8_plane_wmma.loom"
     },
     {
+      "path": "motifs/nvfp4_q8_1_x4.loom"
+    },
+    {
       "path": "ops/mul_mat_q6_k_packed_f16_wmma.loom"
     },
     {
@@ -4221,9 +4224,13 @@
         "primary_sources": [
           "ops/mul_mat_q5_k_q8_plane_wmma.loom"
         ],
-        "library_sources": []
+        "library_sources": [
+          "motifs/nvfp4_q8_1_x4.loom"
+        ]
       },
-      "compile_dependencies": []
+      "compile_dependencies": [
+        "motifs/nvfp4_q8_1_x4.loom"
+      ]
     },
     {
       "name": "ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256",
@@ -4258,9 +4265,13 @@
         "primary_sources": [
           "ops/mul_mat_q5_k_q8_plane_wmma.loom"
         ],
-        "library_sources": []
+        "library_sources": [
+          "motifs/nvfp4_q8_1_x4.loom"
+        ]
       },
-      "compile_dependencies": []
+      "compile_dependencies": [
+        "motifs/nvfp4_q8_1_x4.loom"
+      ]
     },
     {
       "name": "ggml_mul_mat_q4_k_q8_1_x4_swiglu_wmma_token256",
@@ -4297,9 +4308,13 @@
         "primary_sources": [
           "ops/mul_mat_q5_k_q8_plane_wmma.loom"
         ],
-        "library_sources": []
+        "library_sources": [
+          "motifs/nvfp4_q8_1_x4.loom"
+        ]
       },
-      "compile_dependencies": []
+      "compile_dependencies": [
+        "motifs/nvfp4_q8_1_x4.loom"
+      ]
     },
     {
       "name": "ggml_mul_mat_q6_k_f32_wmma_prefill_wave32",
