@@ -20,6 +20,8 @@
 // of qs[j] and value j + 16 the high nibble, as in IQ4_NL. A value is kvalues_mxfp4[code] * 2^(e - 127) / 2
 // (ggml GGML_E8M0_TO_FP32_HALF), with the E2M1 table {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}.
 // %packet (0..7) picks four consecutive values: 4 (packet % 4)..+4, from the high nibbles when packet >= 4.
+//
+// TQ1_0 (format 34) and TQ2_0 (format 35): ggml ternary types, 256 values per block; see their decoders below.
 
 // Nibble unpacking: four codes from four bytes, low nibbles or (uses_high) high nibbles.
 func.def inline @ggml_1bit_nibble_codes4(%q_bytes: vector<4xi8>, %uses_high: i1) -> (vector<4xi8>) {
@@ -122,6 +124,168 @@ func.def inline @ggml_mxfp4_f32_vector4(%weight: buffer, %row_byte_base: offset,
 
 func.def inline @ggml_mxfp4_f16_vector4(%weight: buffer, %row_byte_base: offset, %mx_block: index, %packet: index) -> (vector<4xf16>) {
   %values_f32 = func.call @ggml_mxfp4_f32_vector4(%weight, %row_byte_base, %mx_block, %packet) : (buffer, offset, index, index) -> (vector<4xf32>)
+  %values = vector.fptrunc %values_f32 : vector<4xf32> to vector<4xf16>
+  func.return %values : vector<4xf16>
+}
+
+
+// TQ2_0 (format 35): 66 bytes per 256 values = qs[64], d (f16). Value v = 128 a + 32 l + m is
+// ((qs[32 a + m] >> 2 l) & 3) - 1, times d (ggml dequantize_row_tq2_0). %tq_group (0..7) = v / 32 and %packet (0..7)
+// = (v % 32) / 4: four consecutive values are four consecutive bytes, one shift.
+func.def inline @ggml_tq2_0_f32_vector4(%weight: buffer, %row_byte_base: offset, %tq_block: index, %tq_group: index, %packet: index) -> (vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c32 = index.constant 32 : index
+  %c2_i32 = scalar.constant 2 : i32
+  %c3_i32 = scalar.constant 3 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %block_bytes = index.constant 66 : offset
+  %d_offset = index.constant 64 : offset
+  %g = index.assume %tq_group [range(%tq_group, 0, 7)] : index
+  %p = index.assume %packet [range(%packet, 0, 7)] : index
+  %block_byte_add = index.scale %tq_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %d_base = index.add %block_byte_base, %d_offset : offset
+  %d_view = buffer.view %weight[%d_base] : buffer -> view<1xf16>
+  %qv = buffer.view %weight[%block_byte_base] : buffer -> view<64xi8>
+  %a = index.div %g, %c4 : index
+  %l = index.rem %g, %c4 : index
+  %a32 = index.mul %a, %c32 : index
+  %p4 = index.mul %p, %c4 : index
+  %byte0 = index.add %a32, %p4 : index
+  %byte = index.assume %byte0 [range(%byte0, 0, 60), mul(%byte0, 4)] : index
+  %bytes = vector.load %qv[%byte] : view<64xi8> -> vector<4xi8>
+  %word_v = vector.bitcast %bytes : vector<4xi8> to vector<1xi32>
+  %word = vector.extract %word_v[0] : vector<1xi32> -> i32
+  %bsh0 = scalar.constant 0 : i32
+  %bsh8 = scalar.constant 8 : i32
+  %bsh16 = scalar.constant 16 : i32
+  %bsh24 = scalar.constant 24 : i32
+  %byte_shift = vector.from_elements %bsh0, %bsh8, %bsh16, %bsh24 : vector<4xi32>
+  %byte_mask = scalar.constant 255 : i32
+  %byte_mask_v = vector.splat %byte_mask : vector<4xi32>
+  %word_s = vector.splat %word : vector<4xi32>
+  %word_sh = vector.shrui %word_s, %byte_shift : vector<4xi32>
+  %b = vector.andi %word_sh, %byte_mask_v : vector<4xi32>
+  %l_i32 = index.cast %l : index to i32
+  %shift = scalar.muli %l_i32, %c2_i32 : i32
+  %shift_v = vector.splat %shift : vector<4xi32>
+  %three = vector.splat %c3_i32 : vector<4xi32>
+  %one = vector.splat %c1_i32 : vector<4xi32>
+  %bs = vector.shrui %b, %shift_v : vector<4xi32>
+  %q = vector.andi %bs, %three : vector<4xi32>
+  %t = vector.subi %q, %one : vector<4xi32>
+  %tf = vector.sitofp %t : vector<4xi32> to vector<4xf32>
+  %d_f16 = view.load %d_view[%c0] : view<1xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %dv = vector.splat %d : vector<4xf32>
+  %r = vector.mulf %tf, %dv : vector<4xf32>
+  func.return %r : vector<4xf32>
+}
+
+// TQ1_0 (format 34): 54 bytes per 256 values = qs[48], qh[4], d (f16), trits packed 5 per byte (4 in qh) in base 3:
+// the n-th trit of byte b is ((b * 3^n mod 256) * 3) >> 8, minus 1 (ggml dequantize_row_tq1_0). Value order:
+// 0..159 = trit n of qs[0..31] (n = v / 32), 160..239 = trit n of qs[32..47] (n = (v - 160) / 16), 240..255 = trit n
+// of qh[0..3] (n = (v - 240) / 4). Every packet of four values is four consecutive bytes and one power.
+func.def inline @ggml_tq1_0_f32_vector4(%weight: buffer, %row_byte_base: offset, %tq_block: index, %tq_group: index, %packet: index) -> (vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c7 = index.constant 7 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c48 = index.constant 48 : index
+  %c1_i32 = scalar.constant 1 : i32
+  %c3_i32 = scalar.constant 3 : i32
+  %c8_i32 = scalar.constant 8 : i32
+  %c255_i32 = scalar.constant 255 : i32
+  %block_bytes = index.constant 54 : offset
+  %d_offset = index.constant 52 : offset
+  %g = index.assume %tq_group [range(%tq_group, 0, 7)] : index
+  %p = index.assume %packet [range(%packet, 0, 7)] : index
+  %block_byte_add = index.scale %tq_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %d_base = index.add %block_byte_base, %d_offset : offset
+  %d_view = buffer.view %weight[%d_base] : buffer -> view<1xf16>
+  %qv = buffer.view %weight[%block_byte_base] : buffer -> view<52xi8>
+  %p4 = index.mul %p, %c4 : index
+  // groups 0..4: qs[4p..], power g
+  %first = index.cmp ult, %g, %c5 : index
+  // groups 5, 6: k = 32 (g - 5) + 4p in 0..60, power k / 16, byte 32 + k % 16
+  %g5 = index.sub %g, %c5 : index
+  %g5_32 = index.mul %g5, %c32 : index
+  %k = index.add %g5_32, %p4 : index
+  %mid_n = index.div %k, %c16 : index
+  %k16 = index.rem %k, %c16 : index
+  %mid_byte = index.add %c32, %k16 : index
+  %middle = index.cmp ult, %g, %c7 : index
+  // group 7: packets 0..3 = qs[32 + 4p..], power 4; packets 4..7 = qh[0..3], power p - 4
+  %low_half = index.cmp ult, %p, %c4 : index
+  %last_byte_lo = index.add %c32, %p4 : index
+  %last_n_hi = index.sub %p, %c4 : index
+  %last_byte = scf.select %low_half, %last_byte_lo, %c48 : index
+  %last_n = scf.select %low_half, %c4, %last_n_hi : index
+  %rest_byte = scf.select %middle, %mid_byte, %last_byte : index
+  %rest_n = scf.select %middle, %mid_n, %last_n : index
+  %byte0 = scf.select %first, %p4, %rest_byte : index
+  %n = scf.select %first, %g, %rest_n : index
+  %byte = index.assume %byte0 [range(%byte0, 0, 48)] : index
+  %bytes = vector.load %qv[%byte] : view<52xi8> -> vector<4xi8>
+  %word_v = vector.bitcast %bytes : vector<4xi8> to vector<1xi32>
+  %word = vector.extract %word_v[0] : vector<1xi32> -> i32
+  %bsh0 = scalar.constant 0 : i32
+  %bsh8 = scalar.constant 8 : i32
+  %bsh16 = scalar.constant 16 : i32
+  %bsh24 = scalar.constant 24 : i32
+  %byte_shift = vector.from_elements %bsh0, %bsh8, %bsh16, %bsh24 : vector<4xi32>
+  %byte_mask = scalar.constant 255 : i32
+  %byte_mask_v = vector.splat %byte_mask : vector<4xi32>
+  %word_s = vector.splat %word : vector<4xi32>
+  %word_sh = vector.shrui %word_s, %byte_shift : vector<4xi32>
+  %b = vector.andi %word_sh, %byte_mask_v : vector<4xi32>
+  // 3^n for n in 0..4
+  %n_i32 = index.cast %n : index to i32
+  %pw1 = scalar.constant 1 : i32
+  %pw3 = scalar.constant 3 : i32
+  %pw9 = scalar.constant 9 : i32
+  %pw27 = scalar.constant 27 : i32
+  %pw81 = scalar.constant 81 : i32
+  %is1 = scalar.cmpi eq, %n_i32, %c1_i32 : i32
+  %c2_n = scalar.constant 2 : i32
+  %is2 = scalar.cmpi eq, %n_i32, %c2_n : i32
+  %is3 = scalar.cmpi eq, %n_i32, %c3_i32 : i32
+  %c4_n = scalar.constant 4 : i32
+  %is4 = scalar.cmpi eq, %n_i32, %c4_n : i32
+  %s1 = scf.select %is1, %pw3, %pw1 : i32
+  %s2 = scf.select %is2, %pw9, %s1 : i32
+  %s3 = scf.select %is3, %pw27, %s2 : i32
+  %pow = scf.select %is4, %pw81, %s3 : i32
+  %pow_v = vector.splat %pow : vector<4xi32>
+  %mask = vector.splat %c255_i32 : vector<4xi32>
+  %three = vector.splat %c3_i32 : vector<4xi32>
+  %eight = vector.splat %c8_i32 : vector<4xi32>
+  %one = vector.splat %c1_i32 : vector<4xi32>
+  %bp = vector.muli %b, %pow_v : vector<4xi32>
+  %q = vector.andi %bp, %mask : vector<4xi32>
+  %q3 = vector.muli %q, %three : vector<4xi32>
+  %xi = vector.shrui %q3, %eight : vector<4xi32>
+  %t = vector.subi %xi, %one : vector<4xi32>
+  %tf = vector.sitofp %t : vector<4xi32> to vector<4xf32>
+  %d_f16 = view.load %d_view[%c0] : view<1xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %dv = vector.splat %d : vector<4xf32>
+  %r = vector.mulf %tf, %dv : vector<4xf32>
+  func.return %r : vector<4xf32>
+}
+
+func.def inline @ggml_tq1_0_f16_vector4(%weight: buffer, %row_byte_base: offset, %tq_block: index, %tq_group: index, %packet: index) -> (vector<4xf16>) {
+  %values_f32 = func.call @ggml_tq1_0_f32_vector4(%weight, %row_byte_base, %tq_block, %tq_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
+  %values = vector.fptrunc %values_f32 : vector<4xf32> to vector<4xf16>
+  func.return %values : vector<4xf16>
+}
+
+func.def inline @ggml_tq2_0_f16_vector4(%weight: buffer, %row_byte_base: offset, %tq_block: index, %tq_group: index, %packet: index) -> (vector<4xf16>) {
+  %values_f32 = func.call @ggml_tq2_0_f32_vector4(%weight, %row_byte_base, %tq_block, %tq_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
   %values = vector.fptrunc %values_f32 : vector<4xf32> to vector<4xf16>
   func.return %values : vector<4xf16>
 }
