@@ -21,6 +21,8 @@
 // (ggml GGML_E8M0_TO_FP32_HALF), with the E2M1 table {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}.
 // %packet (0..7) picks four consecutive values: 4 (packet % 4)..+4, from the high nibbles when packet >= 4.
 //
+// NVFP4 (format 43): see its decoder below.
+//
 // TQ1_0 (format 34) and TQ2_0 (format 35): ggml ternary types, 256 values per block; see their decoders below.
 
 // Nibble unpacking: four codes from four bytes, low nibbles or (uses_high) high nibbles.
@@ -139,6 +141,87 @@ func.def inline @ggml_mxfp4_f16_vector4(%weight: buffer, %row_byte_base: offset,
 // TQ2_0 (format 35): 66 bytes per 256 values = qs[64], d (f16). Value v = 128 a + 32 l + m is
 // ((qs[32 a + m] >> 2 l) & 3) - 1, times d (ggml dequantize_row_tq2_0). %tq_group (0..7) = v / 32 and %packet (0..7)
 // = (v % 32) / 4: four consecutive values are four consecutive bytes, one shift.
+// NVFP4 (format 43): 36 bytes per 64 values = d[4] (UE4M3, one scale per 16 values), then qs[32]. Sub-block s
+// reads qs[8 s .. 8 s + 7]: value j is the low nibble of qs[8 s + j] and value j + 8 the high nibble. A value is
+// kvalues_mxfp4[code] * ggml_ue4m3_to_fp32(d[s]), which halves the scale as GGML_E8M0_TO_FP32_HALF does for MXFP4.
+// The shared dequantizer walks 32-value blocks: %nv_half is 32-value block b, half (b % 2) of 64-value block b / 2;
+// %packet (0..7) picks its values 4 packet .. 4 packet + 3: sub-block 2 (b % 2) + packet / 4, bytes
+// 4 (packet % 2) .. + 3 of it, high nibbles when packet % 4 >= 2.
+
+// ggml_ue4m3_to_fp32: bits 3..6 are the exponent e (bias 7), bits 0..2 the mantissa m, bit 7 is ignored;
+// 0x7F reads as 0. Halved: m * 2^-10 for e = 0, (8 + m) * 2^(e - 11) otherwise, both exact in f32.
+func.def inline @ggml_nvfp4_half_scale(%x: i32) -> (f32) {
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c3_i32 = scalar.constant 3 : i32
+  %c7_i32 = scalar.constant 7 : i32
+  %c8_i32 = scalar.constant 8 : i32
+  %c15_i32 = scalar.constant 15 : i32
+  %c23_i32 = scalar.constant 23 : i32
+  %c116_i32 = scalar.constant 116 : i32
+  %c127_i32 = scalar.constant 127 : i32
+  %zero = scalar.constant 0.0 : f32
+  %x_shr3 = scalar.shrui %x, %c3_i32 : i32
+  %e = scalar.andi %x_shr3, %c15_i32 : i32
+  %m = scalar.andi %x, %c7_i32 : i32
+  %is_e0 = scalar.cmpi eq, %e, %c0_i32 : i32
+  %e_eff = scf.select %is_e0, %c1_i32, %e : i32
+  %m_norm = scalar.addi %m, %c8_i32 : i32
+  %mant = scf.select %is_e0, %m, %m_norm : i32
+  %pow_e = scalar.addi %e_eff, %c116_i32 : i32
+  %pow_bits = scalar.shli %pow_e, %c23_i32 : i32
+  %pow_bits_v = vector.from_elements %pow_bits : vector<1xi32>
+  %pow_v = vector.bitcast %pow_bits_v : vector<1xi32> to vector<1xf32>
+  %pow = vector.extract %pow_v[0] : vector<1xf32> -> f32
+  %mant_f = scalar.sitofp %mant : i32 to f32
+  %scale = scalar.mulf %mant_f, %pow : f32
+  %is_nan = scalar.cmpi eq, %x, %c127_i32 : i32
+  %result = scf.select %is_nan, %zero, %scale : f32
+  func.return %result : f32
+}
+
+func.def inline @ggml_nvfp4_f32_vector4(%weight: buffer, %row_byte_base: offset, %nv_half: index, %packet: index) -> (vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %block_bytes = index.constant 36 : offset
+  %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
+  %nv_block = index.div %nv_half, %c2 : index
+  %half = index.rem %nv_half, %c2 : index
+  %block_byte_add = index.scale %nv_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %d_view = buffer.view %weight[%block_byte_base] : buffer -> view<36xi8>
+  %packet_sub = index.div %bounded_packet, %c4 : index
+  %half_sub = index.mul %half, %c2 : index
+  %sub = index.add %half_sub, %packet_sub : index
+  %packet_page = index.rem %bounded_packet, %c4 : index
+  %uses_high = index.cmp uge, %packet_page, %c2 : index
+  %packet_word = index.rem %bounded_packet, %c2 : index
+  %sub_bytes = index.mul %sub, %c8 : index
+  %word_bytes = index.mul %packet_word, %c4 : index
+  %code_rel = index.add %sub_bytes, %word_bytes : index
+  %code_index0 = index.add %code_rel, %c4 : index
+  %code_index = index.assume %code_index0 [range(%code_index0, 4, 32), mul(%code_index0, 4)] : index
+  %q_bytes = vector.load %d_view[%code_index] : view<36xi8> -> vector<4xi8>
+  %codes = func.call @ggml_1bit_nibble_codes4(%q_bytes, %uses_high) : (vector<4xi8>, i1) -> (vector<4xi8>)
+  %table = func.call @ggml_mxfp4_table_i8() : () -> (vector<16xi8>)
+  %lookup_i8 = vector.table.lookup %table[%codes] : vector<16xi8>, vector<4xi8> -> vector<4xi8>
+  %lookup = vector.sitofp %lookup_i8 : vector<4xi8> to vector<4xf32>
+  %d_i8 = view.load %d_view[%sub] : view<36xi8> -> i8
+  %d = scalar.extui %d_i8 : i8 to i32
+  %scale = func.call @ggml_nvfp4_half_scale(%d) : (i32) -> (f32)
+  %scale_v = vector.splat %scale : vector<4xf32>
+  %result = vector.mulf %scale_v, %lookup : vector<4xf32>
+  func.return %result : vector<4xf32>
+}
+
+func.def inline @ggml_nvfp4_f16_vector4(%weight: buffer, %row_byte_base: offset, %nv_half: index, %packet: index) -> (vector<4xf16>) {
+  %values_f32 = func.call @ggml_nvfp4_f32_vector4(%weight, %row_byte_base, %nv_half, %packet) : (buffer, offset, index, index) -> (vector<4xf32>)
+  %values = vector.fptrunc %values_f32 : vector<4xf32> to vector<4xf16>
+  func.return %values : vector<4xf16>
+}
+
 func.def inline @ggml_tq2_0_f32_vector4(%weight: buffer, %row_byte_base: offset, %tq_block: index, %tq_group: index, %packet: index) -> (vector<4xf32>) {
   %c0 = index.constant 0 : index
   %c4 = index.constant 4 : index
