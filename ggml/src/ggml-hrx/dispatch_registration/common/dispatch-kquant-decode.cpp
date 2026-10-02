@@ -14,7 +14,7 @@
 // limitations under the License.
 
 // Decode projections (1 token, or 2-8 for MTP / speculative verify batches) on Q2_K, Q3_K, Q4_K, Q5_K,
-// Q6_K, IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, IQ4_XS, Q8_0, TQ1_0, TQ2_0, MXFP4 and NVFP4 weights, read in
+// Q6_K, IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL, IQ4_XS, Q8_0, TQ1_0, TQ2_0, MXFP4, NVFP4 and Q2_0 weights, read in
 // their GGUF block layout (and exact-ternary Q4_0 repacked to 2 bits, see kquant_ternary; Q1_0 and PrismML's PQ2_0 /
 // PTQ1_0 in their group-128 GGUF layout)
 // (ops/kquant_decode_f32.loom): FFN gate/up pairs fused with SwiGLU, and plain projections with an
@@ -70,6 +70,7 @@ bool kquant_format(CommonMulMatWeightFormat format) {
         case CommonMulMatWeightFormat::TQ2_0:
         case CommonMulMatWeightFormat::MXFP4:
         case CommonMulMatWeightFormat::NVFP4:
+        case CommonMulMatWeightFormat::Q2_0:
             return true;
         default:
             return false;
