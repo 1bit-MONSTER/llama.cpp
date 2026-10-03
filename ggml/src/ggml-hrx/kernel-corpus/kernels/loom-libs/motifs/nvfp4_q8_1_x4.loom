@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// NVFP4 (HRX format 43) and Q2_0 (format 42, see below) prompt matmuls on the int8 WMMA path of ops/mul_mat_q5_k_q8_plane_wmma.loom
+// NVFP4 (HRX format 43), Q2_0 (format 42) and the 32-value block formats (see below) prompt matmuls on the int8 WMMA path of ops/mul_mat_q5_k_q8_plane_wmma.loom
 // (ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256): activations are the q8_1 x4 groups (one d per 32 values),
 // weights are staged per 64-value K chunk, which is exactly one 36-byte NVFP4 block: d[4] (UE4M3, one scale per 16
 // values), then qs[32]; sub-block s reads qs[8 s .. 8 s + 7], low nibbles first.
@@ -286,13 +286,386 @@ func.def inline @ggml_q2_0_x4_stage_row(%weight: buffer, %scratch: buffer, %w_of
   func.return
 }
 
-// The q8_1 x4 kernel's weight staging hook: at NVFP4 or Q2_0, staging threads (tid < rows) stage their row of the
-// chunk here. Returns whether the kernel's own staging runs (tid < rows and neither format).
-func.def inline @ggml_own_x4_stage(%is_nvfp4: i1, %is_q2_0: i1, %weight: buffer, %scratch: buffer, %w_off: offset, %ws_off: offset, %wc_off: offset, %input_size: index, %row_base: index, %tid: index, %rows: index, %chunk: index) -> (i1) {
+// The 32-value block formats (HRX format codes): Q8_0 80, Q4_0 40, Q4_1 41, Q5_0 50, Q5_1 51, IQ4_NL 20, MXFP4 39.
+// A K chunk is two blocks, one per K32 block of the kernel, each with one scale: the kernel's own contraction runs
+// unchanged. Q8_0, Q4_0, Q5_0, IQ4_NL and MXFP4 are staged as signed values (Q4_0 code - 8, Q5_0 code - 16, the
+// IQ4_NL and MXFP4 tables); Q4_1 and Q5_1 as their unsigned codes with the block minimum m as the K32 correction,
+// which the kernel applies against the q8_1 activation sum.
+func.def pure inline @ggml_legacy_x4_format(%format: index) -> (i1) {
+  %f20 = index.constant 20 : index
+  %f39 = index.constant 39 : index
+  %f40 = index.constant 40 : index
+  %f41 = index.constant 41 : index
+  %f50 = index.constant 50 : index
+  %f51 = index.constant 51 : index
+  %f80 = index.constant 80 : index
+  %is20 = index.cmp eq, %format, %f20 : index
+  %is39 = index.cmp eq, %format, %f39 : index
+  %is40 = index.cmp eq, %format, %f40 : index
+  %is41 = index.cmp eq, %format, %f41 : index
+  %is50 = index.cmp eq, %format, %f50 : index
+  %is51 = index.cmp eq, %format, %f51 : index
+  %is80 = index.cmp eq, %format, %f80 : index
+  %a = scalar.ori %is20, %is39 : i1
+  %b = scalar.ori %is40, %is41 : i1
+  %c = scalar.ori %is50, %is51 : i1
+  %ab = scalar.ori %a, %b : i1
+  %abc = scalar.ori %ab, %c : i1
+  %all = scalar.ori %abc, %is80 : i1
+  func.return %all : i1
+}
+
+// The kernel's format selector: %weight_format itself when this file stages it (NVFP4 43, Q2_0 42 or a 32-value
+// block format above), else 0 (the kernel's own formats).
+func.def pure inline @ggml_own_x4_format(%weight_format: index) -> (index) {
+  %c0 = index.constant 0 : index
+  %f42 = index.constant 42 : index
+  %f43 = index.constant 43 : index
+  %is42 = index.cmp eq, %weight_format, %f42 : index
+  %is43 = index.cmp eq, %weight_format, %f43 : index
+  %legacy = func.call pure @ggml_legacy_x4_format(%weight_format) : (index) -> (i1)
+  %a = scalar.ori %is42, %is43 : i1
+  %own = scalar.ori %a, %legacy : i1
+  %format = scf.select %own, %weight_format, %c0 : index
+  func.return %format : index
+}
+
+// Whether the staged weights of %own_format are signed (everything here but Q4_1 and Q5_1).
+func.def pure inline @ggml_own_x4_signed(%own_format: index) -> (i1) {
+  %c0 = index.constant 0 : index
+  %f41 = index.constant 41 : index
+  %f51 = index.constant 51 : index
+  %is_own = index.cmp ne, %own_format, %c0 : index
+  %is41 = index.cmp eq, %own_format, %f41 : index
+  %is51 = index.cmp eq, %own_format, %f51 : index
+  %affine = scalar.ori %is41, %is51 : i1
   %true = scalar.constant true : i1
+  %not_affine = scalar.xori %affine, %true : i1
+  %signed = scalar.andi %is_own, %not_affine : i1
+  func.return %signed : i1
+}
+
+// 2^(e - 128) (GGML_E8M0_TO_FP32_HALF) from its f32 bits: (e - 1) << 23 for e >= 2, 0x00200000 << e below.
+func.def inline @ggml_legacy_x4_e8m0_half(%e: i32) -> (f32) {
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c23_i32 = scalar.constant 23 : i32
+  %sub_unit = scalar.constant 2097152 : i32
+  %is_small = scalar.cmpi ult, %e, %c2_i32 : i32
+  %e_m1 = scalar.subi %e, %c1_i32 : i32
+  %normal_bits = scalar.shli %e_m1, %c23_i32 : i32
+  %sub_bits = scalar.shli %sub_unit, %e : i32
+  %bits = scf.select %is_small, %sub_bits, %normal_bits : i32
+  %bits_v = vector.from_elements %bits : vector<1xi32>
+  %scale_v = vector.bitcast %bits_v : vector<1xi32> to vector<1xf32>
+  %scale = vector.extract %scale_v[0] : vector<1xf32> -> f32
+  func.return %scale : f32
+}
+
+// Four table values for the four codes (0..15) in the bytes of each word of %codes.
+func.def inline @ggml_legacy_x4_table16(%codes: vector<4xi32>, %table: vector<16xi8>) -> (vector<4xi32>) {
+  %w0 = vector.extract %codes[0] : vector<4xi32> -> i32
+  %w1 = vector.extract %codes[1] : vector<4xi32> -> i32
+  %w2 = vector.extract %codes[2] : vector<4xi32> -> i32
+  %w3 = vector.extract %codes[3] : vector<4xi32> -> i32
+  %v0 = vector.from_elements %w0 : vector<1xi32>
+  %v1 = vector.from_elements %w1 : vector<1xi32>
+  %v2 = vector.from_elements %w2 : vector<1xi32>
+  %v3 = vector.from_elements %w3 : vector<1xi32>
+  %c0 = vector.bitcast %v0 : vector<1xi32> to vector<4xi8>
+  %c1 = vector.bitcast %v1 : vector<1xi32> to vector<4xi8>
+  %c2 = vector.bitcast %v2 : vector<1xi32> to vector<4xi8>
+  %c3 = vector.bitcast %v3 : vector<1xi32> to vector<4xi8>
+  %t0 = vector.table.lookup %table[%c0] : vector<16xi8>, vector<4xi8> -> vector<4xi8>
+  %t1 = vector.table.lookup %table[%c1] : vector<16xi8>, vector<4xi8> -> vector<4xi8>
+  %t2 = vector.table.lookup %table[%c2] : vector<16xi8>, vector<4xi8> -> vector<4xi8>
+  %t3 = vector.table.lookup %table[%c3] : vector<16xi8>, vector<4xi8> -> vector<4xi8>
+  %r0v = vector.bitcast %t0 : vector<4xi8> to vector<1xi32>
+  %r1v = vector.bitcast %t1 : vector<4xi8> to vector<1xi32>
+  %r2v = vector.bitcast %t2 : vector<4xi8> to vector<1xi32>
+  %r3v = vector.bitcast %t3 : vector<4xi8> to vector<1xi32>
+  %r0 = vector.extract %r0v[0] : vector<1xi32> -> i32
+  %r1 = vector.extract %r1v[0] : vector<1xi32> -> i32
+  %r2 = vector.extract %r2v[0] : vector<1xi32> -> i32
+  %r3 = vector.extract %r3v[0] : vector<1xi32> -> i32
+  %r = vector.from_elements %r0, %r1, %r2, %r3 : vector<4xi32>
+  func.return %r : vector<4xi32>
+}
+
+// The fifth bits of 16 values from qh (values 16 h .. 16 h + 15 use bits 16 h ..), at bit 4 of each value byte.
+func.def inline @ggml_legacy_x4_fifth_bits(%qh: i32, %h: i32) -> (vector<4xi32>) {
+  %c4 = scalar.constant 4 : i32
+  %c8 = scalar.constant 8 : i32
+  %c12 = scalar.constant 12 : i32
+  %c16 = scalar.constant 16 : i32
+  %base = scalar.muli %h, %c16 : i32
+  %s1 = scalar.addi %base, %c4 : i32
+  %s2 = scalar.addi %base, %c8 : i32
+  %s3 = scalar.addi %base, %c12 : i32
+  %shifts = vector.from_elements %base, %s1, %s2, %s3 : vector<4xi32>
+  %qhv = vector.splat %qh : vector<4xi32>
+  %hb0 = vector.shrui %qhv, %shifts : vector<4xi32>
+  %fifteen = vector.constant 15 : vector<4xi32>
+  %hb = vector.andi %hb0, %fifteen : vector<4xi32>
+  %m1 = vector.constant 1 : vector<4xi32>
+  %m2 = vector.constant 2 : vector<4xi32>
+  %m4 = vector.constant 4 : vector<4xi32>
+  %m8 = vector.constant 8 : vector<4xi32>
+  %sh4 = vector.constant 4 : vector<4xi32>
+  %sh11 = vector.constant 11 : vector<4xi32>
+  %sh18 = vector.constant 18 : vector<4xi32>
+  %sh25 = vector.constant 25 : vector<4xi32>
+  %b0 = vector.andi %hb, %m1 : vector<4xi32>
+  %b1 = vector.andi %hb, %m2 : vector<4xi32>
+  %b2 = vector.andi %hb, %m4 : vector<4xi32>
+  %b3 = vector.andi %hb, %m8 : vector<4xi32>
+  %p0 = vector.shli %b0, %sh4 : vector<4xi32>
+  %p1 = vector.shli %b1, %sh11 : vector<4xi32>
+  %p2 = vector.shli %b2, %sh18 : vector<4xi32>
+  %p3 = vector.shli %b3, %sh25 : vector<4xi32>
+  %p01 = vector.ori %p0, %p1 : vector<4xi32>
+  %p23 = vector.ori %p2, %p3 : vector<4xi32>
+  %bits = vector.ori %p01, %p23 : vector<4xi32>
+  func.return %bits : vector<4xi32>
+}
+
+// Signed bytes from biased codes: each byte x (0..2 bias - 1) becomes x - bias, for bias 8 or 16 (%bias_bits =
+// bias in every byte, %extend = 256 - 2 bias over bias, so bias x extend is the sign extension of the byte).
+func.def inline @ggml_legacy_x4_unbias(%codes: vector<4xi32>, %bias_bits: i32, %extend: i32) -> (vector<4xi32>) {
+  %bias = vector.splat %bias_bits : vector<4xi32>
+  %ext = vector.splat %extend : vector<4xi32>
+  %flipped = vector.xori %codes, %bias : vector<4xi32>
+  %sign = vector.andi %flipped, %bias : vector<4xi32>
+  %fill = vector.muli %sign, %ext : vector<4xi32>
+  %values = vector.ori %flipped, %fill : vector<4xi32>
+  func.return %values : vector<4xi32>
+}
+
+// One 32-value block at %block_base: values 0..15 and 16..31 as two 16-byte groups, its scale and correction.
+func.def inline @ggml_legacy_x4_block(%format: index, %weight: buffer, %block_base: offset) -> (vector<4xi32>, vector<4xi32>, f32, f32) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c16 = index.constant 16 : index
+  %zero = scalar.constant 0.0 : f32
+  %f20 = index.constant 20 : index
+  %f39 = index.constant 39 : index
+  %f40 = index.constant 40 : index
+  %f41 = index.constant 41 : index
+  %f50 = index.constant 50 : index
+  %f51 = index.constant 51 : index
+  %f80 = index.constant 80 : index
+  %is20 = index.cmp eq, %format, %f20 : index
+  %is39 = index.cmp eq, %format, %f39 : index
+  %is40 = index.cmp eq, %format, %f40 : index
+  %is41 = index.cmp eq, %format, %f41 : index
+  %is50 = index.cmp eq, %format, %f50 : index
+  %is51 = index.cmp eq, %format, %f51 : index
+  %is80 = index.cmp eq, %format, %f80 : index
+  %low, %high, %scale, %correction = scf.if %is80 -> (vector<4xi32>, vector<4xi32>, f32, f32) {
+    %d_view = buffer.view %weight[%block_base] : buffer -> view<1xf16>
+    %d16 = view.load %d_view[%c0] : view<1xf16> -> f16
+    %d = scalar.extf %d16 : f16 to f32
+    %qs_off = index.constant 2 : offset
+    %qs_base = index.add %block_base, %qs_off : offset
+    %qs = buffer.view %weight[%qs_base] : buffer -> view<32xi8>
+    %q0 = vector.load %qs[%c0] : view<32xi8> -> vector<16xi8>
+    %q1 = vector.load %qs[%c16] : view<32xi8> -> vector<16xi8>
+    %w0 = vector.bitcast %q0 : vector<16xi8> to vector<4xi32>
+    %w1 = vector.bitcast %q1 : vector<16xi8> to vector<4xi32>
+    scf.yield %w0, %w1, %d, %zero : vector<4xi32>, vector<4xi32>, f32, f32
+  } else {
+    // Nibble formats: qs offset 1 (MXFP4), 2 (Q4_0, IQ4_NL), 4 (Q4_1), 6 (Q5_0), 8 (Q5_1).
+    %o1 = index.constant 1 : offset
+    %o2 = index.constant 2 : offset
+    %o4 = index.constant 4 : offset
+    %o6 = index.constant 6 : offset
+    %o8 = index.constant 8 : offset
+    %qo0 = scf.select %is39, %o1, %o2 : offset
+    %qo1 = scf.select %is41, %o4, %qo0 : offset
+    %qo2 = scf.select %is50, %o6, %qo1 : offset
+    %qs_off = scf.select %is51, %o8, %qo2 : offset
+    %qs_base = index.add %block_base, %qs_off : offset
+    %qs = buffer.view %weight[%qs_base] : buffer -> view<16xi8>
+    %q = vector.load %qs[%c0] : view<16xi8> -> vector<16xi8>
+    %words = vector.bitcast %q : vector<16xi8> to vector<4xi32>
+    %nib = vector.constant 252645135 : vector<4xi32>
+    %four = vector.constant 4 : vector<4xi32>
+    %low_codes = vector.andi %words, %nib : vector<4xi32>
+    %words_shr = vector.shrui %words, %four : vector<4xi32>
+    %high_codes = vector.andi %words_shr, %nib : vector<4xi32>
+    // Q5: the fifth bits from qh (bytes 2..5 of Q5_0, 4..7 of Q5_1).
+    %is_q5 = scalar.ori %is50, %is51 : i1
+    %qh_off = scf.select %is51, %o4, %o2 : offset
+    %qh_base = index.add %block_base, %qh_off : offset
+    %qh_view = buffer.view %weight[%qh_base] : buffer -> view<4xi8>
+    %qh_bytes = vector.load %qh_view[%c0] : view<4xi8> -> vector<4xi8>
+    %qh_v = vector.bitcast %qh_bytes : vector<4xi8> to vector<1xi32>
+    %qh = vector.extract %qh_v[0] : vector<1xi32> -> i32
+    %h0 = scalar.constant 0 : i32
+    %h1 = scalar.constant 1 : i32
+    %fifth0 = func.call @ggml_legacy_x4_fifth_bits(%qh, %h0) : (i32, i32) -> (vector<4xi32>)
+    %fifth1 = func.call @ggml_legacy_x4_fifth_bits(%qh, %h1) : (i32, i32) -> (vector<4xi32>)
+    %zero_v = vector.constant 0 : vector<4xi32>
+    %add0 = scf.select %is_q5, %fifth0, %zero_v : vector<4xi32>
+    %add1 = scf.select %is_q5, %fifth1, %zero_v : vector<4xi32>
+    %codes0 = vector.ori %low_codes, %add0 : vector<4xi32>
+    %codes1 = vector.ori %high_codes, %add1 : vector<4xi32>
+    // Signed values: Q4_0 code - 8, Q5_0 code - 16; tables for IQ4_NL and MXFP4; Q4_1 / Q5_1 stay unsigned.
+    %b8 = scalar.constant 134744072 : i32
+    %e8 = scalar.constant 30 : i32
+    %b16 = scalar.constant 269488144 : i32
+    %e16 = scalar.constant 14 : i32
+    %bias = scf.select %is50, %b16, %b8 : i32
+    %extend = scf.select %is50, %e16, %e8 : i32
+    %unb0 = func.call @ggml_legacy_x4_unbias(%codes0, %bias, %extend) : (vector<4xi32>, i32, i32) -> (vector<4xi32>)
+    %unb1 = func.call @ggml_legacy_x4_unbias(%codes1, %bias, %extend) : (vector<4xi32>, i32, i32) -> (vector<4xi32>)
+    %t0 = scalar.constant -127 : i8
+    %t1 = scalar.constant -104 : i8
+    %t2 = scalar.constant -83 : i8
+    %t3 = scalar.constant -65 : i8
+    %t4 = scalar.constant -49 : i8
+    %t5 = scalar.constant -35 : i8
+    %t6 = scalar.constant -22 : i8
+    %t7 = scalar.constant -10 : i8
+    %t8 = scalar.constant 1 : i8
+    %t9 = scalar.constant 13 : i8
+    %t10 = scalar.constant 25 : i8
+    %t11 = scalar.constant 38 : i8
+    %t12 = scalar.constant 53 : i8
+    %t13 = scalar.constant 69 : i8
+    %t14 = scalar.constant 89 : i8
+    %t15 = scalar.constant 113 : i8
+    %iq4nl = vector.from_elements %t0, %t1, %t2, %t3, %t4, %t5, %t6, %t7, %t8, %t9, %t10, %t11, %t12, %t13, %t14, %t15 : vector<16xi8>
+    %m0 = scalar.constant 0 : i8
+    %m1 = scalar.constant 1 : i8
+    %m2 = scalar.constant 2 : i8
+    %m3 = scalar.constant 3 : i8
+    %m4 = scalar.constant 4 : i8
+    %m6 = scalar.constant 6 : i8
+    %m8 = scalar.constant 8 : i8
+    %m12 = scalar.constant 12 : i8
+    %n1 = scalar.constant -1 : i8
+    %n2 = scalar.constant -2 : i8
+    %n3 = scalar.constant -3 : i8
+    %n4 = scalar.constant -4 : i8
+    %n6 = scalar.constant -6 : i8
+    %n8 = scalar.constant -8 : i8
+    %n12 = scalar.constant -12 : i8
+    %mxfp4 = vector.from_elements %m0, %m1, %m2, %m3, %m4, %m6, %m8, %m12, %m0, %n1, %n2, %n3, %n4, %n6, %n8, %n12 : vector<16xi8>
+    %uses_table = scalar.ori %is20, %is39 : i1
+    %table = scf.select %is39, %mxfp4, %iq4nl : vector<16xi8>
+    %tab0 = func.call @ggml_legacy_x4_table16(%codes0, %table) : (vector<4xi32>, vector<16xi8>) -> (vector<4xi32>)
+    %tab1 = func.call @ggml_legacy_x4_table16(%codes1, %table) : (vector<4xi32>, vector<16xi8>) -> (vector<4xi32>)
+    %is_biased = scalar.ori %is40, %is50 : i1
+    %s0 = scf.select %is_biased, %unb0, %codes0 : vector<4xi32>
+    %s1 = scf.select %is_biased, %unb1, %codes1 : vector<4xi32>
+    %v0 = scf.select %uses_table, %tab0, %s0 : vector<4xi32>
+    %v1 = scf.select %uses_table, %tab1, %s1 : vector<4xi32>
+    // Scales: E8M0 for MXFP4 (17-byte blocks, so no f16 loads), else the f16 d (and the minimum m of Q4_1 / Q5_1).
+    %is_affine = scalar.ori %is41, %is51 : i1
+    %scale, %corr = scf.if %is39 -> (f32, f32) {
+      %e_view = buffer.view %weight[%block_base] : buffer -> view<1xi8>
+      %e_i8 = view.load %e_view[%c0] : view<1xi8> -> i8
+      %e = scalar.extui %e_i8 : i8 to i32
+      %mx_scale = func.call @ggml_legacy_x4_e8m0_half(%e) : (i32) -> (f32)
+      scf.yield %mx_scale, %zero : f32, f32
+    } else {
+      %dm_view = buffer.view %weight[%block_base] : buffer -> view<2xf16>
+      %d16 = view.load %dm_view[%c0] : view<2xf16> -> f16
+      %m16 = view.load %dm_view[%c1] : view<2xf16> -> f16
+      %d = scalar.extf %d16 : f16 to f32
+      %m = scalar.extf %m16 : f16 to f32
+      %c = scf.select %is_affine, %m, %zero : f32
+      scf.yield %d, %c : f32, f32
+    }
+    scf.yield %v0, %v1, %scale, %corr : vector<4xi32>, vector<4xi32>, f32, f32
+  }
+  func.return %low, %high, %scale, %correction : vector<4xi32>, vector<4xi32>, f32, f32
+}
+
+// Stages K chunk %chunk (two 32-value blocks, 2 chunk and 2 chunk + 1) of weight row %row as staged row %lane_row:
+// 64 values at %w_off + 80 lane_row, each block's scale and correction at slots 2 lane_row and 2 lane_row + 1.
+func.def inline @ggml_legacy_x4_stage_row(%format: index, %weight: buffer, %scratch: buffer, %w_off: offset, %ws_off: offset, %wc_off: offset, %input_size: index, %row: index, %lane_row: index, %chunk: index) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c48 = index.constant 48 : index
+  %c80 = index.constant 80 : index
+  %f39 = index.constant 39 : index
+  %f40 = index.constant 40 : index
+  %f41 = index.constant 41 : index
+  %f50 = index.constant 50 : index
+  %f51 = index.constant 51 : index
+  %f80 = index.constant 80 : index
+  %b17 = index.constant 17 : offset
+  %b18 = index.constant 18 : offset
+  %b20 = index.constant 20 : offset
+  %b22 = index.constant 22 : offset
+  %b24 = index.constant 24 : offset
+  %b34 = index.constant 34 : offset
+  %is39 = index.cmp eq, %format, %f39 : index
+  %is41 = index.cmp eq, %format, %f41 : index
+  %is50 = index.cmp eq, %format, %f50 : index
+  %is51 = index.cmp eq, %format, %f51 : index
+  %is80 = index.cmp eq, %format, %f80 : index
+  %bb0 = scf.select %is39, %b17, %b18 : offset
+  %bb1 = scf.select %is41, %b20, %bb0 : offset
+  %bb2 = scf.select %is50, %b22, %bb1 : offset
+  %bb3 = scf.select %is51, %b24, %bb2 : offset
+  %block_bytes = scf.select %is80, %b34, %bb3 : offset
+  %blocks = index.div %input_size, %c32 : index
+  %row_bytes = index.scale %blocks, %block_bytes : index, offset -> offset
+  %row_byte_base = index.scale %row, %row_bytes : index, offset -> offset
+  %block0 = index.mul %chunk, %c2 : index
+  %block1 = index.add %block0, %c1 : index
+  %add0 = index.scale %block0, %block_bytes : index, offset -> offset
+  %add1 = index.scale %block1, %block_bytes : index, offset -> offset
+  %base0 = index.add %row_byte_base, %add0 : offset
+  %base1 = index.add %row_byte_base, %add1 : offset
+  %l0, %h0, %s0, %k0 = func.call @ggml_legacy_x4_block(%format, %weight, %base0) : (index, buffer, offset) -> (vector<4xi32>, vector<4xi32>, f32, f32)
+  %l1, %h1, %s1, %k1 = func.call @ggml_legacy_x4_block(%format, %weight, %base1) : (index, buffer, offset) -> (vector<4xi32>, vector<4xi32>, f32, f32)
+  %weights = buffer.view %scratch[%w_off] : buffer -> view<5120xi8>
+  %scales = buffer.view %scratch[%ws_off] : buffer -> view<128xf32>
+  %corrections = buffer.view %scratch[%wc_off] : buffer -> view<128xf32>
+  %bounded_lane_row = index.assume %lane_row [range(%lane_row, 0, 63)] : index
+  %dst0_0 = index.mul %bounded_lane_row, %c80 : index
+  %dst0 = index.assume %dst0_0 [range(%dst0_0, 0, 5040), mul(%dst0_0, 16)] : index
+  %dst1 = index.add %dst0, %c16 : index
+  %dst2 = index.add %dst0, %c32 : index
+  %dst3 = index.add %dst0, %c48 : index
+  %l0b = vector.bitcast %l0 : vector<4xi32> to vector<16xi8>
+  %h0b = vector.bitcast %h0 : vector<4xi32> to vector<16xi8>
+  %l1b = vector.bitcast %l1 : vector<4xi32> to vector<16xi8>
+  %h1b = vector.bitcast %h1 : vector<4xi32> to vector<16xi8>
+  vector.store %l0b, %weights[%dst0] : vector<16xi8>, view<5120xi8>
+  vector.store %h0b, %weights[%dst1] : vector<16xi8>, view<5120xi8>
+  vector.store %l1b, %weights[%dst2] : vector<16xi8>, view<5120xi8>
+  vector.store %h1b, %weights[%dst3] : vector<16xi8>, view<5120xi8>
+  %meta0_0 = index.mul %bounded_lane_row, %c2 : index
+  %meta0 = index.assume %meta0_0 [range(%meta0_0, 0, 126)] : index
+  %meta1_0 = index.add %meta0, %c1 : index
+  %meta1 = index.assume %meta1_0 [range(%meta1_0, 1, 127)] : index
+  view.store %s0, %scales[%meta0] : f32, view<128xf32>
+  view.store %s1, %scales[%meta1] : f32, view<128xf32>
+  view.store %k0, %corrections[%meta0] : f32, view<128xf32>
+  view.store %k1, %corrections[%meta1] : f32, view<128xf32>
+  func.return
+}
+
+// The q8_1 x4 kernel's weight staging hook: for a format staged here (%own_format, see @ggml_own_x4_format), the
+// staging threads (tid < rows) stage their row of the chunk. Returns whether the kernel's own staging runs (tid < rows
+// and %own_format 0).
+func.def inline @ggml_own_x4_stage(%own_format: index, %weight: buffer, %scratch: buffer, %w_off: offset, %ws_off: offset, %wc_off: offset, %input_size: index, %row_base: index, %tid: index, %rows: index, %chunk: index) -> (i1) {
+  %c0 = index.constant 0 : index
+  %f42 = index.constant 42 : index
+  %f43 = index.constant 43 : index
   %lane_active = index.cmp ult, %tid, %rows : index
   %row0 = index.add %row_base, %tid : index
   %row = index.assume %row0 [range(%row0, 0, 262143)] : index
+  %is_nvfp4 = index.cmp eq, %own_format, %f43 : index
+  %is_q2_0 = index.cmp eq, %own_format, %f42 : index
+  %is_legacy = func.call pure @ggml_legacy_x4_format(%own_format) : (index) -> (i1)
   %stage_nvfp4 = scalar.andi %lane_active, %is_nvfp4 : i1
   scf.if %stage_nvfp4 {
     func.call @ggml_nvfp4_x4_stage_row(%weight, %scratch, %w_off, %ws_off, %wc_off, %input_size, %row, %tid, %chunk) : (buffer, buffer, offset, offset, offset, index, index, index, index)
@@ -301,9 +674,12 @@ func.def inline @ggml_own_x4_stage(%is_nvfp4: i1, %is_q2_0: i1, %weight: buffer,
   scf.if %stage_q2_0 {
     func.call @ggml_q2_0_x4_stage_row(%weight, %scratch, %w_off, %ws_off, %wc_off, %input_size, %row, %tid, %chunk) : (buffer, buffer, offset, offset, offset, index, index, index, index)
   }
-  %ours = scalar.ori %is_nvfp4, %is_q2_0 : i1
-  %other = scalar.xori %ours, %true : i1
-  %own = scalar.andi %lane_active, %other : i1
+  %stage_legacy = scalar.andi %lane_active, %is_legacy : i1
+  scf.if %stage_legacy {
+    func.call @ggml_legacy_x4_stage_row(%own_format, %weight, %scratch, %w_off, %ws_off, %wc_off, %input_size, %row, %tid, %chunk) : (index, buffer, buffer, offset, offset, offset, index, index, index, index)
+  }
+  %kernel_format = index.cmp eq, %own_format, %c0 : index
+  %own = scalar.andi %lane_active, %kernel_format : i1
   func.return %own : i1
 }
 
