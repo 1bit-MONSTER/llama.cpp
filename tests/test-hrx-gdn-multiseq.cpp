@@ -24,6 +24,7 @@
 // kv_head + n_seqs - 1 - s). Each case runs `repeats` times on HRX and every repeat must give identical bytes.
 //
 // Usage: test-hrx-gdn-multiseq [--plan-only] [--verbose] [--repeats N] [--filter SUBSTRING]
+//                              [--mode native|per-seq|both]   (default both; one mode per process isolates a GPU fault)
 
 #include "dispatch/command-program-resolver.h"
 #include "dispatch/command-program.h"
@@ -268,6 +269,7 @@ int main(int argc, char ** argv) {
     bool        verbose   = false;
     int         repeats   = 3;
     std::string filter;
+    std::string mode = "both";
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--plan-only") == 0) {
             plan_only = true;
@@ -277,6 +279,8 @@ int main(int argc, char ** argv) {
             repeats = std::max(1, std::atoi(argv[++i]));
         } else if (std::strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
             filter = argv[++i];
+        } else if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
+            mode = argv[++i];
         }
     }
 
@@ -302,9 +306,18 @@ int main(int argc, char ** argv) {
         cases.swap(kept);
     }
 
+    std::vector<bool> modes;
+    if (mode == "native" || mode == "both") {
+        modes.push_back(false);
+    }
+    if (mode == "per-seq" || mode == "both") {
+        modes.push_back(true);
+    }
+    REQUIRE(!modes.empty());
+
     int problems = 0;
     std::printf("test-hrx-gdn-multiseq: plans for gfx1151\n");
-    for (bool per_sequence : { false, true }) {
+    for (bool per_sequence : modes) {
         for (const Case & c : cases) {
             problems += check_plan(c, per_sequence, verbose);
         }
@@ -329,7 +342,7 @@ int main(int argc, char ** argv) {
             for (const Case & c : cases) {
                 Outputs expected;
                 REQUIRE(run(cpu, c, seed, expected));
-                for (bool per_sequence : { false, true }) {
+                for (bool per_sequence : modes) {
                     set_mode(per_sequence);
                     Outputs first;
                     bool    ok        = true;
@@ -365,6 +378,6 @@ int main(int argc, char ** argv) {
             ggml_backend_free(hrx);
         }
     }
-    std::printf("test-hrx-gdn-multiseq: %zu cases x 2 modes, %d problems\n", cases.size(), problems);
+    std::printf("test-hrx-gdn-multiseq: %zu cases x %zu modes, %d problems\n", cases.size(), modes.size(), problems);
     return problems == 0 ? 0 : 1;
 }
