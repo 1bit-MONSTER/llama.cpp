@@ -871,6 +871,21 @@ static Status upload_prepared_host_staging(const CommandProgramExecutionContext 
         if (!staging.upload) {
             continue;
         }
+        // A host download staged by an earlier replay is only published to host
+        // memory by mark_stream_synchronized(); add_host_writeback merely queues
+        // the memcpy. Uploading the same host memory before that has happened
+        // would read the previous contents. The split scheduler computes splits
+        // back to back and only synchronizes a backend when it inserts a
+        // cross-backend input copy, so nothing else guarantees the ordering.
+        if (context.graph_replay_state != nullptr && context.graph_replay_state->has_pending_host_writebacks()) {
+            static thread_local WaitHistory writeback_wait_history;
+            if (ErrorResult error =
+                    take_status(stream_synchronize_sleeping(context.stream, writeback_wait_history))) {
+                status.log("synchronize HRX stream before host-staging upload: %s", error->c_str());
+                return status;
+            }
+            context.graph_replay_state->mark_stream_synchronized();
+        }
         const std::string detail = debug.enabled() ? DebugSerialExecutionTrace::host_staging_detail(staging) :
                                                      std::string();
         if (!debug.sync("host-staging-upload-buffer-pre", detail)) {

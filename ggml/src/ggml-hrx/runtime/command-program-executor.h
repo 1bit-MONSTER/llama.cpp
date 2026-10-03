@@ -46,6 +46,10 @@ struct GraphReplayStreamState {
     void add_host_writeback(void * host_destination, const void * mapped_source, size_t size, hrx_buffer_t buffer);
     void clear();
 
+    // True while a host download staged by an earlier replay has not been
+    // published to host memory yet (see mark_stream_synchronized).
+    bool has_pending_host_writebacks() const { return !pending_host_writebacks_.empty(); }
+
   private:
     std::vector<PendingHostWriteback> pending_host_writebacks_;
 };
