@@ -30,6 +30,7 @@ enum class CommonMulMatWeightFormat {
     IQ3_S,
     IQ4_NL,
     MXFP4,
+    NVFP4,
     TQ1_0,
     TQ2_0,
     IQ4_XS,
@@ -104,6 +105,9 @@ inline bool common_mul_mat_format_for_type(ggml_type type, CommonMulMatWeightFor
             return true;
         case GGML_TYPE_MXFP4:
             format = CommonMulMatWeightFormat::MXFP4;
+            return true;
+        case GGML_TYPE_NVFP4:
+            format = CommonMulMatWeightFormat::NVFP4;
             return true;
         case GGML_TYPE_TQ1_0:
             format = CommonMulMatWeightFormat::TQ1_0;
@@ -182,6 +186,8 @@ inline int64_t common_mul_mat_format_config_value(CommonMulMatWeightFormat forma
             return 20;
         case CommonMulMatWeightFormat::MXFP4:
             return 39;
+        case CommonMulMatWeightFormat::NVFP4:
+            return 43;  // not its ggml type id (40): HRX's format 40 is Q4_0
         case CommonMulMatWeightFormat::TQ1_0:
             return 34;
         case CommonMulMatWeightFormat::TQ2_0:
@@ -213,6 +219,9 @@ inline bool common_mul_mat_supported_dense_input_size(CommonMulMatWeightFormat f
         case CommonMulMatWeightFormat::PQ2_0:
         case CommonMulMatWeightFormat::PTQ1_0:
             return input_size >= 256 && input_size <= 32768 && input_size % 128 == 0;
+        case CommonMulMatWeightFormat::NVFP4:
+            // 64-value blocks (four 16-value scale groups)
+            return input_size >= 256 && input_size <= 32768 && input_size % 64 == 0;
         case CommonMulMatWeightFormat::Q4_0:
         case CommonMulMatWeightFormat::Q4_1:
         case CommonMulMatWeightFormat::Q5_0:
