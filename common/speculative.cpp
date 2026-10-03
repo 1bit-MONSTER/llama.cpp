@@ -1352,6 +1352,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     // call to pair with, so it's stashed here until that next call fires.
     std::vector<std::vector<float>> pending_h;   // [n_seq][n_embd]
 
+    // Position that pending_h belongs to, or -1 when there is no carryover.
+    // The bridge is only valid for a batch that continues at pending_pos + 1;
+    // a fresh sequence starts at pos 0 while pending_h still holds the previous
+    // request's last row (engine #290).
+    std::vector<llama_pos> pending_pos;
+
     std::vector<int32_t> i_batch_beg;
     std::vector<int32_t> i_batch_end;
 
@@ -1359,6 +1365,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     // Row 0 corresponds to the sampled token, row N to the Nth accepted draft token.
     std::vector<std::vector<float>> verify_h;
     std::vector<int32_t> verify_h_rows;
+    std::vector<llama_pos> verify_pos_first;   // [n_seq] — pos of verify_h[seq][0]
 
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
@@ -1436,6 +1443,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         this->n_max = this->params.n_max;
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
+        pending_pos.assign(n_seq, -1);
 
         i_last.assign(n_seq, -1);
         i_batch_beg.assign(n_seq, -1);
@@ -1443,6 +1451,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         verify_h.assign(n_seq, {});
         verify_h_rows.assign(n_seq, 0);
+        verify_pos_first.assign(n_seq, -1);
     }
 
     ~common_speculative_impl_draft_mtp() override {
@@ -1545,7 +1554,19 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     continue;
                 }
 
-                set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
+                // pending_h is the h-row that precedes the first token of this
+                // batch, so it only pairs with that token when the batch really
+                // continues from it. A fresh sequence starts at pos 0 while
+                // pending_h still holds the previous request's last row; seeding
+                // the MTP head with it there made the draft's first prediction
+                // depend on the previous request (engine #290). This is the same
+                // continuity guard eagle3 applies with pending_pos_last.
+                const llama_pos pos_beg = batch_in.pos[i_batch_beg[seq_id]];
+                if (pending_pos[seq_id] >= 0 && pending_pos[seq_id] + 1 == pos_beg) {
+                    set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
+                } else {
+                    std::memset(batch.embd + (size_t) i_batch_beg[seq_id] * n_embd, 0, row_bytes);
+                }
             }
 
             auto * mem_dft = llama_get_memory(ctx_dft);
@@ -1588,6 +1609,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
             verify_h_rows[seq_id] = n_rows;
             verify_h[seq_id].resize((size_t) n_rows * n_embd);
+            verify_pos_first[seq_id] = batch_in.pos[i_batch_beg[seq_id]];
 
             for (int32_t i = 0; i < n_rows; ++i) {
                 const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, i_batch_beg[seq_id] + i);
@@ -1596,6 +1618,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             std::memcpy(pending_h[seq_id].data(),
                     verify_h[seq_id].data() + (size_t) (n_rows - 1) * n_embd, row_bytes);
+            pending_pos[seq_id] = batch_in.pos[i_batch_end[seq_id]];
         }
 
         return true;
@@ -1765,6 +1788,37 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const int32_t i_h = std::min<int32_t>(n_accepted, n_rows - 1);
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
         std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
+        pending_pos[seq_id] = verify_pos_first[seq_id] + i_h;
+    }
+
+    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) const override {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq || pending_pos[seq_id] < 0) {
+            return false;
+        }
+
+        const llama_pos            pos = pending_pos[seq_id];
+        const std::vector<float> & h   = pending_h[seq_id];
+
+        data.resize(sizeof(llama_pos) + h.size() * sizeof(float));
+        std::memcpy(data.data(),                     &pos,   sizeof(llama_pos));
+        std::memcpy(data.data() + sizeof(llama_pos), h.data(), h.size() * sizeof(float));
+        return true;
+    }
+
+    void set_state(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+            return;
+        }
+        if (data.size() != sizeof(llama_pos) + (size_t) n_embd * sizeof(float)) {
+            return;
+        }
+
+        llama_pos pos = -1;
+        std::memcpy(&pos, data.data(), sizeof(llama_pos));
+
+        pending_pos[seq_id] = pos;
+        pending_h[seq_id].resize(n_embd);
+        std::memcpy(pending_h[seq_id].data(), data.data() + sizeof(llama_pos), (size_t) n_embd * sizeof(float));
     }
 };
 
