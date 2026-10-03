@@ -376,6 +376,14 @@ static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16
     if (match.key_value_capacity > kDecodeSplitMaxKeyValueTokenCapacity) {
         return {};
     }
+
+    // engine#123 step 6: the decode-split pack handoff is only PROVEN with the production
+    // partial-transient alignment. Any other layout is a test rig whose safety is not
+    // established, so DECLINE (fall back to flash_attention_f32_f16_wmma) rather than run an
+    // unproven layout and risk a probabilistic fault. Production behaviour is unchanged.
+    if (decode_split_partial_alignment() != 4096u) {
+        return {};
+    }
     match.query_head_count      = query_head_count;
     match.key_value_head_count  = key_value_head_count;
     match.qk_head_size          = qk_head_size;
