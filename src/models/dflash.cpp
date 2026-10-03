@@ -298,27 +298,33 @@ static ggml_tensor * build_dflash2_conv(
 
     ggml_tensor * result = nullptr;
     for (int64_t tap = 0; tap < kernel_size; ++tap) {
-        ggml_tensor * values = blocks;
-        if (tap > 0) {
-            ggml_tensor * zeros = ggml_fill(ctx0,
-                    ggml_new_tensor_3d(ctx0, hidden->type, hidden_size, std::min(tap, block_size), n_blocks), 0.0f);
-            if (tap < block_size) {
-                ggml_tensor * previous = ggml_view_3d(ctx0, blocks, hidden_size, block_size - tap, n_blocks,
-                        blocks->nb[1], blocks->nb[2], 0);
-                values = ggml_concat(ctx0, zeros, previous, 1);
-            } else {
-                values = zeros;
-            }
-        }
-        values = ggml_reshape_2d(ctx0, values, hidden_size, n_tokens);
-
         ggml_tensor * weight = ggml_reshape_2d(ctx0,
                 ggml_cont(ctx0, ggml_view_4d(ctx0, weight_all, group_size, n_groups, 1, n_tokens,
                         weight_all->nb[1], weight_all->nb[2], weight_all->nb[3], tap * weight_all->nb[2])),
                 hidden_size, n_tokens);
 
-        ggml_tensor * term = ggml_mul(ctx0, weight, values);
-        result = result ? ggml_add(ctx0, result, term) : term;
+        if (tap == 0) {
+            result = ggml_mul(ctx0, weight, ggml_reshape_2d(ctx0, blocks, hidden_size, n_tokens));
+            continue;
+        }
+        if (tap >= block_size) {
+            continue; // every row's tap reaches before its block: a zero term
+        }
+        // Row t of a block gets weight[t] * hidden[t - tap] for t >= tap. Rows tap..T-1 of every block are one
+        // contiguous run per block, so the term is a product of two strided 2-D views ([E * (T - tap), n_blocks]),
+        // added to those rows and joined back to rows 0..tap-1 with a dim-0 concat. (Shifting the block with a
+        // zero fill and a dim-1 concat put both ops, and a graph split each, on the CPU of backends without them.)
+        const int64_t run = hidden_size * (block_size - tap);
+        ggml_tensor * weight_blocks = ggml_reshape_3d(ctx0, weight, hidden_size, block_size, n_blocks);
+        ggml_tensor * result_blocks = ggml_reshape_3d(ctx0, result, hidden_size, block_size, n_blocks);
+        ggml_tensor * shifted_weight = ggml_view_2d(ctx0, weight_blocks, run, n_blocks,
+                weight_blocks->nb[2], tap * weight_blocks->nb[1]);
+        ggml_tensor * previous = ggml_view_2d(ctx0, blocks, run, n_blocks, blocks->nb[2], 0);
+        ggml_tensor * tail = ggml_add(ctx0,
+                ggml_view_2d(ctx0, result_blocks, run, n_blocks, result_blocks->nb[2], tap * result_blocks->nb[1]),
+                ggml_mul(ctx0, shifted_weight, previous));
+        ggml_tensor * head = ggml_view_2d(ctx0, result_blocks, hidden_size * tap, n_blocks, result_blocks->nb[2], 0);
+        result = ggml_reshape_2d(ctx0, ggml_concat(ctx0, head, tail, 0), hidden_size, n_tokens);
     }
     return result;
 }
