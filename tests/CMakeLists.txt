@@ -372,6 +372,11 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-decode-stride PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-decode-stride COMMAND test-hrx-decode-stride)
 
+    add_executable(test-hrx-gdn-multiseq test-hrx-gdn-multiseq.cpp)
+    target_link_libraries(test-hrx-gdn-multiseq PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-gdn-multiseq PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-gdn-multiseq COMMAND test-hrx-gdn-multiseq)
+
     add_executable(test-hrx-mul-mat-id-k32 test-hrx-mul-mat-id-k32.cpp)
     target_link_libraries(test-hrx-mul-mat-id-k32 PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-mul-mat-id-k32 PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)

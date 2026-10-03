@@ -4189,6 +4189,8 @@ struct test_gated_delta_net : public test_case {
     }
 };
 
+#include "test-backend-ops-hrx-gdn.h"
+
 // GGML_OP_GATED_LINEAR_ATTN
 struct test_gla : public test_case {
     const ggml_type type;
@@ -9735,6 +9737,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // overflow: n_tokens > K — only the last K snapshots kept.
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 32,   8, 1, 1, false, false, /*K=*/3));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  16, 2, 1, false, false, /*K=*/4));
+    // Qwen3.8-27B: 16 key heads, 48 value heads (v_repeat 3), head 128; llama-server --parallel puts 2..4 sequences in a ubatch
+    for (int64_t n_seqs : { 2, 3, 4 }) {
+        test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, 1, n_seqs, 3));
+        test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, 4, n_seqs, 3, false, false, /*K=*/4));
+    }
+    add_hrx_gdn_layer_cases(test_cases);
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging
