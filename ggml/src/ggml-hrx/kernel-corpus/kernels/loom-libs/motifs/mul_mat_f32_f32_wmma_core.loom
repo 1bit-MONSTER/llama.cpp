@@ -86,7 +86,8 @@ func.def inline @ggml_mul_mat_f32_f32_wmma_tiled(%weight_format: index, %token_c
   %activation_fragment_layout = encoding.layout.strided [1, %c40] : encoding<layout>
   %activation_fragment_view = buffer.view %activation_stage[%c0_offset] : buffer -> view<32x32xf16, %activation_fragment_layout>
   %wave_result_stage_offset = index.scale %subgroup, %wave_result_stage_bytes : index, offset -> offset
-  %result_fragment_view = buffer.view %result_stage[%wave_result_stage_offset] : buffer -> view<16x16xf32>
+  %result_fragment_layout = encoding.layout.strided [1, %c16] : encoding<layout>
+  %result_fragment_view = buffer.view %result_stage[%wave_result_stage_offset] : buffer -> view<16x16xf32, %result_fragment_layout>
   %result_physical_view = buffer.view %result_stage[%wave_result_stage_offset] : buffer -> view<16x16xf32>
   %channel_tile_base = index.mul %channel_tile, %c64 : index
   %token_tile_base = index.mul %token_tile, %c32 : index
@@ -180,28 +181,28 @@ func.def inline @ggml_mul_mat_f32_f32_wmma_tiled(%weight_format: index, %token_c
   %writes01 = scalar.andi %valid_token1, %valid_channel0 : i1
   %writes10 = scalar.andi %valid_token0, %valid_channel1 : i1
   %writes11 = scalar.andi %valid_token1, %valid_channel1 : i1
-  vector.fragment.store<result> %result00, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32>
+  vector.fragment.store<result> %result00, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32, %result_fragment_layout>
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   scf.if %writes00 {
     %values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
     template.apply<@ggml.mul_mat_f32_f32_wmma.publish_vector4>(%writes00, %token0, %channel0, %bounded_token_count, %bounded_output_size, %output_accumulation, %output_unary_op, %values, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   }
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
-  vector.fragment.store<result> %result01, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32>
+  vector.fragment.store<result> %result01, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32, %result_fragment_layout>
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   scf.if %writes01 {
     %values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
     template.apply<@ggml.mul_mat_f32_f32_wmma.publish_vector4>(%writes01, %token1, %channel0, %bounded_token_count, %bounded_output_size, %output_accumulation, %output_unary_op, %values, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   }
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
-  vector.fragment.store<result> %result10, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32>
+  vector.fragment.store<result> %result10, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32, %result_fragment_layout>
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   scf.if %writes10 {
     %values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
     template.apply<@ggml.mul_mat_f32_f32_wmma.publish_vector4>(%writes10, %token0, %channel1, %bounded_token_count, %bounded_output_size, %output_accumulation, %output_unary_op, %values, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   }
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
-  vector.fragment.store<result> %result11, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32>
+  vector.fragment.store<result> %result11, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32, %result_fragment_layout>
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   scf.if %writes11 {
     %values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
