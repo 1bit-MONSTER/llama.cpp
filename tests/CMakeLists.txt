@@ -392,6 +392,11 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-q2_0-prefill PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-q2_0-prefill COMMAND test-hrx-q2_0-prefill)
 
+    add_executable(test-hrx-legacy-prefill test-hrx-legacy-prefill.cpp)
+    target_link_libraries(test-hrx-legacy-prefill PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-legacy-prefill PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-legacy-prefill COMMAND test-hrx-legacy-prefill)
+
     add_executable(test-hrx-decode-stride test-hrx-decode-stride.cpp)
     target_link_libraries(test-hrx-decode-stride PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-decode-stride PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)

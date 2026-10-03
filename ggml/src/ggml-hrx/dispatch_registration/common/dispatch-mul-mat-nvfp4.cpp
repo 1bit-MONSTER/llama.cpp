@@ -13,12 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// NVFP4 and Q2_0 prompt matmuls (256..2048 tokens in multiples of 256, input sizes in multiples of 256) on AMD's
-// q8_1 x4 int8 WMMA kernel (ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256) at weight format 43 / 42:
-// activations are quantized to q8_1 x4 once; NVFP4 blocks are staged as signed E2M1 codes with one scale per 16
-// values, Q2_0 blocks as signed -1..2 under their block scale (motifs/nvfp4_q8_1_x4.loom). Without this, they take
-// the generic f16 WMMA kernels (common.mul_mat.f32_f32_wmma, common.mul_mat_swiglu.f32_f32_wmma), which dequantize
-// every weight to f16.
+// Prompt matmuls (256..2048 tokens in multiples of 256, input sizes in multiples of 256) on AMD's q8_1 x4 int8 WMMA
+// kernel (ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256) for the formats motifs/nvfp4_q8_1_x4.loom stages: NVFP4
+// (format 43, signed E2M1 codes, one scale per 16 values), Q2_0 (42, signed -1..2) and the 32-value block formats
+// Q8_0, Q4_0, Q5_0, IQ4_NL, MXFP4 (signed) and Q4_1, Q5_1 (unsigned, with the block minimum as the K32 correction).
+// Activations are quantized to q8_1 x4 once. Without this, these formats take the generic f16 WMMA kernels
+// (common.mul_mat.f32_f32_wmma, common.mul_mat_swiglu.f32_f32_wmma), which dequantize every weight to f16.
 
 #include "dispatch-mul-mat-nvfp4.h"
 
@@ -88,6 +88,33 @@ static bool match_q2_0_q8_1_x4_prefill_dispatch(const DispatchMatchContext & con
                                               CommonMulMatWeightFormat::Q2_0);
 }
 
+// The 32-value block formats, one scale (and for Q4_1 / Q5_1 one minimum) per K32 block of the kernel.
+static bool match_legacy_q8_1_x4_prefill_dispatch(const DispatchMatchContext & context,
+                                                  DispatchMatch &              dispatch_match) {
+    if (context.root_node == nullptr || context.root_node->inputs.empty()) {
+        return false;
+    }
+    const Value * weight = common_graph_value(context.graph, context.root_node->inputs[0]);
+    if (weight == nullptr) {
+        return false;
+    }
+    switch (weight->type) {
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_MXFP4:
+            break;
+        default:
+            return false;
+    }
+    CommonMulMatWeightFormat format;
+    return common_mul_mat_format_for_type(weight->type, format) &&
+           match_own_q8_1_x4_prefill_dispatch(context, dispatch_match, weight->type, format);
+}
+
 }  // namespace
 
 void register_nvfp4_prefill_dispatches(DispatchRegistryBuilder & registry) {
@@ -107,6 +134,14 @@ void register_nvfp4_prefill_dispatches(DispatchRegistryBuilder & registry) {
         300,
         DispatchSource::Common,
         match_q2_0_q8_1_x4_prefill_dispatch,
+    });
+    registry.add({
+        "common.mul_mat.legacy_q8_1_x4_prefill",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        300,
+        DispatchSource::Common,
+        match_legacy_q8_1_x4_prefill_dispatch,
     });
 }
 
