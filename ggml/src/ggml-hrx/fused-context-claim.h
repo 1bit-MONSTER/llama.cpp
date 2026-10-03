@@ -24,7 +24,8 @@
 //
 // - the MoE router chain SOFT_MAX -> ARGSORT -> GET_ROWS -> SUM_ROWS -> CLAMP
 //   (llm.moe_router.top8_f32 and the decode projection fusion);
-// - the gated-delta-net chain L2_NORM, SOFTPLUS and GATED_DELTA_NET;
+// - the gated-delta-net chain L2_NORM, SOFTPLUS and GATED_DELTA_NET (the L2_NORM is 4-D when a ubatch holds
+//   several sequences);
 // - the per-head RMS_NORM and ROPE of the attention fusions (head_dim 64..256).
 //
 // With the standalone test alone these nodes went to the CPU, which split every MoE
@@ -81,13 +82,24 @@ inline bool fused_context_is_3d(const ggml_tensor * op) {
     return op->ne[3] == 1;
 }
 
+// Sequences per ubatch the gated delta net fusion takes (llama-server --parallel): the q/k L2_NORM of a
+// multi-sequence ubatch is 4-D, [128, H_k, n_seq_tokens, n_seqs], a view of the conv output (SSM_CONV + SiLU).
+// 4 is also the most sequences the SSM_CONV dispatches take (dispatch-ssm-conv.cpp).
+inline constexpr int64_t kFusedContextGdnMaxSequences = 4;
+
+inline bool fused_context_gdn_multiseq_l2_norm(const ggml_tensor * op) {
+    return op->op == GGML_OP_L2_NORM && op->ne[0] == 128 && op->ne[3] > 1 &&
+           op->ne[3] <= kFusedContextGdnMaxSequences && op->src[0] != nullptr &&
+           fused_context_producer_op(op->src[0]) == GGML_OP_UNARY;
+}
+
 inline bool fused_context_is_head_row(const ggml_tensor * op) {
     return op->ne[0] == 64 || op->ne[0] == 128 || op->ne[0] == 256;
 }
 
 // true when op is a node that only a fused dispatch executes, with the producers of that fused pattern
 inline bool fused_context_claim(const ggml_tensor * op) {
-    if (op == nullptr || !fused_context_is_3d(op)) {
+    if (op == nullptr || (!fused_context_is_3d(op) && !fused_context_gdn_multiseq_l2_norm(op))) {
         return false;
     }
     switch (op->op) {

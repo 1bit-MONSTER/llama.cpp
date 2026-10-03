@@ -256,6 +256,7 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/llm/dispatch-attention-qkv.h
     dispatch_registration/llm/dispatch-gated-delta-net.cpp
     dispatch_registration/llm/dispatch-gated-delta-net.h
+    dispatch_registration/llm/dispatch-gdn-multiseq.h
     dispatch_registration/llm/dispatch-ssm-conv.cpp
     dispatch_registration/llm/dispatch-ssm-conv.h
     dispatch_registration/qwen/dispatch-llm-profiles.h

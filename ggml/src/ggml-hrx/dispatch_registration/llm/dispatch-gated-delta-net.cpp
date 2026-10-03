@@ -1,4 +1,5 @@
 #include "dispatch-gated-delta-net.h"
+#include "dispatch-gdn-multiseq.h"
 
 #include "../common/dispatch-mul-mat-common.h"
 #include "../common/dispatch-rmsnorm.h"
@@ -181,7 +182,7 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
     const int64_t sequence_count = raw_q->ne[3];
     const int64_t head_count     = v->ne[1];
     if (width != 128 || q_head_count <= 0 || q_head_count > 4096 || head_count <= 0 || head_count > 4096 ||
-        token_count < 1 || token_count > 512 || sequence_count < 1 || sequence_count > 3) {
+        token_count < 1 || token_count > 512 || sequence_count < 1 || sequence_count > ggml_hrx_gdn_max_sequences()) {
         return {};
     }
     const int64_t hidden_size = width * (2 * q_head_count + head_count);
@@ -515,7 +516,7 @@ static GatedDeltaNetMatch match_direct_gated_delta_net(const Graph & graph, cons
     const int64_t sequence_count = q_norm->ne[3];
     const int64_t head_count     = v->ne[1];
     if (width != 128 || q_head_count <= 0 || q_head_count > 4096 || head_count <= 0 || head_count > 4096 ||
-        token_count < 1 || token_count > 512 || sequence_count < 1 || sequence_count > 3) {
+        token_count < 1 || token_count > 512 || sequence_count < 1 || sequence_count > ggml_hrx_gdn_max_sequences()) {
         return {};
     }
 
@@ -800,6 +801,11 @@ static bool match_gated_delta_net_dispatch(const DispatchMatchContext & context,
         epilogue.bindings.push_back({ match.gate_flat->id, 0, match.gate_flat->byte_count });
         epilogue.bindings.push_back({ match.beta->id, 0, match.beta->byte_count });
         dispatch_match.dispatches.push_back(std::move(epilogue));
+    }
+
+    if (ggml_hrx_gdn_per_sequence(match, can_fuse_projection_epilogue, fuse_rmsnorm_gate,
+                                  configure_gated_delta_net_kernel, dispatch_match)) {
+        return true;
     }
 
     if (match.snapshot_count == 1) {
