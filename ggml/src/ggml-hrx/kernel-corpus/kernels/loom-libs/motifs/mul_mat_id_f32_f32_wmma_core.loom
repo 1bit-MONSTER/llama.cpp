@@ -76,7 +76,16 @@ template.def<@ggml.mul_mat_id_f32_f32_wmma.core> device @ggml_mul_mat_id_f32_f32
   %c0_i32 = scalar.constant 0 : i32
   %cn1_i32 = scalar.constant -1 : i32
   %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %zero_accumulator = vector.constant 0.0 : vector<8xf16>
+  // The wave64 16x16x16 f16 MMA offered by the rdna3_5 descriptor set
+  // accumulates in f16 (the f32-accumulator variant is rejected: matrix
+  // constraint 'wave_size'). Chained over the whole K dimension it re-rounds
+  // the running sum to f16 at every 16-wide step and drifts upward once the
+  // sum passes ~32 products' worth: a constant 0.0234375 weight gives +17% at
+  // K=2816 and +22% at K=4096 instead of the exact K x 0.0234375.
+  // The f16 fragment therefore only ever accumulates one 256-wide K tile and
+  // every tile is folded into these f32 accumulators, which carry the sum.
+  %zero_accumulator = vector.constant 0.0 : vector<8xf32>
+  %zero_step_accumulator = vector.constant 0.0 : vector<8xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -160,14 +169,17 @@ template.def<@ggml.mul_mat_id_f32_f32_wmma.core> device @ggml_mul_mat_id_f32_f32
     %expert_byte_base = index.scale %bounded_expert, %weight_expert_bytes : index, offset -> offset
     %subgroup_channel_add = index.mul %subgroup, %c32 : index
     %subgroup_channel1 = index.add %subgroup_channel_add, %c16 : index
-    %init00 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf16>
-    %init01 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf16>
-    %init10 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf16>
-    %init11 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf16>
+    %init00 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
+    %init01 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
+    %init10 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
+    %init11 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
+    // Zero accumulator operand: each K tile restarts the f16 fragment from
+    // here, so the fragment never holds more than one 256-wide K tile.
+    %zero_step_fragment = vector.fragment<init> %zero_step_accumulator shape [%m, %n] : vector<8xf16>
     %iq4nl_table = func.call @ggml_iq4nl_table_i8() : () -> (vector<16xi8>)
     %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15 = func.call @ggml_iq3s_grid_f32_halves() : () -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
-    %result00, %result01, %result10, %result11 = scf.for %quant_block = [%c0 to %quant_block_count step %c1](%block_acc00 = %init00 : vector<8xf16>, %block_acc01 = %init01 : vector<8xf16>, %block_acc10 = %init10 : vector<8xf16>, %block_acc11 = %init11 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
-      %block_result00, %block_result01, %block_result10, %block_result11 = scf.for %quant_group = [%c0 to %c8 step %c1](%acc00 = %block_acc00 : vector<8xf16>, %acc01 = %block_acc01 : vector<8xf16>, %acc10 = %block_acc10 : vector<8xf16>, %acc11 = %block_acc11 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
+    %result00, %result01, %result10, %result11 = scf.for %quant_block = [%c0 to %quant_block_count step %c1](%block_acc00 = %init00 : vector<8xf32>, %block_acc01 = %init01 : vector<8xf32>, %block_acc10 = %init10 : vector<8xf32>, %block_acc11 = %init11 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+      %group_result00, %group_result01, %group_result10, %group_result11 = scf.for %quant_group = [%c0 to %c8 step %c1](%acc00 = %zero_step_fragment : vector<8xf16>, %acc01 = %zero_step_fragment : vector<8xf16>, %acc10 = %zero_step_fragment : vector<8xf16>, %acc11 = %zero_step_fragment : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
         %block_k_base = index.mul %quant_block, %c256 : index
         %group_k_add = index.mul %quant_group, %c32 : index
         %k_origin = index.add %block_k_base, %group_k_add : index
@@ -232,7 +244,17 @@ template.def<@ggml.mul_mat_id_f32_f32_wmma.core> device @ggml_mul_mat_id_f32_f32
         kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
         scf.yield %next00, %next01, %next10, %next11 : vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>
       }
-      scf.yield %block_result00, %block_result01, %block_result10, %block_result11 : vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>
+      // The K tile is done: widen its f16 partial into the f32 carries. The
+      // f16 fragment never spans more than this one tile.
+      %wide00 = vector.extf %group_result00 : vector<8xf16> to vector<8xf32>
+      %wide01 = vector.extf %group_result01 : vector<8xf16> to vector<8xf32>
+      %wide10 = vector.extf %group_result10 : vector<8xf16> to vector<8xf32>
+      %wide11 = vector.extf %group_result11 : vector<8xf16> to vector<8xf32>
+      %next_block00 = vector.addf %block_acc00, %wide00 : vector<8xf32>
+      %next_block01 = vector.addf %block_acc01, %wide01 : vector<8xf32>
+      %next_block10 = vector.addf %block_acc10, %wide10 : vector<8xf32>
+      %next_block11 = vector.addf %block_acc11, %wide11 : vector<8xf32>
+      scf.yield %next_block00, %next_block01, %next_block10, %next_block11 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
     }
     %publish_route0 = index.div %lane, %c4 : index
     %publish_route = index.assume %publish_route0 [range(%publish_route0, 0, 15)] : index
@@ -274,7 +296,8 @@ template.def<@ggml.mul_mat_id_f32_f32_wmma.core> device @ggml_mul_mat_id_f32_f32
     %writes01 = scalar.andi %assignment1_nonnegative, %valid_channel0 : i1
     %writes10 = scalar.andi %assignment0_nonnegative, %valid_channel1 : i1
     %writes11 = scalar.andi %assignment1_nonnegative, %valid_channel1 : i1
-    vector.fragment.store<result> %result00, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<8xf16>, view<16x16xf16, %result_fragment_layout>
+    %result00_narrow = vector.fptrunc %result00 : vector<8xf32> to vector<8xf16>
+    vector.fragment.store<result> %result00_narrow, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<8xf16>, view<16x16xf16, %result_fragment_layout>
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
     scf.if %writes00 {
       %values = vector.load %result_physical_view[%publish_route, %publish_channel_add] : view<16x16xf16> -> vector<4xf16>
@@ -282,7 +305,8 @@ template.def<@ggml.mul_mat_id_f32_f32_wmma.core> device @ggml_mul_mat_id_f32_f32
       template.apply<@ggml.mul_mat_id_f32_f32_wmma.publish_vector4>(%writes00, %bounded_assignment0, %assignment_token0, %assignment_route0, %channel0, %bounded_token_count, %bounded_route_count, %bounded_output_size, %wide, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
     }
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
-    vector.fragment.store<result> %result01, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<8xf16>, view<16x16xf16, %result_fragment_layout>
+    %result01_narrow = vector.fptrunc %result01 : vector<8xf32> to vector<8xf16>
+    vector.fragment.store<result> %result01_narrow, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<8xf16>, view<16x16xf16, %result_fragment_layout>
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
     scf.if %writes01 {
       %values = vector.load %result_physical_view[%publish_route, %publish_channel_add] : view<16x16xf16> -> vector<4xf16>
@@ -290,7 +314,8 @@ template.def<@ggml.mul_mat_id_f32_f32_wmma.core> device @ggml_mul_mat_id_f32_f32
       template.apply<@ggml.mul_mat_id_f32_f32_wmma.publish_vector4>(%writes01, %bounded_assignment1, %assignment_token1, %assignment_route1, %channel0, %bounded_token_count, %bounded_route_count, %bounded_output_size, %wide, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
     }
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
-    vector.fragment.store<result> %result10, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<8xf16>, view<16x16xf16, %result_fragment_layout>
+    %result10_narrow = vector.fptrunc %result10 : vector<8xf32> to vector<8xf16>
+    vector.fragment.store<result> %result10_narrow, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<8xf16>, view<16x16xf16, %result_fragment_layout>
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
     scf.if %writes10 {
       %values = vector.load %result_physical_view[%publish_route, %publish_channel_add] : view<16x16xf16> -> vector<4xf16>
@@ -298,7 +323,8 @@ template.def<@ggml.mul_mat_id_f32_f32_wmma.core> device @ggml_mul_mat_id_f32_f32
       template.apply<@ggml.mul_mat_id_f32_f32_wmma.publish_vector4>(%writes10, %bounded_assignment0, %assignment_token0, %assignment_route0, %channel1, %bounded_token_count, %bounded_route_count, %bounded_output_size, %wide, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
     }
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
-    vector.fragment.store<result> %result11, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<8xf16>, view<16x16xf16, %result_fragment_layout>
+    %result11_narrow = vector.fptrunc %result11 : vector<8xf32> to vector<8xf16>
+    vector.fragment.store<result> %result11_narrow, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<8xf16>, view<16x16xf16, %result_fragment_layout>
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
     scf.if %writes11 {
       %values = vector.load %result_physical_view[%publish_route, %publish_channel_add] : view<16x16xf16> -> vector<4xf16>
