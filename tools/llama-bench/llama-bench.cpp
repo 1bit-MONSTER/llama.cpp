@@ -1272,6 +1272,10 @@ struct cmd_params_instance {
         mparams.main_gpu      = main_gpu;
         mparams.tensor_split  = tensor_split.data();
         mparams.no_host       = no_host;
+        // LLAMA_BENCH_NO_REPACK=1: no CPU repack copies (big file-backed tensors stay mapped)
+        if (const char * e = getenv("LLAMA_BENCH_NO_REPACK"); e != nullptr && atoi(e) != 0) {
+            mparams.use_extra_bufts = false;
+        }
 
         if (n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {
