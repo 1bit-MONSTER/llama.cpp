@@ -42,6 +42,7 @@ class LoomCompiledKernel {
   private:
     friend class LoomSyncJit;
     friend class LoomAsyncJit;
+    friend struct HipCodeObjectLoader;
 
     const LoomKernelCompileRequest & request() const { return request_; }
 

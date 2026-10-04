@@ -321,6 +321,7 @@ ggml_add_backend_library(ggml-hrx
 target_link_libraries(ggml-hrx PRIVATE ggml-hrx-kernel-corpus hrx::hrx loomc::loomc)
 target_include_directories(ggml-hrx PRIVATE . "${CMAKE_CURRENT_BINARY_DIR}" ../../../vendor)
 target_compile_definitions(ggml-hrx PRIVATE GGML_USE_HRX)
+include("${CMAKE_CURRENT_SOURCE_DIR}/hip/ggml-hrx-hip.cmake")
 
 if (GGML_HRX_BUNDLE_RUNTIME_LIBS)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BundleRuntime.cmake")
