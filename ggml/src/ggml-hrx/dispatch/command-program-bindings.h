@@ -23,6 +23,10 @@ struct CommandProgramBinding {
     void *       host_data  = nullptr;
     bool         weight     = false;
     bool         empty_value = false;
+    // ggml graph input (GGML_TENSOR_FLAG_INPUT). A kernel may rewrite its device copy in place (the Qwen
+    // attention metadata kernel regenerates positions, cache indices and the mask), but that copy is never
+    // written back to the caller's host tensor: ggml reuses that memory for the next graph's inputs.
+    bool         graph_input = false;
 
     bool requires_materialization() const { return host_data != nullptr; }
 };

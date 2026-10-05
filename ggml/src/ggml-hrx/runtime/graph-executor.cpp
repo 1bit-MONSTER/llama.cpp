@@ -64,6 +64,9 @@ CommandProgramBindings GraphExecutor::bind_external_value_buffers(const GraphPro
             binding.capacity   = value_binding.capacity;
             binding.weight     = value_binding.weight;
             binding.empty_value = ggml_nbytes(external.tensor) == 0;
+            binding.graph_input = (external.tensor->flags & GGML_TENSOR_FLAG_INPUT) != 0 ||
+                                  (external.tensor->view_src != nullptr &&
+                                   (external.tensor->view_src->flags & GGML_TENSOR_FLAG_INPUT) != 0);
         } else {
             status.log("external value %d is not bound", external.value.value);
         }

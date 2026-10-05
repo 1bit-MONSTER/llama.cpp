@@ -643,7 +643,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         staging.value                        = binding.value.value;
         staging.host_data                    = static_cast<uint8_t *>(binding.host_data) + binding.offset;
         staging.upload                       = access.read;
-        staging.download                     = access.write;
+        staging.download                     = access.write && !binding.graph_input;
         if (staging.upload && context.host_buffers != nullptr) {
             staging.source_host_buffer = context.host_buffers->find(staging.host_data, staging.length);
         }
