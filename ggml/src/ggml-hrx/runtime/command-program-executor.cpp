@@ -934,10 +934,10 @@ static Status flush_stream_commands(const CommandProgramExecutionContext & conte
     return status;
 }
 
-static Status wait_stream_commands(const CommandProgramExecutionContext & context, const char * label) {
-    static thread_local WaitHistory graph_wait_history;
+static Status wait_stream_commands(const CommandProgramExecutionContext & context, const char * label,
+                                   const void * work) {
     Status status;
-    if (ErrorResult error = take_status(stream_wait_sleeping(context.stream, graph_wait_history))) {
+    if (ErrorResult error = take_status(stream_wait_sleeping(context.stream, wait_history_for(work)))) {
         status.log("%s failed: %s", label, error->c_str());
     }
     return status;
@@ -1903,7 +1903,7 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
         result.event = HrxGraphReplayEvent::LaunchFailed;
         return result;
     }
-    Status replay_wait_status = wait_stream_commands(context, "wait for HRX graph replay commands");
+    Status replay_wait_status = wait_stream_commands(context, "wait for HRX graph replay commands", recorded.exec);
     if (!replay_wait_status.success()) {
         result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
         result.status.append(replay_wait_status);
