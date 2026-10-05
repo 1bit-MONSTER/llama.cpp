@@ -26,6 +26,14 @@
 // through 3-10 ms tokens cost small models 2-5% of decode (the host work between tokens then runs
 // on a core that has clocked down), and they were never the thermal problem.
 //
+// The estimate must not feed on its own sleep. A wait that is still asleep when the work finishes
+// records the sleep, not the work, so the next estimate was 80% of a stale one: after a 512-token
+// prompt graph (98-123 ms waits on Qwen3-4B) the 13 ms decode tokens slept 98, 78, 63, 50, ... ms,
+// an 0.8x decay over ~10 tokens (measured 2026-10-04). Two guards: a wait that finds the work
+// already done when it wakes forgets the history instead of recording the sleep (the next wait
+// blocks and measures the work), and the graph replay wait keeps one history per replayed graph
+// (wait_history_for), so prompt graph waits never set the sleep of a decode graph.
+//
 // ONEBIT_HRX_BLOCKING_WAIT=1 turns the sleep off.
 
 #include "hrx-sleeping-wait.h"
@@ -35,6 +43,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <sys/prctl.h>
+#include <unordered_map>
 
 namespace ggml::hrx {
 
@@ -77,8 +86,9 @@ hrx_status_t stream_wait_sleeping(hrx_stream_t stream, WaitHistory & history) {
     if (blocking_wait() || stream == nullptr) {
         return hrx_stream_wait(stream);
     }
-    const auto    start    = Clock::now();
-    const int64_t expected = expected_ns(history);
+    const auto    start     = Clock::now();
+    const int64_t expected  = expected_ns(history);
+    bool          overslept = false;
     if (expected > kSleepAboveNs) {
         bool         complete = false;
         hrx_status_t status   = hrx_stream_query(stream, &complete);
@@ -87,15 +97,33 @@ hrx_status_t stream_wait_sleeping(hrx_stream_t stream, WaitHistory & history) {
         }
         if (!complete) {
             sleep_ns(expected * 4 / 5);
+            status = hrx_stream_query(stream, &complete);
+            if (!hrx_status_is_ok(status)) {
+                return status;
+            }
+            overslept = complete;
         }
     }
     hrx_status_t status = hrx_stream_wait(stream);
     if (hrx_status_is_ok(status)) {
-        history.duration_ns[history.count % history.duration_ns.size()] =
-            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count();
-        history.count++;
+        if (overslept) {
+            history.count = 0;
+        } else {
+            history.duration_ns[history.count % history.duration_ns.size()] =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count();
+            history.count++;
+        }
     }
     return status;
+}
+
+WaitHistory & wait_history_for(const void * key) {
+    // Bounded: a replayed graph is re-recorded (new key) when the transient arena moves.
+    thread_local std::unordered_map<const void *, WaitHistory> histories;
+    if (histories.size() >= 256 && histories.find(key) == histories.end()) {
+        histories.clear();
+    }
+    return histories[key];
 }
 
 hrx_status_t stream_synchronize_sleeping(hrx_stream_t stream, WaitHistory & history) {

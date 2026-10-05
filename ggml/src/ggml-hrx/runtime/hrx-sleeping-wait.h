@@ -32,6 +32,10 @@ struct WaitHistory {
 // HSA signal wait, which keeps a CPU core busy. See hrx-sleeping-wait.cpp.
 hrx_status_t stream_wait_sleeping(hrx_stream_t stream, WaitHistory & history);
 
+// This thread's WaitHistory for the work identified by `key` (a replayed graph), so waits on
+// different work do not share one estimate.
+WaitHistory & wait_history_for(const void * key);
+
 // hrx_stream_synchronize (flush, then wait) with the sleeping wait.
 hrx_status_t stream_synchronize_sleeping(hrx_stream_t stream, WaitHistory & history);
 
