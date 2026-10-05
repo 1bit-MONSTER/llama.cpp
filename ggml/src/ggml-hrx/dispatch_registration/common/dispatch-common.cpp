@@ -25,6 +25,7 @@
 #include "dispatch-softplus.h"
 #include "dispatch-swiglu-oai.h"
 #include "dispatch-unary.h"
+#include "hip/hip-dispatches.h"
 
 namespace ggml::hrx {
 
@@ -54,6 +55,7 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_swiglu_oai_dispatches(registry);
     register_unary_dispatch(registry);
     register_rmsnorm_dispatches(registry);
+    register_hip_dispatches(registry);
 }
 
 }  // namespace ggml::hrx

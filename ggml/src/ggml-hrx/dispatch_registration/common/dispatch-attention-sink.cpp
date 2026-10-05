@@ -22,6 +22,7 @@
 
 #include "dispatch-mul-mat-common.h"
 #include "graph/op-params.h"
+#include "hip/hip-dispatches.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cstdint>
@@ -100,6 +101,15 @@ bool append_attention_sink_dispatch(const Graph & graph, const GraphNode & node,
         if (overlaps(graph, *input, *output)) {
             return false;
         }
+    }
+
+    // A HIP kernel add-on may take the rescale (hip/hip-dispatches.h).
+    if (Dispatch hip_dispatch; hip_attention_sink_dispatch({ query, key, mask, sinks, output, tokens, key_count,
+                                                             query_head_count, key_value_head_count, qk_head_size,
+                                                             value_head_size, params->scale },
+                                                           hip_dispatch)) {
+        dispatch_match.dispatches.push_back(std::move(hip_dispatch));
+        return true;
     }
 
     Dispatch dispatch;

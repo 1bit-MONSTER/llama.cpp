@@ -1,4 +1,5 @@
 #include "kernel-corpus.h"
+#include "hip/hip-kernel-registry.h"
 
 #include <algorithm>
 #include <cstring>
@@ -97,6 +98,9 @@ KernelResolveResult resolve_kernel_definition(const KernelCorpus & corpus,
                                               uint64_t             kernel_id) {
     if (kernel_id == kUncatalogedKernelId) {
         return { KernelResolveStatus::UncatalogedKernel, nullptr };
+    }
+    if (const KernelDefinition * hip = find_hip_kernel_definition(kernel_id)) {
+        return { KernelResolveStatus::Found, hip };
     }
     const KernelDefinition * first_match     = nullptr;
     const KernelDefinition * default_variant = nullptr;

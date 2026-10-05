@@ -2,6 +2,8 @@
 
 #include "ggml-impl.h"
 #include "hrx-interop-utils.h"
+#include "hip/hip-kernel-loader.h"
+#include "hip/hip-kernel-registry.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -280,6 +282,13 @@ KernelExecutableRef KernelExecutableCache::get_or_compile(const KernelExecutable
         const auto                  found = cache_.find(key);
         if (found != cache_.end()) {
             ref.entry = found->second;
+            return ref;
+        }
+        if (is_hip_kernel_definition(definition)) {
+            auto entry = std::make_shared<KernelExecutableCacheEntry>(
+                key, definition, dispatch, make_hip_compiled_kernel(key, definition, dispatch, context.target));
+            cache_.emplace(key, entry);
+            ref.entry = std::move(entry);
             return ref;
         }
         std::string error_message;
