@@ -1,4 +1,5 @@
 #include "transient-allocator.h"
+#include "transient-reuse-guard.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -442,7 +443,9 @@ TransientPlan TransientAllocator::allocate(const Graph &                graph,
             }
         }
     }
-    pack_transient_intervals(intervals, plan);
+    std::vector<TransientReuseLifetime> lifetimes;  // transient-reuse-guard.h
+    for (const TransientAllocationInterval & interval : intervals) lifetimes.push_back({ interval.allocation, interval.first_use, interval.last_use });
+    if (!pack_transients_without_false_dependencies(commands, lifetimes, plan)) pack_transient_intervals(intervals, plan);
     plan.arena_size = align_up(plan.arena_size, plan.arena_alignment);
     return plan;
 }

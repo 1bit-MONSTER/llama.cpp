@@ -4,6 +4,7 @@
 #include "dispatch/command-program-resolver.h"
 #include "ggml-impl.h"
 #include "hrx-interop-utils.h"
+#include "runtime/graph-record-order.h"
 #include "runtime/hrx-sleeping-wait.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/transient-arena.h"
@@ -1475,8 +1476,9 @@ static RecordedCommandGraph record_prepared_command_graph(const CommandProgramEx
     if (!recorded.status.success()) {
         return recorded;
     }
+    const std::vector<PreparedCommand> ordered = order_prepared_commands_for_graph(prepared.commands);  // graph-record-order.h
     recorded.status.append(
-        record_prepared_command_list(recorded.graph, dependencies, prepared.commands, recorded.dispatch_count));
+        record_prepared_command_list(recorded.graph, dependencies, ordered.empty() ? prepared.commands : ordered, recorded.dispatch_count));
     if (!recorded.status.success()) {
         return recorded;
     }

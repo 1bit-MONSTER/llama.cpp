@@ -185,6 +185,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch/dispatch.h
     dispatch/transient-allocator.cpp
     dispatch/transient-allocator.h
+    dispatch/transient-reuse-guard.cpp
+    dispatch/transient-reuse-guard.h
     dispatch_registration/common/dispatch-binary.cpp
     dispatch_registration/common/dispatch-binary.h
     dispatch_registration/common/dispatch-common.cpp
@@ -299,6 +301,8 @@ ggml_add_backend_library(ggml-hrx
     runtime/graph-program-cache.cpp
     runtime/graph-program-cache-limit.cpp
     runtime/graph-program-cache-limit.h
+    runtime/graph-record-order.cpp
+    runtime/graph-record-order.h
     runtime/graph-program-cache.h
     runtime/host-memory.cpp
     runtime/host-memory.h
