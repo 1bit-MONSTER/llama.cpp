@@ -111,6 +111,8 @@ add_dependencies(ggml-hrx-kernel-corpus ggml-hrx-hip-code-objects)
 target_sources(ggml-hrx PRIVATE
     hip/hip-kernel-loader.cpp
     hip/hip-kernel-loader.h
+    hip/hip-capabilities.cpp
+    hip/hip-capabilities.h
     hip/hip-dispatches.cpp
     hip/hip-dispatches.h
     hip/dispatch-hip-scale.cpp

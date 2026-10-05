@@ -8,6 +8,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "graph/op-params.h"
+#include "hip/hip-capabilities.h"
 #include "hrx_runtime.h"
 #include "kernel-corpus/kernel-corpus.h"
 #include "loom-jit.h"
@@ -640,7 +641,7 @@ static bool eager_capability_declared(enum ggml_op op) {
         case GGML_OP_VIEW:
             return true;
         default:
-            return false;
+            return ggml::hrx::hip_eager_op_declared(op);  // ops a HIP matcher declared (hip/hip-capabilities.h)
     }
 }
 

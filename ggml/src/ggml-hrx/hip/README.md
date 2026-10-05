@@ -100,5 +100,9 @@ The add-on defines `ggml::hrx::ggml_hrx_hip_addon_register(DispatchRegistryBuild
 directory, once per registry build. Add-on sources include `hip/hip-dispatches.h` and
 `hip/hip-kernel-registry.h` like the example does. Kernel stems must not repeat a stem from
 `kernels/` (configure fails). An add-on can also take the attention-sink rescale that follows
-FlashAttention through `set_hip_attention_sink_hook`. Without the option nothing changes: only
-the kernels and matchers in this directory are built.
+FlashAttention through `set_hip_attention_sink_hook`. A matcher for an op that ggml-hrx's
+`supports_op` does not list by itself declares the op from its `register_*` function with
+`hip_declare_eager_op(op)` (`hip/hip-capabilities.h`); `eager_capability_declared` consults that
+set for every op outside its built-in list, so the node reaches the dispatcher instead of another
+backend. Without the option nothing changes: only the kernels and matchers in this directory are
+built, and the declared-op set stays empty.
