@@ -1966,6 +1966,24 @@ bool execute_prepared_command_program(const CommandProgramExecutionContext & con
         return false;
     }
     HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-download-post");
+    // Uploads from registered host buffers are device-timeline copies that read
+    // the host memory when they execute. ggml writes the next graph's inputs
+    // into that same memory as soon as graph_compute returns, so wait for this
+    // program here, as the graph replay path does after its launch.
+    bool reads_registered_host_memory = false;
+    for (const HostStagingBuffer & staging : commands.host_staging) {
+        reads_registered_host_memory =
+            reads_registered_host_memory || (staging.upload && staging.source_host_buffer.valid());
+    }
+    if (reads_registered_host_memory) {
+        static thread_local WaitHistory registered_upload_wait_history;
+        if (ErrorResult error =
+                take_status(stream_synchronize_sleeping(context.stream, registered_upload_wait_history))) {
+            GGML_LOG_ERROR("%s: wait for HRX command program reading host memory: %s\n", __func__, error->c_str());
+            return false;
+        }
+        mark_graph_replay_synchronized(context);
+    }
     return true;
 }
 
