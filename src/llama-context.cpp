@@ -1723,7 +1723,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_vocab = vocab.n_tokens();
-    const int64_t n_embd  = hparams.n_embd_inp();
+    // MTP batches carry the target hidden state, which is n_embd_out wide (4 * n_embd for qwen4exp)
+    const bool    mtp_embd = cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && batch_inp.embd;
+    const int64_t n_embd  = mtp_embd ? hparams.n_embd_out() : hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
     const bool output_all   = cparams.embeddings;
@@ -2302,8 +2304,10 @@ void llama_context::output_reorder() {
         }
 
         if (embd_nextn.size > 0) {
-            for (uint64_t k = 0; k < n_embd; k++) {
-                std::swap(embd_nextn.data[i0*n_embd + k], embd_nextn.data[i1*n_embd + k]);
+            // nextn rows are n_embd_out wide (4 * n_embd for qwen4exp)
+            const uint64_t n_out = model.hparams.n_embd_out();
+            for (uint64_t k = 0; k < n_out; k++) {
+                std::swap(embd_nextn.data[i0*n_out + k], embd_nextn.data[i1*n_out + k]);
             }
         }
 

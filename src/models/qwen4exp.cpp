@@ -38,6 +38,9 @@ static const llama_model & qwen4exp_shared_model(const llama_cparams & cparams, 
 }
 
 void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
+    // this tree reads the MTP block count per architecture (qwen35 does the same)
+    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
+
     // the trunk must keep at least one block: n_layer() == n_layer_all - n_layer_nextn
     if (hparams.n_layer_nextn >= hparams.n_layer_all) {
         throw std::runtime_error(format("%s must be less than %s, got %u",
