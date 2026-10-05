@@ -2,7 +2,12 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
-set(CMAKE_CXX_STANDARD 26)
+# C++26 where the compiler has it (amdclang 23, g++ 15); older toolchains keep C++17
+if("cxx_std_26" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
+    set(CMAKE_CXX_STANDARD 26)
+else()
+    set(CMAKE_CXX_STANDARD 17)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED true)
 # no C++20 module scanning: no module sources, and some toolchains lack clang-scan-deps
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
