@@ -35,7 +35,7 @@ dispatch a HIP kernel the same way it dispatches a Loom kernel.
 | `hip-dispatches.{h,cpp}` | **the one place HIP matchers are registered** |
 | `dispatch-hip-scale.cpp`, `kernels/hip_scale_f32.hip` | worked example (GGML_OP_SCALE, opt-in `GGML_HRX_HIP_EXAMPLE_SCALE=1`) |
 | `hip-smoke.cpp`, `kernels/hip_smoke.hip` | `ggml-hrx-hip-smoke`: libhrx-only load/dispatch/check of a code object |
-| `drafts/` | kernels that are not built yet |
+| `GGML_HRX_HIP_ADDON_DIR` | optional out-of-tree kernel add-on, built in the same way (see "Kernel add-ons") |
 
 Hooks in upstream ggml-hrx files are one line each: the `include()` in `CMakeLists.txt`, the
 HIP lookup in `resolve_kernel_definition` (kernel-corpus.cpp), the HIP branch in
@@ -60,11 +60,18 @@ loom-kernel-jit.h and `register_hip_dispatches` in dispatch-common.cpp.
    holds only the workload parameters, so list the parameters that change the grid there and
    nothing else.
 3. **Register**: add one line to `register_hip_dispatches` in `hip-dispatches.cpp` and the
-   matcher source to `target_sources(ggml-hrx ...)` in `ggml-hrx-hip.cmake`.
+   matcher source to `target_sources(ggml-hrx ...)` in `ggml-hrx-hip.cmake`. (In an add-on,
+   the line goes in its `ggml_hrx_hip_addon_register` and the source is picked up by the glob.)
 4. **Check** (loom worker rules): `test-backend-ops -o <OP> -b HRX0`, run several times, with
    `GGML_HRX_LOG_DISPATCH=1` to confirm `hip.<name>` matched. Add a known-answer probe, a model
    KLD or teacher-forced comparison, and repeated identical requests. Keep a HIP kernel only
    if an interleaved A/B shows it at least as fast as the path it replaces.
+
+**Trap: fused registrations always come first.** For a root op the registry tries every
+`DispatchMatchKind::Fused` registration before any `SingleOp` one; `priority` only orders
+registrations within the same kind. A `SingleOp` HIP matcher with a high priority still loses
+to any fused Loom matcher that takes the node, and a fused HIP matcher wins over every single-op
+matcher whatever its priority. Check `GGML_HRX_LOG_DISPATCH=1` rather than reasoning from priorities.
 
 At load, a missing (stem, target) code object fails with `no <target> code object '<stem>'`.
 A kernel ABI that differs from the registration (binding count or constant bytes) fails with
@@ -76,3 +83,22 @@ A kernel ABI that differs from the registration (binding count or constant bytes
 `GGML_HRX_HIP_TARGETS` (default `gfx1151`, semicolon list), `GGML_HRX_HIP_FLAGS` (default `-O3`).
 Look at the ISA with
 `llvm-objdump -d --mcpu=gfx1151 build/ggml/src/ggml-hrx/hip-code-objects/<stem>.gfx1151.hsaco`.
+
+## Kernel add-ons
+
+Kernels and matchers can live outside this tree. Configure with
+`-DGGML_HRX_HIP_ADDON_DIR=<dir>` (absolute, or relative to the top source directory):
+
+| add-on path | what the build does with it |
+|---|---|
+| `<dir>/kernels/*.hip` | compiled and embedded with `kernels/*.hip` (same targets, flags and lookup by stem; `-I` the kernel's own directory) |
+| `<dir>/*.cpp`, `<dir>/*.h` | compiled into ggml-hrx, with `GGML_HRX_HIP_ADDON` defined |
+| `<dir>/addon.cmake` | included at the end of `ggml-hrx-hip.cmake` if present (extra tools; relative source paths resolve against `ggml/src/ggml-hrx`) |
+
+The add-on defines `ggml::hrx::ggml_hrx_hip_addon_register(DispatchRegistryBuilder &)`
+(declared in `hip-dispatches.h`); `register_hip_dispatches` calls it after the matchers in this
+directory, once per registry build. Add-on sources include `hip/hip-dispatches.h` and
+`hip/hip-kernel-registry.h` like the example does. Kernel stems must not repeat a stem from
+`kernels/` (configure fails). An add-on can also take the attention-sink rescale that follows
+FlashAttention through `set_hip_attention_sink_hook`. Without the option nothing changes: only
+the kernels and matchers in this directory are built.

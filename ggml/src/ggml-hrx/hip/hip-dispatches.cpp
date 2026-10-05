@@ -16,9 +16,25 @@
 #include "hip/hip-dispatches.h"
 
 namespace ggml::hrx {
+namespace {
+
+HipAttentionSinkHook g_attention_sink_hook = nullptr;
+
+}  // namespace
 
 void register_hip_dispatches(DispatchRegistryBuilder & registry) {
     register_hip_scale_dispatch(registry);
+#ifdef GGML_HRX_HIP_ADDON
+    ggml_hrx_hip_addon_register(registry);
+#endif
+}
+
+void set_hip_attention_sink_hook(HipAttentionSinkHook hook) {
+    g_attention_sink_hook = hook;
+}
+
+bool hip_attention_sink_dispatch(const HipAttentionSinkArgs & args, Dispatch & dispatch) {
+    return g_attention_sink_hook != nullptr && g_attention_sink_hook(args, dispatch);
 }
 
 }  // namespace ggml::hrx

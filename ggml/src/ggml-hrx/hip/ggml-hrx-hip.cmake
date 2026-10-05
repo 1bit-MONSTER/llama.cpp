@@ -19,6 +19,8 @@
 
 set(GGML_HRX_HIP_TARGETS "gfx1151" CACHE STRING "GPU targets for the HRX HIP kernels (semicolon list)")
 set(GGML_HRX_HIP_FLAGS "-O3" CACHE STRING "Extra amdclang++ flags for the HRX HIP kernels")
+set(GGML_HRX_HIP_ADDON_DIR "" CACHE PATH
+    "Optional HIP kernel add-on directory: <dir>/kernels/*.hip join the code objects, <dir>/*.cpp join ggml-hrx, <dir>/addon.cmake is included if present (hip/README.md)")
 
 set(_ggml_hrx_hip_default_compiler "")
 if (CMAKE_CXX_COMPILER MATCHES "amdclang\\+\\+$")
@@ -35,6 +37,32 @@ if (NOT GGML_HRX_HIP_COMPILER)
 endif()
 
 file(GLOB GGML_HRX_HIP_KERNEL_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels/*.hip")
+
+# Add-on: its kernels are built and embedded exactly like the ones above, its matchers are compiled into
+# ggml-hrx, and register_hip_dispatches calls the ggml_hrx_hip_addon_register it defines.
+set(GGML_HRX_HIP_ADDON_SOURCES)
+if (GGML_HRX_HIP_ADDON_DIR)
+    get_filename_component(GGML_HRX_HIP_ADDON_PATH "${GGML_HRX_HIP_ADDON_DIR}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+    if (NOT IS_DIRECTORY "${GGML_HRX_HIP_ADDON_PATH}/kernels")
+        message(FATAL_ERROR "GGML_HRX_HIP_ADDON_DIR=${GGML_HRX_HIP_ADDON_DIR}: no kernels/ directory")
+    endif()
+    file(GLOB _ggml_hrx_hip_addon_kernels CONFIGURE_DEPENDS "${GGML_HRX_HIP_ADDON_PATH}/kernels/*.hip")
+    file(GLOB GGML_HRX_HIP_ADDON_SOURCES CONFIGURE_DEPENDS "${GGML_HRX_HIP_ADDON_PATH}/*.cpp" "${GGML_HRX_HIP_ADDON_PATH}/*.h")
+    list(APPEND GGML_HRX_HIP_KERNEL_SOURCES ${_ggml_hrx_hip_addon_kernels})
+    list(LENGTH _ggml_hrx_hip_addon_kernels _ggml_hrx_hip_addon_kernel_count)
+    message(STATUS "GGML_HRX: HIP kernel add-on ${GGML_HRX_HIP_ADDON_PATH} (${_ggml_hrx_hip_addon_kernel_count} kernels)")
+endif()
+
+# Code objects are looked up by file stem, so stems must be unique across this directory and the add-on.
+set(_ggml_hrx_hip_stems)
+foreach(_source ${GGML_HRX_HIP_KERNEL_SOURCES})
+    get_filename_component(_stem "${_source}" NAME_WE)
+    if (_stem IN_LIST _ggml_hrx_hip_stems)
+        message(FATAL_ERROR "GGML_HRX: two HIP kernels named '${_stem}' (${_source})")
+    endif()
+    list(APPEND _ggml_hrx_hip_stems "${_stem}")
+endforeach()
+
 separate_arguments(_ggml_hrx_hip_flags UNIX_COMMAND "${GGML_HRX_HIP_FLAGS}")
 set(_ggml_hrx_hip_dir "${CMAKE_CURRENT_BINARY_DIR}/hip-code-objects")
 file(MAKE_DIRECTORY "${_ggml_hrx_hip_dir}")
@@ -43,13 +71,14 @@ set(_ggml_hrx_hip_objects)
 set(_ggml_hrx_hip_entries)
 foreach(_source ${GGML_HRX_HIP_KERNEL_SOURCES})
     get_filename_component(_stem "${_source}" NAME_WE)
+    get_filename_component(_source_dir "${_source}" DIRECTORY)
     foreach(_target ${GGML_HRX_HIP_TARGETS})
         set(_object "${_ggml_hrx_hip_dir}/${_stem}.${_target}.hsaco")
         add_custom_command(
             OUTPUT "${_object}"
             COMMAND "${GGML_HRX_HIP_COMPILER}" -x hip -std=c++17 --offload-arch=${_target} --cuda-device-only
                     --no-gpu-bundle-output ${_ggml_hrx_hip_flags}
-                    -I "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels"
+                    -I "${_source_dir}" -I "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels"
                     -MD -MF "${_object}.d" -o "${_object}" "${_source}"
             DEPENDS "${_source}"
             DEPFILE "${_object}.d"
@@ -84,7 +113,11 @@ target_sources(ggml-hrx PRIVATE
     hip/hip-kernel-loader.h
     hip/hip-dispatches.cpp
     hip/hip-dispatches.h
-    hip/dispatch-hip-scale.cpp)
+    hip/dispatch-hip-scale.cpp
+    ${GGML_HRX_HIP_ADDON_SOURCES})
+if (GGML_HRX_HIP_ADDON_DIR)
+    target_compile_definitions(ggml-hrx PRIVATE GGML_HRX_HIP_ADDON)
+endif()
 
 # Standalone check that HRX loads and runs a hipcc code object (hip/kernels/hip_smoke.hip).
 add_executable(ggml-hrx-hip-smoke hip/hip-smoke.cpp hip/hip-code-objects.cpp)
@@ -92,3 +125,8 @@ target_link_libraries(ggml-hrx-hip-smoke PRIVATE hrx::hrx)
 target_include_directories(ggml-hrx-hip-smoke PRIVATE . "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_features(ggml-hrx-hip-smoke PRIVATE cxx_std_17)
 add_dependencies(ggml-hrx-hip-smoke ggml-hrx-hip-code-objects)
+
+# Add-on extras (standalone harnesses, benches); paths in it resolve as in this file.
+if (GGML_HRX_HIP_ADDON_DIR)
+    include("${GGML_HRX_HIP_ADDON_PATH}/addon.cmake" OPTIONAL)
+endif()
