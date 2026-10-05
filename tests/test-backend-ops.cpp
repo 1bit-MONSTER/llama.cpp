@@ -9673,6 +9673,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // one-token Q4_K/Q5_K gate/up + SwiGLU at the HRX HIP kernel sizes (output % 128 == 0)
+    for (ggml_type t : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) { for (int64_t n : {128, 384}) { for (int64_t k : {256, 1024, 2560}) { test_cases.emplace_back(new test_mul_mat_vec_fusion(t, GGML_GLU_OP_SWIGLU, 1, n, k, false, 1, 1, false, false, true, false, {1, 1})); } } }
+
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
         for (bool with_norm : {false, true}) {
             for (bool bias_probs : {false, true}) {
