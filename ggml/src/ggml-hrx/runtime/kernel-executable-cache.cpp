@@ -213,7 +213,7 @@ class KernelExecutableCacheEntry {
     const KernelDefinition *          definition = nullptr;
     Dispatch                          dispatch;
     LoomCompiledKernelRef             compiled_ref;
-    std::shared_ptr<KernelExecutable> executable;
+    std::atomic<std::shared_ptr<KernelExecutable>> executable;
     std::string                       error;
 
     enum class LoadState {
@@ -317,7 +317,7 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
     KernelExecutableCacheEntry &          entry      = *ref.entry;
     KernelExecutableCacheEntry::LoadState load_state = entry.load_state.load(std::memory_order_acquire);
     if (load_state == KernelExecutableCacheEntry::LoadState::Loaded) {
-        return std::atomic_load_explicit(&entry.executable, std::memory_order_acquire);
+        return entry.executable.load(std::memory_order_acquire);
     }
     if (load_state == KernelExecutableCacheEntry::LoadState::Failed) {
         std::lock_guard<std::mutex> entry_lock(entry.mutex);
@@ -338,7 +338,7 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
             GGML_LOG_ERROR("%s: %s\n", __func__, entry.error.c_str());
             return nullptr;
         }
-        return std::atomic_load_explicit(&entry.executable, std::memory_order_acquire);
+        return entry.executable.load(std::memory_order_acquire);
     }
 
     LoomCompiledKernelRef compiled_ref;
@@ -376,7 +376,7 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
         {
             std::lock_guard<std::mutex> entry_lock(entry.mutex);
             entry.compiled_ref.reset();
-            std::atomic_store_explicit(&entry.executable, executable, std::memory_order_release);
+            entry.executable.store(executable, std::memory_order_release);
             entry.load_state.store(KernelExecutableCacheEntry::LoadState::Loaded, std::memory_order_release);
         }
     } else {

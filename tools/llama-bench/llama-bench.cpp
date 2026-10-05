@@ -1727,8 +1727,8 @@ struct test {
                                             test_time,
                                             std::to_string(avg_ns()),
                                             std::to_string(stdev_ns()),
-                                            std::to_string(avg_ts()),
-                                            std::to_string(stdev_ts()) };
+                                            string_format("%f", avg_ts()), // std::to_string format before C++26
+                                            string_format("%f", stdev_ts()) };
         return values;
     }
 

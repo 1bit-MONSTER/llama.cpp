@@ -588,6 +588,16 @@ static void handle_with_catch(const char * name, std::function<void()> func) {
     }
 }
 
+// "%f" for floating point: the std::to_string format before C++26
+template <typename T>
+static std::string num_to_str(T v) {
+    if constexpr (std::is_floating_point_v<T>) {
+        return string_format("%f", (double) v);
+    } else {
+        return std::to_string(v);
+    }
+}
+
 // treat a null value as absent so clients can send null to request the server default
 static bool has_value(const json & data, const char * n) {
     auto it = data.find(n);
@@ -606,7 +616,7 @@ void field_num<T>::eval(field_eval_context & ctx, const json & data) {
                 } else {
                     T tmp = data.at(n).template get<T>();
                     if (tmp < min || tmp > max) {
-                        throw std::invalid_argument(std::string("Value must be between ") + std::to_string(min) + " <= value <= " + std::to_string(max) + ", but got " + std::to_string(tmp));
+                        throw std::invalid_argument(std::string("Value must be between ") + num_to_str(min) + " <= value <= " + num_to_str(max) + ", but got " + num_to_str(tmp));
                     }
                     val = tmp;
                 }

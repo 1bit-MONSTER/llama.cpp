@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 #include <cctype>
@@ -95,6 +96,16 @@
 #endif
 
 namespace fs = std::filesystem;
+
+// UTF-8 C string -> path; fs::u8path is deprecated since C++20
+static fs::path path_from_u8(const char * str) {
+#if defined(__cpp_lib_char8_t)
+    const std::string_view view(str);
+    return fs::path(std::u8string(view.begin(), view.end()));
+#else
+    return fs::u8path(str);
+#endif
+}
 
 static std::string path_str(const fs::path & path) {
     try {
@@ -470,36 +481,36 @@ static fs::path get_executable_path() {
 
 static fs::path backend_filename_prefix() {
 #ifdef _WIN32
-    return fs::u8path("ggml-");
+    return path_from_u8("ggml-");
 #else
-    return fs::u8path("libggml-");
+    return path_from_u8("libggml-");
 #endif
 }
 
 static fs::path backend_filename_extension() {
 #ifdef _WIN32
-    return fs::u8path(".dll");
+    return path_from_u8(".dll");
 #else
-    return fs::u8path(".so");
+    return path_from_u8(".so");
 #endif
 }
 
 static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent, const char * user_search_path) {
     // enumerate all the files that match [lib]ggml-name-*.[so|dll] in the search paths
-    const fs::path name_path = fs::u8path(name);
-    const fs::path file_prefix = backend_filename_prefix().native() + name_path.native() + fs::u8path("-").native();
+    const fs::path name_path = path_from_u8(name);
+    const fs::path file_prefix = backend_filename_prefix().native() + name_path.native() + path_from_u8("-").native();
     const fs::path file_extension = backend_filename_extension();
 
     std::vector<fs::path> search_paths;
     if (user_search_path == nullptr) {
 #ifdef GGML_BACKEND_DIR
-        search_paths.push_back(fs::u8path(GGML_BACKEND_DIR));
+        search_paths.push_back(path_from_u8(GGML_BACKEND_DIR));
 #endif
         // default search paths: executable directory, current directory
         search_paths.push_back(get_executable_path());
         search_paths.push_back(fs::current_path());
     } else {
-        search_paths.push_back(fs::u8path(user_search_path));
+        search_paths.push_back(path_from_u8(user_search_path));
     }
 
     int best_score = 0;
