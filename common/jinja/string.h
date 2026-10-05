@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,7 +32,9 @@ struct string {
         parts.push_back({false, std::to_string(v)});
     }
     string(double v) {
-        parts.push_back({false, std::to_string(v)});
+        char buf[512];
+        snprintf(buf, sizeof(buf), "%f", v); // std::to_string(double) format before C++26
+        parts.push_back({false, buf});
     }
 
     // mark all parts as user input

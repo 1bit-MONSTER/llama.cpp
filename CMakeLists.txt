@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
+set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD_REQUIRED true)
+# no C++20 module scanning: no module sources, and some toolchains lack clang-scan-deps
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 #set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)
 

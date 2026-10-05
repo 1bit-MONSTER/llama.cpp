@@ -286,8 +286,10 @@ option(GGML_BUILD_EXAMPLES "ggml: build examples" ${GGML_STANDALONE})
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED true)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED true)
+# no C++20 module scanning: no module sources, and some toolchains lack clang-scan-deps
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 

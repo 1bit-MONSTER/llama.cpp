@@ -1320,6 +1320,11 @@ struct llama_model_eagle3 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+// explicit specializations, declared before their first use (make_unique is constexpr since C++23)
+template <> llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_graph_params & params);
+template <> llama_model_eagle3::graph<true>::graph(const llama_model & model, const llm_graph_params & params);
+template <> ggml_tensor * llama_model_eagle3::graph<true>::build_inp_embd_enc() const;
+
 
 struct llama_model_dflash : public llama_model_base {
     llama_model_dflash(const struct llama_model_params & params) : llama_model_base(params) {}
@@ -1335,6 +1340,11 @@ struct llama_model_dflash : public llama_model_base {
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
+
+// explicit specializations, declared before their first use (make_unique is constexpr since C++23)
+template <> llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_graph_params & params);
+template <> llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_graph_params & params);
+template <> ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const;
 
 
 struct llama_model_mistral4 : public llama_model_deepseek2 {
@@ -1411,6 +1421,10 @@ struct llama_model_t5 : public llama_model_base {
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
+
+// explicit specializations, declared before their first use (make_unique is constexpr since C++23)
+template <> llama_model_t5::graph<false>::graph(const llama_model & model, const llm_graph_params & params);
+template <> llama_model_t5::graph<true>::graph(const llama_model & model, const llm_graph_params & params);
 
 
 struct llama_model_t5encoder : public llama_model_base {

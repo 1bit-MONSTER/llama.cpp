@@ -2365,7 +2365,7 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
         auto alternatives_of = [](const json & schema) -> std::optional<json> {
             for (const auto * keyword : { "oneOf", "anyOf" }) {
                 if (schema.contains(keyword) && schema.at(keyword).is_array() && !schema.at(keyword).empty()) {
-                    return schema.at(keyword);
+                    return std::optional<json>(std::in_place, schema.at(keyword));
                 }
             }
             return std::nullopt;
