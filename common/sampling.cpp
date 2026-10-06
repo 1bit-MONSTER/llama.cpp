@@ -11,6 +11,7 @@
 #include <cctype>
 #include <climits>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
@@ -578,13 +579,44 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     // behind in-flight work (the engine#140-class nondeterminism). NaN is never a legitimate
     // logit - unlike -inf, which masking legitimately uses - so refuse to sample from it
     // instead of silently decoding a wrong-but-plausible token.
+    //
+    // engine#315: aborting on the FIRST NaN destroys the evidence along with the run, and an
+    // intermittent fault therefore ends a whole evaluation instead of being recorded. So
+    // measure the corruption first - how many entries, over what index range, and whether it
+    // is contiguous - which is what distinguishes "a migrated/torn page" from "one bad
+    // element". With GGML_HRX_NAN_CONTINUE set, substitute -inf and carry on: -inf makes those
+    // vocab entries unsampleable while leaving the rest of the distribution intact, so a long
+    // run survives. Off by default, so the guard's own default remains a hard abort.
     {
-        const float * logits = llama_get_logits_ith(ctx, idx);
+        float * logits = llama_get_logits_ith(ctx, idx);
         if (logits != nullptr) {
             const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+            int32_t nan_count = 0;
+            int32_t nan_first = -1;
+            int32_t nan_last  = -1;
             for (int32_t i = 0; i < n_vocab; ++i) {
                 if (std::isnan(logits[i])) {
-                    LOG_ERR("%s: HRX returned NaN logits at vocab index %d - refusing to sample a silently wrong token (engine#123)\n", __func__, (int) i);
+                    if (nan_first < 0) {
+                        nan_first = i;
+                    }
+                    nan_last = i;
+                    ++nan_count;
+                }
+            }
+            if (nan_count > 0) {
+                const bool contiguous = (nan_last - nan_first + 1) == nan_count;
+                const char * env = std::getenv("GGML_HRX_NAN_CONTINUE");
+                const bool nan_continue = env != nullptr && env[0] != '\0' && env[0] != '0';
+                LOG_ERR("%s: HRX returned NaN logits: count=%d of %d, index range [%d..%d], contiguous=%s, continuing=%s (engine#315)\n",
+                        __func__, (int) nan_count, (int) n_vocab, (int) nan_first, (int) nan_last,
+                        contiguous ? "yes" : "no", nan_continue ? "yes" : "no");
+                if (nan_continue) {
+                    for (int32_t i = nan_first; i <= nan_last; ++i) {
+                        if (std::isnan(logits[i])) {
+                            logits[i] = -INFINITY;
+                        }
+                    }
+                } else {
                     GGML_ABORT("HRX: NaN logits (engine#123)");
                 }
             }
