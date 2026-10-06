@@ -717,6 +717,9 @@
    "path": "ours/ops/attention_sink_f32.loom"
   },
   {
+   "path": "ours/ops/binary_f32.loom"
+  },
+  {
    "path": "ours/ops/flash_attention_f32_f16_wmma.loom"
   },
   {
@@ -1561,7 +1564,7 @@
    "name": "ggml_binary_f32",
    "family": "loom_libs",
    "symbol": "ggml_binary_f32",
-   "source": "ops/elementwise/binary_f32.loom",
+   "source": "ours/ops/binary_f32.loom",
    "workload_parameters": [
     {
      "name": "element_count",
@@ -1588,14 +1591,14 @@
    "compile_recipe": {
     "mode": "direct",
     "primary_sources": [
-     "ops/elementwise/binary_f32.loom"
+     "ours/ops/binary_f32.loom"
     ],
     "library_sources": [
-     "motifs/elementwise/binary_apply.loom"
+     "ours/motifs/binary_f32_apply.loom"
     ]
    },
    "compile_dependencies": [
-    "motifs/elementwise/binary_apply.loom"
+    "ours/motifs/binary_f32_apply.loom"
    ]
   },
   {
