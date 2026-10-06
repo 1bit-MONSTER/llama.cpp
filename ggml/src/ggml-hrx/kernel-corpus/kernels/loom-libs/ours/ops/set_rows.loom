@@ -5,9 +5,7 @@ template.decl @ggml.set_rows.launch(%hidden_capacity: index, %token_capacity: in
 
 template.decl @ggml.set_rows.load_f32_vector4(%input_format: index, %token: index, %channel: index, %token_count: index, %input_stride: index, %rows: buffer) -> (vector<4xf32>)
 
-template.decl @ggml.rows.cache_publish.safe_i64_row(%arg0: index, %arg1: index, %arg2: index, %arg3: buffer) -> (i1, index)
-
-template.decl @ggml.rows.cache_publish.f32_vector4(%arg0: index, %arg1: i1, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: vector<4xf32>, %arg7: buffer)
+template.decl @ggml.set_rows.store_f32_vector4(%output_format: index, %publish: i1, %cache_row: index, %channel: index, %cache_row_count: index, %hidden_size: index, %values: vector<4xf32>, %cache: buffer)
 
 amdgpu.target<gfx11-generic> @ggml_set_rows_gfx11_wave64 {subgroup_size = 64}
 
@@ -48,6 +46,26 @@ template.def<@ggml.set_rows.load_f32_vector4> device @ggml_set_rows_load_f32_vec
   template.return %selected : vector<4xf32>
 }
 
+template.def<@ggml.set_rows.store_f32_vector4> device @ggml_set_rows_store_f32_vector4(%output_format: index, %publish: i1, %cache_row: index, %channel: index, %cache_row_count: index, %hidden_size: index, %values: vector<4xf32>, %cache: buffer) {
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c0_offset = index.constant 0 : offset
+  %is_f16 = index.cmp eq, %output_format, %c16 : index
+  %is_f32 = index.cmp eq, %output_format, %c32 : index
+  %publish_f16 = scalar.andi %publish, %is_f16 : i1
+  %publish_f32 = scalar.andi %publish, %is_f32 : i1
+  scf.if %publish_f16 {
+    %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%hidden_size]xf16>
+    %truncated = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+    vector.store %truncated, %cache_view[%cache_row, %channel] : vector<4xf16>, view<[%cache_row_count]x[%hidden_size]xf16>
+  }
+  scf.if %publish_f32 {
+    %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%hidden_size]xf32>
+    vector.store %values, %cache_view[%cache_row, %channel] : vector<4xf32>, view<[%cache_row_count]x[%hidden_size]xf32>
+  }
+  template.return
+}
+
 template.def<@ggml.set_rows.body> device @ggml_set_rows_body(%token_count: index, %cache_row_count: index, %hidden_size: index, %rows: buffer, %indices: buffer, %cache: buffer) {
   %token_capacity = config.get @ggml.set_rows.token_capacity : index
   %hidden_capacity = config.get @ggml.set_rows.hidden_capacity : index
@@ -63,6 +81,9 @@ template.def<@ggml.set_rows.body> device @ggml_set_rows_body(%token_count: index
   %c0 = index.constant 0 : index
   %c4 = index.constant 4 : index
   %c256 = index.constant 256 : index
+  %c0_i64 = scalar.constant 0 : i64
+  %c1048575_i64 = scalar.constant 1048575 : i64
+  %c0_offset = index.constant 0 : offset
   %packet_tile_base = index.mul %channel_tile, %c256 : index
   %packet0 = index.add %packet_tile_base, %workitem0 : index
   %packet_count = index.div %bounded_hidden_size, %c4 : index
@@ -73,10 +94,20 @@ template.def<@ggml.set_rows.body> device @ggml_set_rows_body(%token_count: index
   %packet = scf.select %valid_packet, %packet0, %c0 : index
   %channel = index.mul %packet, %c4 : index
   %rows_noalias, %indices_noalias, %cache_noalias = buffer.assume.noalias %rows, %indices, %cache : buffer, buffer, buffer
-  %valid_row, %cache_row = template.apply<@ggml.rows.cache_publish.safe_i64_row>(%token, %bounded_token_count, %bounded_cache_row_count, %indices_noalias) : (index, index, index, buffer) -> (i1, index)
-  %publish = scalar.andi %publish0, %valid_row : i1
+  %indices_view = buffer.view %indices_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]xi64>
+  %index_raw = view.load %indices_view[%token] : view<[%bounded_token_count]xi64> -> i64
+  %index_nonnegative = scalar.cmpi sge, %index_raw, %c0_i64 : i64
+  %index_in_cast_range = scalar.cmpi sle, %index_raw, %c1048575_i64 : i64
+  %valid_index = scalar.andi %index_nonnegative, %index_in_cast_range : i1
+  %safe_index0_i64 = scf.select %valid_index, %index_raw, %c0_i64 : i64
+  %safe_index_i64 = scalar.assume %safe_index0_i64 [range(%safe_index0_i64, 0, 1048575)] : i64
+  %cache_row0 = index.cast %safe_index_i64 : i64 to index
+  %valid_row = index.cmp ult, %cache_row0, %bounded_cache_row_count : index
+  %publish1 = scalar.andi %publish0, %valid_index : i1
+  %publish = scalar.andi %publish1, %valid_row : i1
+  %cache_row = scf.select %valid_row, %cache_row0, %c0 : index
   %values = template.apply<@ggml.set_rows.load_f32_vector4>(%input_format, %token, %channel, %bounded_token_count, %input_stride, %rows_noalias) : (index, index, index, index, index, buffer) -> (vector<4xf32>)
-  template.apply<@ggml.rows.cache_publish.f32_vector4>(%output_format, %publish, %cache_row, %channel, %bounded_cache_row_count, %bounded_hidden_size, %values, %cache_noalias) : (index, i1, index, index, index, index, vector<4xf32>, buffer)
+  template.apply<@ggml.set_rows.store_f32_vector4>(%output_format, %publish, %cache_row, %channel, %bounded_cache_row_count, %bounded_hidden_size, %values, %cache_noalias) : (index, i1, index, index, index, index, vector<4xf32>, buffer)
   template.return
 }
 
@@ -104,5 +135,50 @@ kernel.def target(@ggml_set_rows_gfx11_wave64) @ggml_set_rows(%token_count: inde
   kernel.launch.config workgroups(%packet_tiles, %token_capacity, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
 } launch(%token_count: index, %cache_row_count: index, %hidden_size: index, %rows: buffer, %indices: buffer, %cache: buffer) where [range(%token_count, 1, 2048)] {
   template.apply<@ggml.set_rows.body>(%token_count, %cache_row_count, %hidden_size, %rows, %indices, %cache) : (index, index, index, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Scalar SET_ROWS for element-wise KV-cache scatter. The non-FA attention path flattens
+// the K/V rows, so hidden_size == 1 and each value is written to its own cache row.
+config.decl @ggml.set_rows_scatter.token_capacity : %value: index where [range(%value, 1, 1048576)]
+
+kernel.def target(@ggml_set_rows_gfx11_wave64) @ggml_set_rows_scatter(%token_count: index, %cache_row_count: index) {
+  %token_capacity = config.get @ggml.set_rows_scatter.token_capacity : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %c1 = index.constant 1 : index
+  %padded = index.add %token_capacity, %c255 : index
+  %workgroups = index.div %padded, %c256 : index
+  kernel.launch.config workgroups(%workgroups, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %cache_row_count: index, %rows: buffer, %indices: buffer, %cache: buffer) where [range(%token_count, 1, 1048576)] {
+  %token_capacity = config.get @ggml.set_rows_scatter.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1048576), le(%token_count, %token_capacity)] : index
+  %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 134217728)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %c256 = index.constant 256 : index
+  %c0 = index.constant 0 : index
+  %c0_offset = index.constant 0 : offset
+  %i0 = index.mul %workgroup, %c256 : index
+  %i = index.add %i0, %workitem : index
+  %valid = index.cmp ult, %i, %bounded_token_count : index
+  %safe_i = scf.select %valid, %i, %c0 : index
+  %rows_view = buffer.view %rows[%c0_offset] : buffer -> view<[%bounded_token_count]xf32>
+  %indices_view = buffer.view %indices[%c0_offset] : buffer -> view<[%bounded_token_count]xi64>
+  %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%bounded_cache_row_count]xf16>
+  %value = view.load %rows_view[%safe_i] : view<[%bounded_token_count]xf32> -> f32
+  %idx_i64 = view.load %indices_view[%safe_i] : view<[%bounded_token_count]xi64> -> i64
+  %c0_i64 = scalar.constant 0 : i64
+  %idx_nonneg = scalar.cmpi sge, %idx_i64, %c0_i64 : i64
+  %safe_idx0_i64 = scf.select %idx_nonneg, %idx_i64, %c0_i64 : i64
+  %safe_idx_i64 = scalar.assume %safe_idx0_i64 [range(%safe_idx0_i64, 0, 134217727)] : i64
+  %idx = index.cast %safe_idx_i64 : i64 to index
+  %idx_in_range = index.cmp ult, %idx, %bounded_cache_row_count : index
+  %publish0 = scalar.andi %valid, %idx_nonneg : i1
+  %publish = scalar.andi %publish0, %idx_in_range : i1
+  %f16 = scalar.fptrunc %value : f32 to f16
+  scf.if %publish {
+    view.store %f16, %cache_view[%idx] : f16, view<[%bounded_cache_row_count]xf16>
+  }
   kernel.return
 }

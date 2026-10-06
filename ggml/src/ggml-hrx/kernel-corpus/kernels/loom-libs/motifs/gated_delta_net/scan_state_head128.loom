@@ -1163,7 +1163,6 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
     %gq0 = vector.load %gs_flat[%k0] : view<80xf32> -> vector<4xf32>
     %bv0 = vector.extract %gq0[0] : vector<4xf32> -> f32
     %cp0 = vector.extract %gq0[1] : vector<4xf32> -> f32
-    %lc0 = vector.extract %gq0[3] : vector<4xf32> -> f32
     %ev0 = vector.extract %gq0[2] : vector<4xf32> -> f32
     %tk0_r = index.add %t0, %k0 : index
     %tk0_ok = index.cmp ult, %tk0_r, %n_tokens : index
@@ -1282,7 +1281,6 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
     %gq1 = vector.load %gs_flat[%k4] : view<80xf32> -> vector<4xf32>
     %bv1 = vector.extract %gq1[0] : vector<4xf32> -> f32
     %cp1 = vector.extract %gq1[1] : vector<4xf32> -> f32
-    %lc1 = vector.extract %gq1[3] : vector<4xf32> -> f32
     %ev1 = vector.extract %gq1[2] : vector<4xf32> -> f32
     %tk1_r = index.add %t0, %k1 : index
     %tk1_ok = index.cmp ult, %tk1_r, %n_tokens : index
@@ -1396,7 +1394,6 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
     %gq2 = vector.load %gs_flat[%k8] : view<80xf32> -> vector<4xf32>
     %bv2 = vector.extract %gq2[0] : vector<4xf32> -> f32
     %cp2 = vector.extract %gq2[1] : vector<4xf32> -> f32
-    %lc2 = vector.extract %gq2[3] : vector<4xf32> -> f32
     %ev2 = vector.extract %gq2[2] : vector<4xf32> -> f32
     %tk2_r = index.add %t0, %k2 : index
     %tk2_ok = index.cmp ult, %tk2_r, %n_tokens : index
@@ -1506,7 +1503,6 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
     %gq3 = vector.load %gs_flat[%k12] : view<80xf32> -> vector<4xf32>
     %bv3 = vector.extract %gq3[0] : vector<4xf32> -> f32
     %cp3 = vector.extract %gq3[1] : vector<4xf32> -> f32
-    %lc3 = vector.extract %gq3[3] : vector<4xf32> -> f32
     %ev3 = vector.extract %gq3[2] : vector<4xf32> -> f32
     %tk3_r = index.add %t0, %k3 : index
     %tk3_ok = index.cmp ult, %tk3_r, %n_tokens : index
@@ -2922,8 +2918,7 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix1 {
           %snapshot_index1 = index.sub %snapshot_last, %k1 : index
           %snapshot_slot1 = index.mul %snapshot_stride, %snapshot_index1 : index
-          %p10_log = scalar.subf<nnan|ninf|nsz> %lc1, %lc0 : f32
-          %p10 = scalar.expf<afn> %p10_log : f32
+          %p10 = scalar.divf<nnan|ninf|nsz|arcp> %cp1, %cp0 : f32
           %p1d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p10 : f32
           %p1d0 = scalar.fptrunc %p1d0f : f32 to f16
           %p1d1 = scalar.fptrunc %dl1 : f32 to f16
@@ -2940,10 +2935,8 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix2 {
           %snapshot_index2 = index.sub %snapshot_last, %k2 : index
           %snapshot_slot2 = index.mul %snapshot_stride, %snapshot_index2 : index
-          %p20_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc0 : f32
-          %p20 = scalar.expf<afn> %p20_log : f32
-          %p21_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc1 : f32
-          %p21 = scalar.expf<afn> %p21_log : f32
+          %p20 = scalar.divf<nnan|ninf|nsz|arcp> %cp2, %cp0 : f32
+          %p21 = scalar.divf<nnan|ninf|nsz|arcp> %cp2, %cp1 : f32
           %p2d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p20 : f32
           %p2d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p21 : f32
           %p2d0 = scalar.fptrunc %p2d0f : f32 to f16
@@ -2962,12 +2955,9 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix3 {
           %snapshot_index3 = index.sub %snapshot_last, %k3 : index
           %snapshot_slot3 = index.mul %snapshot_stride, %snapshot_index3 : index
-          %p30_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc0 : f32
-          %p30 = scalar.expf<afn> %p30_log : f32
-          %p31_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc1 : f32
-          %p31 = scalar.expf<afn> %p31_log : f32
-          %p32_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc2 : f32
-          %p32 = scalar.expf<afn> %p32_log : f32
+          %p30 = scalar.divf<nnan|ninf|nsz|arcp> %cp3, %cp0 : f32
+          %p31 = scalar.divf<nnan|ninf|nsz|arcp> %cp3, %cp1 : f32
+          %p32 = scalar.divf<nnan|ninf|nsz|arcp> %cp3, %cp2 : f32
           %p3d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p30 : f32
           %p3d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p31 : f32
           %p3d2f = scalar.mulf<nnan|ninf|nsz> %dl2, %p32 : f32
@@ -3019,8 +3009,7 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix1 {
           %snapshot_index1 = index.sub %snapshot_last, %k1 : index
           %snapshot_slot1 = index.mul %snapshot_stride, %snapshot_index1 : index
-          %p10_log = scalar.subf<nnan|ninf|nsz> %lc1, %lc0 : f32
-          %p10 = scalar.expf<afn> %p10_log : f32
+          %p10 = scalar.divf<nnan|ninf|nsz|arcp> %cp1, %cp0 : f32
           %p1d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p10 : f32
           %p1d0 = scalar.fptrunc %p1d0f : f32 to f16
           %p1d1 = scalar.fptrunc %dl1 : f32 to f16
@@ -3037,10 +3026,8 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix2 {
           %snapshot_index2 = index.sub %snapshot_last, %k2 : index
           %snapshot_slot2 = index.mul %snapshot_stride, %snapshot_index2 : index
-          %p20_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc0 : f32
-          %p20 = scalar.expf<afn> %p20_log : f32
-          %p21_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc1 : f32
-          %p21 = scalar.expf<afn> %p21_log : f32
+          %p20 = scalar.divf<nnan|ninf|nsz|arcp> %cp2, %cp0 : f32
+          %p21 = scalar.divf<nnan|ninf|nsz|arcp> %cp2, %cp1 : f32
           %p2d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p20 : f32
           %p2d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p21 : f32
           %p2d0 = scalar.fptrunc %p2d0f : f32 to f16
@@ -3059,12 +3046,9 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix3 {
           %snapshot_index3 = index.sub %snapshot_last, %k3 : index
           %snapshot_slot3 = index.mul %snapshot_stride, %snapshot_index3 : index
-          %p30_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc0 : f32
-          %p30 = scalar.expf<afn> %p30_log : f32
-          %p31_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc1 : f32
-          %p31 = scalar.expf<afn> %p31_log : f32
-          %p32_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc2 : f32
-          %p32 = scalar.expf<afn> %p32_log : f32
+          %p30 = scalar.divf<nnan|ninf|nsz|arcp> %cp3, %cp0 : f32
+          %p31 = scalar.divf<nnan|ninf|nsz|arcp> %cp3, %cp1 : f32
+          %p32 = scalar.divf<nnan|ninf|nsz|arcp> %cp3, %cp2 : f32
           %p3d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p30 : f32
           %p3d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p31 : f32
           %p3d2f = scalar.mulf<nnan|ninf|nsz> %dl2, %p32 : f32

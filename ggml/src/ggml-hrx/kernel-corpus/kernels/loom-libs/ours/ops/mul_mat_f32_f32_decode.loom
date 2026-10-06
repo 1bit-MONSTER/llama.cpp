@@ -84,7 +84,7 @@ func.def inline @ggml_mul_mat_decode_load_f32_block(%token_count: index, %input_
   %itid = index.rem %bounded_lane, %c16 : index
   %vector_half = index.div %itid, %c8 : index
   %vector_index = index.rem %itid, %c8 : index
-  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%token_count]x[%launch_block_count]x256xf32>
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%token_count]x[%input_size]xf32>
   %vector_half_base = index.mul %vector_half, %c128 : index
   %vector_offset = index.mul %vector_index, %c4 : index
   %input_index0 = index.add %vector_half_base, %vector_offset : index
@@ -100,10 +100,10 @@ func.def inline @ggml_mul_mat_decode_load_f32_block(%token_count: index, %input_
   %mask1 = vector.mask.range [%k1 to %input_size step %c1] : index -> vector<4xi1>
   %mask2 = vector.mask.range [%k2 to %input_size step %c1] : index -> vector<4xi1>
   %mask3 = vector.mask.range [%k3 to %input_size step %c1] : index -> vector<4xi1>
-  %input0 = vector.load.mask %input_view[%token, %safe_block, %input_index0], %mask0, %c0_f32x4 : view<[%token_count]x[%launch_block_count]x256xf32>, vector<4xi1>, vector<4xf32>
-  %input1 = vector.load.mask %input_view[%token, %safe_block, %input_index1], %mask1, %c0_f32x4 : view<[%token_count]x[%launch_block_count]x256xf32>, vector<4xi1>, vector<4xf32>
-  %input2 = vector.load.mask %input_view[%token, %safe_block, %input_index2], %mask2, %c0_f32x4 : view<[%token_count]x[%launch_block_count]x256xf32>, vector<4xi1>, vector<4xf32>
-  %input3 = vector.load.mask %input_view[%token, %safe_block, %input_index3], %mask3, %c0_f32x4 : view<[%token_count]x[%launch_block_count]x256xf32>, vector<4xi1>, vector<4xf32>
+  %input0 = vector.load.mask %input_view[%token, %k0], %mask0, %c0_f32x4 : view<[%token_count]x[%input_size]xf32>, vector<4xi1>, vector<4xf32>
+  %input1 = vector.load.mask %input_view[%token, %k1], %mask1, %c0_f32x4 : view<[%token_count]x[%input_size]xf32>, vector<4xi1>, vector<4xf32>
+  %input2 = vector.load.mask %input_view[%token, %k2], %mask2, %c0_f32x4 : view<[%token_count]x[%input_size]xf32>, vector<4xi1>, vector<4xf32>
+  %input3 = vector.load.mask %input_view[%token, %k3], %mask3, %c0_f32x4 : view<[%token_count]x[%input_size]xf32>, vector<4xi1>, vector<4xf32>
   func.return %input0, %input1, %input2, %input3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
 }
 

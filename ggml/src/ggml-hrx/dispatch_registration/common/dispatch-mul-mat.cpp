@@ -2,6 +2,8 @@
 
 #include "dispatch-activation-publication.h"
 #include "dispatch-mul-mat-common.h"
+#include "dispatch-mul-mat-iq3-xxs.h"
+#include "dispatch-mul-mat-tail.h"
 #include "dispatch_registration/immutable-program-resource.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
@@ -1267,6 +1269,16 @@ static bool try_match_fused_unary(const DispatchMatchContext & context, CommonMu
 }
 
 }  // namespace
+
+// Q5_K/IQ4_XS prefill matmuls quantize their own q8_1 activations and may feed a
+// GLU, like Q4_K. GGML_HRX_Q8_PREFILL_RELAX=0 restores the previous policy.
+bool common_q8_prefill_relaxed() {
+    static const bool relaxed = [] {
+        const char * env = std::getenv("GGML_HRX_Q8_PREFILL_RELAX");
+        return env == nullptr || std::atoi(env) != 0;
+    }();
+    return relaxed;
+}
 
 static bool build_mul_mat_dispatch(
     const DispatchMatchContext & context,
