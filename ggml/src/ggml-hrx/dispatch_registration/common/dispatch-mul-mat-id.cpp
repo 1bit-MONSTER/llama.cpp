@@ -15,9 +15,9 @@ namespace ggml::hrx {
 namespace {
 
 static constexpr KernelCatalogRef kMulMatIdTiledF32F32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_publish_f32");
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_f32_f32_wmma");
 static constexpr KernelCatalogRef kMulMatIdSkinnyF32F32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_publish_f32");
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_f32_f32_wmma");
 static constexpr KernelCatalogRef kMulMatIdTiledPostOpsF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_postops_publish_f32");
 static constexpr KernelCatalogRef kMulMatIdSkinnyPostOpsF32F32Kernel =
