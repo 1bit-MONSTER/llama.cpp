@@ -1,7 +1,5 @@
 #include "dispatch-rmsnorm.h"
 
-#include "dispatch-binary-common.h"
-#include "dispatch-activation-publication.h"
 #include "dispatch-layout-utils.h"
 #include "dispatch-mul-mat-common.h"
 #include "ggml.h"
@@ -11,7 +9,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <iterator>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -21,16 +18,10 @@ namespace ggml::hrx {
 namespace {
 
 static constexpr KernelCatalogRef kRmsNormBinaryF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_binary_f32");
-static constexpr KernelCatalogRef kRmsNormBinaryStridedF32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_binary_strided_f32");
-static constexpr KernelCatalogRef kRmsNormMulAddF32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_mul_add_f32");
-static constexpr KernelCatalogRef kRmsNormBinaryF32F16Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_binary_f32_f16");
 static constexpr KernelCatalogRef kRmsNormBinaryF32K16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_binary_f32_k16");
-static constexpr KernelCatalogRef kRmsNormBinaryQ8_1X4PublishKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_binary_q8_1_x4_publish");
+static constexpr KernelCatalogRef kRmsNormBinaryQ8_1X4Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_binary_q8_1_x4");
 static constexpr KernelCatalogRef kRmsNormF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_f32");
 static constexpr KernelCatalogRef kRmsNormMulRopeF32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_mul_rope_f32");
@@ -40,8 +31,10 @@ static constexpr KernelCatalogRef kRmsNormBinarySymmetricI4K32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_binary_symmetric_i4_k32");
 static constexpr KernelCatalogRef kRmsNormGateSiluMulSymmetricI4K32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32");
-static constexpr KernelCatalogRef kRmsNormGateF32PublishKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_gate_f32_publish");
+static constexpr KernelCatalogRef kRmsNormGateF32F16Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_gate_f32_f16");
+static constexpr KernelCatalogRef kRmsNormGateF32Q8_1X4Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_gate_f32_q8_1_x4");
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -87,7 +80,8 @@ static bool supported_rmsnorm_input_layout(const Value & input,
         return true;
     }
 
-    if (input.ne[1] != token_count || input.ne[2] != 1 || input.ne[3] != 1 || input.nb[1] % sizeof(float) != 0) {
+    if (input.ne[1] != token_count || input.ne[2] != 1 || input.ne[3] != 1 ||
+        input.nb[1] % sizeof(float) != 0) {
         return false;
     }
     input_stride = static_cast<int64_t>(input.nb[1] / sizeof(float));
@@ -96,6 +90,56 @@ static bool supported_rmsnorm_input_layout(const Value & input,
     }
 
     return strided_f32_storage_span_bytes(input, input_span_bytes);
+}
+
+static bool is_binary_op(ggml_op op) {
+    return op == GGML_OP_ADD || op == GGML_OP_SUB || op == GGML_OP_MUL || op == GGML_OP_DIV;
+}
+
+static bool binary_kind_requires_order(BinaryKind kind) {
+    return kind == BinaryKind::Sub || kind == BinaryKind::Div;
+}
+
+static bool is_packed_q8_consumer(const Graph & graph, const GraphNode * consumer, const Value & input) {
+    if (consumer == nullptr || consumer->op != GGML_OP_MUL_MAT || consumer->inputs.size() != 2 ||
+        consumer->inputs[1] != input.id) {
+        return false;
+    }
+    const Value * weight = graph_value(graph, consumer->inputs[0]);
+    const Value * output = graph_value(graph, consumer->output);
+    if (weight == nullptr || output == nullptr || input.type != GGML_TYPE_F32 ||
+        output->type != GGML_TYPE_F32 || !input.contiguous || !weight->contiguous || !output->contiguous) {
+        return false;
+    }
+    const bool prefill = (weight->type == GGML_TYPE_Q5_K || weight->type == GGML_TYPE_IQ4_XS) &&
+                         input.ne[1] >= 256 && input.ne[1] <= 2048 && input.ne[1] % 256 == 0;
+    const bool decode = input.ne[1] >= 1 && input.ne[1] <= 5 && weight->alias_source.value < 0 &&
+                        (weight->type == GGML_TYPE_Q4_K ||
+                         (weight->type == GGML_TYPE_Q6_K && !graph.index().consumers(output->id).empty()));
+    return (prefill || decode) && input.ne[0] >= 256 && input.ne[0] <= 32768 && input.ne[0] % 256 == 0 &&
+           input.ne[2] == 1 && input.ne[3] == 1 &&
+           weight->ne[0] == input.ne[0] && weight->ne[1] >= 64 && weight->ne[1] <= 262144 && weight->ne[1] % 64 == 0 &&
+           weight->ne[2] == 1 && weight->ne[3] == 1 && output->ne[0] == weight->ne[1] && output->ne[1] == input.ne[1] &&
+           output->ne[2] == 1 && output->ne[3] == 1;
+}
+
+static bool has_packed_q8_consumer(const Graph & graph, const Value & value) {
+    if (!graph.has_index()) {
+        return false;
+    }
+    for (const GraphNode * consumer : graph.index().consumers(value.id)) {
+        if (is_packed_q8_consumer(graph, consumer, value)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static size_t q8_1_x4_byte_count(int64_t token_count, int64_t hidden_size) {
+    if (token_count <= 0 || hidden_size <= 0) {
+        return 0;
+    }
+    return static_cast<size_t>(token_count) * ggml_row_size(GGML_TYPE_Q8_1, hidden_size);
 }
 
 static bool is_weight_shape(const Value & weight, int64_t hidden_size) {
@@ -120,27 +164,11 @@ struct RmsNormBinaryMatch {
     size_t            binary_node_index = 0;
     int64_t           hidden_size       = 0;
     int64_t           token_count       = 0;
-    int64_t           input_stride      = 0;
-    size_t            input_span        = 0;
     BinaryKind        op                = BinaryKind::Add;
     float             epsilon           = 0.0f;
 
     bool matched() const {
         return rms_node != nullptr && binary_node != nullptr && input != nullptr && rhs != nullptr && output != nullptr;
-    }
-};
-
-struct RmsNormMulAddMatch {
-    RmsNormBinaryMatch rms_binary;
-    const GraphNode *  add_node       = nullptr;
-    const Value *      residual       = nullptr;
-    const Value *      output         = nullptr;
-    size_t             add_node_index = 0;
-    BinaryKind         output_op      = BinaryKind::Add;
-    bool               binary_lhs     = true;
-
-    bool matched() const {
-        return rms_binary.matched() && add_node != nullptr && residual != nullptr && output != nullptr;
     }
 };
 
@@ -215,34 +243,6 @@ template <size_t N> static bool pairwise_distinct_storage_roots(const std::array
     return true;
 }
 
-static bool rope_has_set_rows_consumer(const Graph & graph, const GraphNode & rope) {
-    std::vector<ValueId> pending = { rope.output };
-    for (size_t i = 0; i < pending.size(); ++i) {
-        for (const GraphNode * consumer : graph.index().consumers(pending[i])) {
-            if (consumer == nullptr) {
-                continue;
-            }
-            if (consumer->op == GGML_OP_SET_ROWS) {
-                return true;
-            }
-            if (is_layout_alias_node(graph, *consumer)) {
-                pending.push_back(consumer->output);
-            }
-        }
-    }
-    return false;
-}
-
-static bool fused_input_is_available(const Graph & graph, ValueId value, const std::vector<bool> & covered_nodes) {
-    const GraphNode * producer = graph.index().producer(value);
-    if (producer == nullptr) {
-        return true;
-    }
-    size_t producer_index = 0;
-    return graph.index().node_index(producer, producer_index) && producer_index < covered_nodes.size() &&
-           covered_nodes[producer_index];
-}
-
 static RmsNormMulRopeMatch match_rmsnorm_mul_rope_f32(const Graph & graph, const GraphNode * rms) {
     RmsNormMulRopeMatch match;
     if (rms == nullptr || rms->op != GGML_OP_RMS_NORM || rms->inputs.size() != 1 || !graph.has_index()) {
@@ -288,7 +288,8 @@ static RmsNormMulRopeMatch match_rmsnorm_mul_rope_f32(const Graph & graph, const
         !positions->contiguous || weight->ne[0] != input->ne[0] || weight->ne[1] != 1 || weight->ne[2] != 1 ||
         weight->ne[3] != 1 || input->ne[0] < 2 || input->ne[0] > 512 || input->ne[0] % 2 != 0 || input->ne[1] < 1 ||
         input->ne[1] > 1048576 || input->ne[2] < 1 || input->ne[2] > 1048576 || input->ne[3] < 1 ||
-        input->ne[3] > 1024 || input->nb[0] != sizeof(float) || output->nb[0] != sizeof(float)) {
+        input->ne[3] > 1024 || input->nb[0] != sizeof(float) || output->nb[0] != sizeof(float) ||
+        input->ne[2] > std::numeric_limits<int64_t>::max() / 4 || positions->element_count < 4 * input->ne[2]) {
         return {};
     }
     for (int i = 1; i < GGML_MAX_DIMS; ++i) {
@@ -298,21 +299,15 @@ static RmsNormMulRopeMatch match_rmsnorm_mul_rope_f32(const Graph & graph, const
     }
 
     const bool sectioned_mode = rope_params->mode == GGML_ROPE_TYPE_MROPE || rope_params->mode == GGML_ROPE_TYPE_IMROPE;
-    const bool lfm_neox_mode  = rope_params->mode == GGML_ROPE_TYPE_NEOX && input->ne[0] == 64 &&
-                               rope_params->n_dims == 64 && !rope_has_set_rows_consumer(graph, *rope);
     int64_t    section_count  = 0;
-    if (sectioned_mode) {
-        for (int section : rope_params->sections) {
-            if (section < 0) {
-                return {};
-            }
-            section_count += section;
+    for (int section : rope_params->sections) {
+        if (section < 0) {
+            return {};
         }
+        section_count += section;
     }
-    const int64_t required_positions = sectioned_mode ? 4 * input->ne[2] : input->ne[2];
-    if ((!sectioned_mode && !lfm_neox_mode) || positions->element_count < required_positions ||
-        rope_params->n_dims < 2 || rope_params->n_dims > input->ne[0] || rope_params->n_dims % 2 != 0 ||
-        (sectioned_mode && section_count != rope_params->n_dims / 2) || !std::isfinite(rms_params->eps) ||
+    if (!sectioned_mode || rope_params->n_dims < 2 || rope_params->n_dims > input->ne[0] ||
+        rope_params->n_dims % 2 != 0 || section_count != rope_params->n_dims / 2 || !std::isfinite(rms_params->eps) ||
         rms_params->eps <= 0.0f || !std::isfinite(rope_params->freq_base) || rope_params->freq_base <= 0.0f ||
         !std::isfinite(rope_params->freq_scale) || rope_params->freq_scale <= 0.0f ||
         !std::isfinite(rope_params->attn_factor) || rope_params->attn_factor <= 0.0f ||
@@ -386,10 +381,7 @@ static RmsNormMatch match_rmsnorm_f32(const Graph & graph, const GraphNode * nod
     return match;
 }
 
-static RmsNormBinaryMatch match_rmsnorm_binary_f32(const Graph &     graph,
-                                                   const GraphNode * node,
-                                                   size_t            node_index,
-                                                   bool              allow_strided_input = false) {
+static RmsNormBinaryMatch match_rmsnorm_binary_f32(const Graph & graph, const GraphNode * node, size_t node_index) {
     RmsNormBinaryMatch match;
     if (node == nullptr || node->op != GGML_OP_RMS_NORM || node->inputs.size() != 1 || !graph.has_index()) {
         return match;
@@ -405,18 +397,28 @@ static RmsNormBinaryMatch match_rmsnorm_binary_f32(const Graph &     graph,
     }
     const GraphNode * binary_node = consumers.front();
     size_t            binary_node_index;
-    const CommonBinaryMatch binary_match =
-        common_match_binary_consumer(binary_node, node->output, kCommonArithmeticBinaryKinds);
-    if (!binary_match.matched() || !graph.index().node_index(binary_node, binary_node_index)) {
+    if (binary_node == nullptr || !is_binary_op(binary_node->op) || binary_node->inputs.size() != 2 ||
+        !graph.index().node_index(binary_node, binary_node_index)) {
         return {};
     }
-    if (!binary_match.producer_is_lhs && common_binary_kind_requires_order(binary_match.kind)) {
+    const BinaryParams * binary_params = op_params_as<BinaryParams>(binary_node->params);
+    if (binary_params == nullptr || !binary_kind_supported(binary_params->op)) {
         return {};
     }
 
+    const bool rms_is_lhs = binary_node->inputs[0] == node->output;
+    const bool rms_is_rhs = binary_node->inputs[1] == node->output;
+    if (!rms_is_lhs && !rms_is_rhs) {
+        return {};
+    }
+    if (rms_is_rhs && binary_kind_requires_order(binary_params->op)) {
+        return {};
+    }
+
+    const ValueId rhs_id = rms_is_lhs ? binary_node->inputs[1] : binary_node->inputs[0];
     const Value * input  = graph_value(graph, node->inputs[0]);
     const Value * rms    = graph_value(graph, node->output);
-    const Value * rhs    = graph_value(graph, binary_match.operand);
+    const Value * rhs    = graph_value(graph, rhs_id);
     const Value * output = graph_value(graph, binary_node->output);
     if (input == nullptr || rms == nullptr || rhs == nullptr || output == nullptr) {
         return {};
@@ -425,7 +427,7 @@ static RmsNormBinaryMatch match_rmsnorm_binary_f32(const Graph &     graph,
         output->type != GGML_TYPE_F32) {
         return {};
     }
-    if (!rms->contiguous || !rhs->contiguous || !output->contiguous) {
+    if (!input->contiguous || !rms->contiguous || !rhs->contiguous || !output->contiguous) {
         return {};
     }
     if (!same_shape(*input, *rms) || !same_shape(*input, *output)) {
@@ -443,13 +445,6 @@ static RmsNormBinaryMatch match_rmsnorm_binary_f32(const Graph &     graph,
     if (!is_supported_token_count(token_count)) {
         return {};
     }
-    int64_t input_stride = 0;
-    size_t  input_span   = 0;
-    if (!supported_rmsnorm_input_layout(*input, hidden_size, token_count, input_stride, input_span) ||
-        (!allow_strided_input && input_stride != hidden_size) ||
-        !pairwise_distinct_storage_roots(std::array<const Value *, 3>{ input, rhs, output })) {
-        return {};
-    }
 
     match.rms_node          = node;
     match.binary_node       = binary_node;
@@ -460,66 +455,8 @@ static RmsNormBinaryMatch match_rmsnorm_binary_f32(const Graph &     graph,
     match.binary_node_index = binary_node_index;
     match.hidden_size       = hidden_size;
     match.token_count       = token_count;
-    match.input_stride      = input_stride;
-    match.input_span        = input_span;
-    match.op                = binary_match.kind;
+    match.op                = binary_params->op;
     match.epsilon           = rms_params->eps;
-    return match;
-}
-
-static RmsNormMulAddMatch match_rmsnorm_mul_add_f32(const DispatchMatchContext & context) {
-    RmsNormMulAddMatch match;
-    match.rms_binary = match_rmsnorm_binary_f32(context.graph, context.root_node, context.root_index);
-    if (!match.rms_binary.matched()) {
-        return {};
-    }
-
-    const std::vector<const GraphNode *> & consumers = context.graph.index().consumers(match.rms_binary.output->id);
-    if (consumers.size() != 1) {
-        return {};
-    }
-    const GraphNode * add = consumers.front();
-    size_t            add_index = 0;
-    const CommonBinaryMatch output_binary =
-        common_match_binary_consumer(add, match.rms_binary.output->id, kCommonArithmeticBinaryKinds);
-    if (!output_binary.matched() || !context.graph.index().node_index(add, add_index)) {
-        return {};
-    }
-    const Value * residual   = graph_value(context.graph, output_binary.operand);
-    const Value * output   = graph_value(context.graph, add->output);
-    const Value * rms_output = graph_value(context.graph, match.rms_binary.rms_node->output);
-    if (residual == nullptr || output == nullptr || rms_output == nullptr || residual->type != GGML_TYPE_F32 ||
-        output->type != GGML_TYPE_F32 || !residual->contiguous || !output->contiguous ||
-        !same_shape(*residual, *match.rms_binary.input) || !same_shape(*output, *match.rms_binary.input) ||
-        !pairwise_distinct_storage_roots(std::array<const Value *, 6>{
-            match.rms_binary.input, match.rms_binary.rhs, rms_output, match.rms_binary.output, residual, output })) {
-        return {};
-    }
-    const size_t nodes_size = context.covered_nodes.size();
-    if (match.rms_binary.rms_node_index >= nodes_size || match.rms_binary.binary_node_index >= nodes_size ||
-        add_index >= nodes_size || context.covered_nodes[match.rms_binary.rms_node_index] ||
-        context.covered_nodes[match.rms_binary.binary_node_index] || context.covered_nodes[add_index]) {
-        return {};
-    }
-    const auto available = [&](const Value & value) {
-        const GraphNode * producer = context.graph.index().producer(value.id);
-        if (producer == nullptr) {
-            return true;
-        }
-        size_t producer_index = 0;
-        return context.graph.index().node_index(producer, producer_index) && producer_index < nodes_size &&
-               context.covered_nodes[producer_index];
-    };
-    if (!available(*match.rms_binary.input) || !available(*match.rms_binary.rhs) || !available(*residual)) {
-        return {};
-    }
-
-    match.add_node       = add;
-    match.residual       = residual;
-    match.output         = output;
-    match.add_node_index = add_index;
-    match.output_op      = output_binary.kind;
-    match.binary_lhs     = output_binary.producer_is_lhs;
     return match;
 }
 
@@ -558,6 +495,7 @@ static AddRmsNormBinarySymmetricI4Match match_add_rmsnorm_binary_symmetric_i4(co
     RmsNormBinaryMatch rms_binary = match_rmsnorm_binary_f32(graph, rms_node, rms_node_index);
     if (!rms_binary.matched() || rms_binary.input->id != residual->id || rms_binary.op != BinaryKind::Mul ||
         !is_supported_symmetric_i4_hidden_size(rms_binary.hidden_size) ||
+        !common_has_symmetric_i4_lowrow_consumer(graph, *rms_binary.output) ||
         !pairwise_distinct_storage_roots(
             std::array<const Value *, 5>{ lhs, rhs, residual, rms_binary.rhs, rms_binary.output })) {
         return {};
@@ -572,7 +510,9 @@ static AddRmsNormBinarySymmetricI4Match match_add_rmsnorm_binary_symmetric_i4(co
     return match;
 }
 
-static RmsNormGateMatch match_rmsnorm_gate(const Graph & graph, const GraphNode * node, size_t node_index) {
+static RmsNormGateMatch match_rmsnorm_gate(const Graph &     graph,
+                                         const GraphNode * node,
+                                         size_t            node_index) {
     RmsNormGateMatch match;
     const RmsNormBinaryMatch rms_binary = match_rmsnorm_binary_f32(graph, node, node_index);
     if (!rms_binary.matched() || rms_binary.op != BinaryKind::Mul || rms_binary.hidden_size % 64 != 0) {
@@ -646,12 +586,6 @@ static bool match_rmsnorm_mul_rope_f32_dispatch(const DispatchMatchContext & con
     if (!fused.matched()) {
         return false;
     }
-    if (fused.rope_params->mode == GGML_ROPE_TYPE_NEOX &&
-        (!fused_input_is_available(context.graph, fused.input->id, context.covered_nodes) ||
-         !fused_input_is_available(context.graph, fused.weight->id, context.covered_nodes) ||
-         !fused_input_is_available(context.graph, fused.positions->id, context.covered_nodes))) {
-        return false;
-    }
 
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kRmsNormMulRopeF32Kernel);
@@ -673,10 +607,8 @@ static bool match_rmsnorm_mul_rope_f32_dispatch(const DispatchMatchContext & con
     config.emplace("ggml.rmsnorm_mul_rope.output_stride3",
                    to_config_value(static_cast<int64_t>(fused.output->nb[3] / sizeof(float))));
     config.emplace("ggml.rmsnorm_mul_rope.n_dims", to_config_value(static_cast<int64_t>(fused.rope_params->n_dims)));
-    const bool neox_mode = fused.rope_params->mode == GGML_ROPE_TYPE_NEOX;
     config.emplace("ggml.rmsnorm_mul_rope.section0",
-                   to_config_value(neox_mode ? static_cast<int64_t>(fused.rope_params->n_dims / 2) :
-                                               static_cast<int64_t>(fused.rope_params->sections[0])));
+                   to_config_value(static_cast<int64_t>(fused.rope_params->sections[0])));
     config.emplace("ggml.rmsnorm_mul_rope.section1",
                    to_config_value(static_cast<int64_t>(fused.rope_params->sections[1])));
     config.emplace("ggml.rmsnorm_mul_rope.section2",
@@ -715,22 +647,12 @@ static bool match_add_rmsnorm_binary_symmetric_i4_dispatch(const DispatchMatchCo
         return false;
     }
 
-    const CommonActivationPublicationCapabilities capabilities = {
-        DispatchActivationInputSymmetricI4K32,
-        DispatchActivationInputSymmetricI4K32,
-    };
-    const CommonActivationPublicationPlan publication_plan =
-        common_select_activation_publication_plan(context, *fused.rms_binary.output, capabilities);
-    if (!publication_plan.matched()) {
+    const CommonSymmetricI4ActivationLayout activation_layout =
+        common_symmetric_i4_activation_layout(fused.rms_binary.hidden_size, fused.rms_binary.token_count);
+    if (activation_layout.total_bytes == 0) {
         return false;
     }
-    const CommonActivationPublicationDemand & demand = publication_plan.preferred();
-    CommonActivationPublication publication;
-    if (!common_reserve_activation_publication(context, match, *fused.rms_binary.output, demand,
-                                               kCommonSymmetricI4K32ActivationAlternateName, publication) ||
-        !common_append_activation_publication(match, publication, kCommonSymmetricI4K32ActivationAlternateName)) {
-        return false;
-    }
+    const ValueId activation = context.next_plan_value;
 
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kAddRmsNormBinarySymmetricI4K32Kernel);
@@ -744,14 +666,25 @@ static bool match_add_rmsnorm_binary_symmetric_i4_dispatch(const DispatchMatchCo
     dispatch.bindings.push_back({ fused.residual->id, 0, fused.residual->byte_count });
     dispatch.bindings.push_back({ fused.rms_binary.rhs->id, 0, fused.rms_binary.rhs->byte_count });
     dispatch.bindings.push_back({ fused.rms_binary.output->id, 0, fused.rms_binary.output->byte_count });
-    dispatch.bindings.push_back(publication.binding(0, publication.payload_bytes));
-    dispatch.bindings.push_back(publication.binding(publication.scales_offset, publication.scales_bytes));
-    dispatch.bindings.push_back(publication.binding(publication.sums_offset, publication.sums_bytes));
+    dispatch.bindings.push_back({ activation, 0, activation_layout.payload_bytes });
+    dispatch.bindings.push_back({ activation, activation_layout.scales_offset, activation_layout.metadata_bytes });
+    dispatch.bindings.push_back({ activation, activation_layout.sums_offset, activation_layout.metadata_bytes });
+
+    Status metadata_status;
+    if (!match.metadata.append_alternate_value(
+            { fused.rms_binary.output->id, activation, GGML_TYPE_COUNT, activation_layout.total_bytes,
+              kCommonSymmetricI4K32ActivationAlternateName },
+            metadata_status)) {
+        match.status.append(metadata_status);
+        return false;
+    }
 
     match.covered_nodes.push_back(fused.add_node_index);
     match.covered_nodes.push_back(fused.rms_binary.rms_node_index);
     match.covered_nodes.push_back(fused.rms_binary.binary_node_index);
     match.dispatches.push_back(std::move(dispatch));
+    match.transients.push_back(
+        { activation, kCommonSymmetricI4K32ActivationAlternateName, activation_layout.total_bytes, 256 });
     return match.status.success();
 }
 
@@ -762,30 +695,22 @@ static bool match_rmsnorm_binary_symmetric_i4_dispatch(const DispatchMatchContex
     }
     const RmsNormBinaryMatch fused =
         match_rmsnorm_binary_f32(context.graph, &nodes[context.root_index], context.root_index);
-    if (!fused.matched() || fused.op != BinaryKind::Mul || !is_supported_symmetric_i4_hidden_size(fused.hidden_size) ||
-        fused.token_count > 16 || fused.rms_node_index >= context.covered_nodes.size() ||
+    if (!fused.matched() || fused.op != BinaryKind::Mul ||
+        !is_supported_symmetric_i4_hidden_size(fused.hidden_size) || fused.token_count > 16 ||
+        fused.rms_node_index >= context.covered_nodes.size() ||
         fused.binary_node_index >= context.covered_nodes.size() || context.covered_nodes[fused.rms_node_index] ||
         context.covered_nodes[fused.binary_node_index] ||
+        !common_has_symmetric_i4_lowrow_consumer(context.graph, *fused.output) ||
         !pairwise_distinct_storage_roots(std::array<const Value *, 3>{ fused.input, fused.rhs, fused.output })) {
         return false;
     }
 
-    const CommonActivationPublicationCapabilities capabilities = {
-        DispatchActivationInputSymmetricI4K32,
-        DispatchActivationInputSymmetricI4K32,
-    };
-    const CommonActivationPublicationPlan publication_plan =
-        common_select_activation_publication_plan(context, *fused.output, capabilities);
-    if (!publication_plan.matched()) {
+    const CommonSymmetricI4ActivationLayout activation_layout =
+        common_symmetric_i4_activation_layout(fused.hidden_size, fused.token_count);
+    if (activation_layout.total_bytes == 0) {
         return false;
     }
-    const CommonActivationPublicationDemand & demand = publication_plan.preferred();
-    CommonActivationPublication publication;
-    if (!common_reserve_activation_publication(context, match, *fused.output, demand,
-                                               kCommonSymmetricI4K32ActivationAlternateName, publication) ||
-        !common_append_activation_publication(match, publication, kCommonSymmetricI4K32ActivationAlternateName)) {
-        return false;
-    }
+    const ValueId activation = context.next_plan_value;
 
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kRmsNormBinarySymmetricI4K32Kernel);
@@ -797,13 +722,24 @@ static bool match_rmsnorm_binary_symmetric_i4_dispatch(const DispatchMatchContex
     dispatch.bindings.push_back({ fused.input->id, 0, fused.input->byte_count });
     dispatch.bindings.push_back({ fused.rhs->id, 0, fused.rhs->byte_count });
     dispatch.bindings.push_back({ fused.output->id, 0, fused.output->byte_count });
-    dispatch.bindings.push_back(publication.binding(0, publication.payload_bytes));
-    dispatch.bindings.push_back(publication.binding(publication.scales_offset, publication.scales_bytes));
-    dispatch.bindings.push_back(publication.binding(publication.sums_offset, publication.sums_bytes));
+    dispatch.bindings.push_back({ activation, 0, activation_layout.payload_bytes });
+    dispatch.bindings.push_back({ activation, activation_layout.scales_offset, activation_layout.metadata_bytes });
+    dispatch.bindings.push_back({ activation, activation_layout.sums_offset, activation_layout.metadata_bytes });
+
+    Status metadata_status;
+    if (!match.metadata.append_alternate_value(
+            { fused.output->id, activation, GGML_TYPE_COUNT, activation_layout.total_bytes,
+              kCommonSymmetricI4K32ActivationAlternateName },
+            metadata_status)) {
+        match.status.append(metadata_status);
+        return false;
+    }
 
     match.covered_nodes.push_back(fused.rms_node_index);
     match.covered_nodes.push_back(fused.binary_node_index);
     match.dispatches.push_back(std::move(dispatch));
+    match.transients.push_back(
+        { activation, kCommonSymmetricI4K32ActivationAlternateName, activation_layout.total_bytes, 256 });
     return match.status.success();
 }
 
@@ -813,23 +749,16 @@ static bool match_rmsnorm_gate_dispatch(const DispatchMatchContext & context, Di
         return false;
     }
 
-    const CommonActivationPublicationCapabilities i4_capabilities = {
-        fused.gate_op == UnaryKind::Silu ? DispatchActivationInputSymmetricI4K32 : DispatchActivationInputNone,
-        DispatchActivationInputSymmetricI4K32,
-    };
-    const CommonActivationPublicationPlan i4_plan =
-        common_select_activation_publication_plan(context, *fused.output, i4_capabilities);
-    const bool use_i4 = i4_plan.matched();
+    const bool use_i4 = fused.gate_op == UnaryKind::Silu &&
+                        common_has_symmetric_i4_lowrow_consumer(context.graph, *fused.output);
     if (!use_i4) {
         if (fused.hidden_size > 1024) {
             return false;
         }
         const Value * packed_input = fused.output;
-        const GraphNode * consumer =
-            common_find_only_consumer_with_op(context.graph, packed_input->id, GGML_OP_MUL_MAT);
+        const GraphNode * consumer = common_find_only_consumer_with_op(context.graph, packed_input->id, GGML_OP_MUL_MAT);
         if (consumer == nullptr) {
-            const GraphNode * reshape =
-                common_find_only_consumer_with_op(context.graph, packed_input->id, GGML_OP_RESHAPE);
+            const GraphNode * reshape = common_find_only_consumer_with_op(context.graph, packed_input->id, GGML_OP_RESHAPE);
             const Value * reshaped = reshape != nullptr ? graph_value(context.graph, reshape->output) : nullptr;
             if (reshaped != nullptr && is_layout_alias_node(context.graph, *reshape) && reshaped->contiguous &&
                 same_full_value_range(*packed_input, *reshaped)) {
@@ -837,78 +766,62 @@ static bool match_rmsnorm_gate_dispatch(const DispatchMatchContext & context, Di
                 consumer = common_find_only_consumer_with_op(context.graph, packed_input->id, GGML_OP_MUL_MAT);
             }
         }
-        const uint32_t enabled_formats = DispatchActivationInputF16K16Major | DispatchActivationInputF16Row;
-        const CommonActivationPublicationCapabilities capabilities = {
-            enabled_formats,
-            DispatchActivationInputF16Row,
-            DispatchActivationProducerRequirementFactoredTiledF16,
-        };
-        const CommonActivationPublicationPlan publication_plan =
-            common_select_activation_publication_plan(context, *packed_input, capabilities);
-        const CommonActivationPublicationCapabilities q8_capabilities = {
-            packed_input->ne[1] <= 5 ? DispatchActivationInputQ8_1X4 : DispatchActivationInputNone,
-            DispatchActivationInputQ8_1X4,
-            DispatchActivationProducerRequirementNone,
-            DispatchActivationInputNone,
-            DispatchActivationConsumerSourceAll,
-            DispatchActivationConsumerTraitQ8PublicationPreferred,
-        };
-        const CommonActivationPublicationPlan q8_plan =
-            common_select_activation_publication_plan(context, *packed_input, q8_capabilities);
-        const CommonActivationPublicationDemand * publication_demand =
-            q8_plan.matched() ? &q8_plan.preferred() :
-            publication_plan.matched() ? &publication_plan.preferred() : nullptr;
-        const bool packed_output = publication_demand != nullptr &&
-                                   publication_demand->format == CommonActivationPublicationFormat::F16K16Major;
-        const bool q8_output     = publication_demand != nullptr &&
-                                   publication_demand->format == CommonActivationPublicationFormat::Q8_1X4;
+        const CommonMulMatMatch projection =
+            common_match_mul_mat_any_format(context.graph, consumer, kRmsNormGateF32F16Kernel, false);
+        const bool packed_output = projection.matched() && projection.input->id == packed_input->id &&
+                                   projection.weight->alias_source.value < 0 &&
+                                   common_mul_mat_uses_k16_major_f16(projection.weight_format, projection.input_size,
+                                                                     projection.output_size, projection.token_count);
+        const bool q8_output = !packed_output && packed_input->ne[1] <= 5 &&
+                               is_packed_q8_consumer(context.graph, consumer, *packed_input);
+        const size_t activation_bytes = q8_output ? q8_1_x4_byte_count(fused.token_count, fused.hidden_size) :
+                                                   fused.output->byte_count / 2;
+        const ValueId          activation = context.next_plan_value;
         const char * activation_name = q8_output ? "common.rmsnorm_gate.q8_1_x4" :
                                        packed_output ? "common.rmsnorm_gate.k16_major_f16" : "common.rmsnorm_gate.f16";
-        const Value & publication_source = packed_output ? *packed_input : *fused.output;
-        CommonActivationPublication publication;
-        if (publication_demand != nullptr) {
-            if (!common_reserve_activation_publication(context, match, publication_source, *publication_demand,
-                                                       activation_name, publication) ||
-                !common_append_activation_publication(match, publication, activation_name)) {
-                return false;
-            }
-        } else if (!common_reserve_private_activation_output(context, match, *fused.output,
-                                                             CommonActivationPublicationFormat::F16Row,
-                                                             activation_name, publication)) {
-            return false;
-        }
         Dispatch dispatch;
-        dispatch.kernel = make_kernel_specialization(kRmsNormGateF32PublishKernel);
+        dispatch.kernel = make_kernel_specialization(q8_output ? kRmsNormGateF32Q8_1X4Kernel : kRmsNormGateF32F16Kernel);
         dispatch.kernel.integer_parameters.emplace("token_count", fused.token_count);
         dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_gate_f32.hidden_size",
                                                    to_config_value(fused.hidden_size));
-        dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_gate_f32.rms_epsilon", to_config_value(fused.epsilon));
+        dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_gate_f32.rms_epsilon",
+                                                   to_config_value(fused.epsilon));
         dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_gate_f32.gate_op",
                                                    std::to_string(unary_kind_config_value(fused.gate_op)));
         dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_gate_f32.f16_output_row_width",
-                                                   to_config_value(packed_output ? publication_demand->consumer_value->ne[0] : 0));
-        dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_gate_f32.publish_q8", q8_output ? "1" : "0");
+                                                   to_config_value(packed_output ? projection.input_size : 0));
         dispatch.bindings.push_back({ fused.input->id, 0, fused.input->byte_count });
         dispatch.bindings.push_back({ fused.weight->id, 0, fused.weight->byte_count });
         dispatch.bindings.push_back({ fused.raw_gate->id, 0, fused.raw_gate->byte_count });
         dispatch.bindings.push_back({ fused.output->id, 0, fused.output->byte_count });
-        dispatch.bindings.push_back(publication.binding());
+        dispatch.bindings.push_back({ activation, 0, activation_bytes });
+        Status status;
+        const bool recorded = packed_output ?
+            match.metadata.append_generated_resource(
+                { packed_input->id, GeneratedResourceRole::F16K16Major, activation, activation_bytes, {} }, status) :
+            match.metadata.append_alternate_value(
+                { fused.output->id, activation, q8_output ? GGML_TYPE_Q8_1 : GGML_TYPE_F16,
+                  activation_bytes, activation_name }, status);
+        if (!recorded) {
+            match.status.append(status);
+            return false;
+        }
         for (const GraphNode * covered : fused.covered) {
             if (!append_covered_node_index_once(context.graph, context.covered_nodes, covered, match.covered_nodes)) {
                 return false;
             }
         }
+        match.transients.push_back({ activation, activation_name, activation_bytes, 256 });
         match.dispatches.push_back(std::move(dispatch));
         return true;
     }
 
-    const CommonActivationPublicationDemand & i4_demand = i4_plan.preferred();
-    CommonActivationPublication publication;
-    if (!common_reserve_activation_publication(context, match, *fused.output, i4_demand,
-                                               kCommonSymmetricI4K32ActivationAlternateName, publication) ||
-        !common_append_activation_publication(match, publication, kCommonSymmetricI4K32ActivationAlternateName)) {
+    const CommonSymmetricI4ActivationLayout activation_layout =
+        common_symmetric_i4_activation_layout(fused.hidden_size, fused.token_count);
+    if (activation_layout.total_bytes == 0) {
         return false;
     }
+    const ValueId activation = context.next_plan_value;
 
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kRmsNormGateSiluMulSymmetricI4K32Kernel);
@@ -921,31 +834,50 @@ static bool match_rmsnorm_gate_dispatch(const DispatchMatchContext & context, Di
     dispatch.bindings.push_back({ fused.weight->id, 0, fused.weight->byte_count });
     dispatch.bindings.push_back({ fused.raw_gate->id, 0, fused.raw_gate->byte_count });
     dispatch.bindings.push_back({ fused.output->id, 0, fused.output->byte_count });
-    dispatch.bindings.push_back(publication.binding(0, publication.payload_bytes));
-    dispatch.bindings.push_back(publication.binding(publication.scales_offset, publication.scales_bytes));
-    dispatch.bindings.push_back(publication.binding(publication.sums_offset, publication.sums_bytes));
+    dispatch.bindings.push_back({ activation, 0, activation_layout.payload_bytes });
+    dispatch.bindings.push_back({ activation, activation_layout.scales_offset, activation_layout.metadata_bytes });
+    dispatch.bindings.push_back({ activation, activation_layout.sums_offset, activation_layout.metadata_bytes });
+
+    Status metadata_status;
+    if (!match.metadata.append_alternate_value(
+            { fused.output->id, activation, GGML_TYPE_COUNT, activation_layout.total_bytes,
+              kCommonSymmetricI4K32ActivationAlternateName },
+            metadata_status)) {
+        match.status.append(metadata_status);
+        return false;
+    }
     for (const GraphNode * covered : fused.covered) {
         if (!append_covered_node_index_once(context.graph, context.covered_nodes, covered, match.covered_nodes)) {
             return false;
         }
     }
     match.dispatches.push_back(std::move(dispatch));
+    match.transients.push_back(
+        { activation, kCommonSymmetricI4K32ActivationAlternateName, activation_layout.total_bytes, 256 });
     return match.status.success();
 }
 
-static bool rmsnorm_k16_publication_enabled(const RmsNormBinaryMatch & rms) {
+static bool has_qualified_rmsnorm_k16_consumer(const Graph & graph, const RmsNormBinaryMatch & rms) {
     const bool qualified_shape =
-        (rms.token_count == 512 && (rms.hidden_size == 2048 || rms.hidden_size == 3072 || rms.hidden_size == 4096 ||
-                                   rms.hidden_size == 5120 || rms.hidden_size == 6144 || rms.hidden_size == 8192)) ||
+        (rms.token_count == 512 && (rms.hidden_size == 4096 || rms.hidden_size == 5120 ||
+                                   rms.hidden_size == 6144 || rms.hidden_size == 8192)) ||
         (rms.token_count == 1024 && rms.hidden_size == 5120);
-    return qualified_shape && rms.op == BinaryKind::Mul && rms.output->ne[1] == rms.token_count &&
-           rms.output->ne[2] == 1 && rms.output->ne[3] == 1 &&
-           pairwise_distinct_storage_roots(std::array<const Value *, 3>{ rms.input, rms.rhs, rms.output });
-}
-
-static bool rmsnorm_f16_publication_enabled(const RmsNormBinaryMatch & rms) {
-    return rms.token_count >= 128 && rms.output->ne[1] == rms.token_count && rms.output->ne[2] == 1 &&
-           rms.output->ne[3] == 1;
+    if (!qualified_shape || rms.op != BinaryKind::Mul || rms.output->ne[1] != rms.token_count ||
+        rms.output->ne[2] != 1 || rms.output->ne[3] != 1 ||
+        !pairwise_distinct_storage_roots(std::array<const Value *, 3>{ rms.input, rms.rhs, rms.output })) {
+        return false;
+    }
+    for (const GraphNode * consumer : graph.index().consumers(rms.output->id)) {
+        const CommonMulMatMatch projection =
+            common_match_mul_mat_any_format(graph, consumer, kRmsNormBinaryF32K16Kernel, false);
+        if (projection.matched() && projection.input->id == rms.output->id &&
+            projection.weight->alias_source.value < 0 &&
+            common_mul_mat_uses_k16_major_f16(projection.weight_format, projection.input_size,
+                                              projection.output_size, projection.token_count)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool match_rmsnorm_binary_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
@@ -954,31 +886,16 @@ static bool match_rmsnorm_binary_f32_dispatch(const DispatchMatchContext & conte
         return false;
     }
     const RmsNormBinaryMatch rms_match =
-        match_rmsnorm_binary_f32(context.graph, &nodes[context.root_index], context.root_index, true);
+        match_rmsnorm_binary_f32(context.graph, &nodes[context.root_index], context.root_index);
     if (!rms_match.matched() || rms_match.rms_node_index >= context.covered_nodes.size() ||
         rms_match.binary_node_index >= context.covered_nodes.size() ||
         context.covered_nodes[rms_match.rms_node_index] || context.covered_nodes[rms_match.binary_node_index]) {
         return false;
     }
 
-    const bool strided_input = rms_match.input_stride != rms_match.hidden_size;
-    const uint32_t enabled_formats =
-        (!strided_input && rmsnorm_k16_publication_enabled(rms_match) ? DispatchActivationInputF16K16Major : 0) |
-        (!strided_input && rmsnorm_f16_publication_enabled(rms_match) ? DispatchActivationInputF16Row : 0);
-    const CommonActivationPublicationCapabilities capabilities = { enabled_formats };
-    const CommonActivationPublicationPlan publication_plan =
-        common_select_activation_publication_plan(context, *rms_match.output, capabilities);
-    const CommonActivationPublicationDemand * publication_demand =
-        publication_plan.matched() ? &publication_plan.preferred() : nullptr;
-    const bool packed_output = publication_demand != nullptr &&
-                               publication_demand->format == CommonActivationPublicationFormat::F16K16Major;
-    const bool f16_output    = publication_demand != nullptr &&
-                               publication_demand->format == CommonActivationPublicationFormat::F16Row;
+    const bool packed_output = has_qualified_rmsnorm_k16_consumer(context.graph, rms_match);
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(strided_input ? kRmsNormBinaryStridedF32Kernel :
-                                                  packed_output ? kRmsNormBinaryF32K16Kernel :
-                                                  f16_output ? kRmsNormBinaryF32F16Kernel :
-                                                               kRmsNormBinaryF32Kernel);
+    dispatch.kernel = make_kernel_specialization(packed_output ? kRmsNormBinaryF32K16Kernel : kRmsNormBinaryF32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", rms_match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_binary_f32.hidden_size",
                                                to_config_value(rms_match.hidden_size));
@@ -986,59 +903,25 @@ static bool match_rmsnorm_binary_f32_dispatch(const DispatchMatchContext & conte
                                                to_config_value(rms_match.epsilon));
     dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_binary_f32.op",
                                                std::to_string(binary_kind_config_value(rms_match.op)));
-    if (strided_input) {
-        dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_binary_f32.input_stride",
-                                                   to_config_value(rms_match.input_stride));
-    }
-    dispatch.bindings.push_back(
-        strided_input ?
-            DispatchBinding{ rms_match.input->storage_root, rms_match.input->storage_offset, rms_match.input_span } :
-                                    DispatchBinding{ rms_match.input->id, 0, rms_match.input->byte_count });
+    dispatch.bindings.push_back({ rms_match.input->id, 0, rms_match.input->byte_count });
     dispatch.bindings.push_back({ rms_match.rhs->id, 0, rms_match.rhs->byte_count });
     dispatch.bindings.push_back({ rms_match.output->id, 0, rms_match.output->byte_count });
 
-    if (publication_demand != nullptr) {
-        const char * publication_name = packed_output ? "common.rmsnorm_binary.k16_major_f16" :
-                                                        "common.rmsnorm_binary.f16";
-        CommonActivationPublication publication;
-        if (!common_reserve_activation_publication(context, match, *rms_match.output, *publication_demand,
-                                                   publication_name, publication) ||
-            !common_append_activation_publication(match, publication, publication_name)) {
+    if (packed_output) {
+        const ValueId packed = context.next_plan_value;
+        const size_t bytes = rms_match.output->byte_count / 2;
+        Status status;
+        if (!match.metadata.append_generated_resource(
+                { rms_match.output->id, GeneratedResourceRole::F16K16Major, packed, bytes, {} }, status)) {
+            match.status.append(status);
             return false;
         }
-        dispatch.bindings.push_back(publication.binding());
+        dispatch.bindings.push_back({ packed, 0, bytes });
+        match.transients.push_back({ packed, "common.rmsnorm_binary.k16_major_f16", bytes, 256 });
     }
 
     match.covered_nodes.push_back(rms_match.rms_node_index);
     match.covered_nodes.push_back(rms_match.binary_node_index);
-    match.dispatches.push_back(std::move(dispatch));
-    return match.status.success();
-}
-
-static bool match_rmsnorm_mul_add_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
-    const RmsNormMulAddMatch fused = match_rmsnorm_mul_add_f32(context);
-    if (!fused.matched()) {
-        return false;
-    }
-
-    Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kRmsNormMulAddF32Kernel);
-    dispatch.kernel.integer_parameters.emplace("token_count", fused.rms_binary.token_count);
-    dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_mul_add_f32.hidden_size",
-                                               to_config_value(fused.rms_binary.hidden_size));
-    dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_mul_add_f32.rms_epsilon",
-                                               to_config_value(fused.rms_binary.epsilon));
-    common_set_binary_compile_parameters(dispatch.kernel, "ggml.rmsnorm_mul_add_f32.normalized_op", nullptr,
-                                         fused.rms_binary.op, true);
-    common_set_binary_compile_parameters(dispatch.kernel, "ggml.rmsnorm_mul_add_f32.output_op",
-                                         "ggml.rmsnorm_mul_add_f32.binary_lhs", fused.output_op, fused.binary_lhs);
-    dispatch.bindings.push_back({ fused.rms_binary.input->id, 0, fused.rms_binary.input->byte_count });
-    dispatch.bindings.push_back({ fused.rms_binary.rhs->id, 0, fused.rms_binary.rhs->byte_count });
-    dispatch.bindings.push_back({ fused.residual->id, 0, fused.residual->byte_count });
-    dispatch.bindings.push_back({ fused.output->id, 0, fused.output->byte_count });
-    match.covered_nodes.push_back(fused.rms_binary.rms_node_index);
-    match.covered_nodes.push_back(fused.rms_binary.binary_node_index);
-    match.covered_nodes.push_back(fused.add_node_index);
     match.dispatches.push_back(std::move(dispatch));
     return true;
 }
@@ -1050,43 +933,22 @@ static bool match_rmsnorm_binary_q8_1_x4_dispatch(const DispatchMatchContext & c
     }
     const RmsNormBinaryMatch rms_match =
         match_rmsnorm_binary_f32(context.graph, &nodes[context.root_index], context.root_index);
-    const CommonActivationPublicationCapabilities capabilities = {
-        DispatchActivationInputQ8_1X4,
-        DispatchActivationInputQ8_1X4,
-        DispatchActivationProducerRequirementNone,
-        DispatchActivationInputQ8_1X4 | DispatchActivationInputF16Row,
-        DispatchActivationConsumerSourceAll,
-        DispatchActivationConsumerTraitQ8PublicationPreferred,
-    };
-    const CommonActivationPublicationPlan publication_plan =
-        rms_match.matched() ? common_select_activation_publication_plan(context, *rms_match.output, capabilities) :
-                              CommonActivationPublicationPlan{};
-    const CommonActivationPublicationDemand * q8_demand =
-        publication_plan.find(CommonActivationPublicationFormat::Q8_1X4);
-    const CommonActivationPublicationDemand * f16_demand =
-        publication_plan.find(CommonActivationPublicationFormat::F16Row);
     if (!rms_match.matched() || rms_match.rms_node_index >= context.covered_nodes.size() ||
         rms_match.binary_node_index >= context.covered_nodes.size() ||
         context.covered_nodes[rms_match.rms_node_index] || context.covered_nodes[rms_match.binary_node_index] ||
-        q8_demand == nullptr || f16_demand == nullptr) {
+        !has_packed_q8_consumer(context.graph, *rms_match.output)) {
         return false;
     }
 
-    CommonActivationPublication q8_publication;
-    if (!common_reserve_activation_publication(context, match, *rms_match.output, *q8_demand,
-                                               "common.rmsnorm_binary.q8_1_x4", q8_publication)) {
+    const size_t q8_byte_count = q8_1_x4_byte_count(rms_match.token_count, rms_match.hidden_size);
+    if (q8_byte_count == 0) {
         return false;
     }
-    CommonActivationPublication f16_publication;
-    if (!common_reserve_activation_publication(context, match, *rms_match.output, *f16_demand,
-                                               "common.rmsnorm_binary.f16", f16_publication) ||
-        !common_append_activation_publication(match, q8_publication, "common.rmsnorm_binary.q8_1_x4") ||
-        !common_append_activation_publication(match, f16_publication, "common.rmsnorm_binary.f16")) {
-        return false;
-    }
+
+    const ValueId q8_value = context.next_plan_value;
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kRmsNormBinaryQ8_1X4PublishKernel);
+    dispatch.kernel = make_kernel_specialization(kRmsNormBinaryQ8_1X4Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", rms_match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_binary_q8_1_x4.hidden_size",
                                                to_config_value(rms_match.hidden_size));
@@ -1094,16 +956,23 @@ static bool match_rmsnorm_binary_q8_1_x4_dispatch(const DispatchMatchContext & c
                                                to_config_value(rms_match.epsilon));
     dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_binary_q8_1_x4.op",
                                                std::to_string(binary_kind_config_value(rms_match.op)));
-    dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_binary_q8_1_x4.publish_f16", "1");
     dispatch.bindings.push_back({ rms_match.input->id, 0, rms_match.input->byte_count });
     dispatch.bindings.push_back({ rms_match.rhs->id, 0, rms_match.rhs->byte_count });
     dispatch.bindings.push_back({ rms_match.output->id, 0, rms_match.output->byte_count });
-    dispatch.bindings.push_back(q8_publication.binding());
-    dispatch.bindings.push_back(f16_publication.binding());
+    dispatch.bindings.push_back({ q8_value, 0, q8_byte_count });
+
+    Status metadata_status;
+    if (!match.metadata.append_alternate_value(
+            { rms_match.output->id, q8_value, GGML_TYPE_Q8_1, q8_byte_count, "common.rmsnorm_binary.q8_1_x4" },
+            metadata_status)) {
+        match.status.append(metadata_status);
+        return false;
+    }
 
     match.covered_nodes.push_back(rms_match.rms_node_index);
     match.covered_nodes.push_back(rms_match.binary_node_index);
     match.dispatches.push_back(std::move(dispatch));
+    match.transients.push_back({ q8_value, "common.rmsnorm_binary.q8_1_x4", q8_byte_count, 256 });
     return match.status.success();
 }
 
@@ -1120,7 +989,6 @@ static bool match_rmsnorm_f32_dispatch(const DispatchMatchContext & context, Dis
 
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kRmsNormF32Kernel);
-    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     dispatch.kernel.integer_parameters.emplace("token_count", rms_match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_f32.hidden_size", to_config_value(rms_match.hidden_size));
     dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_f32.rms_epsilon", to_config_value(rms_match.epsilon));
@@ -1171,14 +1039,6 @@ void register_rmsnorm_dispatches(DispatchRegistryBuilder & registry) {
         300,
         DispatchSource::Common,
         match_rmsnorm_mul_rope_f32_dispatch,
-    });
-    registry.add({
-        "common.rmsnorm_mul_add_f32",
-        GGML_OP_RMS_NORM,
-        DispatchMatchKind::Fused,
-        250,
-        DispatchSource::Common,
-        match_rmsnorm_mul_add_f32_dispatch,
     });
     registry.add({
         "common.rmsnorm_binary_q8_1_x4",

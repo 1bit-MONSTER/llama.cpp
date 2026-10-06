@@ -1,12 +1,9 @@
 #include "dispatch-routed-ffn.h"
 
 #include "dispatch-llm-shapes.h"
-#include "dispatch_registration/common/dispatch-activation-publication.h"
-#include "dispatch_registration/common/dispatch-mul-mat-common.h"
 #include "dispatch_registration/common/dispatch-mul-mat-weight-format.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
-#include "graph/op-params.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cstdint>
@@ -20,33 +17,31 @@ namespace {
 
 static constexpr KernelCatalogRef kCommonRoutedGateUpSwiGLUF16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_swiglu_f16_f16_wmma");
-static constexpr KernelCatalogRef kCommonVectorRoutedGateUpSwiGLUPublishF32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_pair_binary_publish_f32");
-static constexpr KernelCatalogRef kCommonVectorRoutedGateUpSwiGLUPublishQ8Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_pair_binary_publish_q8");
+static constexpr KernelCatalogRef kQwenRoutedGateUpSwiGLUQ4KQ8Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_gate_up_swiglu_q4k_q8");
+static constexpr KernelCatalogRef kQwenRoutedGateUpSwiGLUQ4KQ8NextQ8Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8");
 static constexpr KernelCatalogRef kCommonMulMatIdF16F16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_f16_f16_wmma");
-static constexpr KernelCatalogRef kCommonVectorRoutedDownQ4KPublishQ8Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_weighted_wave32_publish_q8");
-static constexpr KernelCatalogRef kCommonVectorRoutedDownQ6KPublishQ8Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_weighted_wave64_publish_q8");
+static constexpr KernelCatalogRef kQwenRoutedDownQ4KQ8NextQ8Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_q4k_q8_1_x4_next_q8");
+static constexpr KernelCatalogRef kQwenRoutedDownQ6KF32Wave64NextQ8Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_q6k_f32_wave64_next_q8");
 static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceF16F32Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_f16_f32");
 static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32");
-static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceNextRmsNormF32PublishQ8Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8");
 
 static constexpr const LlmMoeDispatchProfile & kRoutedFfnProfile                 = kActiveLlmMoeDispatchProfile;
 static constexpr int64_t                       kRoutedFfnInputSize               = kRoutedFfnProfile.hidden_size;
 static constexpr int64_t                       kRoutedFfnExpertHiddenSize        = kRoutedFfnProfile.expert_hidden_size;
 static constexpr int64_t                       kRoutedFfnExpertCount             = kRoutedFfnProfile.expert_count;
 static constexpr int64_t                       kRoutedFfnRouteCount              = kRoutedFfnProfile.route_count;
+static constexpr size_t                        kRoutedFfnPlanTransientAlignment  = 256;
 static constexpr const char *                  kRoutedFfnF16GateUpOutputName     = "qwen.moe.gate_up_swiglu_f16";
 static constexpr const char *                  kRoutedFfnF16RoutedDownOutputName = "qwen.moe.routed_down_f16";
 static constexpr const char *                  kRoutedFfnQ8GateUpOutputName      = "qwen.decode.moe.gate_up_swiglu_q8";
 static constexpr const char *                  kRoutedFfnQ8HiddenOutputName      = "qwen.decode.moe.hidden_q8";
-static constexpr const char *                  kRoutedFfnQ8NextRmsNormOutputName = "qwen.moe.next_rmsnorm_q8";
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -63,51 +58,6 @@ static bool same_shape(const Value & lhs, const Value & rhs) {
         }
     }
     return true;
-}
-
-static bool is_routed_ffn_down_weight(const Value & value);
-static bool is_routed_ffn_projection_output(const Value & value, int64_t token_count);
-static bool is_routed_ffn_down_output(const Value & value, int64_t token_count);
-
-static bool accepts_routed_down_input(const DispatchMatchContext & context,
-                                      const GraphNode &            consumer,
-                                      const Value &                input,
-                                      bool                         require_q4) {
-    if (consumer.op != GGML_OP_MUL_MAT_ID || consumer.inputs.size() != 3 || consumer.inputs[1] != input.id) {
-        return false;
-    }
-    const Value * weight = graph_value(context.graph, consumer.inputs[0]);
-    const Value * output = graph_value(context.graph, consumer.output);
-    return weight != nullptr && output != nullptr && (!require_q4 || weight->type == GGML_TYPE_Q4_K) &&
-           (weight->type == GGML_TYPE_Q4_K || weight->type == GGML_TYPE_Q6_K) && is_routed_ffn_down_weight(*weight) &&
-           is_routed_ffn_projection_output(input, input.ne[2]) && is_routed_ffn_down_output(*output, input.ne[2]) &&
-           find_single_consumer_with_op_through_layout_aliases(context.graph, output->id, GGML_OP_MUL) != nullptr;
-}
-
-static bool accepts_f16_routed_down_input(const DispatchMatchContext & context,
-                                          const GraphNode &            consumer,
-                                          const Value &                input) {
-    return accepts_routed_down_input(context, consumer, input, false);
-}
-
-static bool accepts_q8_routed_down_input(const DispatchMatchContext & context,
-                                         const GraphNode &            consumer,
-                                         const Value &                input) {
-    return accepts_routed_down_input(context, consumer, input, true);
-}
-
-static bool accepts_f16_weighted_reduce_input(const DispatchMatchContext & context,
-                                              const GraphNode &            consumer,
-                                              const Value &                input) {
-    if (consumer.op != GGML_OP_MUL || consumer.inputs.size() != 2 ||
-        (consumer.inputs[0] != input.id && consumer.inputs[1] != input.id)) {
-        return false;
-    }
-    const ValueId weights_id = consumer.inputs[0] == input.id ? consumer.inputs[1] : consumer.inputs[0];
-    const Value * weights    = graph_value(context.graph, weights_id);
-    const Value * output     = graph_value(context.graph, consumer.output);
-    return weights != nullptr && output != nullptr && weights->type == GGML_TYPE_F32 && weights->contiguous &&
-           is_shape(*weights, 1, kRoutedFfnRouteCount, input.ne[2], 1) && same_shape(*output, input);
 }
 
 static bool is_profile_rms_norm_epsilon(float eps) {
@@ -230,46 +180,6 @@ static void add_routed_down_compile_parameters(Dispatch & dispatch, int64_t toke
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.routed_down.output_size",
                                                to_config_value(kRoutedFfnInputSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity", to_config_value(token_count));
-}
-
-static void add_common_vector_shape_compile_parameters(Dispatch & dispatch, int64_t input_size, int64_t output_size) {
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.vector.input_size", to_config_value(input_size));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.vector.route_count",
-                                               to_config_value(kRoutedFfnRouteCount));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.vector.expert_count",
-                                               to_config_value(kRoutedFfnExpertCount));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.vector.output_size", to_config_value(output_size));
-}
-
-static void add_common_vector_pair_compile_parameters(Dispatch & dispatch, int64_t token_count, ggml_type publish_type) {
-    add_common_vector_shape_compile_parameters(dispatch, kRoutedFfnInputSize, kRoutedFfnExpertHiddenSize);
-    const std::string q4k_format =
-        to_config_value(common_mul_mat_format_config_value(CommonMulMatWeightFormat::Q4K));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.vector.input_format",
-                                               to_config_value(static_cast<int64_t>(GGML_TYPE_Q8_1)));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.vector.lhs_weight_format", q4k_format);
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.vector.rhs_weight_format", q4k_format);
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.mul_mat_id.vector.binary_op",
-        to_config_value(static_cast<int64_t>(binary_kind_config_value(BinaryKind::SwiGLU))));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.vector.publish_format",
-                                               to_config_value(static_cast<int64_t>(publish_type)));
-    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity", to_config_value(token_count));
-}
-
-static void add_common_vector_weighted_compile_parameters(Dispatch & dispatch, int64_t token_count,
-                                                          ggml_type input_type, ggml_type weight_type) {
-    add_common_vector_shape_compile_parameters(dispatch, kRoutedFfnExpertHiddenSize, kRoutedFfnInputSize);
-    CommonMulMatWeightFormat weight_format;
-    const bool               has_weight_format = common_mul_mat_format_for_type(weight_type, weight_format);
-    GGML_ASSERT(has_weight_format);
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.vector.input_format",
-                                               to_config_value(static_cast<int64_t>(input_type)));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.mul_mat_id.vector.weight_format", to_config_value(common_mul_mat_format_config_value(weight_format)));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.vector.publish_format",
-                                               to_config_value(static_cast<int64_t>(GGML_TYPE_Q8_1)));
-    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity", to_config_value(token_count));
 }
 
 static void add_common_routed_down_compile_parameters(Dispatch & dispatch, int64_t token_count, ggml_type weight_type) {
@@ -426,48 +336,6 @@ static bool match_same_route_projection(const Graph &     graph,
            is_routed_ffn_projection_output(*output, token_count);
 }
 
-static bool accepts_q8_routed_gate_up_input_impl(const DispatchMatchContext & context,
-                                                  const GraphNode &            consumer,
-                                                  const Value &                input) {
-    if (consumer.op != GGML_OP_MUL_MAT_ID || consumer.inputs.size() != 3 || consumer.inputs[1] != input.id ||
-        input.type != GGML_TYPE_F32 || !input.contiguous || !is_shape(input, kRoutedFfnInputSize, 1, 1, 1)) {
-        return false;
-    }
-
-    const Value * route_ids = graph_value(context.graph, consumer.inputs[2]);
-    const Value * weight    = nullptr;
-    const Value * output    = nullptr;
-    if (route_ids == nullptr || route_ids->type != GGML_TYPE_I32 ||
-        !is_shape(*route_ids, kRoutedFfnRouteCount, 1, 1, 1) ||
-        !match_same_route_projection(context.graph, consumer, input.id, route_ids->id, 1, weight, output)) {
-        return false;
-    }
-
-    const GraphNode * glu_node = find_consumer_with_op(context.graph, output->id, GGML_OP_GLU);
-    if (glu_node == nullptr || glu_node->inputs.size() != 2 || !is_swiglu_params(glu_node->params)) {
-        return false;
-    }
-    const ValueId other_output = glu_node->inputs[0] == output->id ? glu_node->inputs[1] :
-                                   glu_node->inputs[1] == output->id ? glu_node->inputs[0] : ValueId();
-    const GraphNode * other_node = producer_with_op(context.graph, other_output, GGML_OP_MUL_MAT_ID);
-    const Value *     other_weight = nullptr;
-    const Value *     other_projection = nullptr;
-    if (other_node == nullptr || other_node == &consumer ||
-        !match_same_route_projection(context.graph, *other_node, input.id, route_ids->id, 1, other_weight,
-                                     other_projection) ||
-        !same_shape(*output, *other_projection)) {
-        return false;
-    }
-
-    const Value *     glu_output = graph_value(context.graph, glu_node->output);
-    const GraphNode * down_node = glu_output != nullptr ?
-                                      find_single_consumer_with_op(context.graph, glu_output->id, GGML_OP_MUL_MAT_ID) :
-                                      nullptr;
-    return glu_output != nullptr && glu_output->kind == ValueKind::Transient &&
-           is_routed_ffn_projection_output(*glu_output, 1) && down_node != nullptr && down_node->inputs.size() == 3 &&
-           down_node->inputs[2] == route_ids->id && accepts_routed_down_input(context, *down_node, *glu_output, false);
-}
-
 static bool match_same_fast_route_projection(const Graph &     graph,
                                              const GraphNode & node,
                                              ValueId           expected_input,
@@ -514,8 +382,7 @@ static RoutedDownMatch match_routed_ffn_down_grouped(const DispatchMatchContext 
     }
 
     const CommandPlanAlternateValue * input_alternate =
-        find_alternate_value(context.graph, context.plan, input->id, GGML_TYPE_F16,
-                             f16_gate_up_output_size(token_count));
+        find_alternate_value(context.plan, input->id, GGML_TYPE_F16, f16_gate_up_output_size(token_count));
     if (input_alternate == nullptr) {
         return {};
     }
@@ -999,8 +866,7 @@ static WeightedReduceMatch match_routed_ffn_down_weighted_reduce(const DispatchM
     }
     const int64_t                     token_count = match.token_count;
     const CommandPlanAlternateValue * routed_alternate =
-        find_alternate_value(context.graph, context.plan, routed_output->id, GGML_TYPE_F16,
-                             f16_routed_down_output_size(token_count));
+        find_alternate_value(context.plan, routed_output->id, GGML_TYPE_F16, f16_routed_down_output_size(token_count));
     if (routed_alternate == nullptr) {
         return {};
     }
@@ -1038,18 +904,14 @@ static bool match_routed_ffn_gate_up_swiglu_f16_wmma_dispatch(const DispatchMatc
     const std::string weight_format_config = to_config_value(common_mul_mat_format_config_value(weight_format));
     const std::string config_prefix        = "ggml.mul_mat_id_swiglu_f16_f16";
 
-    const CommonActivationPublicationCapabilities capabilities = {
-        DispatchActivationInputF16Row,
-        DispatchActivationInputF16Row,
-    };
-    const CommonActivationPublicationPlan publication_plan =
-        common_select_activation_publication_plan(context, *match.glu_output, capabilities);
-    const CommonActivationPublicationDemand f16_demand =
-        publication_plan.matched() ? publication_plan.preferred() : CommonActivationPublicationDemand{};
-    CommonActivationPublication f16_publication;
-    if (!common_reserve_activation_publication(context, dispatch_match, *match.glu_output, f16_demand,
-                                               kRoutedFfnF16GateUpOutputName, f16_publication) ||
-        !common_append_activation_publication(dispatch_match, f16_publication, kRoutedFfnF16GateUpOutputName)) {
+    const ValueId f16_output(context.next_plan_value.value);
+    const size_t  f16_output_bytes = f16_gate_up_output_size(match.token_count);
+    dispatch_match.transients.push_back(
+        { f16_output, kRoutedFfnF16GateUpOutputName, f16_output_bytes, kRoutedFfnPlanTransientAlignment });
+    Status metadata_status;
+    if (!dispatch_match.metadata.append_alternate_value(
+            { match.glu_output->id, f16_output, GGML_TYPE_F16, f16_output_bytes, kRoutedFfnF16GateUpOutputName },
+            metadata_status)) {
         return false;
     }
 
@@ -1074,7 +936,7 @@ static bool match_routed_ffn_gate_up_swiglu_f16_wmma_dispatch(const DispatchMatc
         { match.routing_bundle->partition_table, 0, match.routing_bundle->partition_table_byte_count });
     dispatch.bindings.push_back({ match.gate_weight->id, 0, match.gate_weight->byte_count });
     dispatch.bindings.push_back({ match.up_weight->id, 0, match.up_weight->byte_count });
-    dispatch.bindings.push_back(f16_publication.binding());
+    dispatch.bindings.push_back({ f16_output, 0, f16_output_bytes });
 
     if (!append_covered_node(context, match.gate_node, dispatch_match) ||
         !append_covered_node(context, match.up_node, dispatch_match) ||
@@ -1092,35 +954,28 @@ static bool match_decode_routed_ffn_gate_up_swiglu_q4k_q8_dispatch(const Dispatc
         return false;
     }
 
-    CommonActivationPublication q8_publication;
-    ValueId                     completion_counters;
-    if (match.publish_q8) {
-        const CommonActivationPublicationCapabilities capabilities = {
-            DispatchActivationInputQ8_1X4,
-            DispatchActivationInputQ8_1X4,
-        };
-        const CommonActivationPublicationPlan publication_plan =
-            common_select_activation_publication_plan(context, *match.glu_output, capabilities);
-        const CommonActivationPublicationDemand q8_demand =
-            publication_plan.matched() ? publication_plan.preferred() : CommonActivationPublicationDemand{};
-        if (!common_reserve_activation_publication(context, dispatch_match, *match.glu_output, q8_demand,
-                                                   kRoutedFfnQ8GateUpOutputName, q8_publication) ||
-            !common_append_activation_publication(dispatch_match, q8_publication, kRoutedFfnQ8GateUpOutputName)) {
-            return false;
-        }
-        completion_counters = ValueId(context.next_plan_value.value + 1);
-    }
+    const size_t q8_output_bytes =
+        q8_1_x4_byte_count(match.token_count * kRoutedFfnRouteCount, kRoutedFfnExpertHiddenSize);
+    const ValueId q8_output           = match.publish_q8 ? ValueId(context.next_plan_value.value) : ValueId();
+    const ValueId completion_counters = match.publish_q8 ? ValueId(context.next_plan_value.value + 1) : ValueId();
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(match.publish_q8 ? kCommonVectorRoutedGateUpSwiGLUPublishQ8Kernel :
-                                                                    kCommonVectorRoutedGateUpSwiGLUPublishF32Kernel);
+    dispatch.kernel = make_kernel_specialization(match.publish_q8 ? kQwenRoutedGateUpSwiGLUQ4KQ8NextQ8Kernel :
+                                                                    kQwenRoutedGateUpSwiGLUQ4KQ8Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.integer_parameters.emplace("route_count", kRoutedFfnRouteCount);
     dispatch.kernel.integer_parameters.emplace("route_stride", match.route_stride);
     dispatch.kernel.integer_parameters.emplace("expert_count", kRoutedFfnExpertCount);
     dispatch.kernel.integer_parameters.emplace("output_size", kRoutedFfnExpertHiddenSize);
-    add_common_vector_pair_compile_parameters(dispatch, match.token_count,
-                                              match.publish_q8 ? GGML_TYPE_Q8_1 : GGML_TYPE_F32);
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.routed_gate_up.input_size",
+                                               to_config_value(kRoutedFfnInputSize));
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.routed_gate_up.expert_count",
+                                               to_config_value(kRoutedFfnExpertCount));
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.routed_gate_up.route_count",
+                                               to_config_value(kRoutedFfnRouteCount));
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.routed_gate_up.output_size",
+                                               to_config_value(kRoutedFfnExpertHiddenSize));
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity", to_config_value(match.token_count));
 
     const size_t route_id_length = static_cast<size_t>(match.token_count * match.route_stride) * sizeof(int32_t);
     dispatch.bindings.push_back({ match.input_alternate->alternate_value, 0, match.input_alternate->byte_count });
@@ -1131,12 +986,21 @@ static bool match_decode_routed_ffn_gate_up_swiglu_q4k_q8_dispatch(const Dispatc
     if (match.publish_q8) {
         dispatch.bindings.push_back(
             { completion_counters, 0, gate_up_completion_counter_count(match.token_count) * sizeof(int32_t) });
-        dispatch.bindings.push_back(q8_publication.binding());
+        dispatch.bindings.push_back({ q8_output, 0, q8_output_bytes });
         dispatch_match.completion_counter_requests.push_back({
             completion_counters,
             "qwen.decode.moe.gate_up_completion_counters",
             gate_up_completion_counter_count(match.token_count),
         });
+        dispatch_match.transients.push_back(
+            { q8_output, kRoutedFfnQ8GateUpOutputName, q8_output_bytes, kRoutedFfnPlanTransientAlignment });
+        Status metadata_status;
+        if (!dispatch_match.metadata.append_alternate_value(
+                { match.glu_output->id, q8_output, GGML_TYPE_Q8_1, q8_output_bytes, kRoutedFfnQ8GateUpOutputName },
+                metadata_status)) {
+            dispatch_match.status.append(metadata_status);
+            return false;
+        }
     }
 
     if (!append_covered_node(context, match.gate_node, dispatch_match) ||
@@ -1214,8 +1078,8 @@ static DecodeRoutedDownMatch match_decode_routed_ffn_down_next_q8(const Dispatch
     match.output            = reduce.output;
     match.route_ids         = route_ids;
     match.reduce            = std::move(reduce);
-    match.kernel = weight->type == GGML_TYPE_Q4_K ? kCommonVectorRoutedDownQ4KPublishQ8Kernel :
-                                                   kCommonVectorRoutedDownQ6KPublishQ8Kernel;
+    match.kernel =
+        weight->type == GGML_TYPE_Q4_K ? kQwenRoutedDownQ4KQ8NextQ8Kernel : kQwenRoutedDownQ6KF32Wave64NextQ8Kernel;
     match.token_count  = 1;
     match.route_stride = route_stride;
     match.input_is_q8  = input_is_q8;
@@ -1229,30 +1093,9 @@ static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchCon
         return false;
     }
 
-    const CommonActivationPublicationCapabilities capabilities = {
-        DispatchActivationInputQ8_1X4,
-        DispatchActivationInputQ8_1X4,
-    };
-    const CommonActivationPublicationPlan publication_plan =
-        common_select_activation_publication_plan(context, *match.reduce.next_rmsnorm.output, capabilities);
-    const CommonActivationPublicationDemand q8_demand =
-        publication_plan.matched() ? publication_plan.preferred() : CommonActivationPublicationDemand{};
-    if (!q8_demand.matched()) {
-        return false;
-    }
-
     const ValueId completion_counter_value(context.next_plan_value.value);
-    dispatch_match.completion_counter_requests.push_back({
-        completion_counter_value,
-        "qwen.decode.moe.routed_down_completion_counter",
-        1,
-    });
-    CommonActivationPublication q8_publication;
-    if (!common_reserve_activation_publication(context, dispatch_match, *match.reduce.next_rmsnorm.output, q8_demand,
-                                               kRoutedFfnQ8HiddenOutputName, q8_publication) ||
-        !common_append_activation_publication(dispatch_match, q8_publication, kRoutedFfnQ8HiddenOutputName)) {
-        return false;
-    }
+    const ValueId q8_output(context.next_plan_value.value + 1);
+    const size_t  q8_output_bytes = q8_1_x4_byte_count(match.token_count, kRoutedFfnInputSize);
 
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(match.kernel);
@@ -1262,9 +1105,7 @@ static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchCon
     dispatch.kernel.integer_parameters.emplace("route_id_stride", match.route_stride);
     dispatch.kernel.integer_parameters.emplace("expert_count", kRoutedFfnExpertCount);
     dispatch.kernel.integer_parameters.emplace("output_size", kRoutedFfnInputSize);
-    add_common_vector_weighted_compile_parameters(dispatch, match.token_count,
-                                                  match.input_is_q8 ? GGML_TYPE_Q8_1 : GGML_TYPE_F32,
-                                                  match.weight->type);
+    add_routed_down_compile_parameters(dispatch, match.token_count);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size", to_config_value(kRoutedFfnInputSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.rms_epsilon", "0.000001");
 
@@ -1281,9 +1122,25 @@ static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchCon
     dispatch.bindings.push_back(
         { match.reduce.next_rmsnorm.norm_weight->id, 0, match.reduce.next_rmsnorm.norm_weight->byte_count });
     dispatch.bindings.push_back({ completion_counter_value, 0, sizeof(int32_t) });
-    dispatch.bindings.push_back(q8_publication.binding());
+    dispatch.bindings.push_back({ q8_output, 0, q8_output_bytes });
 
     dispatch_match.value_aliases.push_back({ match.reduce.residual_input->id, match.output->id });
+    dispatch_match.completion_counter_requests.push_back({
+        completion_counter_value,
+        "qwen.decode.moe.routed_down_completion_counter",
+        1,
+    });
+    dispatch_match.transients.push_back(
+        { q8_output, kRoutedFfnQ8HiddenOutputName, q8_output_bytes, kRoutedFfnPlanTransientAlignment });
+    Status metadata_status;
+    if (!dispatch_match.metadata.append_alternate_value(
+            { match.reduce.next_rmsnorm.output->id, q8_output, GGML_TYPE_Q8_1, q8_output_bytes,
+              kRoutedFfnQ8HiddenOutputName },
+            metadata_status)) {
+        dispatch_match.status.append(metadata_status);
+        return false;
+    }
+
     if (!append_covered_node(context, context.root_node, dispatch_match) ||
         !append_covered_node(context, match.reduce.weighted_node, dispatch_match)) {
         return false;
@@ -1316,19 +1173,14 @@ static bool build_routed_ffn_down_grouped_dispatch(const DispatchMatchContext & 
         return false;
     }
 
-    const CommonActivationPublicationCapabilities capabilities = {
-        DispatchActivationInputF16Row,
-        DispatchActivationInputF16Row,
-    };
-    const CommonActivationPublicationPlan publication_plan =
-        common_select_activation_publication_plan(context, *match.output, capabilities);
-    const CommonActivationPublicationDemand f16_demand =
-        publication_plan.matched() ? publication_plan.preferred() : CommonActivationPublicationDemand{};
-    CommonActivationPublication f16_publication;
-    if (!common_reserve_activation_publication(context, dispatch_match, *match.output, f16_demand,
-                                               kRoutedFfnF16RoutedDownOutputName, f16_publication) ||
-        !common_append_activation_publication(dispatch_match, f16_publication,
-                                              kRoutedFfnF16RoutedDownOutputName)) {
+    const ValueId f16_output(context.next_plan_value.value);
+    const size_t  f16_output_bytes = f16_routed_down_output_size(match.token_count);
+    dispatch_match.transients.push_back(
+        { f16_output, kRoutedFfnF16RoutedDownOutputName, f16_output_bytes, kRoutedFfnPlanTransientAlignment });
+    Status metadata_status;
+    if (!dispatch_match.metadata.append_alternate_value(
+            { match.output->id, f16_output, GGML_TYPE_F16, f16_output_bytes, kRoutedFfnF16RoutedDownOutputName },
+            metadata_status)) {
         return false;
     }
 
@@ -1340,7 +1192,7 @@ static bool build_routed_ffn_down_grouped_dispatch(const DispatchMatchContext & 
     dispatch.bindings.push_back(
         { match.routing_bundle->expert_table, 0, match.routing_bundle->expert_table_byte_count });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
-    dispatch.bindings.push_back(f16_publication.binding());
+    dispatch.bindings.push_back({ f16_output, 0, f16_output_bytes });
 
     dispatch_match.covered_nodes.push_back(context.root_index);
     dispatch_match.dispatches.push_back(std::move(dispatch));
@@ -1356,50 +1208,21 @@ static bool match_routed_ffn_down_weighted_reduce_dispatch(const DispatchMatchCo
     const bool use_next_rmsnorm = match.next_rmsnorm.matched() && match.output->kind == ValueKind::Transient &&
                                   residual_input_is_safe_for_in_place(context, match);
 
-    CommonActivationPublication q8_publication;
-    if (use_next_rmsnorm) {
-        const CommonActivationPublicationCapabilities capabilities = {
-            DispatchActivationInputQ8_1X4,
-            DispatchActivationInputQ8_1X4,
-        };
-        const CommonActivationPublicationPlan publication_plan =
-            common_select_activation_publication_plan(context, *match.next_rmsnorm.output, capabilities);
-        const CommonActivationPublicationDemand q8_demand =
-            publication_plan.matched() ? publication_plan.preferred() : CommonActivationPublicationDemand{};
-        if (q8_demand.matched() &&
-            (!common_reserve_activation_publication(context, dispatch_match, *match.next_rmsnorm.output, q8_demand,
-                                                    kRoutedFfnQ8NextRmsNormOutputName, q8_publication) ||
-             !common_append_activation_publication(dispatch_match, q8_publication,
-                                                   kRoutedFfnQ8NextRmsNormOutputName))) {
-            return false;
-        }
-    }
-
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(
-        q8_publication.matched() ? kQwenRoutedDownWeightedReduceNextRmsNormF32PublishQ8Kernel :
-        use_next_rmsnorm         ? kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel :
-                                   kQwenRoutedDownWeightedReduceF16F32Kernel);
+    dispatch.kernel = make_kernel_specialization(use_next_rmsnorm ? kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel :
+                                                                    kQwenRoutedDownWeightedReduceF16F32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     add_routed_down_compile_parameters(dispatch, match.token_count);
     if (use_next_rmsnorm) {
         dispatch_match.value_aliases.push_back({ match.residual_input->id, match.output->id });
         dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size", to_config_value(kRoutedFfnInputSize));
         dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.rms_epsilon", "0.000001");
-        if (q8_publication.matched()) {
-            dispatch.kernel.compile_parameters.emplace("ggml.quantize_q8_1_x4.group_capacity",
-                                                       to_config_value(match.token_count *
-                                                                       (kRoutedFfnInputSize / 128)));
-        }
         dispatch.bindings.push_back({ match.route_weights->id, 0, match.route_weights->byte_count });
         dispatch.bindings.push_back({ match.routed_alternate->alternate_value, 0, match.routed_alternate->byte_count });
         dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
         dispatch.bindings.push_back(
             { match.next_rmsnorm.norm_weight->id, 0, match.next_rmsnorm.norm_weight->byte_count });
         dispatch.bindings.push_back({ match.next_rmsnorm.output->id, 0, match.next_rmsnorm.output->byte_count });
-        if (q8_publication.matched()) {
-            dispatch.bindings.push_back(q8_publication.binding());
-        }
     } else {
         dispatch.bindings.push_back({ match.route_weights->id, 0, match.route_weights->byte_count });
         dispatch.bindings.push_back({ match.routed_alternate->alternate_value, 0, match.routed_alternate->byte_count });
@@ -1445,42 +1268,6 @@ static bool match_routed_ffn_down_q6k_f16_wmma_grouped_dispatch(const DispatchMa
 }  // namespace
 
 void register_routed_ffn_dispatches(DispatchRegistryBuilder & registry) {
-    registry.add_activation_consumer({
-        "llm.routed_ffn.input.q8_1_x4.gate_up",
-        GGML_OP_MUL_MAT_ID,
-        DispatchActivationInputQ8_1X4,
-        DispatchActivationConsumerUse::BandwidthLimited,
-        DispatchActivationProducerRequirementNone,
-        DispatchSource::Llm,
-        accepts_q8_routed_gate_up_input_impl,
-    });
-    registry.add_activation_consumer({
-        "llm.routed_ffn.input.q8_1_x4.down",
-        GGML_OP_MUL_MAT_ID,
-        DispatchActivationInputQ8_1X4,
-        DispatchActivationConsumerUse::BandwidthLimited,
-        DispatchActivationProducerRequirementNone,
-        DispatchSource::Llm,
-        accepts_q8_routed_down_input,
-    });
-    registry.add_activation_consumer({
-        "llm.routed_ffn.input.f16_row.down",
-        GGML_OP_MUL_MAT_ID,
-        DispatchActivationInputF16Row,
-        DispatchActivationConsumerUse::Row,
-        DispatchActivationProducerRequirementNone,
-        DispatchSource::Llm,
-        accepts_f16_routed_down_input,
-    });
-    registry.add_activation_consumer({
-        "llm.routed_ffn.input.f16_row.weighted_reduce",
-        GGML_OP_MUL,
-        DispatchActivationInputF16Row,
-        DispatchActivationConsumerUse::Row,
-        DispatchActivationProducerRequirementNone,
-        DispatchSource::Llm,
-        accepts_f16_weighted_reduce_input,
-    });
     registry.add({
         "llm.routed_ffn.decode_gate_up_swiglu_q4k_q8",
         GGML_OP_MUL_MAT_ID,

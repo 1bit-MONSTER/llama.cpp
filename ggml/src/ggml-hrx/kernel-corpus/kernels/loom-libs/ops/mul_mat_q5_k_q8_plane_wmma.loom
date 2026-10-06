@@ -74,7 +74,8 @@ func.def inline @ggml_q5_plane_q4k_scale_from_header(%scale0: i32, %scale1: i32,
 }
 
 // Packs either nibble from four adjacent GGUF IQ4_XS bytes for the gfx11 table lookup.
-// Preserve GGUF code indices for the logical table lookup.
+// The nibble is the table index as it is: vector.table.lookup indexes the table in order on gfx1151
+// (the XOR 12 remap made every IQ4_XS weight of this prefill path wrong; same fix as motifs/dequant.loom).
 func.def inline @ggml_q5_plane_dense_iq4xs_wmma_table_codes4(%code_word: vector<1xi32>, %uses_high: i1) -> (vector<4xi8>) {
   %c4_i32 = scalar.constant 4 : i32
   %c8_i32 = scalar.constant 8 : i32
@@ -104,9 +105,9 @@ func.def inline @ggml_q5_plane_dense_iq4xs_wmma_table_codes4(%code_word: vector<
   %high23 = scalar.ori %high2, %high3 : i32
   %high = scalar.ori %high01, %high23 : i32
   %selected = scf.select %uses_high, %high, %low : i32
-  %selected_shr8 = scalar.shrui %selected, %c8_i32 : i32
+  %target_selected_shr8 = scalar.shrui %selected, %c8_i32 : i32
   %packed0 = scalar.trunci %selected : i32 to i8
-  %packed1 = scalar.trunci %selected_shr8 : i32 to i8
+  %packed1 = scalar.trunci %target_selected_shr8 : i32 to i8
   %packed = vector.from_elements %packed0, %packed1 : vector<2xi8>
   %codes = vector.bitunpacku<4> %packed : vector<2xi8> -> vector<4xi8>
   func.return %codes : vector<4xi8>

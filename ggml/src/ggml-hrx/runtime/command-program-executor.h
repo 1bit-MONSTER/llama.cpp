@@ -4,7 +4,6 @@
 #include "dispatch/command-program-resolver.h"
 #include "dispatch/command-program.h"
 #include "kernel-corpus/kernel-corpus.h"
-#include "loom-jit.h"
 #include "runtime/graph-replay.h"
 #include "runtime/host-memory.h"
 
@@ -76,7 +75,6 @@ struct PreparedCommandBinding {
 struct PreparedKernelCommand {
     KernelSpecialization                specialization;
     std::shared_ptr<KernelExecutable>   executable;
-    ggml_hrx_loom_jit_launch_config     launch;
     std::vector<uint8_t>                constants;
     std::vector<PreparedCommandBinding> bindings;
 };

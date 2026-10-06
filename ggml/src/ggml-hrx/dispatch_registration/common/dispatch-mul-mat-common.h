@@ -1,9 +1,7 @@
 #pragma once
 
 #include "../dispatch-registry.h"
-#include "dispatch-binary-common.h"
 #include "dispatch-mul-mat-weight-format.h"
-#include "dispatch-symmetric-i4.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -11,7 +9,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -155,8 +152,8 @@ inline bool common_mul_mat_uses_k16_major_f16(CommonMulMatWeightFormat format,
                                                int64_t output_size,
                                                int64_t token_count,
                                                bool packed_producer = false) {
-    if (token_count < 512 || token_count > 2048 || token_count % 512 != 0 || input_size % 256 != 0 ||
-        output_size % 64 != 0) {
+    if (token_count < 512 || token_count > 2048 || token_count % 512 != 0 ||
+        input_size % 256 != 0 || output_size % 64 != 0) {
         return false;
     }
     if (format == CommonMulMatWeightFormat::Q4K) {
@@ -198,6 +195,8 @@ inline ggml_type common_mul_mat_format_type(CommonMulMatWeightFormat format) {
             return GGML_TYPE_Q5_0;
         case CommonMulMatWeightFormat::Q5_1:
             return GGML_TYPE_Q5_1;
+        case CommonMulMatWeightFormat::IQ3_XXS:
+            return GGML_TYPE_IQ3_XXS;
         case CommonMulMatWeightFormat::IQ1_S:
             return GGML_TYPE_IQ1_S;
         case CommonMulMatWeightFormat::IQ1_M:
@@ -206,8 +205,6 @@ inline ggml_type common_mul_mat_format_type(CommonMulMatWeightFormat format) {
             return GGML_TYPE_IQ2_XXS;
         case CommonMulMatWeightFormat::IQ2_XS:
             return GGML_TYPE_IQ2_XS;
-        case CommonMulMatWeightFormat::IQ3_XXS:
-            return GGML_TYPE_IQ3_XXS;
         case CommonMulMatWeightFormat::IQ2_S:
             return GGML_TYPE_IQ2_S;
         case CommonMulMatWeightFormat::IQ3_S:
@@ -332,14 +329,41 @@ inline const GraphNode * common_find_only_consumer_with_op(const Graph & graph, 
     return consumers.front();
 }
 
-inline bool common_has_symmetric_i4_lowrow_consumer(const Graph & graph, const Value & value) {
-    if (!graph.has_index()) {
+inline bool common_has_direct_symmetric_i4_lowrow_consumer(const Graph & graph, const Value & value) {
+    if (!graph.has_index() || value.type != GGML_TYPE_F32 || !value.contiguous || value.ne[0] < 256 ||
+        value.ne[0] > 32768 || value.ne[0] % 64 != 0 || value.element_count <= 0 ||
+        value.element_count % value.ne[0] != 0) {
         return false;
     }
+
+    const int64_t token_count = value.element_count / value.ne[0];
+    if (token_count < 1 || token_count > 16) {
+        return false;
+    }
+
     for (const GraphNode * consumer : graph.index().consumers(value.id)) {
-        if (consumer != nullptr && common_symmetric_i4_lowrow_mul_mat_eligible(graph, *consumer, value)) {
-            return true;
+        if (consumer == nullptr || consumer->op != GGML_OP_MUL_MAT || consumer->inputs.size() != 2 ||
+            consumer->inputs[1] != value.id) {
+            continue;
         }
+
+        const Value * weight = common_graph_value(graph, consumer->inputs[0]);
+        const Value * output = common_graph_value(graph, consumer->output);
+        if (weight == nullptr || output == nullptr ||
+            (weight->type != GGML_TYPE_Q5_K && weight->type != GGML_TYPE_IQ4_XS) || weight->alias_source.value >= 0 ||
+            !weight->contiguous || !output->contiguous || output->type != GGML_TYPE_F32 ||
+            weight->ne[0] != value.ne[0] || weight->ne[1] != output->ne[0] || output->ne[0] % 64 != 0 ||
+            output->ne[1] != token_count || output->ne[2] != 1 || output->ne[3] != 1) {
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+inline bool common_has_symmetric_i4_lowrow_consumer(const Graph & graph, const Value & value) {
+    if (common_has_direct_symmetric_i4_lowrow_consumer(graph, value)) {
+        return true;
     }
 
     for (const GraphNode * consumer : graph.index().consumers(value.id)) {
@@ -351,13 +375,9 @@ inline bool common_has_symmetric_i4_lowrow_consumer(const Graph & graph, const V
         const Value * reshaped = common_graph_value(graph, consumer->output);
         if (reshaped != nullptr && reshaped->type == GGML_TYPE_F32 && reshaped->contiguous &&
             reshaped->storage_root == value.storage_root && reshaped->element_count == value.element_count &&
-            reshaped->byte_count == value.byte_count) {
-            for (const GraphNode * reshaped_consumer : graph.index().consumers(reshaped->id)) {
-                if (reshaped_consumer != nullptr &&
-                    common_symmetric_i4_lowrow_mul_mat_eligible(graph, *reshaped_consumer, *reshaped)) {
-                    return true;
-                }
-            }
+            reshaped->byte_count == value.byte_count &&
+            common_has_direct_symmetric_i4_lowrow_consumer(graph, *reshaped)) {
+            return true;
         }
     }
     return false;
@@ -389,6 +409,39 @@ inline bool common_is_swiglu_params(const OpParams & params) {
     return glu_params != nullptr && glu_params->op == GGML_GLU_OP_SWIGLU;
 }
 
+inline bool common_fused_binary_kind_from_params(const OpParams & params, BinaryKind & kind) {
+    const BinaryParams * binary_params = op_params_as<BinaryParams>(params);
+    if (binary_params != nullptr && binary_kind_supported(binary_params->op)) {
+        kind = binary_params->op;
+        return true;
+    }
+
+    const GluParams * glu_params = op_params_as<GluParams>(params);
+    if (glu_params == nullptr) {
+        return false;
+    }
+
+    switch (glu_params->op) {
+        case GGML_GLU_OP_REGLU:
+            kind = BinaryKind::RegLU;
+            return true;
+        case GGML_GLU_OP_SWIGLU:
+            kind = BinaryKind::SwiGLU;
+            return true;
+        case GGML_GLU_OP_GEGLU:
+            kind = BinaryKind::GeGLU;
+            return true;
+        case GGML_GLU_OP_GEGLU_ERF:
+            kind = BinaryKind::GeGLUErf;
+            return true;
+        case GGML_GLU_OP_GEGLU_QUICK:
+            kind = BinaryKind::GeGLUQuick;
+            return true;
+        default:
+            return false;
+    }
+}
+
 inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph,
                                                          const GraphNode * node,
                                                          KernelCatalogRef  kernel,
@@ -409,20 +462,6 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
 
     CommonMulMatWeightFormat format = CommonMulMatWeightFormat::Q4K;
     if (!common_mul_mat_format_for_type(weight->type, format)) {
-        if (weight->type == GGML_TYPE_IQ1_S) {
-            format = CommonMulMatWeightFormat::IQ1_S;
-        } else if (weight->type == GGML_TYPE_IQ1_M) {
-            format = CommonMulMatWeightFormat::IQ1_M;
-        } else {
-            return {};
-        }
-    }
-    if ((format == CommonMulMatWeightFormat::IQ1_S || format == CommonMulMatWeightFormat::IQ1_M) &&
-        (std::getenv("GGML_HRX_DISABLE_IQ_CODEBOOK_MATMUL") != nullptr ||
-         (format == CommonMulMatWeightFormat::IQ1_S &&
-          std::getenv("GGML_HRX_DISABLE_IQ1_S_CODEBOOK_MATMUL") != nullptr) ||
-         (format == CommonMulMatWeightFormat::IQ1_M &&
-          std::getenv("GGML_HRX_DISABLE_IQ1_M_CODEBOOK_MATMUL") != nullptr))) {
         return {};
     }
 
@@ -447,118 +486,6 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
     match.token_count   = token_count;
     match.weight_format = format;
     return match;
-}
-
-struct CommonMulMatActivationConsumerMatch {
-    const Value *            input         = nullptr;
-    const Value *            weight        = nullptr;
-    const Value *            output        = nullptr;
-    int64_t                  input_size    = 0;
-    int64_t                  output_size   = 0;
-    int64_t                  token_count   = 0;
-    CommonMulMatWeightFormat weight_format = CommonMulMatWeightFormat::Q4K;
-
-    bool matched() const { return input != nullptr && weight != nullptr && output != nullptr; }
-};
-
-inline CommonMulMatActivationConsumerMatch common_match_mul_mat_activation_consumer(const Graph &     graph,
-                                                                                     const GraphNode * consumer,
-                                                                                     const Value &     input) {
-    if (consumer == nullptr || consumer->op != GGML_OP_MUL_MAT || consumer->inputs.size() != 2 ||
-        consumer->inputs[1] != input.id) {
-        return {};
-    }
-
-    const Value * weight = common_graph_value(graph, consumer->inputs[0]);
-    const Value * output = common_graph_value(graph, consumer->output);
-    if (weight == nullptr || output == nullptr || input.type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32 ||
-        !input.contiguous || !weight->contiguous || !output->contiguous || !common_is_2d(input) ||
-        !common_is_2d(*weight) || !common_is_2d(*output)) {
-        return {};
-    }
-
-    CommonMulMatWeightFormat format;
-    if (!common_mul_mat_format_for_type(weight->type, format)) {
-        return {};
-    }
-
-    const int64_t input_size  = weight->ne[0];
-    const int64_t output_size = weight->ne[1];
-    const int64_t token_count = input.ne[1];
-    if (input.ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
-        !common_is_supported_dense_input_size(input_size) || !common_is_supported_dense_output_size(output_size) ||
-        output_size % 64 != 0) {
-        return {};
-    }
-
-    return { &input, weight, output, input_size, output_size, token_count, format };
-}
-
-inline bool common_accepts_q8_1_x4_decode_mul_mat(const Graph &     graph,
-                                                   const GraphNode * consumer,
-                                                   const Value &     input) {
-    const CommonMulMatActivationConsumerMatch match =
-        common_match_mul_mat_activation_consumer(graph, consumer, input);
-    return match.matched() && match.weight->alias_source.value < 0 && match.token_count >= 1 &&
-           match.token_count <= 5 &&
-           (match.weight_format == CommonMulMatWeightFormat::Q4K ||
-            match.weight_format == CommonMulMatWeightFormat::Q6K);
-}
-
-inline bool common_accepts_q8_1_x4_decode_mul_mat(const DispatchMatchContext & context,
-                                                   const GraphNode &            consumer,
-                                                   const Value &                input) {
-    return common_accepts_q8_1_x4_decode_mul_mat(context.graph, &consumer, input);
-}
-
-inline bool common_accepts_q8_1_x4_prefill_mul_mat(const Graph &     graph,
-                                                    const GraphNode * consumer,
-                                                    const Value &     input) {
-    const CommonMulMatActivationConsumerMatch match =
-        common_match_mul_mat_activation_consumer(graph, consumer, input);
-    return match.matched() && match.token_count >= 256 && match.token_count <= 2048 &&
-           match.token_count % 256 == 0 &&
-           (match.weight_format == CommonMulMatWeightFormat::Q5K ||
-            match.weight_format == CommonMulMatWeightFormat::IQ4_XS);
-}
-
-inline bool common_accepts_f16_k16_major_mul_mat(const Graph &     graph,
-                                                  const GraphNode * consumer,
-                                                  const Value &     input,
-                                                  bool              packed_producer = false) {
-    const CommonMulMatActivationConsumerMatch match =
-        common_match_mul_mat_activation_consumer(graph, consumer, input);
-    return match.matched() && match.weight->alias_source.value < 0 &&
-           common_mul_mat_uses_k16_major_f16(match.weight_format, match.input_size, match.output_size,
-                                             match.token_count, packed_producer);
-}
-
-inline bool common_accepts_f16_k16_major_mul_mat(const DispatchMatchContext & context,
-                                                  const GraphNode &            consumer,
-                                                  const Value &                input) {
-    return common_accepts_f16_k16_major_mul_mat(context.graph, &consumer, input);
-}
-
-inline bool common_accepts_f16_k16_major_packed_producer_mul_mat(const DispatchMatchContext & context,
-                                                                  const GraphNode &            consumer,
-                                                                  const Value &                input) {
-    return common_accepts_f16_k16_major_mul_mat(context.graph, &consumer, input, true);
-}
-
-inline bool common_accepts_f16_row_prefill_mul_mat(const DispatchMatchContext & context,
-                                                    const GraphNode &            consumer,
-                                                    const Value &                input) {
-    const CommonMulMatActivationConsumerMatch match =
-        common_match_mul_mat_activation_consumer(context.graph, &consumer, input);
-    if (!match.matched() || match.weight->alias_source.value >= 0 ||
-        !common_is_supported_prefill_token_count(match.token_count)) {
-        return false;
-    }
-    if (match.weight_format == CommonMulMatWeightFormat::Q6K && match.token_count % 128 == 0) {
-        return true;
-    }
-    return match.weight_format == CommonMulMatWeightFormat::Q4K && match.token_count % 256 == 0 &&
-           match.output_size >= match.input_size / 4;
 }
 
 // Share the conversion used by F16-operand matmuls.
@@ -626,8 +553,8 @@ inline bool common_prepare_k16_major_f16_input(const DispatchMatchContext & cont
     copy.bindings.push_back({ packed, 0, bytes });
     match.dispatches.push_back(std::move(copy));
     Status status;
-    if (!match.metadata.append_generated_resource({ input.id, GeneratedResourceRole::F16K16Major, packed, bytes, {} },
-                                                  status)) {
+    if (!match.metadata.append_generated_resource(
+            { input.id, GeneratedResourceRole::F16K16Major, packed, bytes, {} }, status)) {
         match.status.append(status);
         return false;
     }

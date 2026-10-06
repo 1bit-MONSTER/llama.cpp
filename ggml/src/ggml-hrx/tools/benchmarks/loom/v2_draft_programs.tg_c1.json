@@ -30,10 +30,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -74,16 +74,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -211,10 +211,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -255,21 +255,12 @@
       "count": 96,
       "integer_parameters": {},
       "kernel": "loom_libs:llm_ssm_conv_dconv4_silu_rollback_f32",
-      "library_sources": [
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom",
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "symbol": "llm_ssm_conv_dconv4_silu_rollback_f32",
       "workload_parameters": []
@@ -329,10 +320,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -363,14 +354,13 @@
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_010_llm_gated_delta_net_projection_epilogue_f32",
       "compile_parameters": {
+        "llm.gated_delta_net.epilogue_element_count": "96",
         "llm.gated_delta_net.epilogue_head_count": "48",
         "llm.gated_delta_net.epilogue_workgroup_size": "256"
       },
       "corpus_dir": "kernel-corpus/kernels/loom-libs",
       "count": 96,
-      "integer_parameters": {
-        "element_count": 96
-      },
+      "integer_parameters": {},
       "kernel": "loom_libs:llm_gated_delta_net_projection_epilogue_f32",
       "library_sources": [],
       "primary_sources": [
@@ -380,12 +370,7 @@
         "ops/gated_delta_net_f32_wmma.loom"
       ],
       "symbol": "llm_gated_delta_net_projection_epilogue_f32",
-      "workload_parameters": [
-        {
-          "name": "element_count",
-          "type": "index"
-        }
-      ]
+      "workload_parameters": []
     },
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_011_llm_gated_delta_net_f32_wmma_head128_snapshot",
@@ -436,16 +421,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "workload_parameters": [
@@ -489,16 +474,16 @@
       },
       "kernel": "loom_libs:ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -697,16 +682,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -741,16 +724,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -771,15 +752,12 @@
         "token_count": 2
       },
       "kernel": "loom_libs:ggml_set_rows",
-      "library_sources": [
-        "motifs/rows/cache_publish.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/rows/set_rows.loom"
+        "ops/set_rows.loom"
       ],
       "sources": [
-        "ops/rows/set_rows.loom",
-        "motifs/rows/cache_publish.loom"
+        "ops/set_rows.loom"
       ],
       "symbol": "ggml_set_rows",
       "workload_parameters": [
@@ -814,21 +792,12 @@
         "query_token_count": 2
       },
       "kernel": "loom_libs:ggml_flash_attention_f32_f16_wmma",
-      "library_sources": [
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom",
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "symbol": "ggml_flash_attention_f32_f16_wmma",
       "workload_parameters": [
@@ -905,18 +874,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_f32",
       "workload_parameters": [
@@ -954,10 +921,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -1024,15 +991,12 @@
       "count": 2,
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_concat_dim0_f32",
-      "library_sources": [
-        "motifs/copy/concat_dim0.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/copy/concat_dim0_f32.loom"
+        "ops/copy_f32.loom"
       ],
       "sources": [
-        "ops/copy/concat_dim0_f32.loom",
-        "motifs/copy/concat_dim0.loom"
+        "ops/copy_f32.loom"
       ],
       "symbol": "ggml_concat_dim0_f32",
       "workload_parameters": []
@@ -1117,10 +1081,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -1161,16 +1125,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -1256,21 +1220,12 @@
       "count": 96,
       "integer_parameters": {},
       "kernel": "loom_libs:llm_ssm_conv_dconv4_silu_rollback_f32",
-      "library_sources": [
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom",
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "symbol": "llm_ssm_conv_dconv4_silu_rollback_f32",
       "workload_parameters": []
@@ -1278,14 +1233,13 @@
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_038_llm_gated_delta_net_projection_epilogue_f32",
       "compile_parameters": {
+        "llm.gated_delta_net.epilogue_element_count": "192",
         "llm.gated_delta_net.epilogue_head_count": "48",
         "llm.gated_delta_net.epilogue_workgroup_size": "256"
       },
       "corpus_dir": "kernel-corpus/kernels/loom-libs",
       "count": 96,
-      "integer_parameters": {
-        "element_count": 192
-      },
+      "integer_parameters": {},
       "kernel": "loom_libs:llm_gated_delta_net_projection_epilogue_f32",
       "library_sources": [],
       "primary_sources": [
@@ -1295,12 +1249,7 @@
         "ops/gated_delta_net_f32_wmma.loom"
       ],
       "symbol": "llm_gated_delta_net_projection_epilogue_f32",
-      "workload_parameters": [
-        {
-          "name": "element_count",
-          "type": "index"
-        }
-      ]
+      "workload_parameters": []
     },
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_039_llm_gated_delta_net_f32_wmma_head128_snapshot",
@@ -1351,16 +1300,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "workload_parameters": [
@@ -1404,16 +1353,16 @@
       },
       "kernel": "loom_libs:ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -1588,16 +1537,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -1632,16 +1579,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -1662,15 +1607,12 @@
         "token_count": 4
       },
       "kernel": "loom_libs:ggml_set_rows",
-      "library_sources": [
-        "motifs/rows/cache_publish.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/rows/set_rows.loom"
+        "ops/set_rows.loom"
       ],
       "sources": [
-        "ops/rows/set_rows.loom",
-        "motifs/rows/cache_publish.loom"
+        "ops/set_rows.loom"
       ],
       "symbol": "ggml_set_rows",
       "workload_parameters": [
@@ -1705,21 +1647,12 @@
         "query_token_count": 4
       },
       "kernel": "loom_libs:ggml_flash_attention_f32_f16_wmma",
-      "library_sources": [
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom",
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "symbol": "ggml_flash_attention_f32_f16_wmma",
       "workload_parameters": [
@@ -1796,18 +1729,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_f32",
       "workload_parameters": [
@@ -1845,10 +1776,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -1932,10 +1863,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -1976,16 +1907,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -2071,21 +2002,12 @@
       "count": 48,
       "integer_parameters": {},
       "kernel": "loom_libs:llm_ssm_conv_dconv4_silu_rollback_f32",
-      "library_sources": [
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom",
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "symbol": "llm_ssm_conv_dconv4_silu_rollback_f32",
       "workload_parameters": []
@@ -2093,14 +2015,13 @@
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_064_llm_gated_delta_net_projection_epilogue_f32",
       "compile_parameters": {
+        "llm.gated_delta_net.epilogue_element_count": "240",
         "llm.gated_delta_net.epilogue_head_count": "48",
         "llm.gated_delta_net.epilogue_workgroup_size": "256"
       },
       "corpus_dir": "kernel-corpus/kernels/loom-libs",
       "count": 48,
-      "integer_parameters": {
-        "element_count": 240
-      },
+      "integer_parameters": {},
       "kernel": "loom_libs:llm_gated_delta_net_projection_epilogue_f32",
       "library_sources": [],
       "primary_sources": [
@@ -2110,12 +2031,7 @@
         "ops/gated_delta_net_f32_wmma.loom"
       ],
       "symbol": "llm_gated_delta_net_projection_epilogue_f32",
-      "workload_parameters": [
-        {
-          "name": "element_count",
-          "type": "index"
-        }
-      ]
+      "workload_parameters": []
     },
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_065_llm_gated_delta_net_f32_wmma_head128_snapshot",
@@ -2166,16 +2082,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "workload_parameters": [
@@ -2219,16 +2135,16 @@
       },
       "kernel": "loom_libs:ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -2403,16 +2319,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -2447,16 +2361,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -2477,15 +2389,12 @@
         "token_count": 5
       },
       "kernel": "loom_libs:ggml_set_rows",
-      "library_sources": [
-        "motifs/rows/cache_publish.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/rows/set_rows.loom"
+        "ops/set_rows.loom"
       ],
       "sources": [
-        "ops/rows/set_rows.loom",
-        "motifs/rows/cache_publish.loom"
+        "ops/set_rows.loom"
       ],
       "symbol": "ggml_set_rows",
       "workload_parameters": [
@@ -2520,21 +2429,12 @@
         "query_token_count": 5
       },
       "kernel": "loom_libs:ggml_flash_attention_f32_f16_wmma",
-      "library_sources": [
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom",
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "symbol": "ggml_flash_attention_f32_f16_wmma",
       "workload_parameters": [
@@ -2611,18 +2511,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_f32",
       "workload_parameters": [
@@ -2660,10 +2558,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -2730,15 +2628,12 @@
       "count": 1,
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_concat_dim0_f32",
-      "library_sources": [
-        "motifs/copy/concat_dim0.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/copy/concat_dim0_f32.loom"
+        "ops/copy_f32.loom"
       ],
       "sources": [
-        "ops/copy/concat_dim0_f32.loom",
-        "motifs/copy/concat_dim0.loom"
+        "ops/copy_f32.loom"
       ],
       "symbol": "ggml_concat_dim0_f32",
       "workload_parameters": []
@@ -2799,10 +2694,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -2843,16 +2738,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -2938,21 +2833,12 @@
       "count": 48,
       "integer_parameters": {},
       "kernel": "loom_libs:llm_ssm_conv_dconv4_silu_rollback_f32",
-      "library_sources": [
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom",
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "symbol": "llm_ssm_conv_dconv4_silu_rollback_f32",
       "workload_parameters": []
@@ -2960,14 +2846,13 @@
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_092_llm_gated_delta_net_projection_epilogue_f32",
       "compile_parameters": {
+        "llm.gated_delta_net.epilogue_element_count": "144",
         "llm.gated_delta_net.epilogue_head_count": "48",
         "llm.gated_delta_net.epilogue_workgroup_size": "256"
       },
       "corpus_dir": "kernel-corpus/kernels/loom-libs",
       "count": 48,
-      "integer_parameters": {
-        "element_count": 144
-      },
+      "integer_parameters": {},
       "kernel": "loom_libs:llm_gated_delta_net_projection_epilogue_f32",
       "library_sources": [],
       "primary_sources": [
@@ -2977,12 +2862,7 @@
         "ops/gated_delta_net_f32_wmma.loom"
       ],
       "symbol": "llm_gated_delta_net_projection_epilogue_f32",
-      "workload_parameters": [
-        {
-          "name": "element_count",
-          "type": "index"
-        }
-      ]
+      "workload_parameters": []
     },
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_093_llm_gated_delta_net_f32_wmma_head128_snapshot",
@@ -3033,16 +2913,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "workload_parameters": [
@@ -3086,16 +2966,16 @@
       },
       "kernel": "loom_libs:ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -3270,16 +3150,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -3314,16 +3192,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -3344,15 +3220,12 @@
         "token_count": 3
       },
       "kernel": "loom_libs:ggml_set_rows",
-      "library_sources": [
-        "motifs/rows/cache_publish.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/rows/set_rows.loom"
+        "ops/set_rows.loom"
       ],
       "sources": [
-        "ops/rows/set_rows.loom",
-        "motifs/rows/cache_publish.loom"
+        "ops/set_rows.loom"
       ],
       "symbol": "ggml_set_rows",
       "workload_parameters": [
@@ -3387,21 +3260,12 @@
         "query_token_count": 3
       },
       "kernel": "loom_libs:ggml_flash_attention_f32_f16_wmma",
-      "library_sources": [
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom",
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "symbol": "ggml_flash_attention_f32_f16_wmma",
       "workload_parameters": [
@@ -3478,18 +3342,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_f32",
       "workload_parameters": [
@@ -3527,10 +3389,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -3597,15 +3459,12 @@
       "count": 1,
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_concat_dim0_f32",
-      "library_sources": [
-        "motifs/copy/concat_dim0.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/copy/concat_dim0_f32.loom"
+        "ops/copy_f32.loom"
       ],
       "sources": [
-        "ops/copy/concat_dim0_f32.loom",
-        "motifs/copy/concat_dim0.loom"
+        "ops/copy_f32.loom"
       ],
       "symbol": "ggml_concat_dim0_f32",
       "workload_parameters": []
@@ -3666,10 +3525,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -3710,16 +3569,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -3805,21 +3664,12 @@
       "count": 48,
       "integer_parameters": {},
       "kernel": "loom_libs:llm_ssm_conv_dconv4_silu_rollback_f32",
-      "library_sources": [
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom",
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "symbol": "llm_ssm_conv_dconv4_silu_rollback_f32",
       "workload_parameters": []
@@ -3827,14 +3677,13 @@
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_120_llm_gated_delta_net_projection_epilogue_f32",
       "compile_parameters": {
+        "llm.gated_delta_net.epilogue_element_count": "768",
         "llm.gated_delta_net.epilogue_head_count": "48",
         "llm.gated_delta_net.epilogue_workgroup_size": "256"
       },
       "corpus_dir": "kernel-corpus/kernels/loom-libs",
       "count": 48,
-      "integer_parameters": {
-        "element_count": 768
-      },
+      "integer_parameters": {},
       "kernel": "loom_libs:llm_gated_delta_net_projection_epilogue_f32",
       "library_sources": [],
       "primary_sources": [
@@ -3844,12 +3693,7 @@
         "ops/gated_delta_net_f32_wmma.loom"
       ],
       "symbol": "llm_gated_delta_net_projection_epilogue_f32",
-      "workload_parameters": [
-        {
-          "name": "element_count",
-          "type": "index"
-        }
-      ]
+      "workload_parameters": []
     },
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_121_llm_gated_delta_net_f32_wmma_head128",
@@ -3895,15 +3739,12 @@
         "element_count": 786432
       },
       "kernel": "loom_libs:ggml_copy_f32",
-      "library_sources": [
-        "motifs/copy/vector_load_store.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/copy/copy_f32.loom"
+        "ops/copy_f32.loom"
       ],
       "sources": [
-        "ops/copy/copy_f32.loom",
-        "motifs/copy/vector_load_store.loom"
+        "ops/copy_f32.loom"
       ],
       "symbol": "ggml_copy_f32",
       "workload_parameters": [
@@ -3961,16 +3802,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "workload_parameters": [
@@ -4014,16 +3855,16 @@
       },
       "kernel": "loom_libs:ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -4198,16 +4039,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -4242,16 +4081,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -4272,15 +4109,12 @@
         "token_count": 16
       },
       "kernel": "loom_libs:ggml_set_rows",
-      "library_sources": [
-        "motifs/rows/cache_publish.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/rows/set_rows.loom"
+        "ops/set_rows.loom"
       ],
       "sources": [
-        "ops/rows/set_rows.loom",
-        "motifs/rows/cache_publish.loom"
+        "ops/set_rows.loom"
       ],
       "symbol": "ggml_set_rows",
       "workload_parameters": [
@@ -4315,21 +4149,12 @@
         "query_token_count": 16
       },
       "kernel": "loom_libs:ggml_flash_attention_f32_f16_wmma",
-      "library_sources": [
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom",
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "symbol": "ggml_flash_attention_f32_f16_wmma",
       "workload_parameters": [
@@ -4406,18 +4231,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_f32",
       "workload_parameters": [
@@ -4438,15 +4261,12 @@
       "count": 1,
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_concat_dim0_f32",
-      "library_sources": [
-        "motifs/copy/concat_dim0.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/copy/concat_dim0_f32.loom"
+        "ops/copy_f32.loom"
       ],
       "sources": [
-        "ops/copy/concat_dim0_f32.loom",
-        "motifs/copy/concat_dim0.loom"
+        "ops/copy_f32.loom"
       ],
       "symbol": "ggml_concat_dim0_f32",
       "workload_parameters": []
@@ -4507,10 +4327,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -4549,15 +4369,12 @@
       "count": 1,
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_concat_dim0_f32",
-      "library_sources": [
-        "motifs/copy/concat_dim0.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/copy/concat_dim0_f32.loom"
+        "ops/copy_f32.loom"
       ],
       "sources": [
-        "ops/copy/concat_dim0_f32.loom",
-        "motifs/copy/concat_dim0.loom"
+        "ops/copy_f32.loom"
       ],
       "symbol": "ggml_concat_dim0_f32",
       "workload_parameters": []
@@ -4618,10 +4435,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -4663,18 +4480,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_f32",
       "workload_parameters": [
@@ -4695,15 +4510,12 @@
       "count": 2,
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_concat_dim0_f32",
-      "library_sources": [
-        "motifs/copy/concat_dim0.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/copy/concat_dim0_f32.loom"
+        "ops/copy_f32.loom"
       ],
       "sources": [
-        "ops/copy/concat_dim0_f32.loom",
-        "motifs/copy/concat_dim0.loom"
+        "ops/copy_f32.loom"
       ],
       "symbol": "ggml_concat_dim0_f32",
       "workload_parameters": []
@@ -4776,16 +4588,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -4922,16 +4734,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -4966,16 +4776,14 @@
       "integer_parameters": {},
       "kernel": "loom_libs:ggml_rmsnorm_mul_rope_f32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom"
+        "ops/rmsnorm_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_mul_rope_f32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "ops/rmsnorm_f32.loom",
+        "motifs/rmsnorm_f32.loom"
       ],
       "symbol": "ggml_rmsnorm_mul_rope_f32",
       "workload_parameters": []
@@ -4996,15 +4804,12 @@
         "token_count": 1
       },
       "kernel": "loom_libs:ggml_set_rows",
-      "library_sources": [
-        "motifs/rows/cache_publish.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/rows/set_rows.loom"
+        "ops/set_rows.loom"
       ],
       "sources": [
-        "ops/rows/set_rows.loom",
-        "motifs/rows/cache_publish.loom"
+        "ops/set_rows.loom"
       ],
       "symbol": "ggml_set_rows",
       "workload_parameters": [
@@ -5039,21 +4844,12 @@
         "query_token_count": 1
       },
       "kernel": "loom_libs:ggml_flash_attention_f32_f16_wmma",
-      "library_sources": [
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "sources": [
-        "ops/flash_attention/prefill_f32_f16_wmma.loom",
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
+        "ops/flash_attention_f32_f16_wmma.loom"
       ],
       "symbol": "ggml_flash_attention_f32_f16_wmma",
       "workload_parameters": [
@@ -5121,16 +4917,16 @@
       },
       "kernel": "loom_libs:ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "workload_parameters": [
@@ -5262,10 +5058,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
@@ -5549,21 +5345,12 @@
       "count": 48,
       "integer_parameters": {},
       "kernel": "loom_libs:llm_ssm_conv_dconv4_silu_rollback_f32",
-      "library_sources": [
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
-      ],
+      "library_sources": [],
       "primary_sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "sources": [
-        "ops/ssm_conv/rollback_dconv4_silu_f32.loom",
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
+        "ops/ssm_conv_f32.loom"
       ],
       "symbol": "llm_ssm_conv_dconv4_silu_rollback_f32",
       "workload_parameters": []
@@ -5571,14 +5358,13 @@
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_175_llm_gated_delta_net_projection_epilogue_f32",
       "compile_parameters": {
+        "llm.gated_delta_net.epilogue_element_count": "48",
         "llm.gated_delta_net.epilogue_head_count": "48",
         "llm.gated_delta_net.epilogue_workgroup_size": "256"
       },
       "corpus_dir": "kernel-corpus/kernels/loom-libs",
       "count": 48,
-      "integer_parameters": {
-        "element_count": 48
-      },
+      "integer_parameters": {},
       "kernel": "loom_libs:llm_gated_delta_net_projection_epilogue_f32",
       "library_sources": [],
       "primary_sources": [
@@ -5588,12 +5374,7 @@
         "ops/gated_delta_net_f32_wmma.loom"
       ],
       "symbol": "llm_gated_delta_net_projection_epilogue_f32",
-      "workload_parameters": [
-        {
-          "name": "element_count",
-          "type": "index"
-        }
-      ]
+      "workload_parameters": []
     },
     {
       "benchmark": "@qwen38_27b_udq4kxl_draft_tg_c1_176_llm_gated_delta_net_f32_wmma_head128_inplace",
@@ -5643,16 +5424,16 @@
       },
       "kernel": "loom_libs:ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "library_sources": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "primary_sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom"
+        "ops/rmsnorm_binary_f32.loom"
       ],
       "sources": [
-        "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom",
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "ops/rmsnorm_binary_f32.loom",
+        "motifs/rmsnorm_f32.loom",
+        "motifs/binary_f32_apply.loom"
       ],
       "symbol": "ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "workload_parameters": [
@@ -5690,10 +5471,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/rows/get_rows_f32.loom"
+        "ops/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/rows/get_rows_f32.loom",
+        "ops/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
