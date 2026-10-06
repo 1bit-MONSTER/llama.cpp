@@ -715,11 +715,8 @@ def render_case(symbol: str, command: dict[str, Any], export: dict[str, Any]) ->
     elif kernel == "ggml_mul_mat_add_f32_f32_decode_wave64":
         case = case_mul_mat_add_decode(symbol, command, kernel)
     elif kernel in (
-        "ggml_mul_mat_bias_f32_f32_wmma",
-        "ggml_mul_mat_add_f32_f32_wmma",
-        "ggml_mul_mat_bias_add_f32_f32_wmma",
-        "ggml_mul_mat_add_next_rmsnorm_f32_f32_wmma",
-        "ggml_mul_mat_bias_add_next_rmsnorm_f32_f32_wmma",
+        "ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+        "ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
     ):
         case = case_mul_mat_postops(symbol, command, kernel)
     elif kernel in ("ggml_mul_mat_swiglu_f32_f32_wmma", "ggml_mul_mat_swiglu_f32_f32_decode_wave64"):
@@ -733,8 +730,6 @@ def render_case(symbol: str, command: dict[str, Any], export: dict[str, Any]) ->
         case = case_llm_attention_k_matmul_rope_set_rows(symbol, command, kernel)
     elif kernel in ("llm_attention_v_matmul_set_rows_f32_f32_wmma", "llm_attention_v_matmul_set_rows_decode_f32_f32"):
         case = case_llm_attention_v_matmul_set_rows(symbol, command, kernel)
-    elif kernel == "qwen3_moe_flash_attention_f32_f16_wmma":
-        case = case_flash_attention(symbol, command, kernel, "qwen3_moe")
     elif kernel == "ggml_flash_attention_f32_f16_wmma":
         case = case_flash_attention(symbol, command, kernel, "ggml")
     elif kernel in ("ggml_flash_attention_decode_split_f32_f16_wmma", "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"):

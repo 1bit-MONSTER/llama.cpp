@@ -6,6 +6,7 @@
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -15,18 +16,24 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr KernelCatalogRef kAttentionQMatMulRopeF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_f32_f32_wmma");
-static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_f32_f32_wmma");
-static constexpr KernelCatalogRef kAttentionVMatMulSetRowsF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_f32_f32_wmma");
-static constexpr KernelCatalogRef kAttentionQMatMulRopeF32F32DecodeKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_decode_f32_f32");
-static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsF32F32DecodeKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_decode_f32_f32");
-static constexpr KernelCatalogRef kAttentionVMatMulSetRowsF32F32DecodeKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_decode_f32_f32");
+static constexpr KernelCatalogRef kAttentionQMatMulRopeTiledF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_tiled_f32_f32");
+static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsTiledF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_tiled_f32_f32");
+static constexpr KernelCatalogRef kAttentionVMatMulSetRowsTiledF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_tiled_f32_f32");
+static constexpr KernelCatalogRef kAttentionQMatMulRopeVectorF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_vector_f32_f32");
+static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsVectorF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_vector_f32_f32");
+static constexpr KernelCatalogRef kAttentionVMatMulSetRowsVectorF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_vector_f32_f32");
+static constexpr KernelCatalogRef kAttentionQMatMulRopeLegacyF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_legacy_f32_f32");
+static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsLegacyF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_legacy_f32_f32");
+static constexpr KernelCatalogRef kAttentionVMatMulSetRowsLegacyF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_legacy_f32_f32");
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -253,9 +260,53 @@ struct AttentionQkvMatch {
     std::vector<const GraphNode *> layout_nodes;
     KernelCatalogRef               kernel = {};
     AttentionQkvProjectionKind     kind   = AttentionQkvProjectionKind::Query;
+    bool                           use_f16_activation = false;
 
     bool matched() const { return root.matched() && kernel.id != kUncatalogedKernelId; }
 };
+
+static bool prefill_v_cache_fusion_disabled() {
+    const char * value = std::getenv("GGML_HRX_DISABLE_PREFILL_V_CACHE_FUSION");
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+    return std::strcmp(value, "0") != 0 && std::strcmp(value, "false") != 0 && std::strcmp(value, "FALSE") != 0 &&
+           std::strcmp(value, "off") != 0 && std::strcmp(value, "OFF") != 0;
+}
+
+static bool distinct_storage(const Graph & graph, const Value & lhs, const Value & rhs) {
+    return !graph.values().same_storage(lhs.id, rhs.id);
+}
+
+static bool is_q6_f16_prefill_v_cache_cell(const DispatchMatchContext & context,
+                                           const AttentionMatMulMatch & root,
+                                           const AttentionSetRowsMatch & set_rows) {
+    if (prefill_v_cache_fusion_disabled() || root.weight->type != GGML_TYPE_Q6_K || root.input_size != 1536 ||
+        root.output_size != 256 || root.token_count != 64 || set_rows.output_format != 16 ||
+        set_rows.cache_row_count != 512 || root.output->kind != ValueKind::Transient ||
+        root.weight->alias_source.value >= 0 || !distinct_storage(context.graph, *root.input, *root.weight) ||
+        !distinct_storage(context.graph, *root.input, *set_rows.indices) ||
+        !distinct_storage(context.graph, *root.input, *set_rows.output) ||
+        !distinct_storage(context.graph, *root.weight, *set_rows.indices) ||
+        !distinct_storage(context.graph, *root.weight, *set_rows.output) ||
+        !distinct_storage(context.graph, *set_rows.indices, *set_rows.output)) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool can_fuse_q6_f16_prefill_v_cache_cell(const DispatchMatchContext & context,
+                                                 const AttentionMatMulMatch & root,
+                                                 const AttentionSetRowsMatch & set_rows) {
+    if (!is_q6_f16_prefill_v_cache_cell(context, root, set_rows)) {
+        return false;
+    }
+
+    const size_t activation_bytes = static_cast<size_t>(root.input_size * root.token_count) * sizeof(ggml_fp16_t);
+    return find_alternate_value(context.graph, context.plan, root.input->id, GGML_TYPE_F16, activation_bytes) !=
+           nullptr;
+}
 
 static bool can_use_packed_lowtoken_attention_matmul(const AttentionMatMulMatch & root) {
     if (root.token_count < 1 || root.token_count > 5 || root.output_size % 64 != 0 ||
@@ -421,6 +472,26 @@ static AttentionSetRowsMatch match_attention_set_rows(const Graph &     graph,
     return match;
 }
 
+static bool accepts_q6_f16_prefill_v_cache_cell(const DispatchMatchContext & context,
+                                                const GraphNode &            consumer,
+                                                const Value &                input) {
+    AttentionMatMulMatch root = match_attention_matmul_any_format(context.graph, &consumer);
+    if (!root.matched() || root.input->id != input.id || !context.graph.has_index()) {
+        return false;
+    }
+
+    std::vector<const GraphNode *> layouts;
+    const Value *     after_projection = nullptr;
+    const GraphNode * set_rows_node =
+        find_only_consumer_after_layout_aliases(context, root.output, layouts, after_projection, 2);
+    if (set_rows_node == nullptr || set_rows_node->op != GGML_OP_SET_ROWS) {
+        return false;
+    }
+    const AttentionSetRowsMatch set_rows = match_attention_set_rows(context.graph, set_rows_node, after_projection);
+    return set_rows.matched() && set_rows.token_count == root.token_count &&
+           set_rows.output_size == root.output_size && is_q6_f16_prefill_v_cache_cell(context, root, set_rows);
+}
+
 static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchContext & context) {
     AttentionQkvMatch    match;
     AttentionMatMulMatch root = match_attention_matmul_any_format(context.graph, context.root_node);
@@ -455,45 +526,47 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
             match.layout_nodes.insert(match.layout_nodes.end(), set_rows_layouts.begin(), set_rows_layouts.end());
             match.root   = root;
             match.kernel = is_supported_decode_token_count(root.token_count) ?
-                               kAttentionKMatMulRopeSetRowsF32F32DecodeKernel :
-                               kAttentionKMatMulRopeSetRowsF32F32WmmaKernel;
+                               kAttentionKMatMulRopeSetRowsVectorF32F32Kernel :
+                               kAttentionKMatMulRopeSetRowsTiledF32F32Kernel;
             if (can_use_packed_lowtoken_attention_matmul(root)) {
                 match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-                match.kernel = kAttentionKMatMulRopeSetRowsF32F32WmmaKernel;
+                match.kernel = kAttentionKMatMulRopeSetRowsLegacyF32F32Kernel;
             }
             match.kind   = AttentionQkvProjectionKind::Key;
             return match;
         }
 
         match.root   = root;
-        match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionQMatMulRopeF32F32DecodeKernel :
-                                                                           kAttentionQMatMulRopeF32F32WmmaKernel;
+        match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionQMatMulRopeVectorF32F32Kernel :
+                                                                           kAttentionQMatMulRopeTiledF32F32Kernel;
         if (can_use_packed_lowtoken_attention_matmul(root)) {
             match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-            match.kernel = kAttentionQMatMulRopeF32F32WmmaKernel;
+            match.kernel = kAttentionQMatMulRopeLegacyF32F32Kernel;
         }
         match.kind   = AttentionQkvProjectionKind::Query;
         return match;
     }
 
     if (consumer->op == GGML_OP_SET_ROWS) {
-        if (!is_supported_decode_token_count(root.token_count) &&
-            !common_mul_mat_dense_float_format(root.weight_format)) {
-            return {};
-        }
         match.set_rows = match_attention_set_rows(context.graph, consumer, after_projection);
         if (!match.set_rows.matched() || match.set_rows.token_count != root.token_count ||
             match.set_rows.output_size != root.output_size) {
             return {};
         }
+        const bool quantized_prefill = !is_supported_decode_token_count(root.token_count) &&
+                                       !common_mul_mat_dense_float_format(root.weight_format);
+        if (quantized_prefill && !can_fuse_q6_f16_prefill_v_cache_cell(context, root, match.set_rows)) {
+            return {};
+        }
         match.root   = root;
-        match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionVMatMulSetRowsF32F32DecodeKernel :
-                                                                           kAttentionVMatMulSetRowsF32F32WmmaKernel;
+        match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionVMatMulSetRowsVectorF32F32Kernel :
+                                                                           kAttentionVMatMulSetRowsTiledF32F32Kernel;
         if (can_use_packed_lowtoken_attention_matmul(root)) {
             match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-            match.kernel = kAttentionVMatMulSetRowsF32F32WmmaKernel;
+            match.kernel = kAttentionVMatMulSetRowsLegacyF32F32Kernel;
         }
         match.kind   = AttentionQkvProjectionKind::Value;
+        match.use_f16_activation = quantized_prefill;
         return match;
     }
 
@@ -535,12 +608,6 @@ static void add_attention_qkv_compile_parameters(Dispatch & dispatch, const Atte
     dispatch.kernel.compile_parameters.emplace("llm.attention_qkv.input_size", to_config_value(match.root.input_size));
     dispatch.kernel.compile_parameters.emplace("llm.attention_qkv.output_size",
                                                to_config_value(match.root.output_size));
-    if (is_supported_decode_token_count(match.root.token_count)) {
-        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_f32_f32_decode.token_capacity",
-                                                   to_config_value(match.root.token_count));
-        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_f32_f32_decode.output_capacity",
-                                                   to_config_value(match.root.output_size));
-    }
     dispatch.kernel.compile_parameters.emplace(
         "llm.attention_qkv.weight_format",
         to_config_value(common_mul_mat_format_config_value(match.root.weight_format)));
@@ -595,6 +662,16 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
     bool pack_q6 = match.root.weight_format == CommonMulMatWeightFormat::Q6KRow64;
     bool use_q8_activation = false;
     DispatchBinding activation = { match.root.input->id, 0, match.root.input->byte_count };
+    if (match.use_f16_activation) {
+        const size_t activation_bytes =
+            static_cast<size_t>(match.root.input_size * match.root.token_count) * sizeof(ggml_fp16_t);
+        const CommandPlanAlternateValue * alternate =
+            find_alternate_value(context.graph, context.plan, match.root.input->id, GGML_TYPE_F16, activation_bytes);
+        if (alternate == nullptr) {
+            return false;
+        }
+        activation = { alternate->alternate_value, 0, activation_bytes };
+    }
     if (pack_q4 || pack_q6) {
         if (common_prepare_q8_1_x4_input(context, *match.root.input, match.root.input_size, match.root.token_count,
                                          dispatch_match, activation,
@@ -608,18 +685,22 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
             match.root.weight_format = fallback_format;
             pack_q4 = false;
             pack_q6 = false;
-            if (is_supported_decode_token_count(match.root.token_count)) {
-                switch (match.kind) {
-                    case AttentionQkvProjectionKind::Query:
-                        match.kernel = kAttentionQMatMulRopeF32F32DecodeKernel;
-                        break;
-                    case AttentionQkvProjectionKind::Key:
-                        match.kernel = kAttentionKMatMulRopeSetRowsF32F32DecodeKernel;
-                        break;
-                    case AttentionQkvProjectionKind::Value:
-                        match.kernel = kAttentionVMatMulSetRowsF32F32DecodeKernel;
-                        break;
-                }
+            switch (match.kind) {
+                case AttentionQkvProjectionKind::Query:
+                    match.kernel = is_supported_decode_token_count(match.root.token_count) ?
+                                       kAttentionQMatMulRopeVectorF32F32Kernel :
+                                       kAttentionQMatMulRopeTiledF32F32Kernel;
+                    break;
+                case AttentionQkvProjectionKind::Key:
+                    match.kernel = is_supported_decode_token_count(match.root.token_count) ?
+                                       kAttentionKMatMulRopeSetRowsVectorF32F32Kernel :
+                                       kAttentionKMatMulRopeSetRowsTiledF32F32Kernel;
+                    break;
+                case AttentionQkvProjectionKind::Value:
+                    match.kernel = is_supported_decode_token_count(match.root.token_count) ?
+                                       kAttentionVMatMulSetRowsVectorF32F32Kernel :
+                                       kAttentionVMatMulSetRowsTiledF32F32Kernel;
+                    break;
             }
         }
     }
@@ -628,6 +709,8 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
     add_attention_qkv_compile_parameters(dispatch, match);
     if (use_q8_activation) {
         dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.activation_format", std::to_string(GGML_TYPE_Q8_1));
+    } else if (match.use_f16_activation) {
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.activation_format", std::to_string(GGML_TYPE_F16));
     }
     dispatch.bindings.push_back(activation);
     if (pack_q4 || pack_q6) {
@@ -664,8 +747,17 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
 }  // namespace
 
 void register_llm_attention_qkv_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add_activation_consumer({
+        "llm.attention_v_cache.input.f16_row.prefill",
+        GGML_OP_MUL_MAT,
+        DispatchActivationInputF16Row,
+        DispatchActivationConsumerUse::Tiled,
+        DispatchActivationProducerRequirementNone,
+        DispatchSource::Llm,
+        accepts_q6_f16_prefill_v_cache_cell,
+    });
     registry.add({
-        "llm.attention_qkv_matmul_postprocess.f32_f32_wmma",
+        "llm.attention_qkv_matmul_postprocess.tiled_vector_f32_f32",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::Fused,
         210,
