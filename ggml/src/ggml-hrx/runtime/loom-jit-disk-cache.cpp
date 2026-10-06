@@ -33,7 +33,7 @@ namespace ggml::hrx {
 namespace {
 
 constexpr uint32_t kMagic   = 0x434a4231;  // "1BJC"
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 3;
 
 std::mutex  g_mutex;
 std::string g_target;
@@ -205,6 +205,11 @@ void loom_jit_disk_cache_store(const LoomKernelCompileRequest &         request,
                                const ggml_hrx_loom_jit_compile_result & compiled) {
     if (!enabled() || cache_dir().empty() || library_identity().empty() || compiled.hsaco_data == nullptr ||
         compiled.hsaco_size == 0) {
+        return;
+    }
+    // The entry does not carry the host-side launch program, so a cache hit restores a result whose
+    // launch_program is null. Kernels that need one (dynamic workloads) must not be cached.
+    if (compiled.launch_program != nullptr) {  // the format cannot carry it
         return;
     }
     std::error_code ec;

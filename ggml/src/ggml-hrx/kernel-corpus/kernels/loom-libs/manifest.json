@@ -717,6 +717,9 @@
    "path": "ours/ops/attention_sink_f32.loom"
   },
   {
+   "path": "ours/ops/flash_attention_f32_f16_wmma.loom"
+  },
+  {
    "path": "ours/ops/grouped_mul_mat_f16_f32.loom"
   },
   {
@@ -6455,7 +6458,7 @@
    "name": "ggml_flash_attention_f32_f16_wmma",
    "family": "loom_libs",
    "symbol": "ggml_flash_attention_f32_f16_wmma",
-   "source": "ops/flash_attention/prefill_f32_f16_wmma.loom",
+   "source": "ours/ops/flash_attention_f32_f16_wmma.loom",
    "workload_parameters": [
     {
      "name": "query_token_count",
@@ -6496,21 +6499,11 @@
    "compile_recipe": {
     "mode": "direct",
     "primary_sources": [
-     "ops/flash_attention/prefill_f32_f16_wmma.loom"
+     "ours/ops/flash_attention_f32_f16_wmma.loom"
     ],
-    "library_sources": [
-     "motifs/flash_attention/qk_block_wmma.loom",
-     "motifs/flash_attention/online_softmax.loom",
-     "motifs/flash_attention/pv_block_wmma.loom",
-     "motifs/flash_attention/publish_f32.loom"
-    ]
+    "library_sources": []
    },
-   "compile_dependencies": [
-    "motifs/flash_attention/qk_block_wmma.loom",
-    "motifs/flash_attention/online_softmax.loom",
-    "motifs/flash_attention/pv_block_wmma.loom",
-    "motifs/flash_attention/publish_f32.loom"
-   ]
+   "compile_dependencies": []
   },
   {
    "name": "ggml_flash_attention_f32_f16_wmma_publish_f16",
@@ -12989,9 +12982,53 @@
     "primary_sources": [
      "ours/ops/kquant_decode_f32.loom"
     ],
-    "library_sources": []
+    "library_sources": [
+     "ours/motifs/bf16_f16.loom",
+     "ours/motifs/binary_f32_apply.loom",
+     "ours/motifs/dequant.loom",
+     "ours/motifs/dequant_1bit.loom",
+     "ours/motifs/dequant_prism.loom",
+     "ours/motifs/f16_f16.loom",
+     "ours/motifs/f32_f16.loom",
+     "ours/motifs/llm_attention_qkv_matmul_postops.loom",
+     "ours/motifs/mul_mat_f32_f32_postops.loom",
+     "ours/motifs/mul_mat_f32_f32_wmma_core.loom",
+     "ours/motifs/mul_mat_id_f32_f32_postops.loom",
+     "ours/motifs/mul_mat_id_f32_f32_wmma_core.loom",
+     "ours/motifs/mul_mat_quantized_f16_prefill.loom",
+     "ours/motifs/q4_k_f16.loom",
+     "ours/motifs/q6_k_f16.loom",
+     "ours/motifs/q8_0_f16.loom",
+     "ours/motifs/q8_1_f16.loom",
+     "ours/motifs/quantize_q8_1_x4.loom",
+     "ours/motifs/rmsnorm_f32.loom",
+     "ours/motifs/rope_f32.loom",
+     "ours/motifs/unary_f32_apply.loom"
+    ]
    },
-   "compile_dependencies": []
+   "compile_dependencies": [
+    "ours/motifs/bf16_f16.loom",
+    "ours/motifs/binary_f32_apply.loom",
+    "ours/motifs/dequant.loom",
+    "ours/motifs/dequant_1bit.loom",
+    "ours/motifs/dequant_prism.loom",
+    "ours/motifs/f16_f16.loom",
+    "ours/motifs/f32_f16.loom",
+    "ours/motifs/llm_attention_qkv_matmul_postops.loom",
+    "ours/motifs/mul_mat_f32_f32_postops.loom",
+    "ours/motifs/mul_mat_f32_f32_wmma_core.loom",
+    "ours/motifs/mul_mat_id_f32_f32_postops.loom",
+    "ours/motifs/mul_mat_id_f32_f32_wmma_core.loom",
+    "ours/motifs/mul_mat_quantized_f16_prefill.loom",
+    "ours/motifs/q4_k_f16.loom",
+    "ours/motifs/q6_k_f16.loom",
+    "ours/motifs/q8_0_f16.loom",
+    "ours/motifs/q8_1_f16.loom",
+    "ours/motifs/quantize_q8_1_x4.loom",
+    "ours/motifs/rmsnorm_f32.loom",
+    "ours/motifs/rope_f32.loom",
+    "ours/motifs/unary_f32_apply.loom"
+   ]
   },
   {
    "name": "ggml_kquant_mul_mat_decode_f32",
@@ -13018,9 +13055,53 @@
     "primary_sources": [
      "ours/ops/kquant_decode_f32.loom"
     ],
-    "library_sources": []
+    "library_sources": [
+     "ours/motifs/bf16_f16.loom",
+     "ours/motifs/binary_f32_apply.loom",
+     "ours/motifs/dequant.loom",
+     "ours/motifs/dequant_1bit.loom",
+     "ours/motifs/dequant_prism.loom",
+     "ours/motifs/f16_f16.loom",
+     "ours/motifs/f32_f16.loom",
+     "ours/motifs/llm_attention_qkv_matmul_postops.loom",
+     "ours/motifs/mul_mat_f32_f32_postops.loom",
+     "ours/motifs/mul_mat_f32_f32_wmma_core.loom",
+     "ours/motifs/mul_mat_id_f32_f32_postops.loom",
+     "ours/motifs/mul_mat_id_f32_f32_wmma_core.loom",
+     "ours/motifs/mul_mat_quantized_f16_prefill.loom",
+     "ours/motifs/q4_k_f16.loom",
+     "ours/motifs/q6_k_f16.loom",
+     "ours/motifs/q8_0_f16.loom",
+     "ours/motifs/q8_1_f16.loom",
+     "ours/motifs/quantize_q8_1_x4.loom",
+     "ours/motifs/rmsnorm_f32.loom",
+     "ours/motifs/rope_f32.loom",
+     "ours/motifs/unary_f32_apply.loom"
+    ]
    },
-   "compile_dependencies": []
+   "compile_dependencies": [
+    "ours/motifs/bf16_f16.loom",
+    "ours/motifs/binary_f32_apply.loom",
+    "ours/motifs/dequant.loom",
+    "ours/motifs/dequant_1bit.loom",
+    "ours/motifs/dequant_prism.loom",
+    "ours/motifs/f16_f16.loom",
+    "ours/motifs/f32_f16.loom",
+    "ours/motifs/llm_attention_qkv_matmul_postops.loom",
+    "ours/motifs/mul_mat_f32_f32_postops.loom",
+    "ours/motifs/mul_mat_f32_f32_wmma_core.loom",
+    "ours/motifs/mul_mat_id_f32_f32_postops.loom",
+    "ours/motifs/mul_mat_id_f32_f32_wmma_core.loom",
+    "ours/motifs/mul_mat_quantized_f16_prefill.loom",
+    "ours/motifs/q4_k_f16.loom",
+    "ours/motifs/q6_k_f16.loom",
+    "ours/motifs/q8_0_f16.loom",
+    "ours/motifs/q8_1_f16.loom",
+    "ours/motifs/quantize_q8_1_x4.loom",
+    "ours/motifs/rmsnorm_f32.loom",
+    "ours/motifs/rope_f32.loom",
+    "ours/motifs/unary_f32_apply.loom"
+   ]
   },
   {
    "name": "ggml_kquant_swiglu_decode_tokens_f32",
@@ -13047,9 +13128,53 @@
     "primary_sources": [
      "ours/ops/kquant_decode_f32.loom"
     ],
-    "library_sources": []
+    "library_sources": [
+     "ours/motifs/bf16_f16.loom",
+     "ours/motifs/binary_f32_apply.loom",
+     "ours/motifs/dequant.loom",
+     "ours/motifs/dequant_1bit.loom",
+     "ours/motifs/dequant_prism.loom",
+     "ours/motifs/f16_f16.loom",
+     "ours/motifs/f32_f16.loom",
+     "ours/motifs/llm_attention_qkv_matmul_postops.loom",
+     "ours/motifs/mul_mat_f32_f32_postops.loom",
+     "ours/motifs/mul_mat_f32_f32_wmma_core.loom",
+     "ours/motifs/mul_mat_id_f32_f32_postops.loom",
+     "ours/motifs/mul_mat_id_f32_f32_wmma_core.loom",
+     "ours/motifs/mul_mat_quantized_f16_prefill.loom",
+     "ours/motifs/q4_k_f16.loom",
+     "ours/motifs/q6_k_f16.loom",
+     "ours/motifs/q8_0_f16.loom",
+     "ours/motifs/q8_1_f16.loom",
+     "ours/motifs/quantize_q8_1_x4.loom",
+     "ours/motifs/rmsnorm_f32.loom",
+     "ours/motifs/rope_f32.loom",
+     "ours/motifs/unary_f32_apply.loom"
+    ]
    },
-   "compile_dependencies": []
+   "compile_dependencies": [
+    "ours/motifs/bf16_f16.loom",
+    "ours/motifs/binary_f32_apply.loom",
+    "ours/motifs/dequant.loom",
+    "ours/motifs/dequant_1bit.loom",
+    "ours/motifs/dequant_prism.loom",
+    "ours/motifs/f16_f16.loom",
+    "ours/motifs/f32_f16.loom",
+    "ours/motifs/llm_attention_qkv_matmul_postops.loom",
+    "ours/motifs/mul_mat_f32_f32_postops.loom",
+    "ours/motifs/mul_mat_f32_f32_wmma_core.loom",
+    "ours/motifs/mul_mat_id_f32_f32_postops.loom",
+    "ours/motifs/mul_mat_id_f32_f32_wmma_core.loom",
+    "ours/motifs/mul_mat_quantized_f16_prefill.loom",
+    "ours/motifs/q4_k_f16.loom",
+    "ours/motifs/q6_k_f16.loom",
+    "ours/motifs/q8_0_f16.loom",
+    "ours/motifs/q8_1_f16.loom",
+    "ours/motifs/quantize_q8_1_x4.loom",
+    "ours/motifs/rmsnorm_f32.loom",
+    "ours/motifs/rope_f32.loom",
+    "ours/motifs/unary_f32_apply.loom"
+   ]
   },
   {
    "name": "ggml_kquant_mul_mat_decode_tokens_f32",
@@ -13076,9 +13201,53 @@
     "primary_sources": [
      "ours/ops/kquant_decode_f32.loom"
     ],
-    "library_sources": []
+    "library_sources": [
+     "ours/motifs/bf16_f16.loom",
+     "ours/motifs/binary_f32_apply.loom",
+     "ours/motifs/dequant.loom",
+     "ours/motifs/dequant_1bit.loom",
+     "ours/motifs/dequant_prism.loom",
+     "ours/motifs/f16_f16.loom",
+     "ours/motifs/f32_f16.loom",
+     "ours/motifs/llm_attention_qkv_matmul_postops.loom",
+     "ours/motifs/mul_mat_f32_f32_postops.loom",
+     "ours/motifs/mul_mat_f32_f32_wmma_core.loom",
+     "ours/motifs/mul_mat_id_f32_f32_postops.loom",
+     "ours/motifs/mul_mat_id_f32_f32_wmma_core.loom",
+     "ours/motifs/mul_mat_quantized_f16_prefill.loom",
+     "ours/motifs/q4_k_f16.loom",
+     "ours/motifs/q6_k_f16.loom",
+     "ours/motifs/q8_0_f16.loom",
+     "ours/motifs/q8_1_f16.loom",
+     "ours/motifs/quantize_q8_1_x4.loom",
+     "ours/motifs/rmsnorm_f32.loom",
+     "ours/motifs/rope_f32.loom",
+     "ours/motifs/unary_f32_apply.loom"
+    ]
    },
-   "compile_dependencies": []
+   "compile_dependencies": [
+    "ours/motifs/bf16_f16.loom",
+    "ours/motifs/binary_f32_apply.loom",
+    "ours/motifs/dequant.loom",
+    "ours/motifs/dequant_1bit.loom",
+    "ours/motifs/dequant_prism.loom",
+    "ours/motifs/f16_f16.loom",
+    "ours/motifs/f32_f16.loom",
+    "ours/motifs/llm_attention_qkv_matmul_postops.loom",
+    "ours/motifs/mul_mat_f32_f32_postops.loom",
+    "ours/motifs/mul_mat_f32_f32_wmma_core.loom",
+    "ours/motifs/mul_mat_id_f32_f32_postops.loom",
+    "ours/motifs/mul_mat_id_f32_f32_wmma_core.loom",
+    "ours/motifs/mul_mat_quantized_f16_prefill.loom",
+    "ours/motifs/q4_k_f16.loom",
+    "ours/motifs/q6_k_f16.loom",
+    "ours/motifs/q8_0_f16.loom",
+    "ours/motifs/q8_1_f16.loom",
+    "ours/motifs/quantize_q8_1_x4.loom",
+    "ours/motifs/rmsnorm_f32.loom",
+    "ours/motifs/rope_f32.loom",
+    "ours/motifs/unary_f32_apply.loom"
+   ]
   },
   {
    "name": "ggml_softplus_f32",
