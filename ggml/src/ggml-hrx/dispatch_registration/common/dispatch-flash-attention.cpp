@@ -54,7 +54,11 @@ static constexpr int64_t kDecodeKvTileSize          = 64;
 // selector reject every candidate ("all_rejected") and the whole decode fail; match this bound so
 // the scheduler falls through to the general flash_attention_f32_f16_wmma dispatch instead (lower
 // priority, still correct here, just not split-parallelized for very long decode contexts).
-static constexpr int64_t kDecodeSplitMaxKeyValueTokenCapacity = 32768;
+// 2048, not 32768: after AMD's refactor the merged corpus has only direct_f32 (64-256) and
+// cooperative_f32 (257-2048) - the multipass provider that covered above 2048 is gone. Offering
+// the dispatch past the last provider makes the selector reject every candidate ("all_rejected")
+// and the decode fails, which is what the note above warns about.
+static constexpr int64_t kDecodeSplitMaxKeyValueTokenCapacity = 2048;
 // ggml.copy_transpose_f16 declares row_count and column_count in [32, 32768] (copy_f32.loom).
 // Past that the JIT refuses the specialization ("violates constraint 'range'") and the whole
 // prompt batch fails, so a longer context keeps V in the row-major cache layout instead.
