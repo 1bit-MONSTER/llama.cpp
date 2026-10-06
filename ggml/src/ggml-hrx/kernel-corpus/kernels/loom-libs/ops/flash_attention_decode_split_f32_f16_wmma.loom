@@ -345,8 +345,11 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
         %lane_outside_key_tile = index.cmp ne, %lane_key_tile, %key_tile_ordinal : index
         %lane_tile_visible = scalar.ori %lane_outside_key_tile, %lane_key_visible : i1
         %lane_tile_has_visible = scalar.andi %lane_in_key_tile, %lane_key_visible : i1
-        %key_tile_all_visible = kernel.subgroup.vote.all %lane_tile_visible : i1
-        %key_tile_any_visible = kernel.subgroup.vote.any %lane_tile_has_visible : i1
+        // engine#314 candidate 2: always take the staging path. Constant predicates keep the
+        // existing if/else structure (so the scf yields stay in the right regions) while
+        // removing the subgroup collectives the AMDGPU scheduler cannot order.
+        %key_tile_all_visible = scalar.constant false : i1
+        %key_tile_any_visible = scalar.constant true : i1
         %next_product_accumulator0, %next_product_accumulator1 = scf.if %key_tile_all_visible -> (vector<8xf16>, vector<8xf16>) {
           %value_fragment0 = vector.fragment.load<rhs> %full_value_view[%value_token, %clamped_value_channel0] shape [%k, %n] : view<[%value_token_end]x[%value_width]xf16> -> vector<16xf16>
           %value_fragment1 = vector.fragment.load<rhs> %full_value_view[%value_token, %clamped_value_channel1] shape [%k, %n] : view<[%value_token_end]x[%value_width]xf16> -> vector<16xf16>
