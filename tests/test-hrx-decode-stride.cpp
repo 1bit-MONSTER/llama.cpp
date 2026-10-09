@@ -16,8 +16,9 @@
 // Decode-kernel input rows for input sizes that are a multiple of 32 but not of 256 (gpt-oss 2880, BlackMamba 1152;
 // 2048 as the control): every token / input row after the first must be read input_size values after the previous
 // one. MUL_MAT with 2..8 tokens and MUL_MAT_ID with 1 or 4 input rows per token (the down projection reads one row
-// per route) on MXFP4, Q8_0 and Q4_0 weights, against the CPU backend (normalized MSE, as test-backend-ops). Each
-// graph runs on the HRX device itself (no scheduler) and must be planned on HRX.
+// per route) on MXFP4, Q8_0 and Q4_0 weights, and on NVFP4 also at 320 and with one token, against the CPU backend
+// (normalized MSE, as test-backend-ops). Each graph runs on the HRX device itself (no scheduler) and must be planned
+// on HRX.
 
 #include "dispatch/dispatch-scheduler.h"
 #include "ggml-alloc.h"
@@ -194,6 +195,18 @@ int main() {
                 for (int64_t tokens : { 1, 2 }) {
                     cases.push_back({ type, input_size, tokens, input_rows });
                 }
+            }
+        }
+    }
+    // NVFP4 (64-value blocks): the format admits input sizes that are a multiple of 64, the decode lanes only
+    // multiples of 256; 320 and 2880 must take a path that reads them right, from one token up.
+    for (int64_t input_size : { 320, 2880, 1152, 2048 }) {
+        for (int64_t tokens : { 1, 2, 3, 4, 8 }) {
+            cases.push_back({ GGML_TYPE_NVFP4, input_size, tokens, 0 });
+        }
+        for (int64_t input_rows : { int64_t(1), kRouteCount }) {
+            for (int64_t tokens : { 1, 2 }) {
+                cases.push_back({ GGML_TYPE_NVFP4, input_size, tokens, input_rows });
             }
         }
     }
