@@ -309,9 +309,13 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
     // transfer memory: DEVICE_VISIBLE permits handle-based stream copies without implying direct device access.
     if (host_visible) {
         memory_type = HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE;
-        if (direct_host_binding) {
-            memory_type |= HRX_MEMORY_TYPE_HOST_COHERENT;
-        }
+        // engine#315: a host-visible buffer is read directly by the CPU — the generic
+        // ggml_backend_tensor_get_async short-circuits for host buffers, so no backend copy runs and
+        // nothing in the transfer path can order the device's write against that read. Coherence must
+        // therefore not be conditional on the direct-binding knob: with that knob off (the default) the
+        // reader can observe unwritten bytes, which is the observed whole-vocabulary NaN. Same memory
+        // class, one unconditional bit, no new allocation path and no configuration change.
+        memory_type |= HRX_MEMORY_TYPE_HOST_COHERENT;
     }
     hrx_buffer_params_t params = {
         memory_type,
