@@ -31,6 +31,7 @@ enum class CommonMulMatWeightFormat {
     IQ4_NL,
     MXFP4,
     NVFP4,
+    Q2_0,
     TQ1_0,
     TQ2_0,
     IQ4_XS,
@@ -109,6 +110,9 @@ inline bool common_mul_mat_format_for_type(ggml_type type, CommonMulMatWeightFor
         case GGML_TYPE_NVFP4:
             format = CommonMulMatWeightFormat::NVFP4;
             return true;
+        case GGML_TYPE_Q2_0:
+            format = CommonMulMatWeightFormat::Q2_0;
+            return true;
         case GGML_TYPE_TQ1_0:
             format = CommonMulMatWeightFormat::TQ1_0;
             return true;
@@ -142,6 +146,8 @@ inline int64_t common_mul_mat_format_config_value(CommonMulMatWeightFormat forma
     switch (format) {
         case CommonMulMatWeightFormat::Q1_0:
             return 10;
+        case CommonMulMatWeightFormat::Q2_0:
+            return 42;
         case CommonMulMatWeightFormat::PQ2_0:
             return 72;
         case CommonMulMatWeightFormat::PTQ1_0:
@@ -219,6 +225,8 @@ inline bool common_mul_mat_supported_dense_input_size(CommonMulMatWeightFormat f
         case CommonMulMatWeightFormat::PQ2_0:
         case CommonMulMatWeightFormat::PTQ1_0:
             return input_size >= 256 && input_size <= 32768 && input_size % 128 == 0;
+        case CommonMulMatWeightFormat::Q2_0:
+            return input_size >= 256 && input_size <= 32768 && input_size % 64 == 0;
         case CommonMulMatWeightFormat::NVFP4:
             // 64-value blocks (four 16-value scale groups)
             return input_size >= 256 && input_size <= 32768 && input_size % 64 == 0;
