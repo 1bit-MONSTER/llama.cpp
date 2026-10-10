@@ -15,7 +15,7 @@
 // aligned descriptor contains the expert ordinal, assignment base, row count,
 // and a reserved zero field. The b128 representation keeps the ABI independent
 // of model geometry while giving consumers one native-width descriptor load.
-config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), mul(%value, 32)]
+config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), multiple_of(%value, 32)]
 
 config.decl @qwen3_moe.router.route_count : %value: index where [range(%value, 1, 32)]
 

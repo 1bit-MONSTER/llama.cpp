@@ -17,7 +17,7 @@ template.decl @qwen3_moe.routed_gate_up.q4k_q8.body(%publish_output: i1, %token_
 
 template.decl @qwen3_moe.routed_gate_up.quantize_q8_1_x4.subgroup_body(%publish_output: i1, %group_count0: index, %group0: index, %input: buffer, %output: buffer)
 
-config.decl @qwen3_moe.routed_gate_up.input_size : %value: index where [range(%value, 512, 32768), mul(%value, 512)]
+config.decl @qwen3_moe.routed_gate_up.input_size : %value: index where [range(%value, 512, 32768), multiple_of(%value, 512)]
 
 config.decl @qwen3_moe.routed_gate_up.expert_count : %value: index where [range(%value, 1, 512)]
 
@@ -336,7 +336,7 @@ func.def inline @qwen3_moe_q4k_q8_1_chunk(%weight: buffer, %row_byte_base: offse
 // providers choose output ownership independently, then share this exact
 // packed-row contraction before reducing across a wave32 subgroup.
 func.def inline @qwen3_moe_q4k_q8_1_x4_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -407,7 +407,7 @@ func.def inline @qwen3_moe_q4k_q8_1_x4_row_lane(%input_size: index, %weight: buf
 // Eight block lanes consume both nibbles from every packed code load and cover
 // the block's full 256-element input extent.
 func.def inline @qwen3_moe_q4k_q8_1_x4_paired_block_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %q4_block: index, %block_lane: index) -> (f32) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_q4_block0 = index.assume %q4_block [range(%q4_block, 0, 127)] : index
   %bounded_block_lane = index.assume %block_lane [range(%block_lane, 0, 7)] : index
   %c1 = index.constant 1 : index
@@ -480,7 +480,7 @@ func.def inline @qwen3_moe_q4k_q8_1_x4_paired_block_lane(%input_size: index, %we
 // advances through four blocks per iteration and reduces the adjacent-group
 // contributions together.
 func.def inline @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -518,7 +518,7 @@ func.def inline @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%input_size: index, %weig
 // cohort walks all blocks in the row. This schedule lets separate cohorts
 // contract independent routed rows concurrently.
 func.def inline @qwen3_moe_q4k_q8_1_x4_cohort_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %cohort_lane: index) -> (f32) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_cohort_lane = index.assume %cohort_lane [range(%cohort_lane, 0, 7)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -1008,7 +1008,7 @@ kernel.def @qwen3_moe_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8(%token_count: in
   %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
   %bounded_route_stride = index.assume %route_stride [range(%route_stride, 1, 128)] : index
   %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 128), eq(%expert_count, %configured_expert_count0)] : index, index
-  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), mul(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), multiple_of(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
   %q8_input_noalias, %route_ids_noalias, %gate_weight_noalias, %up_weight_noalias, %output_noalias, %completion_counters_noalias, %next_q8_output_noalias = buffer.assume.noalias %q8_input, %route_ids, %gate_weight, %up_weight, %output, %completion_counters, %next_q8_output : buffer, buffer, buffer, buffer, buffer, buffer, buffer
   %publishes_swiglu = scalar.constant true : i1
   %body_token = index.constant 0 : index

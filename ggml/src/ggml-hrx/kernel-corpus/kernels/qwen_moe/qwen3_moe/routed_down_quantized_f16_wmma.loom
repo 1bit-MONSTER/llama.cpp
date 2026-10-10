@@ -15,7 +15,7 @@ template.decl @qwen3_moe.routed_down.quantized_prefill.body(%weight_format: inde
 
 amdgpu.target<gfx11-generic> @qwen3_moe_routed_down_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @qwen3_moe.routed_down.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @qwen3_moe.routed_down.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 config.decl @qwen3_moe.routed_down.route_count : %value: index where [range(%value, 1, 8)]
 

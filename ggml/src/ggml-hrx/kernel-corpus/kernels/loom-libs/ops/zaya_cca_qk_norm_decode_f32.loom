@@ -25,7 +25,7 @@
 
 amdgpu.target<gfx11-generic> @ggml_zaya_cca_qk_norm_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.zaya_cca_qk_norm.head_dim : %value: index where [range(%value, 64, 256), mul(%value, 64)]
+config.decl @ggml.zaya_cca_qk_norm.head_dim : %value: index where [range(%value, 64, 256), multiple_of(%value, 64)]
 
 config.decl @ggml.zaya_cca_qk_norm.n_head : %value: index where [range(%value, 1, 128)]
 

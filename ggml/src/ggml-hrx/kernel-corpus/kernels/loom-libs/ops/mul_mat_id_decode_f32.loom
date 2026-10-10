@@ -63,7 +63,7 @@ kernel.def target(@ggml_mul_mat_id_decode_gfx11_wave64) export("ggml_mul_mat_id_
   %bounded_tokens = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_slots = index.assume %slot_count [range(%slot_count, 1, 64)] : index
   %bounded_input_rows = index.assume %input_rows [range(%input_rows, 1, 64)] : index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 32)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 32)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 1048576)] : index
   %flat_count0 = index.mul %bounded_tokens, %bounded_slots : index
   %flat_count = index.assume %flat_count0 [range(%flat_count0, 1, 2048), le(%flat_count0, %row_capacity)] : index

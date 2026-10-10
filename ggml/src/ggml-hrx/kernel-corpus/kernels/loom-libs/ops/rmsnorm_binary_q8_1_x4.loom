@@ -9,7 +9,7 @@ template.decl @ggml.rmsnorm_f32.row_scale(%arg0: index, %arg1: index, %arg2: ind
 
 amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_q8_1_x4_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.rmsnorm_binary_q8_1_x4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_binary_q8_1_x4.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @ggml.rmsnorm_binary_q8_1_x4.rms_epsilon : f32
 
@@ -36,7 +36,7 @@ kernel.def target(@ggml_rmsnorm_binary_q8_1_x4_gfx11_wave32) export("ggml_rmsnor
   %hidden_size0 = config.get @ggml.rmsnorm_binary_q8_1_x4.hidden_size : index
   %epsilon = config.get @ggml.rmsnorm_binary_q8_1_x4.rms_epsilon : f32
   %op = config.get @ggml.rmsnorm_binary_q8_1_x4.op : index
-  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
   %dispatch_group = kernel.workgroup.id<x> : index
   %workitem = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index

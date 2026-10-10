@@ -114,7 +114,7 @@ func.def inline @ggml_mxfp4_f32_vector4(%weight: buffer, %row_byte_base: offset,
   %code_view = buffer.view %weight[%code_byte_base] : buffer -> view<16xi8>
   %packet_page = index.rem %bounded_packet, %c4 : index
   %code_index0 = index.mul %packet_page, %c4 : index
-  %code_index = index.assume %code_index0 [range(%code_index0, 0, 12), mul(%code_index0, 4)] : index
+  %code_index = index.assume %code_index0 [range(%code_index0, 0, 12), multiple_of(%code_index0, 4)] : index
   %uses_high = index.cmp uge, %bounded_packet, %c4 : index
   %q_bytes = vector.load %code_view[%code_index] : view<16xi8> -> vector<4xi8>
   %codes = func.call @ggml_1bit_nibble_codes4(%q_bytes, %uses_high) : (vector<4xi8>, i1) -> (vector<4xi8>)
@@ -160,7 +160,7 @@ func.def inline @ggml_tq2_0_f32_vector4(%weight: buffer, %row_byte_base: offset,
   %a32 = index.mul %a, %c32 : index
   %p4 = index.mul %p, %c4 : index
   %byte0 = index.add %a32, %p4 : index
-  %byte = index.assume %byte0 [range(%byte0, 0, 60), mul(%byte0, 4)] : index
+  %byte = index.assume %byte0 [range(%byte0, 0, 60), multiple_of(%byte0, 4)] : index
   %bytes = vector.load %qv[%byte] : view<64xi8> -> vector<4xi8>
   %word_v = vector.bitcast %bytes : vector<4xi8> to vector<1xi32>
   %word = vector.extract %word_v[0] : vector<1xi32> -> i32

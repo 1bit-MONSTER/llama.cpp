@@ -9,7 +9,7 @@ template.decl @qwen3_moe.dense_quantized.body(%arg0: index, %arg1: index, %arg2:
 
 amdgpu.target<gfx11-generic> @qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @qwen3_moe.attention.query_size : %value: index where [range(%value, 1, 262144)]
 

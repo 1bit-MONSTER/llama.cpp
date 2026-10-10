@@ -20,9 +20,9 @@ template.decl @ggml.mul_mat_f32_f32_wmma.store_vector4(%arg0: index, %arg1: inde
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_add_next_rmsnorm_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.mul_mat_postops.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.mul_mat_postops.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
-config.decl @ggml.mul_mat_postops.output_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.mul_mat_postops.output_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @ggml.mul_mat_postops.weight_format : %value: index where [range(%value, 4, 81)]
 
@@ -32,7 +32,7 @@ config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1
 
 template.def<@ggml.mul_mat_f32_f32_wmma.publish_vector4> device @ggml_mul_mat_add_next_rmsnorm_publish_vector4(%publish_word: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %values: vector<4xf32>, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
   %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
-  %output_size = index.assume %output_size0 [range(%output_size0, 128, 32768), mul(%output_size0, 128)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 128, 32768), multiple_of(%output_size0, 128)] : index
   scf.if %publish_word {
     %published = template.apply<@ggml.mul_mat_f32_f32_wmma.add_residual_vector4>(%token_count, %output_size, %token0, %channel, %values, %residual_input) : (index, index, index, index, vector<4xf32>, buffer) -> (vector<4xf32>)
     template.apply<@ggml.mul_mat_f32_f32_wmma.store_vector4>(%token_count, %output_size, %token0, %channel, %published, %residual_output) : (index, index, index, index, vector<4xf32>, buffer)

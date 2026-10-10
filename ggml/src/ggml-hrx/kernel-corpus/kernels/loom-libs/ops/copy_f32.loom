@@ -33,8 +33,8 @@ kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_f32") @ggml_cop
 
 // Exact K16-major F16 layout for native matrix fragments. The ordinary F16
 // alternate remains unchanged; this copy is a private dispatch transient.
-config.decl @ggml.copy_f16_k16_major.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
-config.decl @ggml.copy_f16_k16_major.token_count : %value: index where [range(%value, 512, 2048), mul(%value, 512)]
+config.decl @ggml.copy_f16_k16_major.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
+config.decl @ggml.copy_f16_k16_major.token_count : %value: index where [range(%value, 512, 2048), multiple_of(%value, 512)]
 config.decl @ggml.copy_f16_k16_major.input_is_f16 : %value: index where [range(%value, 0, 1)]
 amdgpu.target<gfx11-generic> @ggml_copy_f16_k16_major_target {subgroup_size = 32}
 
@@ -51,7 +51,7 @@ kernel.def target(@ggml_copy_f16_k16_major_target) export("ggml_copy_f16_k16_maj
 } launch(%token_count: index, %input: buffer, %output: buffer) {
   %width = config.get @ggml.copy_f16_k16_major.input_size : index
   %token_count_static = config.get @ggml.copy_f16_k16_major.token_count : index
-  %tokens = index.assume %token_count_static [range(%token_count_static, 16, 2048), mul(%token_count_static, 16)] : index
+  %tokens = index.assume %token_count_static [range(%token_count_static, 16, 2048), multiple_of(%token_count_static, 16)] : index
   %count = index.mul %tokens, %width : index
   %c0 = index.constant 0 : offset
   %c8 = index.constant 8 : index
@@ -61,7 +61,7 @@ kernel.def target(@ggml_copy_f16_k16_major_target) export("ggml_copy_f16_k16_maj
   %group = kernel.workgroup.id<x> : index
   %packet = index.madd %group, %c256, %thread : index
   %linear_raw = index.mul %packet, %c8 : index
-  %linear = index.assume %linear_raw [range(%linear_raw, 0, 67110904), mul(%linear_raw, 8)] : index
+  %linear = index.assume %linear_raw [range(%linear_raw, 0, 67110904), multiple_of(%linear_raw, 8)] : index
   %end = index.add %linear, %c8 : index
   %valid = index.cmp ule, %end, %count : index
   scf.if %valid {
@@ -73,14 +73,14 @@ kernel.def target(@ggml_copy_f16_k16_major_target) export("ggml_copy_f16_k16_maj
     %k_tile = index.div %tile, %m_tiles : index
     %row_in_tile = index.div %local, %c16 : index
     %k_in_tile_raw = index.rem %local, %c16 : index
-    %k_in_tile = index.assume %k_in_tile_raw [range(%k_in_tile_raw, 0, 8), mul(%k_in_tile_raw, 8)] : index
+    %k_in_tile = index.assume %k_in_tile_raw [range(%k_in_tile_raw, 0, 8), multiple_of(%k_in_tile_raw, 8)] : index
     %row = index.madd %m_tile, %c16, %row_in_tile : index
     %k = index.madd %k_tile, %c16, %k_in_tile : index
     %bounded_row, %bounded_tokens = index.assume %row, %tokens [lt(%row, %tokens)] : index, index
     %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
     %dest = buffer.view %output_noalias[%c0] : buffer -> view<[%count]xf16>
     %maximum_k = index.sub %width, %c8 : index
-    %bounded_k = index.assume %k [range(%k, 0, %maximum_k), mul(%k, 8)] : index
+    %bounded_k = index.assume %k [range(%k, 0, %maximum_k), multiple_of(%k, 8)] : index
     %input_is_f16 = config.get @ggml.copy_f16_k16_major.input_is_f16 : index
     %one = index.constant 1 : index
     %use_f16 = index.cmp eq, %input_is_f16, %one : index
@@ -99,8 +99,8 @@ kernel.def target(@ggml_copy_f16_k16_major_target) export("ggml_copy_f16_k16_maj
   kernel.return
 }
 
-config.decl @ggml.copy_transpose_f16.row_count : %value: index where [range(%value, 32, 32768), mul(%value, 32)]
-config.decl @ggml.copy_transpose_f16.column_count : %value: index where [range(%value, 32, 32768), mul(%value, 32)]
+config.decl @ggml.copy_transpose_f16.row_count : %value: index where [range(%value, 32, 32768), multiple_of(%value, 32)]
+config.decl @ggml.copy_transpose_f16.column_count : %value: index where [range(%value, 32, 32768), multiple_of(%value, 32)]
 kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_transpose_f16") @ggml_copy_transpose_f16() {
   %rows = config.get @ggml.copy_transpose_f16.row_count : index
   %columns = config.get @ggml.copy_transpose_f16.column_count : index
@@ -180,14 +180,14 @@ kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_f32_f16") @ggml
   %groups = index.div %rounded, %tile : index
   kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
 } launch(%element_count: index, %source: buffer, %output: buffer) {
-  %count = index.assume %element_count [range(%element_count, 4, 1073741824), mul(%element_count, 4)] : index
+  %count = index.assume %element_count [range(%element_count, 4, 1073741824), multiple_of(%element_count, 4)] : index
   %group = kernel.workgroup.id<x> : index
   %thread = kernel.workitem.id<x> : index
   %threads = index.constant 256 : index
   %four = index.constant 4 : index
   %lane = index.madd %group, %threads, %thread : index
   %linear0 = index.mul %lane, %four : index
-  %linear = index.assume %linear0 [range(%linear0, 0, 1073742844), mul(%linear0, 4)] : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073742844), multiple_of(%linear0, 4)] : index
   %end = index.add %linear, %four : index
   %valid = index.cmp ule, %end, %count : index
   %zero = index.constant 0 : offset
