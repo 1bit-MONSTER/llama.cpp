@@ -1080,7 +1080,8 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     // otherwise claim only nodes the dispatcher can execute, so the rest falls back to another backend instead of failing the graph
     // a node that only a fused dispatch executes keeps the per-op claim inside a model graph (fused-context-claim.h)
     return eager_capability_declared(op->op) &&
-           (ggml::hrx::fused_context_claim(op) ||
+           (ggml::hrx::fused_context_claim(
+                op, [device](const ggml_tensor * tensor) { return device_supports_op(device, tensor); }) ||
             ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture));
 }
 

@@ -146,4 +146,29 @@ inline bool fused_context_claim(const ggml_tensor * op) {
     }
 }
 
+// The conv's x (qkv_mixed): the source CONCAT(state, TRANSPOSE(x)) transposes into the window, through views.
+inline const ggml_tensor * fused_context_conv_x(const ggml_tensor * ssm_conv) {
+    const ggml_tensor * concat     = ssm_conv->src[0];
+    const ggml_tensor * transposed = concat != nullptr ? concat->src[1] : nullptr;
+    return transposed != nullptr && transposed->op == GGML_OP_TRANSPOSE ? fused_context_root(transposed->src[0]) :
+                                                                          nullptr;
+}
+
+// A fused claim also needs the producers its matcher looks at to stay on this backend: when one goes to
+// another backend its output becomes a split input, the matcher no longer sees the pattern, and the
+// claimed node is left with no dispatch. At -ub 4096 the 27B qkv projection went to the CPU (the prefill
+// matmul matchers stop at 2048 tokens) and the claimed SSM_CONV failed the graph. `supported` is the
+// backend's own supports_op.
+template <typename Supported>
+inline bool fused_context_claim(const ggml_tensor * op, Supported && supported) {
+    if (!fused_context_claim(op)) {
+        return false;
+    }
+    if (op->op == GGML_OP_SSM_CONV) {
+        const ggml_tensor * x = fused_context_conv_x(op);
+        return x != nullptr && supported(x);
+    }
+    return true;
+}
+
 }  // namespace ggml::hrx
