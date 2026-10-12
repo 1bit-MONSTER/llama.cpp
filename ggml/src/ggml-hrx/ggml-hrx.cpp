@@ -512,7 +512,8 @@ static void backend_synchronize(ggml_backend_t backend) {
 }
 
 static const char * status_first_error(const ggml::hrx::Status & status) {
-    return status.errors().empty() ? "" : status.errors().front().c_str();
+    return status.errors().empty() ? "HRX graph execution failed without a recorded reason" :
+                                     status.errors().front().c_str();
 }
 
 static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {

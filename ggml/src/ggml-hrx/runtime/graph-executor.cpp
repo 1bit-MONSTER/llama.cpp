@@ -107,6 +107,9 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         binding_match = lookup.program->match_host_staging_graph(graph);
         if (!binding_match.valid()) {
             result.status.append(binding_match.status);
+            if (result.status.success()) {
+                result.status.log("match HRX host-staging graph failed");
+            }
             return result;
         }
     }
@@ -114,6 +117,9 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     CommandProgramBindings bindings = bind_external_value_buffers(binding_match);
     if (!bindings.valid()) {
         result.status.append(bindings.status);
+        if (result.status.success()) {
+            result.status.log("bind HRX external value buffers failed");
+        }
         return result;
     }
     const CommandProgramExecutionContext execution_context = {

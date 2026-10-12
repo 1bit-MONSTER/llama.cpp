@@ -260,6 +260,9 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/llm/dispatch-gated-delta-net.h
     dispatch_registration/llm/dispatch-ssm-conv.cpp
     dispatch_registration/llm/dispatch-ssm-conv.h
+    dispatch_registration/llm/dispatch-ssm-conv-chunked.cpp
+    dispatch_registration/llm/dispatch-ssm-conv-chunked.h
+    ubatch-token-limits.h
     dispatch_registration/qwen/dispatch-llm-profiles.h
     dispatch_registration/qwen/dispatch-llm-shapes.h
     dispatch_registration/qwen/dispatch-moe-router.cpp
