@@ -1,6 +1,7 @@
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
 #include "ggml-hrx-dmabuf.h"
+#include "ggml-hrx-memory-info.h"
 
 #include "backend-buffer-binding.h"
 #include "backend-context.h"
@@ -553,7 +554,7 @@ static const char * device_description(ggml_backend_dev_t device) {
 }
 
 static void device_memory(ggml_backend_dev_t device, size_t * free, size_t * total) {
-    *free  = device_context(device)->memory_total;
+    *free  = ggml::hrx::device_free_memory(device_context(device)->memory_total);  // [1bit] ggml-hrx-memory-info.cpp
     *total = device_context(device)->memory_total;
 }
 
