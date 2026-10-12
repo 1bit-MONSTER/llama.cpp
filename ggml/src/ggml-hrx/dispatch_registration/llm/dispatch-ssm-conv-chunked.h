@@ -35,10 +35,12 @@ struct SsmConvChunkedRequest {
     int64_t                    sequence_count = 0;
 };
 
-// Emits the conv as rollback dispatches of at most kSsmConvRollbackMaxTokens tokens per sequence.
-// Each dispatch but the last writes its final 3-row history to a transient that the next one
-// reads as its state; the last one writes the real cache slots. Returns false (with a status
-// message) when the request cannot be chained.
+// Emits the conv as a chain of dispatches of at most kSsmConvRollbackMaxTokens tokens. Each link but
+// the last writes its final 3-row history to a transient that the next one reads as its state; the
+// last one writes the real cache slots. One sequence, one cache slot, 8192..10240 channels and a
+// multiple of 512 tokens use AMD's tuned 512-token snapshot + prefill pair per link; everything else
+// uses the rollback kernel per sequence. Returns false (with a status message) when the request
+// cannot be chained.
 bool append_ssm_conv_rollback_chunks(const DispatchMatchContext & context,
                                      const SsmConvChunkedRequest & request,
                                      DispatchMatch &               dispatch_match);
