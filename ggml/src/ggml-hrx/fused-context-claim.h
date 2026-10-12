@@ -25,7 +25,7 @@
 // - the MoE router chain SOFT_MAX -> ARGSORT -> GET_ROWS -> SUM_ROWS -> CLAMP
 //   (llm.moe_router.top8_f32 and the decode projection fusion);
 // - the gated-delta-net chain L2_NORM, SOFTPLUS and GATED_DELTA_NET;
-// - the qwen35 conv prefill SSM_CONV fed by CONCAT(state, x^T), above 512 tokens;
+// - the delta-net conv prefill SSM_CONV fed by CONCAT(state, x^T), above 512 tokens;
 // - the per-head RMS_NORM and ROPE of the attention fusions (head_dim 64..256).
 //
 // With the standalone test alone these nodes went to the CPU, which split every MoE
@@ -40,6 +40,8 @@
 
 #include "ggml.h"
 #include "ubatch-token-limits.h"
+
+#include <cstring>
 
 namespace ggml::hrx {
 
@@ -77,6 +79,12 @@ inline bool fused_context_fed_by_op(const ggml_tensor * op) {
         }
     }
     return false;
+}
+
+// true when llama.cpp named the tensor `base` or `base-<layer>`
+inline bool fused_context_named(const ggml_tensor * op, const char * base) {
+    const size_t length = std::strlen(base);
+    return std::strncmp(op->name, base, length) == 0 && (op->name[length] == '\0' || op->name[length] == '-');
 }
 
 inline bool fused_context_is_3d(const ggml_tensor * op) {
@@ -119,12 +127,16 @@ inline bool fused_context_claim(const ggml_tensor * op) {
         case GGML_OP_UNARY:
             return ggml_get_unary_op(op) == GGML_UNARY_OP_SOFTPLUS &&
                    op->ne[1] * op->ne[2] <= 3 * kLinearAttentionMaxTokens && fused_context_fed_by_op(op);
-        // qwen35 conv prefill CONCAT(state, x^T) -> SSM_CONV (d_conv 4): above the standalone conv kernel's
-        // 512 tokens only the CONCAT matcher runs it, as chained rollback dispatches (dispatch-ssm-conv-chunked.cpp)
+        // delta-net conv prefill CONCAT(state, x^T) -> SSM_CONV (d_conv 4) -> SILU: above the standalone conv
+        // kernel's 512 tokens only the CONCAT matcher runs it, as chained rollback dispatches
+        // (dispatch-ssm-conv-chunked.cpp). A claim cannot see the SILU consumer that matcher needs, so it
+        // keys on the names the delta-net conv builder gives these tensors (qwen3next, qwen35, qwen35moe);
+        // other conv layouts (Mamba's conv bias before SILU) keep the standalone test.
         case GGML_OP_SSM_CONV:
             return op->src[0] != nullptr && op->src[1] != nullptr && op->src[1]->ne[0] == 4 &&
-                   op->src[0]->op == GGML_OP_CONCAT && op->ne[1] <= kLinearAttentionMaxTokens && op->ne[2] <= 3 &&
-                   op->ne[0] >= 32 && op->ne[0] <= 65536 && op->ne[0] % 32 == 0;
+                   op->src[0]->op == GGML_OP_CONCAT && fused_context_named(op, "conv_output_raw") &&
+                   fused_context_named(op->src[0], "conv_input") && op->ne[1] <= kLinearAttentionMaxTokens &&
+                   op->ne[2] <= 3 && op->ne[0] >= 32 && op->ne[0] <= 65536 && op->ne[0] % 32 == 0;
         // per-head attention normalisation and rotation
         case GGML_OP_RMS_NORM:
         case GGML_OP_ROPE:
