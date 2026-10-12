@@ -181,7 +181,7 @@ static SsmConvPrefillMatch match_ssm_conv_prefill(const Graph & graph, const Gra
     const int64_t hidden_size    = x_layout->ne[0];
     const int64_t token_count    = x_layout->ne[1];
     const int64_t sequence_count = x_layout->ne[2];
-    if (!supported_hidden_size(hidden_size) || token_count < 1 || token_count > kLinearAttentionMaxTokens ||
+    if (!supported_hidden_size(hidden_size) || token_count < 1 || token_count > kUbatchMaxTokens ||
         sequence_count < 1 || sequence_count > 3 || !is_shape(*x_layout, hidden_size, token_count, sequence_count, 1) ||
         !is_shape(*x_transposed, token_count, hidden_size, sequence_count, 1) ||
         !is_shape(*state, 3, hidden_size, sequence_count, 1) ||

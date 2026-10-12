@@ -15,10 +15,10 @@
 
 #pragma once
 
-// Token-count bounds shared by the matchers that run the Qwen3.5/3.6 (qwen35) linear-attention
-// layers and by the per-op claim in fused-context-claim.h. Keeping them in one place keeps the
-// claim (which decides placement) from promising a node that no matcher can execute: that
-// mismatch made every prompt batch above 512 tokens fail with GGML_STATUS_FAILED (engine #389,
+// Token-count bounds shared by the matchers that take ubatches above their kernels' token range
+// and by the per-op claim in fused-context-claim.h. Keeping them in one place keeps the claim
+// (which decides placement) from promising a node that no matcher can execute: that mismatch
+// made every qwen35 prompt batch above 512 tokens fail with GGML_STATUS_FAILED (engine #389,
 // "unsupported HRX node 2: L2_NORM ... f32[128,16,1024,1]").
 
 #include <cstdint>
@@ -30,10 +30,15 @@ namespace ggml::hrx {
 // rollback dispatches of at most this many tokens (dispatch-ssm-conv-chunked.cpp).
 inline constexpr int64_t kSsmConvRollbackMaxTokens = 512;
 
-// Largest ubatch the qwen35 linear-attention matchers accept. The gated-delta-net WMMA kernels
-// walk tokens in 16-token chunks with fixed LDS (llm.gated_delta_net.token_count range
-// [1, 1048576]), and the chained SSM_CONV has no bound of its own; 65536 is above any ubatch
-// llama.cpp builds here and keeps every byte offset well inside 32 bits per sequence.
-inline constexpr int64_t kLinearAttentionMaxTokens = 65536;
+// Largest token count of one ggml_set_rows dispatch: its ggml.set_rows.token_capacity config range is
+// [1, 2048]. A KV-cache write cannot leave HRX (the cache lives there), so larger writes run as several
+// dispatches (dispatch-row-chunks.cpp).
+inline constexpr int64_t kSetRowsKernelMaxTokens = 2048;
+
+// Largest ubatch the chunked paths and the qwen35 linear-attention matchers accept. The
+// gated-delta-net WMMA kernels walk tokens in 16-token chunks with fixed LDS
+// (llm.gated_delta_net.token_count range [1, 1048576]); the chained SSM_CONV and SET_ROWS have no
+// bound of their own. 65536 is above any ubatch llama.cpp builds here.
+inline constexpr int64_t kUbatchMaxTokens = 65536;
 
 }  // namespace ggml::hrx

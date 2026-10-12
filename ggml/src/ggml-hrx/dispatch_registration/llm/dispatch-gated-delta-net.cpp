@@ -182,7 +182,7 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
     const int64_t sequence_count = raw_q->ne[3];
     const int64_t head_count     = v->ne[1];
     if (width != 128 || q_head_count <= 0 || q_head_count > 4096 || head_count <= 0 || head_count > 4096 ||
-        token_count < 1 || token_count > kLinearAttentionMaxTokens || sequence_count < 1 || sequence_count > 3) {
+        token_count < 1 || token_count > kUbatchMaxTokens || sequence_count < 1 || sequence_count > 3) {
         return {};
     }
     const int64_t hidden_size = width * (2 * q_head_count + head_count);
@@ -516,7 +516,7 @@ static GatedDeltaNetMatch match_direct_gated_delta_net(const Graph & graph, cons
     const int64_t sequence_count = q_norm->ne[3];
     const int64_t head_count     = v->ne[1];
     if (width != 128 || q_head_count <= 0 || q_head_count > 4096 || head_count <= 0 || head_count > 4096 ||
-        token_count < 1 || token_count > kLinearAttentionMaxTokens || sequence_count < 1 || sequence_count > 3) {
+        token_count < 1 || token_count > kUbatchMaxTokens || sequence_count < 1 || sequence_count > 3) {
         return {};
     }
 

@@ -120,13 +120,13 @@ inline bool fused_context_claim(const ggml_tensor * op) {
         // gated delta net, within the token count its matchers take (ubatch-token-limits.h): a claim
         // past it leaves the node with no dispatch and fails the whole graph (engine #389)
         case GGML_OP_L2_NORM:
-            return op->ne[2] <= kLinearAttentionMaxTokens && fused_context_fed_by_op(op);
+            return op->ne[2] <= kUbatchMaxTokens && fused_context_fed_by_op(op);
         case GGML_OP_GATED_DELTA_NET:
-            return op->src[0] != nullptr && op->src[0]->ne[2] <= kLinearAttentionMaxTokens &&
+            return op->src[0] != nullptr && op->src[0]->ne[2] <= kUbatchMaxTokens &&
                    fused_context_fed_by_op(op);
         case GGML_OP_UNARY:
             return ggml_get_unary_op(op) == GGML_UNARY_OP_SOFTPLUS &&
-                   op->ne[1] * op->ne[2] <= 3 * kLinearAttentionMaxTokens && fused_context_fed_by_op(op);
+                   op->ne[1] * op->ne[2] <= 3 * kUbatchMaxTokens && fused_context_fed_by_op(op);
         // delta-net conv prefill CONCAT(state, x^T) -> SSM_CONV (d_conv 4) -> SILU: above the standalone conv
         // kernel's 512 tokens only the CONCAT matcher runs it, as chained rollback dispatches
         // (dispatch-ssm-conv-chunked.cpp). A claim cannot see the SILU consumer that matcher needs, so it
@@ -135,7 +135,7 @@ inline bool fused_context_claim(const ggml_tensor * op) {
         case GGML_OP_SSM_CONV:
             return op->src[0] != nullptr && op->src[1] != nullptr && op->src[1]->ne[0] == 4 &&
                    op->src[0]->op == GGML_OP_CONCAT && fused_context_named(op, "conv_output_raw") &&
-                   fused_context_named(op->src[0], "conv_input") && op->ne[1] <= kLinearAttentionMaxTokens &&
+                   fused_context_named(op->src[0], "conv_input") && op->ne[1] <= kUbatchMaxTokens &&
                    op->ne[2] <= 3 && op->ne[0] >= 32 && op->ne[0] <= 65536 && op->ne[0] % 32 == 0;
         // per-head attention normalisation and rotation
         case GGML_OP_RMS_NORM:

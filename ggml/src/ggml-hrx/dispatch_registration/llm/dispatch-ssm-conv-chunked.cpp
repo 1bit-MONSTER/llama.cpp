@@ -46,7 +46,7 @@ bool append_ssm_conv_rollback_chunks(const DispatchMatchContext & context,
     const int64_t tokens = request.token_count;
     if (request.state == nullptr || request.x == nullptr || request.filter == nullptr || request.output == nullptr ||
         request.caches.empty() || request.caches.size() > kRollbackCacheSlots || hidden < 32 || hidden > 65536 ||
-        hidden % 32 != 0 || tokens <= kSsmConvRollbackMaxTokens || tokens > kLinearAttentionMaxTokens ||
+        hidden % 32 != 0 || tokens <= kSsmConvRollbackMaxTokens || tokens > kUbatchMaxTokens ||
         request.sequence_count < 1) {
         dispatch_match.status.log("chained SSM_CONV: unsupported request (hidden %lld, tokens %lld, sequences %lld, "
                                   "cache slots %zu)",
