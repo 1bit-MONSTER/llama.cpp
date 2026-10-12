@@ -1,4 +1,6 @@
 #include "dispatch-ssm-conv.h"
+#include "dispatch-ssm-conv-chunked.h"
+#include "ubatch-token-limits.h"
 
 #include "../common/dispatch-mul-mat-common.h"
 
@@ -179,8 +181,8 @@ static SsmConvPrefillMatch match_ssm_conv_prefill(const Graph & graph, const Gra
     const int64_t hidden_size    = x_layout->ne[0];
     const int64_t token_count    = x_layout->ne[1];
     const int64_t sequence_count = x_layout->ne[2];
-    if (!supported_hidden_size(hidden_size) || token_count < 1 || token_count > 512 || sequence_count < 1 ||
-        sequence_count > 3 || !is_shape(*x_layout, hidden_size, token_count, sequence_count, 1) ||
+    if (!supported_hidden_size(hidden_size) || token_count < 1 || token_count > kUbatchMaxTokens ||
+        sequence_count < 1 || sequence_count > 3 || !is_shape(*x_layout, hidden_size, token_count, sequence_count, 1) ||
         !is_shape(*x_transposed, token_count, hidden_size, sequence_count, 1) ||
         !is_shape(*state, 3, hidden_size, sequence_count, 1) ||
         !is_shape(*window, token_count + 3, hidden_size, sequence_count, 1)) {
@@ -446,6 +448,15 @@ static bool append_ssm_conv_covered_nodes(const DispatchMatchContext & context,
     return true;
 }
 
+static SsmConvChunkedRequest ssm_conv_chunked_request(const SsmConvPrefillMatch & match) {
+    SsmConvChunkedRequest request{ match.state, match.x, match.filter, match.output, {}, match.hidden_size,
+                                   match.token_count, match.sequence_count };
+    for (const SsmConvCacheUpdate & update : match.cache_updates) {
+        request.caches.push_back(update.cache);
+    }
+    return request;
+}
+
 static bool match_ssm_conv_prefill_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const SsmConvPrefillMatch match = match_ssm_conv_prefill(context.graph, context.root_node);
     if (!match.matched()) {
@@ -470,6 +481,10 @@ static bool match_ssm_conv_prefill_dispatch(const DispatchMatchContext & context
         finish.bindings.push_back({ cache->id, 0, cache->byte_count });
         dispatch_match.dispatches.push_back(std::move(finish));
         return true;
+    }
+
+    if (match.token_count > kSsmConvRollbackMaxTokens) {
+        return append_ssm_conv_rollback_chunks(context, ssm_conv_chunked_request(match), dispatch_match);
     }
 
     const bool optimized_prefill =

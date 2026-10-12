@@ -252,6 +252,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-scale.h
     dispatch_registration/common/dispatch-unary.cpp
     dispatch_registration/common/dispatch-unary.h
+    dispatch_registration/common/dispatch-row-chunks.cpp
+    dispatch_registration/common/dispatch-row-chunks.h
     dispatch_registration/dispatch-registry.cpp
     dispatch_registration/dispatch-registry.h
     dispatch_registration/llm/dispatch-attention-qkv.cpp
@@ -260,6 +262,9 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/llm/dispatch-gated-delta-net.h
     dispatch_registration/llm/dispatch-ssm-conv.cpp
     dispatch_registration/llm/dispatch-ssm-conv.h
+    dispatch_registration/llm/dispatch-ssm-conv-chunked.cpp
+    dispatch_registration/llm/dispatch-ssm-conv-chunked.h
+    ubatch-token-limits.h
     dispatch_registration/qwen/dispatch-llm-profiles.h
     dispatch_registration/qwen/dispatch-llm-shapes.h
     dispatch_registration/qwen/dispatch-moe-router.cpp

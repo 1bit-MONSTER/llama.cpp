@@ -1,4 +1,6 @@
 #include "dispatch-rope-set-rows.h"
+#include "dispatch-row-chunks.h"
+#include "ubatch-token-limits.h"
 
 #include "dispatch-layout-utils.h"
 #include "dispatch-rope-utils.h"
@@ -361,7 +363,10 @@ static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Sta
     return match;
 }
 
-static SetRowsMatch match_set_rows_2d(const Graph & graph, const GraphNode * node, Status * status = nullptr) {
+static SetRowsMatch match_set_rows_2d(const Graph & graph,
+                                      const GraphNode * node,
+                                      Status *          status     = nullptr,
+                                      int64_t           max_tokens = kSetRowsKernelMaxTokens) {
     SetRowsMatch match;
     if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->inputs.size() != 3) {
         log_set_rows_reject(status, "root is not a supported SET_ROWS arity", nullptr, nullptr, nullptr, nullptr);
@@ -397,7 +402,8 @@ static SetRowsMatch match_set_rows_2d(const Graph & graph, const GraphNode * nod
     size_t        rows_span_bytes = 0;
     if (!supported_set_rows_input_layout(*rows, hidden_size, token_count, input_stride, rows_span_bytes) ||
         !is_1d_shape(*indices, token_count) || !is_2d_shape(*cache, hidden_size, cache_row_count) ||
-        !supported_hidden_size(hidden_size) || !supported_token_count(token_count) ||
+        !supported_hidden_size(hidden_size) ||
+        (!supported_token_count(token_count) && (token_count <= kSetRowsKernelMaxTokens || token_count > max_tokens)) ||
         !supported_cache_row_count(cache_row_count)) {
         log_set_rows_reject(status, "shape or rows layout is unsupported", rows, indices, cache, output);
         return {};
@@ -664,12 +670,19 @@ static bool match_set_rows_scatter_dispatch(const DispatchMatchContext & context
 }
 
 static bool match_set_rows_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const SetRowsMatch match = match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status);
+    const SetRowsMatch match =
+        match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status, kUbatchMaxTokens);
     if (!match.matched()) {
         return false;
     }
 
     dispatch_match.covered_nodes.push_back(context.root_index);
+    if (match.token_count > kSetRowsKernelMaxTokens) {
+        const size_t row_bytes = static_cast<size_t>(match.input_stride) * ggml_type_size(match.rows->type);
+        return append_row_chunked_dispatches(make_set_rows_dispatch(match), match.token_count,
+                                             kSetRowsKernelMaxTokens, 0, row_bytes, 1, sizeof(int64_t), "token_count",
+                                             "ggml.set_rows.token_capacity", dispatch_match);
+    }
     dispatch_match.dispatches.push_back(make_set_rows_dispatch(match));
     return true;
 }

@@ -2223,8 +2223,12 @@ static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
 }
 
 static void llama_null_log_callback(enum ggml_log_level level, const char * text, void * user_data) {
-    (void) level;
-    (void) text;
+    // keep errors (and their continuation lines) without -v, so a failed decode says why
+    static bool in_error = false;
+    in_error = level == GGML_LOG_LEVEL_ERROR || (level == GGML_LOG_LEVEL_CONT && in_error);
+    if (in_error) {
+        fputs(text, stderr);
+    }
     (void) user_data;
 }
 

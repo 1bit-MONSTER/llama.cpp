@@ -25,6 +25,7 @@
 // - the MoE router chain SOFT_MAX -> ARGSORT -> GET_ROWS -> SUM_ROWS -> CLAMP
 //   (llm.moe_router.top8_f32 and the decode projection fusion);
 // - the gated-delta-net chain L2_NORM, SOFTPLUS and GATED_DELTA_NET;
+// - the delta-net conv prefill SSM_CONV fed by CONCAT(state, x^T), above 512 tokens;
 // - the per-head RMS_NORM and ROPE of the attention fusions (head_dim 64..256).
 //
 // With the standalone test alone these nodes went to the CPU, which split every MoE
@@ -38,6 +39,9 @@
 // standalone test.
 
 #include "ggml.h"
+#include "ubatch-token-limits.h"
+
+#include <cstring>
 
 namespace ggml::hrx {
 
@@ -77,6 +81,12 @@ inline bool fused_context_fed_by_op(const ggml_tensor * op) {
     return false;
 }
 
+// true when llama.cpp named the tensor `base` or `base-<layer>`
+inline bool fused_context_named(const ggml_tensor * op, const char * base) {
+    const size_t length = std::strlen(base);
+    return std::strncmp(op->name, base, length) == 0 && (op->name[length] == '\0' || op->name[length] == '-');
+}
+
 inline bool fused_context_is_3d(const ggml_tensor * op) {
     return op->ne[3] == 1;
 }
@@ -107,12 +117,26 @@ inline bool fused_context_claim(const ggml_tensor * op) {
             return sum != nullptr && sum->op == GGML_OP_SUM_ROWS &&
                    fused_context_router_get_rows(fused_context_root(sum->src[0]));
         }
-        // gated delta net
+        // gated delta net, within the token count its matchers take (ubatch-token-limits.h): a claim
+        // past it leaves the node with no dispatch and fails the whole graph (engine #389)
         case GGML_OP_L2_NORM:
+            return op->ne[2] <= kUbatchMaxTokens && fused_context_fed_by_op(op);
         case GGML_OP_GATED_DELTA_NET:
-            return fused_context_fed_by_op(op);
+            return op->src[0] != nullptr && op->src[0]->ne[2] <= kUbatchMaxTokens &&
+                   fused_context_fed_by_op(op);
         case GGML_OP_UNARY:
-            return ggml_get_unary_op(op) == GGML_UNARY_OP_SOFTPLUS && fused_context_fed_by_op(op);
+            return ggml_get_unary_op(op) == GGML_UNARY_OP_SOFTPLUS &&
+                   op->ne[1] * op->ne[2] <= 3 * kUbatchMaxTokens && fused_context_fed_by_op(op);
+        // delta-net conv prefill CONCAT(state, x^T) -> SSM_CONV (d_conv 4) -> SILU: above the standalone conv
+        // kernel's 512 tokens only the CONCAT matcher runs it, as chained rollback dispatches
+        // (dispatch-ssm-conv-chunked.cpp). A claim cannot see the SILU consumer that matcher needs, so it
+        // keys on the names the delta-net conv builder gives these tensors (qwen3next, qwen35, qwen35moe);
+        // other conv layouts (Mamba's conv bias before SILU) keep the standalone test.
+        case GGML_OP_SSM_CONV:
+            return op->src[0] != nullptr && op->src[1] != nullptr && op->src[1]->ne[0] == 4 &&
+                   op->src[0]->op == GGML_OP_CONCAT && fused_context_named(op, "conv_output_raw") &&
+                   fused_context_named(op->src[0], "conv_input") && op->ne[1] <= kUbatchMaxTokens &&
+                   op->ne[2] <= 3 && op->ne[0] >= 32 && op->ne[0] <= 65536 && op->ne[0] % 32 == 0;
         // per-head attention normalisation and rotation
         case GGML_OP_RMS_NORM:
         case GGML_OP_ROPE:
@@ -120,6 +144,31 @@ inline bool fused_context_claim(const ggml_tensor * op) {
         default:
             return false;
     }
+}
+
+// The conv's x (qkv_mixed): the source CONCAT(state, TRANSPOSE(x)) transposes into the window, through views.
+inline const ggml_tensor * fused_context_conv_x(const ggml_tensor * ssm_conv) {
+    const ggml_tensor * concat     = ssm_conv->src[0];
+    const ggml_tensor * transposed = concat != nullptr ? concat->src[1] : nullptr;
+    return transposed != nullptr && transposed->op == GGML_OP_TRANSPOSE ? fused_context_root(transposed->src[0]) :
+                                                                          nullptr;
+}
+
+// A fused claim also needs the producers its matcher looks at to stay on this backend: when one goes to
+// another backend its output becomes a split input, the matcher no longer sees the pattern, and the
+// claimed node is left with no dispatch. At -ub 4096 the 27B qkv projection went to the CPU (the prefill
+// matmul matchers stop at 2048 tokens) and the claimed SSM_CONV failed the graph. `supported` is the
+// backend's own supports_op.
+template <typename Supported>
+inline bool fused_context_claim(const ggml_tensor * op, Supported && supported) {
+    if (!fused_context_claim(op)) {
+        return false;
+    }
+    if (op->op == GGML_OP_SSM_CONV) {
+        const ggml_tensor * x = fused_context_conv_x(op);
+        return x != nullptr && supported(x);
+    }
+    return true;
 }
 
 }  // namespace ggml::hrx
