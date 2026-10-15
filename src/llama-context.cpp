@@ -1486,6 +1486,11 @@ int llama_context::encode(const llama_batch & batch_inp) {
         GGML_ASSERT(logits.data != nullptr);
 
         ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_tokens*n_vocab*sizeof(float));
+        // engine#315: the read above is asynchronous, and the sampling path reads this buffer next.
+        // ggml_backend_tensor_get_async skips its own synchronise when the backend implements
+        // get_tensor_async, and HRX does (backend_get_tensor_async enqueues a copy and returns), so
+        // nothing was guaranteed to have completed the copy before the caller read the logits. Wait here.
+        ggml_backend_synchronize(backend_res);
     }
 
     // extract embeddings
