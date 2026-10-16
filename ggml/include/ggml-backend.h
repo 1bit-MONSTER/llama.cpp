@@ -334,6 +334,11 @@ extern "C" {
     GGML_API void                 ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend);
     GGML_API ggml_backend_t       ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node);
 
+    // Called once per graph, after the scheduler assigns every node to a backend and before the graph is
+    // allocated and computed. A backend that reports or refuses off-backend placement registers one.
+    typedef void (*ggml_backend_sched_placement_observer)(ggml_backend_sched_t sched, struct ggml_cgraph * graph, void * user_data);
+    GGML_API void                 ggml_backend_sched_set_placement_observer(ggml_backend_sched_placement_observer observer, void * user_data);
+
     // Split graph without allocating it
     GGML_API void                 ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
 
