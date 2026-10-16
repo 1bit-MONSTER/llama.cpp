@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <atomic>
 #include <vector>
 
 #ifdef __APPLE__
@@ -1870,6 +1871,9 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
     return true;
 }
 
+static std::atomic<ggml_backend_sched_placement_observer> g_sched_placement_observer{ nullptr };
+static void * g_sched_placement_observer_user_data = nullptr;
+
 bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     GGML_ASSERT(sched);
     GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs);
@@ -1879,6 +1883,11 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
     sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
 
     ggml_backend_sched_split_graph(sched, graph);
+
+    ggml_backend_sched_placement_observer placement_observer = g_sched_placement_observer.load();
+    if (placement_observer != nullptr) {
+        placement_observer(sched, graph, g_sched_placement_observer_user_data);
+    }
 
     if (!ggml_backend_sched_alloc_splits(sched)) {
         return false;
@@ -1927,6 +1936,11 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
     GGML_ASSERT(sched);
     sched->callback_eval = callback;
     sched->callback_eval_user_data = user_data;
+}
+
+void ggml_backend_sched_set_placement_observer(ggml_backend_sched_placement_observer observer, void * user_data) {
+    g_sched_placement_observer_user_data = user_data;
+    g_sched_placement_observer.store(observer);
 }
 
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {

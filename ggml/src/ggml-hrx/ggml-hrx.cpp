@@ -368,6 +368,92 @@ static const char * backend_name(ggml_backend_t backend) {
     return static_cast<ggml_backend_hrx_context *>(backend->context)->name.c_str();
 }
 
+// Placement report and strict mode (engine #390). The scheduler decides placement, so the placement
+// observer is the only point where the full graph and the backend of every node are both known.
+// GGML_HRX_STRICT=1 aborts on the first node off HRX. The report is off by default and rides the
+// scheduler debug switch: GGML_HRX_REPORT 1 = first graph, 2 = every graph (GGML_SCHED_DEBUG >= 1 also
+// turns it on), 0 = off.
+static std::atomic<ggml_backend_t> g_placement_observer_backend{ nullptr };
+
+// the scheduler treats these as layout nodes and does not assign a backend to them
+static bool placement_view_op(enum ggml_op op) {
+    return op == GGML_OP_VIEW || op == GGML_OP_RESHAPE || op == GGML_OP_PERMUTE || op == GGML_OP_TRANSPOSE;
+}
+
+static int placement_report_level() {
+    const char * value = std::getenv("GGML_HRX_REPORT");
+    if (value != nullptr && value[0] != '\0') {
+        return std::atoi(value);
+    }
+    const char * sched_debug = std::getenv("GGML_SCHED_DEBUG");
+    return sched_debug != nullptr && std::atoi(sched_debug) >= 1 ? 1 : 0;
+}
+
+static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, void * user_data) {
+    const bool strict = environment_flag_enabled("GGML_HRX_STRICT");
+    const int  level  = placement_report_level();
+    static std::atomic<bool> reported{ false };
+    if (!strict && (level <= 0 || (level < 2 && reported.load()))) {
+        return;
+    }
+
+    ggml_backend_t hrx                = static_cast<ggml_backend_t>(user_data);
+    bool           scheduler_uses_hrx = false;
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); i++) {
+        if (ggml_backend_sched_get_backend(sched, i) == hrx) {
+            scheduler_uses_hrx = true;
+            break;
+        }
+    }
+    if (!scheduler_uses_hrx) {
+        return;
+    }
+
+    std::vector<int64_t> off_by_op(GGML_OP_COUNT, 0);
+    int64_t              off_nodes = 0;
+    ggml_tensor *        first_off = nullptr;
+    for (int i = 0; i < graph->n_nodes; i++) {
+        ggml_tensor * node = graph->nodes[i];
+        // the scheduler splits on non-view nodes and does not assign backends to views
+        if (placement_view_op(node->op) || ggml_backend_sched_get_tensor_backend(sched, node) == hrx) {
+            continue;
+        }
+        off_nodes++;
+        off_by_op[node->op]++;
+        if (first_off == nullptr) {
+            first_off = node;
+        }
+    }
+
+    std::string off_detail;
+    for (int op = 0; op < GGML_OP_COUNT; op++) {
+        if (off_by_op[op] == 0) {
+            continue;
+        }
+        if (!off_detail.empty()) {
+            off_detail += ", ";
+        }
+        off_detail += ggml_op_name(static_cast<enum ggml_op>(op));
+        off_detail += " x " + std::to_string(off_by_op[op]);
+    }
+    if (off_detail.empty()) {
+        off_detail = "none";
+    }
+
+    if (strict && first_off != nullptr) {
+        GGML_ABORT("%s: GGML_HRX_STRICT=1: \"%s\" is %s %s ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] and is not placed on HRX; %" PRId64 " of %d nodes off HRX (%s), %d splits\n",
+                   __func__, first_off->name, ggml_op_name(first_off->op), ggml_type_name(first_off->type),
+                   first_off->ne[0], first_off->ne[1], first_off->ne[2], first_off->ne[3], off_nodes, graph->n_nodes,
+                   off_detail.c_str(), ggml_backend_sched_get_n_splits(sched));
+    }
+
+    if (level >= 1) {
+        reported.store(true);
+        GGML_LOG_INFO("%s: placement: %d nodes, %" PRId64 " off HRX (%s), %d graph splits\n", __func__, graph->n_nodes,
+                      off_nodes, off_detail.c_str(), ggml_backend_sched_get_n_splits(sched));
+    }
+}
+
 static void backend_synchronize(ggml_backend_t backend);
 
 static void backend_free(ggml_backend_t backend) {
@@ -380,6 +466,10 @@ static void backend_free(ggml_backend_t backend) {
     context->host_weights.clear();
     context->host_transfers.clear();
     hrx_stream_release(context->stream);
+    ggml_backend_t registered = backend;
+    if (g_placement_observer_backend.compare_exchange_strong(registered, nullptr)) {
+        ggml_backend_sched_set_placement_observer(nullptr, nullptr);
+    }
     delete context;
     delete backend;
 }
@@ -591,6 +681,9 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
     if (backend == nullptr) {
         delete context;
         hrx_stream_release(stream);
+    } else {
+        g_placement_observer_backend.store(backend);
+        ggml_backend_sched_set_placement_observer(placement_observer, backend);
     }
     return backend;
 }
@@ -607,8 +700,10 @@ static bool eager_capability_declared(enum ggml_op op) {
     switch (op) {
         // The scheduler probes preallocated weight tensors as NONE operations when deciding whether their buffer type is
         // usable by this backend. Fused ops are declared here so graph-claim can validate the full dispatch pattern.
-        // TODO: split this into placement capability and exact graph execution capability once graph claiming owns the
-        // full decision.
+        // This list is placement capability only. Whether a node runs here is decided by device_supports_op, and the
+        // per-op claim in fused-context-claim.h bounds each fused op by the token count its matchers execute
+        // (ubatch-token-limits.h). A claim past those bounds leaves a node with no dispatch and fails the whole
+        // graph, which is what made every qwen35 prompt batch above 512 tokens return -3 (engine #389).
         case GGML_OP_NONE:
         case GGML_OP_ADD:
         case GGML_OP_ADD_ID:
