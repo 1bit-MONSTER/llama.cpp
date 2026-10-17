@@ -1654,6 +1654,50 @@ static ggml_tensor * make_test_binary(ggml_context *        ctx,
     }
 }
 
+static const char * expected_plain_rmsnorm_binary_kernel(int64_t hidden_size, int64_t token_count) {
+    return token_count < 6 && hidden_size >= 2048 && hidden_size <= 5120 ?
+               "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" :
+               "loom_libs:ggml_rmsnorm_binary_f32";
+}
+
+static void run_rmsnorm_lowtoken_striped_dispatch_checks() {
+    const struct {
+        int64_t              hidden_size;
+        int64_t              token_count;
+        ggml::hrx::BinaryKind op;
+        const char *         expected_kernel;
+    } cases[] = {
+        { 1024, 1, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32"                  },
+        { 2048, 1, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" },
+        { 3072, 2, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" },
+        { 5120, 4, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" },
+        { 5120, 6, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32"                  },
+        { 2048, 1, ggml::hrx::BinaryKind::Add, "loom_libs:ggml_rmsnorm_binary_f32"                  },
+    };
+
+    for (const auto & test : cases) {
+        ggml_init_params params = {};
+        params.mem_size = static_cast<size_t>(test.hidden_size * test.token_count * sizeof(float) * 8 + 1024 * 1024);
+        params.no_alloc = true;
+        ggml_context * ctx = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, test.hidden_size, test.token_count);
+        ggml_tensor * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, test.hidden_size);
+        ggml_tensor * rms = ggml_rms_norm(ctx, input, 1.0e-6f);
+        ggml_tensor * output = make_test_binary(ctx, rms, weight, test.op);
+        REQUIRE(output != nullptr);
+
+        const ggml::hrx::Dispatch dispatch = schedule_single_dispatch_for_tensor(ctx, output);
+        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == test.expected_kernel);
+        REQUIRE(dispatch.bindings.size() == 3);
+        require_compile_parameter(dispatch, "ggml.rmsnorm_binary_f32.hidden_size",
+                                  std::to_string(test.hidden_size));
+        require_compile_parameter(dispatch, "ggml.rmsnorm_binary_f32.op",
+                                  std::to_string(ggml::hrx::binary_kind_config_value(test.op)));
+        ggml_free(ctx);
+    }
+}
+
 static void run_rmsnorm_two_binary_dispatch_checks() {
     const struct {
         ggml::hrx::BinaryKind normalized_op;
@@ -3706,7 +3750,8 @@ static void schedule_fused_matmul_postops_command(ggml_context *                
     REQUIRE(dispatch.kernel.compile_parameters.count("ggml.mul_mat_postops.rms_epsilon") == 0);
     if (expected_rmsnorm) {
         const ggml::hrx::Dispatch & rmsnorm_dispatch = scheduler.plan().dispatches[1];
-        REQUIRE(kernel_name_for_id(rmsnorm_dispatch.kernel.kernel_id) == "loom_libs:ggml_rmsnorm_binary_f32");
+        REQUIRE(kernel_name_for_id(rmsnorm_dispatch.kernel.kernel_id) ==
+                expected_plain_rmsnorm_binary_kernel(expected_output_size, expected_token_count));
     }
 
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
@@ -12095,6 +12140,51 @@ static void run_graph_program_cache_uid_mismatch_checks() {
     ggml_free(ctx);
 }
 
+static void run_graph_match_empty_expert_views_checks() {
+    ggml_context * ctx = ggml_init({ 512 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+
+    // Simulate MoE output layout: 2048 features, 8 selected expert slots, and no requested token rows.
+    // Scale supplies a producer node without needing a model or actual expert computation.
+    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2048, 8, 0);
+    ggml_tensor * experts = ggml_scale(ctx, input, 2.0f);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    graph->uid = 3003;
+    ggml_build_forward_expand(graph, experts);
+
+    // Build empty views to verify that the graph is accepted with each slot's
+    // offset preserved (0, 8192, ..., 57344 bytes). Previous check rejected
+    // empty views with positive offsets (which admittedly is a little odd but
+    // that's how GGML represents this).
+    for (int expert = 0; expert < 8; ++expert) {
+        ggml_tensor * view = ggml_view_2d(ctx, experts, 2048, 0, experts->nb[2], expert * experts->nb[1]);
+        ggml_build_forward_expand(graph, view);
+    }
+
+    // Building and matching this graph must accept the empty views; an old bounds check rejected their positive offsets.
+    // gfx1151 selects a target configuration for this host test, not a GPU on which to execute it.
+    ggml::hrx::GraphProgramCache cache;
+    auto lookup = cache.get_or_build(*graph, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(lookup.valid());
+    REQUIRE(lookup.program->match_current_graph(*graph).valid());
+    // Empty operations require no numerical device work.
+    REQUIRE(lookup.program->commands().commands.empty());
+
+    // The same graph must also match when reusing the cached program.
+    lookup = cache.get_or_build(*graph, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(lookup.valid());
+    REQUIRE(cache.stats().hits == 1);
+
+    // Empty views still have to agree with the recorded alias offsets: changing 57344 to 57348 must fail.
+    // Restoring the offset must make the graph match again.
+    ggml_tensor * last_view = ggml_graph_node(graph, ggml_graph_n_nodes(graph) - 1);
+    last_view->view_offs += sizeof(float);
+    REQUIRE(!lookup.program->match_current_graph(*graph).valid());
+    last_view->view_offs -= sizeof(float);
+    REQUIRE(lookup.program->match_current_graph(*graph).valid());
+    ggml_free(ctx);
+}
+
 static void run_graph_match_hash_collision_checks() {
     ggml_context * ctx = ggml_init({ 2 * 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
@@ -13710,6 +13800,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("scale_f32_dispatch", [] { run_scale_f32_dispatch_checks(); });
     suite.host_case("scale_add_f32_dispatch", [] { run_scale_add_f32_dispatch_checks(); });
     suite.host_case("rmsnorm_two_binary_dispatch", [] { run_rmsnorm_two_binary_dispatch_checks(); });
+    suite.host_case("rmsnorm_lowtoken_striped_dispatch", [] { run_rmsnorm_lowtoken_striped_dispatch_checks(); });
     suite.host_case("cont_f32_dispatch", [] { run_cont_f32_dispatch_checks(); });
     suite.host_case("binary_f32_broadcast_dispatch", [] { run_binary_f32_broadcast_dispatch_checks(); });
     suite.host_case("binary_q8_publication", [] { run_binary_q8_publication_checks(); });
@@ -13789,6 +13880,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("command_program_kernel_dump", [] { run_command_program_kernel_dump_checks(); });
     suite.host_case("command_shape_hash", [] { run_command_shape_hash_checks(); });
     suite.host_case("graph_program_cache_uid_mismatch", [] { run_graph_program_cache_uid_mismatch_checks(); });
+    suite.host_case("graph_match_empty_expert_views", [] { run_graph_match_empty_expert_views_checks(); });
     suite.host_case("graph_match_hash_collision", [] { run_graph_match_hash_collision_checks(); });
     suite.host_case("graph_match_bijection", [] { run_graph_match_bijection_checks(); });
     suite.host_case("validated_graph_uid_match", [] { run_validated_graph_uid_match_checks(); });
