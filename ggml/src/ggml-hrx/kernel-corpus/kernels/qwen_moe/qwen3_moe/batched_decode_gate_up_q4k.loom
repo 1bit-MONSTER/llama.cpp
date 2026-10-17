@@ -6,11 +6,11 @@
 // first provider is exact M_e=2: each wave reuses one expert/channel weight
 // row across two independently quantized activation rows and scatters the
 // fused SwiGLU results back to their original [token][route] assignments.
-config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), mul(%value, 32)]
+config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), multiple_of(%value, 32)]
 
 config.decl @qwen3_moe.router.route_count : %value: index where [range(%value, 1, 32)]
 
-config.decl @qwen3_moe.routed_gate_up.input_size : %value: index where [range(%value, 512, 32768), mul(%value, 512)]
+config.decl @qwen3_moe.routed_gate_up.input_size : %value: index where [range(%value, 512, 32768), multiple_of(%value, 512)]
 
 config.decl @qwen3_moe.routed_gate_up.expert_count : %value: index where [range(%value, 1, 512)]
 

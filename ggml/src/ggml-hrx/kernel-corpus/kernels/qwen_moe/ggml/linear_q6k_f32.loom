@@ -244,7 +244,7 @@ func.def inline @ggml_q6k_f32_block_row(%input_size: index, %row: index, %block:
 // subgroup width without duplicating the Q6_K decoding or memory schedule.
 template.def<@ggml.linear_q6k_f32.body> device @ggml_linear_q6k_f32_body(%publish_output: i1, %token_count: index, %token0: index, %pair: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
   %lane0 = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index

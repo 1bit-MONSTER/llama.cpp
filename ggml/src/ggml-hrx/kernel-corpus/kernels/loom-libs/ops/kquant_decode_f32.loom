@@ -37,7 +37,7 @@
 
 amdgpu.target<gfx11-generic> @ggml_kquant_decode_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.kquant_swiglu_decode.input_size : %value: index where [range(%value, 256, 65536), mul(%value, 256)]
+config.decl @ggml.kquant_swiglu_decode.input_size : %value: index where [range(%value, 256, 65536), multiple_of(%value, 256)]
 
 config.decl @ggml.kquant_swiglu_decode.output_size : %value: index where [range(%value, 1, 1048576)]
 
@@ -105,7 +105,7 @@ func.def inline @ggml_kquant_iq4nl_table() -> (vector<16xi8>) {
 }
 
 // 8 codes (two words of 4 bytes) as f32.
-config.decl @ggml.kquant_mul_mat_decode.input_size : %value: index where [range(%value, 256, 65536), mul(%value, 256)]
+config.decl @ggml.kquant_mul_mat_decode.input_size : %value: index where [range(%value, 256, 65536), multiple_of(%value, 256)]
 
 config.decl @ggml.kquant_mul_mat_decode.output_size : %value: index where [range(%value, 1, 1048576)]
 
@@ -8124,7 +8124,7 @@ func.def inline @ggml_kquant_tq2_lane_parts(%weight: buffer, %row_base: offset, 
   %a16 = index.mul %a, %c16 : index
   %h8 = index.mul %h, %c8 : index
   %at0 = index.add %a16, %h8 : index
-  %at = index.assume %at0 [range(%at0, 0, 24), mul(%at0, 8)] : index
+  %at = index.assume %at0 [range(%at0, 0, 24), multiple_of(%at0, 8)] : index
   %w16 = vector.load %iv[%at] : view<33xi16> -> vector<8xi16>
   %words = vector.bitcast %w16 : vector<8xi16> to vector<4xi32>
   %bytes = func.call @ggml_kquant_run16_bytes(%words) : (vector<4xi32>) -> (vector<16xi32>)
@@ -8169,7 +8169,7 @@ func.def inline @ggml_kquant_tq1_lane_parts(%weight: buffer, %row_base: offset, 
   %h = index.rem %l, %c2 : index
   %h8 = index.mul %h, %c8 : index
   %at0 = scf.select %low, %h8, %c16 : index
-  %at = index.assume %at0 [range(%at0, 0, 16), mul(%at0, 8)] : index
+  %at = index.assume %at0 [range(%at0, 0, 16), multiple_of(%at0, 8)] : index
   %w16 = vector.load %iv[%at] : view<27xi16> -> vector<8xi16>
   %words = vector.bitcast %w16 : vector<8xi16> to vector<4xi32>
   %qs_bytes = func.call @ggml_kquant_run16_bytes(%words) : (vector<4xi32>) -> (vector<16xi32>)

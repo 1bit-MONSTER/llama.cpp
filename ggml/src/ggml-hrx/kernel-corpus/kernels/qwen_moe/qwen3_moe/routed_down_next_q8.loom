@@ -17,7 +17,7 @@ template.def<@qwen3_moe.routed_down.next_q8_completion> device @qwen3_moe_routed
   %output_channels_per_workgroup = index.assume %output_channels_per_workgroup0 [range(%output_channels_per_workgroup0, 1, 8)] : index
   %reduction_subgroup_count = index.assume %reduction_subgroup_count0 [range(%reduction_subgroup_count0, 1, 8)] : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
-  %bounded_output_size = index.assume %output_size [range(%output_size, 128, 32768), mul(%output_size, 128)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 128, 32768), multiple_of(%output_size, 128)] : index
   %token0 = kernel.workgroup.id<y> : index
   %token = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
   %c0 = index.constant 0 : index

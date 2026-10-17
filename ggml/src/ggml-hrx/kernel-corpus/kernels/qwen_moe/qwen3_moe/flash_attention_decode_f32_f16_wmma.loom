@@ -94,7 +94,7 @@ kernel.def target(@qwen3_moe_attention_decode_gfx11_wave64) @qwen3_moe_flash_att
   %key_value_head_base = index.mul %key_value_head, %c128 : index
   %full_key_value_block_count = index.div %bounded_key_value_token_count, %c64 : index
   %full_key_value_token_count0 = index.mul %full_key_value_block_count, %c64 : index
-  %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 32768), mul(%full_key_value_token_count0, 64)] : index
+  %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 32768), multiple_of(%full_key_value_token_count0, 64)] : index
   %tail_key_value_token_count = index.sub %bounded_key_value_token_count, %full_key_value_token_count : index
   %has_key_value_tail = index.cmp ne, %tail_key_value_token_count, %c0 : index
   %has_single_key_value_tail = index.cmp eq, %tail_key_value_token_count, %c1 : index
@@ -521,7 +521,7 @@ kernel.def target(@qwen3_moe_attention_decode_gfx11_wave64) @qwen3_moe_flash_att
     %scaled_current_sum = vector.mulf<reassoc|nnan|ninf|nsz|contract> %wmma_tail_sum, %old_scale : vector<4xf32>
     %next_sum = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_sum, %probability : vector<4xf32>
     %next_output0, %next_output1, %next_output2, %next_output3 = scf.if %lane_has_output -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
-      %output_packet_channel = index.assume %lane_output_channel [range(%lane_output_channel, 0, 124), mul(%lane_output_channel, 4)] : index
+      %output_packet_channel = index.assume %lane_output_channel [range(%lane_output_channel, 0, 124), multiple_of(%lane_output_channel, 4)] : index
       %value_channel = index.add %key_value_head_base, %output_packet_channel : index
       %value_packet = vector.load %value_view[%single_tail_token, %value_channel] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> vector<4xf16>
       %old_scale_f16 = vector.fptrunc %old_scale : vector<4xf32> to vector<4xf16>
@@ -565,7 +565,7 @@ kernel.def target(@qwen3_moe_attention_decode_gfx11_wave64) @qwen3_moe_flash_att
   // Normalize and publish the lane-owned packets. Query-tail rows never
   // participate in the output store.
   scf.if %lane_has_output {
-    %output_packet_channel = index.assume %lane_output_channel [range(%lane_output_channel, 0, 124), mul(%lane_output_channel, 4)] : index
+    %output_packet_channel = index.assume %lane_output_channel [range(%lane_output_channel, 0, 124), multiple_of(%lane_output_channel, 4)] : index
     %sum0_scalar = vector.extract %final_sum[0] : vector<4xf32> -> f32
     %sum1_scalar = vector.extract %final_sum[1] : vector<4xf32> -> f32
     %sum2_scalar = vector.extract %final_sum[2] : vector<4xf32> -> f32

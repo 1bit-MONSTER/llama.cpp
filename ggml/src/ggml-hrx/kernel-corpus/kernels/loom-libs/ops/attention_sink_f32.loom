@@ -30,9 +30,9 @@ config.decl @ggml.attention_sink.query_head_count : %value: index where [range(%
 
 config.decl @ggml.attention_sink.key_value_head_count : %value: index where [range(%value, 1, 256)]
 
-config.decl @ggml.attention_sink.qk_head_size : %value: index where [range(%value, 16, 576), mul(%value, 16)]
+config.decl @ggml.attention_sink.qk_head_size : %value: index where [range(%value, 16, 576), multiple_of(%value, 16)]
 
-config.decl @ggml.attention_sink.value_head_size : %value: index where [range(%value, 16, 576), mul(%value, 16)]
+config.decl @ggml.attention_sink.value_head_size : %value: index where [range(%value, 16, 576), multiple_of(%value, 16)]
 
 config.decl @ggml.attention_sink.scale : f32
 
@@ -49,8 +49,8 @@ kernel.def target(@ggml_attention_sink_gfx11_wave32) export("ggml_attention_sink
   %scale = config.get @ggml.attention_sink.scale : f32
   %query_head_count = index.assume %query_head_count0 [range(%query_head_count0, 1, 256)] : index
   %key_value_head_count = index.assume %key_value_head_count0 [range(%key_value_head_count0, 1, 256)] : index
-  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 576), mul(%qk_head_size0, 16)] : index
-  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 16, 576), mul(%value_head_size0, 16)] : index
+  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 576), multiple_of(%qk_head_size0, 16)] : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 16, 576), multiple_of(%value_head_size0, 16)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c4 = index.constant 4 : index
@@ -170,8 +170,8 @@ kernel.def target(@ggml_attention_sink_gfx11_wave32) export("ggml_attention_sink
   %scale = config.get @ggml.attention_sink.scale : f32
   %query_head_count = index.assume %query_head_count0 [range(%query_head_count0, 1, 256)] : index
   %key_value_head_count = index.assume %key_value_head_count0 [range(%key_value_head_count0, 1, 256)] : index
-  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 576), mul(%qk_head_size0, 16)] : index
-  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 16, 576), mul(%value_head_size0, 16)] : index
+  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 576), multiple_of(%qk_head_size0, 16)] : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 16, 576), multiple_of(%value_head_size0, 16)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c0_offset = index.constant 0 : offset

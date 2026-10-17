@@ -29,7 +29,7 @@ amdgpu.target<gfx11-generic> @qwen3_moe_routed_down_q6k_gfx11_wave64 {subgroup_s
 
 target.decl @qwen3_moe_attention_prepare_gfx11_wave32
 
-config.decl @qwen3_moe.routed_down.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @qwen3_moe.routed_down.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 config.decl @qwen3_moe.routed_down.route_count : %value: index where [range(%value, 1, 8)]
 
@@ -56,7 +56,7 @@ kernel.decl @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4(%token_count$106: inde
 template.def<@qwen3_moe.routed_down.q6k_q8_1_x4.body> device @qwen3_moe_routed_down_q6k_q8_1_x4_body(%publish_output: i1, %token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_route_count = index.assume %route_count [range(%route_count, 1, 8)] : index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count = index.assume %expert_count [range(%expert_count, 1, 512)] : index
@@ -154,7 +154,7 @@ kernel.def @qwen3_moe_routed_down_q6k_q8_1_x4(%token_count: index, %input_size: 
   %configured_expert_count0 = config.get @qwen3_moe.routed_down.expert_count : index
   %configured_output_size0 = config.get @qwen3_moe.routed_down.output_size : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
-  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), mul(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), multiple_of(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
   %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
@@ -185,11 +185,11 @@ kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_routed_d
   %configured_route_count0 = config.get @qwen3_moe.routed_down.route_count : index
   %configured_expert_count0 = config.get @qwen3_moe.routed_down.expert_count : index
   %configured_output_size0 = config.get @qwen3_moe.routed_down.output_size : index
-  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), mul(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), multiple_of(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
   %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
-  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), mul(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), multiple_of(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
   %c8 = index.constant 8 : index
   %publishes_output = scalar.constant true : i1
   %body_token = index.constant 0 : index
@@ -280,7 +280,7 @@ check.case public @qwen3_moe_routed_down_q6k_q8_1_x4_next_q8_composed_benchmark_
 template.def<@qwen3_moe.routed_down.q6k_f32.body> device @qwen3_moe_routed_down_q6k_f32_body(%publish_output: i1, %subgroup_count: index, %block_step: index, %scale_stage_bytes: offset, %token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_route_count = index.assume %route_count [range(%route_count, 1, 8)] : index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count = index.assume %expert_count [range(%expert_count, 1, 512)] : index
@@ -365,7 +365,7 @@ template.def<@qwen3_moe.routed_down.q6k_f32.body> device @qwen3_moe_routed_down_
 template.def<@qwen3_moe.routed_down.q6k_f32.pair_body> device @qwen3_moe_routed_down_q6k_f32_pair_body(%token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
   %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_route_count = index.assume %route_count [range(%route_count, 1, 8)] : index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count = index.assume %expert_count [range(%expert_count, 1, 512)] : index
@@ -476,7 +476,7 @@ kernel.def target(@qwen3_moe_routed_down_q6k_gfx11_wave64) @qwen3_moe_routed_dow
   %configured_expert_count0 = config.get @qwen3_moe.routed_down.expert_count : index
   %configured_output_size0 = config.get @qwen3_moe.routed_down.output_size : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
-  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), mul(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), multiple_of(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
   %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
@@ -511,11 +511,11 @@ kernel.def target(@qwen3_moe_routed_down_q6k_gfx11_wave64) @qwen3_moe_routed_dow
   %configured_route_count0 = config.get @qwen3_moe.routed_down.route_count : index
   %configured_expert_count0 = config.get @qwen3_moe.routed_down.expert_count : index
   %configured_output_size0 = config.get @qwen3_moe.routed_down.output_size : index
-  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), mul(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), multiple_of(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
   %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
-  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), mul(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), multiple_of(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
   %c4 = index.constant 4 : index
   %c8 = index.constant 8 : index
   %body_token = index.constant 0 : index

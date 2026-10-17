@@ -32,7 +32,7 @@
 
 amdgpu.target<gfx11-generic> @ggml_zaya_cca_conv_decode_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.zaya_cca_conv.channels : %value: index where [range(%value, 128, 8192), mul(%value, 128)]
+config.decl @ggml.zaya_cca_conv.channels : %value: index where [range(%value, 128, 8192), multiple_of(%value, 128)]
 
 config.decl @ggml.zaya_cca_conv.q_size : %value: index where [range(%value, 1, 8191)]
 
