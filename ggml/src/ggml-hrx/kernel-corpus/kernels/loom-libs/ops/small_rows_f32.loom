@@ -152,7 +152,8 @@ kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_argsort_rows_f
   }
   scf.if %valid {
     %element_i32 = index.cast %element : index to i32
-    view.store %element_i32, %output_view[%row, %rank] : i32, view<[%rows]x[%cols]xi32>
+    %rank_bounded = index.assume %rank [range(%rank, 0, 1023)] : index
+    view.store %element_i32, %output_view[%row, %rank_bounded] : i32, view<[%rows]x[%cols]xi32>
   }
   kernel.return
 }
