@@ -11048,8 +11048,15 @@ static void run_gdn_rmsnorm_gate_dispatch_checks() {
                    "loom_libs:llm_gated_delta_net_f32_wmma_head128_rmsnorm_gate";
         });
         REQUIRE((fused != plan.dispatches.end()) == test.fused);
+        // The fused path publishes the packed f16 from inside its own dispatch; the unfused path hands
+        // the norm-gate tail to ggml_rmsnorm_gate_f32_f16, which publishes it the same way for the
+        // projection consumer. The pre-re-head producer this once named, ggml_rmsnorm_gate_f32_publish,
+        // is not in the corpus: this family is served by ggml_rmsnorm_gate_f32_f16 and _q8_1_x4, both
+        // of which run the same publish_body and carry the publish selection as a compile parameter
+        // (engine #449, seen in the plan: rmsnorm_gate_f32_f16 + generated F16K16Major consumed by
+        // ggml_mul_mat_q4_k_f16_wmma_prefill_wave32 with f16_input_layout=1).
         REQUIRE(std::count_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
-            return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_rmsnorm_gate_f32_publish";
+            return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_rmsnorm_gate_f32_f16";
         }) == (test.fused ? 0 : 1));
         if (test.fused) {
             REQUIRE(fused->bindings.size() == 11);
@@ -11099,7 +11106,9 @@ static int run_cases(const char * label, const std::vector<Case> & cases) {
                 std::printf("[UNEXPECTED-PASS %s] %s\n", test.known_fail, test.name);
             } else {
                 ++known;
-                std::printf("[KNOWN-FAIL %s] %s\n", test.known_fail, test.name);
+                // the failing requirement as well: a guard that never says what it is waiting for is
+                // hard to retire on purpose (engine #449)
+                std::printf("[KNOWN-FAIL %s] %s\n       %s\n", test.known_fail, test.name, where.c_str());
             }
         } else if (ok) {
             ++passed;
@@ -11145,7 +11154,7 @@ int main() {
         { "rmsnorm_gate_q8_output", [] { run_rmsnorm_gate_q8_output_checks(); } },
         { "lowtoken_residual_dispatch", [] { run_lowtoken_residual_dispatch_checks(); } },
         { "quantized_conv4_dispatch", [] { run_quantized_conv4_dispatch_checks(); } },
-        { "gdn_rmsnorm_gate_dispatch", [] { run_gdn_rmsnorm_gate_dispatch_checks(); }, "#449" },
+        { "gdn_rmsnorm_gate_dispatch", [] { run_gdn_rmsnorm_gate_dispatch_checks(); } },
         { "gdn_native_projection_pair_dispatch", [] { run_gdn_native_projection_pair_dispatch_checks(); } },
         { "gdn_selected_snapshot_dispatch", [] { run_gdn_selected_snapshot_dispatch_checks(); } },
         { "gdn_selected_rms_q8_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(); } },
