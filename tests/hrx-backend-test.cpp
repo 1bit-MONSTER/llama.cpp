@@ -32,6 +32,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <sstream>
@@ -39,11 +40,18 @@
 #include <utility>
 #include <vector>
 
+// A failed expectation unwinds to the case runner below instead of ending the process, so one red
+// case cannot hide every case after it (engine #445 keeps 9 REGRESSION rows and one NEEDS-DEVICE row
+// red on purpose, and those must not mask the rest of the suite).
+struct RequirementFailure {
+    std::string where;
+};
+
 #define REQUIRE(condition)                                                                           \
     do {                                                                                             \
         if (!(condition)) {                                                                          \
             std::fprintf(stderr, "%s:%d: requirement failed: %s\n", __FILE__, __LINE__, #condition); \
-            std::abort();                                                                            \
+            throw RequirementFailure{ std::string(__FILE__) + ":" + std::to_string(__LINE__) + ": " + #condition }; \
         }                                                                                            \
     } while (false)
 
@@ -3728,10 +3736,13 @@ static void run_gather_add_dispatch_checks() {
         schedule_gather_add_command(graph, 2048, 128, 8);
     }
 
-    REQUIRE(!manual_gather_add_graph_is_supported(ctx, 2048, 13, 1, false));
+    // #445 row gather_add_dispatch (ACCEPT): claimed by the generic path now (get_rows + strided
+    // binary, three dispatches) instead of being refused; the fused gather_add kernel still takes
+    // the canonical shape above. The strided-coalesced variant below is still refused.
+    REQUIRE(manual_gather_add_graph_is_supported(ctx, 2048, 13, 1, false));
     REQUIRE(!manual_gather_add_graph_is_supported(ctx, 2048, 13, 1, true, 1024));
-    REQUIRE(!manual_gather_add_graph_is_supported(ctx, 96, 13, 1, true));
-    REQUIRE(!partial_gather_add_graph_is_supported(ctx));
+    REQUIRE(manual_gather_add_graph_is_supported(ctx, 96, 13, 1, true));
+    REQUIRE(partial_gather_add_graph_is_supported(ctx));
     require_gather_add_rejects_unavailable_sources(ctx);
 
     ggml_free(ctx);
@@ -3765,7 +3776,22 @@ static void schedule_flash_attention_command(ggml_context * ctx,
 
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.back();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
-    REQUIRE(kernel_name == expected_kernel_name);
+    // #445 row qwen_flash_attention_dispatch (ACCEPT): a QK-layout value (MLA) shape is routed to the
+    // generic strided attention kernel now (dispatch-flash-attention.cpp, the MLA columns-wide path),
+    // whose parameters are the strided extents rather than the flash_attention.* set. Same op, same
+    // math; the expectation is what moved.
+    const bool strided_attention = kernel_name == "loom_libs:ggml_attention_rows_f32_f16";
+    REQUIRE(kernel_name == expected_kernel_name || strided_attention);
+    if (strided_attention) {
+        REQUIRE(dispatch.bindings.size() == 5);
+        REQUIRE(dispatch.kernel.integer_parameters.at("q_count") == query_token_count);
+        REQUIRE(dispatch.kernel.integer_parameters.at("kv_count") == key_value_token_count);
+        REQUIRE(dispatch.kernel.integer_parameters.at("head_count") == query_head_count);
+        REQUIRE(dispatch.kernel.integer_parameters.at("kv_head_count") == key_value_head_count);
+        REQUIRE(dispatch.kernel.integer_parameters.at("qk_size") == qk_head_size);
+        REQUIRE(dispatch.kernel.integer_parameters.at("v_size") == value_head_size);
+        require_compile_parameter(dispatch, "ggml.attention_strided.scale", expected_config_value(scale));
+    } else {
     REQUIRE(dispatch.kernel.integer_parameters.at("query_token_count") == query_token_count);
     REQUIRE(dispatch.kernel.integer_parameters.at("key_value_token_count") == key_value_token_count);
     REQUIRE(dispatch.bindings.size() == 6);
@@ -3784,6 +3810,7 @@ static void schedule_flash_attention_command(ggml_context * ctx,
         require_compile_parameter(dispatch, "qwen3_moe.workload.token_capacity", std::to_string(query_token_count));
     }
 
+    }
     if (transposed_value) {
         REQUIRE(scheduler.plan().transients.size() == 1);
         const auto & copy = scheduler.plan().dispatches.front();
@@ -3802,13 +3829,19 @@ static void schedule_flash_attention_command(ggml_context * ctx,
     REQUIRE(commands.valid());
     REQUIRE(commands.commands.size() == (transposed_value ? 2 : 1));
     REQUIRE(command_program_verifies(commands));
-    REQUIRE(commands.commands.back().bindings.size() == 6);
+    // the strided MLA kernel binds five values (no gate); the flash kernels bind six (#445 row
+    // qwen_flash_attention_dispatch, ACCEPT: the route moved, the shape of the command follows it).
+    REQUIRE(commands.commands.back().bindings.size() == (strided_attention ? 5 : 6));
     REQUIRE(commands.commands.back().bindings[0].name == "query");
     REQUIRE(commands.commands.back().bindings[1].name == "key");
     REQUIRE(commands.commands.back().bindings[2].name == "value");
     REQUIRE(commands.commands.back().bindings[3].name == "mask");
-    REQUIRE(commands.commands.back().bindings[4].name == "gate");
-    REQUIRE(commands.commands.back().bindings[5].name == "output");
+    if (!strided_attention) {
+        REQUIRE(commands.commands.back().bindings[4].name == "gate");
+        REQUIRE(commands.commands.back().bindings[5].name == "output");
+    } else {
+        REQUIRE(commands.commands.back().bindings[4].name == "output");
+    }
 }
 
 static void schedule_qwen_flash_attention_command(ggml_context * ctx, ggml_tensor * output) {
@@ -3970,12 +4003,14 @@ static void run_qwen_flash_attention_dispatch_checks() {
     }
     {
         ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 4, 8, 4, 2, GGML_TYPE_F32, GGML_TYPE_F16, false);
-        REQUIRE(!graph_is_supported(ctx, output));
+        REQUIRE(!graph_is_supported(ctx, output));   // still refused with #445's ACCEPT applied
     }
     {
+        // #445 row qwen_flash_attention_dispatch (ACCEPT): same for the gated, transposed-value
+        // variant, which routes through the transpose copy + strided attention.
         ggml_tensor * output =
             build_qwen_flash_attention_graph(ctx, 4, 8, 4, 2, GGML_TYPE_F32, GGML_TYPE_F16, true, true);
-        REQUIRE(!graph_is_supported(ctx, output));
+        REQUIRE(graph_is_supported(ctx, output));
     }
     {
         ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 16, 16, 4, 2, GGML_TYPE_F32, GGML_TYPE_F16, true,
@@ -4553,7 +4588,10 @@ static void run_swiglu_q8_output_checks() {
         const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
             return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot_q8_output";
         });
-        REQUIRE((producer != plan.dispatches.end()) == test.packed);
+        // #445 row swiglu_q8_output (ACCEPT): the q8-output publish kernel went with f2099e9b; the shape
+        // is the kquant swiglu decode feeding the kquant matmul decode, which reads f32, so no alternate
+        // and no producer to bind.
+        REQUIRE(producer == plan.dispatches.end());
         if (test.outputs > 32768) {
             REQUIRE(!scheduled);
             REQUIRE(status_contains(plan.status, "unsupported HRX node"));
@@ -4564,7 +4602,7 @@ static void run_swiglu_q8_output_checks() {
         REQUIRE(plan.valid());
         const auto * output = imported.graph.values().find_tensor(glu);
         REQUIRE(output != nullptr);
-        if (test.packed) {
+        if (test.packed && producer != plan.dispatches.end()) {
             const size_t bytes = static_cast<size_t>(test.tokens) * ggml_row_size(GGML_TYPE_Q8_1, test.outputs);
             const auto * alternate = plan.metadata.find_alternate_value(output->id, GGML_TYPE_Q8_1, bytes);
             REQUIRE(alternate != nullptr);
@@ -10345,83 +10383,114 @@ static void run_gdn_selected_rms_q8_dispatch_checks() {
     ggml_free(ctx);
 }
 
+// One entry per case: the runner reports each one, so a red row is a row, not the end of the run.
+struct Case {
+    const char *          name;
+    std::function<void()> fn;
+};
+
+static int run_cases(const char * label, const std::vector<Case> & cases) {
+    std::printf("%s: %zu case(s)\n", label, cases.size());
+    size_t failed = 0;
+    for (const Case & test : cases) {
+        try {
+            test.fn();
+            std::printf("[PASS] %s\n", test.name);
+        } catch (const RequirementFailure & failure) {
+            ++failed;
+            std::printf("[FAIL] %s\n       %s\n", test.name, failure.where.c_str());
+        } catch (const std::exception & error) {
+            ++failed;
+            std::printf("[FAIL] %s\n       exception: %s\n", test.name, error.what());
+        }
+        std::fflush(stdout);
+    }
+    std::printf("%s: %zu passed, %zu failed, %zu total\n", label, cases.size() - failed, failed, cases.size());
+    return failed == 0 ? 0 : 1;
+}
+
 int main() {
-    run_status_checks();
-    run_command_plan_metadata_checks();
-    run_dispatch_registry_checks();
-    run_graph_import_checks();
-    run_graph_import_mixed_backend_boundary_checks();
-    run_graph_view_external_use_checks();
-    run_scale_f32_dispatch_checks();
-    run_cont_f32_dispatch_checks();
-    run_binary_f32_broadcast_dispatch_checks();
-    run_graph_snapshot_diagnostics_checks();
-    run_unmatched_graph_diagnostics_checks();
-    run_completion_counter_plan_checks();
-    run_graph_index_checks();
-    run_rope_set_rows_dispatch_checks();
-    run_graph_traversal_checks();
-    run_qwen_token_embedding_dispatch_checks();
-    run_gather_add_dispatch_checks();
-    run_qwen_flash_attention_dispatch_checks();
-    run_qwen_attention_postprocess_dispatch_checks();
-    run_qwen_matmul_dispatch_checks();
-    run_packed_f16_producer_consumer_checks();
-    run_k16_major_preparation_reuse_checks();
-    run_rmsnorm_binary_k16_output_checks();
-    run_swiglu_q8_output_checks();
-    run_rmsnorm_gate_packed_output_checks();
-    run_rmsnorm_gate_q8_output_checks();
-    run_lowtoken_residual_dispatch_checks();
-    run_quantized_conv4_dispatch_checks();
-    run_gdn_rmsnorm_gate_dispatch_checks();
-    run_gdn_native_projection_pair_dispatch_checks();
-    run_gdn_selected_snapshot_dispatch_checks();
-    run_gdn_selected_rms_q8_dispatch_checks();
-    run_llama_attention_matmul_dispatch_checks();
-    run_quantized_value_projection_dispatch_checks();
-    schedule_qwen_terminal_q6k_q8_command(1);
-    schedule_qwen_terminal_q6k_q8_command(18);
-    schedule_get_rows_q8_1_alternate_command(GGML_TYPE_Q4_K);
-    schedule_get_rows_q8_1_alternate_command(GGML_TYPE_BF16);
-    run_qwen_router_top8_dispatch_checks();
-    run_common_mul_mat_id_swiglu_dispatch_checks();
-    run_qwen_routed_gate_up_dispatch_checks();
-    run_common_mul_mat_id_postops_dispatch_checks();
-    run_alias_value_import_checks();
-    run_multi_dispatch_checks();
-    run_layout_alias_scheduler_elision_checks();
-    run_zero_output_scheduler_elision_checks();
-    run_transient_import_checks();
-    run_graph_view_preserves_shared_output_storage_checks();
-    run_chained_dispatch_requires_transients();
-    run_graph_replay_host_staging_is_not_ineligible();
-    run_multiple_transient_plan_checks();
-    run_disjoint_transient_plan_packing_checks();
-    run_command_program_kernel_dump_checks();
-    run_command_shape_hash_checks();
-    run_graph_program_cache_uid_mismatch_checks();
-    run_graph_match_hash_collision_checks();
-    run_graph_match_bijection_checks();
-    run_validated_graph_uid_match_checks();
-    run_graph_executor_contract_checks();
-    REQUIRE(ggml::hrx::loom_async_jit_enabled_from_environment() == async_jit_expected_from_environment());
+    const std::vector<Case> host_cases = {
+        { "status", [] { run_status_checks(); } },
+        { "command_plan_metadata", [] { run_command_plan_metadata_checks(); } },
+        { "dispatch_registry", [] { run_dispatch_registry_checks(); } },
+        { "graph_import", [] { run_graph_import_checks(); } },
+        { "graph_import_mixed_backend_boundary", [] { run_graph_import_mixed_backend_boundary_checks(); } },
+        { "graph_view_external_use", [] { run_graph_view_external_use_checks(); } },
+        { "scale_f32_dispatch", [] { run_scale_f32_dispatch_checks(); } },
+        { "cont_f32_dispatch", [] { run_cont_f32_dispatch_checks(); } },
+        { "binary_f32_broadcast_dispatch", [] { run_binary_f32_broadcast_dispatch_checks(); } },
+        { "graph_snapshot_diagnostics", [] { run_graph_snapshot_diagnostics_checks(); } },
+        { "unmatched_graph_diagnostics", [] { run_unmatched_graph_diagnostics_checks(); } },
+        { "completion_counter_plan", [] { run_completion_counter_plan_checks(); } },
+        { "graph_index", [] { run_graph_index_checks(); } },
+        { "rope_set_rows_dispatch", [] { run_rope_set_rows_dispatch_checks(); } },
+        { "graph_traversal", [] { run_graph_traversal_checks(); } },
+        { "qwen_token_embedding_dispatch", [] { run_qwen_token_embedding_dispatch_checks(); } },
+        { "gather_add_dispatch", [] { run_gather_add_dispatch_checks(); } },
+        { "qwen_flash_attention_dispatch", [] { run_qwen_flash_attention_dispatch_checks(); } },
+        { "qwen_attention_postprocess_dispatch", [] { run_qwen_attention_postprocess_dispatch_checks(); } },
+        { "qwen_matmul_dispatch", [] { run_qwen_matmul_dispatch_checks(); } },
+        { "packed_f16_producer_consumer", [] { run_packed_f16_producer_consumer_checks(); } },
+        { "k16_major_preparation_reuse", [] { run_k16_major_preparation_reuse_checks(); } },
+        { "rmsnorm_binary_k16_output", [] { run_rmsnorm_binary_k16_output_checks(); } },
+        { "swiglu_q8_output", [] { run_swiglu_q8_output_checks(); } },
+        { "rmsnorm_gate_packed_output", [] { run_rmsnorm_gate_packed_output_checks(); } },
+        { "rmsnorm_gate_q8_output", [] { run_rmsnorm_gate_q8_output_checks(); } },
+        { "lowtoken_residual_dispatch", [] { run_lowtoken_residual_dispatch_checks(); } },
+        { "quantized_conv4_dispatch", [] { run_quantized_conv4_dispatch_checks(); } },
+        { "gdn_rmsnorm_gate_dispatch", [] { run_gdn_rmsnorm_gate_dispatch_checks(); } },
+        { "gdn_native_projection_pair_dispatch", [] { run_gdn_native_projection_pair_dispatch_checks(); } },
+        { "gdn_selected_snapshot_dispatch", [] { run_gdn_selected_snapshot_dispatch_checks(); } },
+        { "gdn_selected_rms_q8_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(); } },
+        { "llama_attention_matmul_dispatch", [] { run_llama_attention_matmul_dispatch_checks(); } },
+        { "quantized_value_projection_dispatch", [] { run_quantized_value_projection_dispatch_checks(); } },
+        { "schedule_qwen_terminal_q6k_q8_command.tokens1", [] { schedule_qwen_terminal_q6k_q8_command(1); } },
+        { "schedule_qwen_terminal_q6k_q8_command.tokens18", [] { schedule_qwen_terminal_q6k_q8_command(18); } },
+        { "schedule_get_rows_q8_1_alternate_command.q4_k", [] { schedule_get_rows_q8_1_alternate_command(GGML_TYPE_Q4_K); } },
+        { "schedule_get_rows_q8_1_alternate_command.bf16", [] { schedule_get_rows_q8_1_alternate_command(GGML_TYPE_BF16); } },
+        { "qwen_router_top8_dispatch", [] { run_qwen_router_top8_dispatch_checks(); } },
+        { "common_mul_mat_id_swiglu_dispatch", [] { run_common_mul_mat_id_swiglu_dispatch_checks(); } },
+        { "qwen_routed_gate_up_dispatch", [] { run_qwen_routed_gate_up_dispatch_checks(); } },
+        { "common_mul_mat_id_postops_dispatch", [] { run_common_mul_mat_id_postops_dispatch_checks(); } },
+        { "alias_value_import", [] { run_alias_value_import_checks(); } },
+        { "multi_dispatch", [] { run_multi_dispatch_checks(); } },
+        { "layout_alias_scheduler_elision", [] { run_layout_alias_scheduler_elision_checks(); } },
+        { "zero_output_scheduler_elision", [] { run_zero_output_scheduler_elision_checks(); } },
+        { "transient_import", [] { run_transient_import_checks(); } },
+        { "graph_view_preserves_shared_output_storage", [] { run_graph_view_preserves_shared_output_storage_checks(); } },
+        { "chained_dispatch_requires_transients", [] { run_chained_dispatch_requires_transients(); } },
+        { "graph_replay_host_staging_is_not_ineligible", [] { run_graph_replay_host_staging_is_not_ineligible(); } },
+        { "multiple_transient_plan", [] { run_multiple_transient_plan_checks(); } },
+        { "disjoint_transient_plan_packing", [] { run_disjoint_transient_plan_packing_checks(); } },
+        { "command_program_kernel_dump", [] { run_command_program_kernel_dump_checks(); } },
+        { "command_shape_hash", [] { run_command_shape_hash_checks(); } },
+        { "graph_program_cache_uid_mismatch", [] { run_graph_program_cache_uid_mismatch_checks(); } },
+        { "graph_match_hash_collision", [] { run_graph_match_hash_collision_checks(); } },
+        { "graph_match_bijection", [] { run_graph_match_bijection_checks(); } },
+        { "validated_graph_uid_match", [] { run_validated_graph_uid_match_checks(); } },
+        { "graph_executor_contract", [] { run_graph_executor_contract_checks(); } },
+        { "loom_async_jit_environment", [] { REQUIRE(ggml::hrx::loom_async_jit_enabled_from_environment() == async_jit_expected_from_environment()); } },    };
+    int failed = run_cases("host", host_cases);
 
     if (ggml_backend_hrx_get_device_count() == 0) {
-        std::fprintf(stderr, "test skipped: no HRX devices available\n");
-        return 0;
+        std::printf("device: skipped, no HRX devices available\n");
+        return failed == 0 ? 0 : 1;
     }
 
-    run_zero_output_device_support_checks();
-    run_scale_f32_device_support_checks();
-    run_qwen_expert_table_partition_prefill_512_execution();
-    run_add_f32();
-    run_scale_f32();
-    run_scale_f32_inplace();
-    run_two_independent_add_f32();
-    run_chained_add_f32();
-    run_same_uid_distinct_graph_reuses_graph_program();
-    run_same_uid_distinct_graph_reuses_graph_program(true);
-    run_unsupported_op_fails();
-    return 0;
+    const std::vector<Case> device_cases = {
+        { "zero_output_device_support", [] { run_zero_output_device_support_checks(); } },
+        { "scale_f32_device_support", [] { run_scale_f32_device_support_checks(); } },
+        { "qwen_expert_table_partition_prefill_512_execution", [] { run_qwen_expert_table_partition_prefill_512_execution(); } },
+        { "add_f32", [] { run_add_f32(); } },
+        { "scale_f32", [] { run_scale_f32(); } },
+        { "scale_f32_inplace", [] { run_scale_f32_inplace(); } },
+        { "two_independent_add_f32", [] { run_two_independent_add_f32(); } },
+        { "chained_add_f32", [] { run_chained_add_f32(); } },
+        { "same_uid_distinct_graph_reuses_graph_program", [] { run_same_uid_distinct_graph_reuses_graph_program(); } },
+        { "same_uid_distinct_graph_reuses_graph_program.distinct_uid", [] { run_same_uid_distinct_graph_reuses_graph_program(true); } },
+        { "unsupported_op_fails", [] { run_unsupported_op_fails(); } },
+    };
+    failed += run_cases("device", device_cases);
+    return failed == 0 ? 0 : 1;
 }
