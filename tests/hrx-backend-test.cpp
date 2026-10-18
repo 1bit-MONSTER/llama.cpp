@@ -3295,7 +3295,8 @@ static void schedule_single_matmul_command(ggml_context * ctx,
     } else if (string_contains(kernel_name, "ggml_mul_mat")) {
         REQUIRE(dispatch.bindings.size() == (codebook_kernel ? 4 : 3));
         if (aligned_dynamic_kernel) {
-            REQUIRE(dispatch.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+            // AMD's dispatch has no workload-specialization marker since the core re-head; what an
+            // aligned dynamic kernel still shows is that it pins no fixed token capacity.
             REQUIRE(dispatch.kernel.compile_parameters.count("ggml.workload.token_capacity") == 0);
         } else {
             require_compile_parameter(dispatch, "ggml.workload.token_capacity", std::to_string(expected_token_count));
@@ -5188,7 +5189,6 @@ static void schedule_flash_attention_command(ggml_context * ctx,
         REQUIRE(scheduler.plan().transients.size() == 1);
         const auto & copy = scheduler.plan().dispatches.front();
         REQUIRE(kernel_name_for_id(copy.kernel.kernel_id) == "loom_libs:ggml_copy_transpose_f16");
-        REQUIRE(copy.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
         REQUIRE(copy.kernel.integer_parameters.at("row_count") == key_value_token_count);
         REQUIRE(copy.kernel.integer_parameters.at("column_count") == key_value_head_count * value_head_size);
         REQUIRE(copy.bindings.size() == 2);
@@ -6325,18 +6325,14 @@ static void run_tiled_matmul_alternate_publish_checks() {
         const auto * q8 = plan.metadata.find_alternate_value(projection_value->id, GGML_TYPE_Q8_1, q8_bytes);
         REQUIRE(q8 != nullptr);
         const auto publication_count = std::count_if(
-            plan.metadata.activation_publication_diagnostics().begin(),
-            plan.metadata.activation_publication_diagnostics().end(), [&](const auto & diagnostic) {
-                return diagnostic.source_value == projection_value->id;
-            });
+            plan.metadata.alternate_values().begin(), plan.metadata.alternate_values().end(),
+            [&](const auto & alternate) { return alternate.graph_value == projection_value->id; });
         REQUIRE(publication_count == 1);
         const auto publication = std::find_if(
-            plan.metadata.activation_publication_diagnostics().begin(),
-            plan.metadata.activation_publication_diagnostics().end(), [&](const auto & diagnostic) {
-                return diagnostic.source_value == projection_value->id;
-            });
-        REQUIRE(publication != plan.metadata.activation_publication_diagnostics().end());
-        REQUIRE(publication->requested_format == "q8-1-x4");
+            plan.metadata.alternate_values().begin(), plan.metadata.alternate_values().end(),
+            [&](const auto & alternate) { return alternate.graph_value == projection_value->id; });
+        REQUIRE(publication != plan.metadata.alternate_values().end());
+        REQUIRE(publication->type == GGML_TYPE_Q8_1);
 
         const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
             return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32" &&
@@ -7349,7 +7345,6 @@ static void run_generic_ssm_conv_binary_dispatch_checks() {
         REQUIRE(plan.dispatches.size() == 1);
         const auto & dispatch = plan.dispatches.front();
         REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:llm_ssm_conv_binary_f32");
-        REQUIRE(dispatch.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
         REQUIRE(dispatch.kernel.integer_parameters.at("n_t") == n_t);
         REQUIRE(dispatch.kernel.integer_parameters.at("n_s") == 1);
         REQUIRE(dispatch.kernel.compile_parameters.count("llm.ssm_conv.generic.n_t") == 0);
@@ -7544,7 +7539,6 @@ static void run_gdn_native_projection_pair_dispatch_checks() {
         });
         REQUIRE((epilogue != plan.dispatches.end()) == (test.tokens > 16));
         if (epilogue != plan.dispatches.end()) {
-            REQUIRE(epilogue->kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
             REQUIRE(epilogue->kernel.integer_parameters.at("element_count") == test.heads * test.tokens);
             REQUIRE(epilogue->kernel.compile_parameters.count("llm.gated_delta_net.epilogue_element_count") == 0);
         }
@@ -9561,7 +9555,6 @@ static bool match_dispatch_at_index(const ggml::hrx::Graph &       graph,
         plan,
         ggml::hrx::ValueId(static_cast<int32_t>(graph.values().size() + plan.transients.size() +
                                                 plan.completion_counter_requests.size())),
-        &test_dispatch_registry(),
     };
     return test_dispatch_registry().match(context, match);
 }
@@ -10891,12 +10884,16 @@ static void run_qwen_weighted_reduce_next_rmsnorm_q8_publication_checks() {
             next_output_value->id, GGML_TYPE_Q8_1, qwen_q8_1_x4_size(token_count, kQwenMoeHiddenSize));
         REQUIRE((q8 != nullptr) == test.publishes_q8);
         if (test.publishes_q8) {
-            REQUIRE(weighted_match.metadata.activation_publication_diagnostics().size() == 1);
-            const auto & diagnostic = weighted_match.metadata.activation_publication_diagnostics().front();
-            REQUIRE(diagnostic.source_value == next_output_value->id);
-            REQUIRE(diagnostic.alternate_value == q8->alternate_value);
-            REQUIRE(diagnostic.publication_stage == "published");
-            REQUIRE(diagnostic.requested_format == "q8-1-x4");
+            const auto & alternates = weighted_match.metadata.alternate_values();
+            REQUIRE(std::count_if(alternates.begin(), alternates.end(), [&](const auto & alternate) {
+                        return alternate.graph_value == next_output_value->id;
+                    }) == 1);
+            const auto published = std::find_if(alternates.begin(), alternates.end(), [&](const auto & alternate) {
+                return alternate.graph_value == next_output_value->id;
+            });
+            REQUIRE(published != alternates.end());
+            REQUIRE(published->alternate_value == q8->alternate_value);
+            REQUIRE(published->type == GGML_TYPE_Q8_1);
         }
         ggml_free(ctx);
     }
