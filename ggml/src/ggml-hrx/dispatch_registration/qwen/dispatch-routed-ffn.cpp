@@ -2,6 +2,7 @@
 
 #include "dispatch-llm-shapes.h"
 #include "dispatch_registration/common/dispatch-mul-mat-weight-format.h"
+#include "dispatch_registration/common/dispatch-q8-publication.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -31,6 +32,8 @@ static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceF16F32Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_f16_f32");
 static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32");
+static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceNextRmsNormQ8_1X4Kernel =
+    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4");
 
 static constexpr const LlmMoeDispatchProfile & kRoutedFfnProfile                 = kActiveLlmMoeDispatchProfile;
 static constexpr int64_t                       kRoutedFfnInputSize               = kRoutedFfnProfile.hidden_size;
@@ -42,6 +45,7 @@ static constexpr const char *                  kRoutedFfnF16GateUpOutputName    
 static constexpr const char *                  kRoutedFfnF16RoutedDownOutputName = "qwen.moe.routed_down_f16";
 static constexpr const char *                  kRoutedFfnQ8GateUpOutputName      = "qwen.decode.moe.gate_up_swiglu_q8";
 static constexpr const char *                  kRoutedFfnQ8HiddenOutputName      = "qwen.decode.moe.hidden_q8";
+static constexpr const char *                  kRoutedFfnQ8NextRmsNormOutputName = "qwen.prefill.moe.next_rmsnorm_q8";
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -1207,10 +1211,31 @@ static bool match_routed_ffn_down_weighted_reduce_dispatch(const DispatchMatchCo
     }
     const bool use_next_rmsnorm = match.next_rmsnorm.matched() && match.output->kind == ValueKind::Transient &&
                                   residual_input_is_safe_for_in_place(context, match);
+    // The q8 producer writes the quantized next-projection input in place of the f32 normalized row,
+    // so it is only worth selecting when a projection will actually read q8 (engine #449).
+    const bool publish_q8 =
+        use_next_rmsnorm && common_has_qualified_q8_projection_consumer(context.graph, *match.next_rmsnorm.output);
+    ValueId    next_projection_input = use_next_rmsnorm ? match.next_rmsnorm.output->id : ValueId();
+    size_t     next_projection_bytes = use_next_rmsnorm ? match.next_rmsnorm.output->byte_count : 0;
+    if (publish_q8) {
+        next_projection_input = context.next_plan_value;
+        next_projection_bytes = q8_1_x4_byte_count(match.token_count, kRoutedFfnInputSize);
+        Status metadata_status;
+        if (!dispatch_match.metadata.append_alternate_value(
+                { match.next_rmsnorm.output->id, next_projection_input, GGML_TYPE_Q8_1, next_projection_bytes,
+                  kRoutedFfnQ8NextRmsNormOutputName },
+                metadata_status)) {
+            dispatch_match.status.append(metadata_status);
+            return false;
+        }
+        dispatch_match.transients.push_back(
+            { next_projection_input, kRoutedFfnQ8NextRmsNormOutputName, next_projection_bytes, kRoutedFfnPlanTransientAlignment });
+    }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(use_next_rmsnorm ? kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel :
-                                                                    kQwenRoutedDownWeightedReduceF16F32Kernel);
+    dispatch.kernel = make_kernel_specialization(publish_q8 ? kQwenRoutedDownWeightedReduceNextRmsNormQ8_1X4Kernel :
+                                                   use_next_rmsnorm ? kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel :
+                                                                      kQwenRoutedDownWeightedReduceF16F32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     add_routed_down_compile_parameters(dispatch, match.token_count);
     if (use_next_rmsnorm) {
@@ -1222,7 +1247,7 @@ static bool match_routed_ffn_down_weighted_reduce_dispatch(const DispatchMatchCo
         dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
         dispatch.bindings.push_back(
             { match.next_rmsnorm.norm_weight->id, 0, match.next_rmsnorm.norm_weight->byte_count });
-        dispatch.bindings.push_back({ match.next_rmsnorm.output->id, 0, match.next_rmsnorm.output->byte_count });
+        dispatch.bindings.push_back({ next_projection_input, 0, next_projection_bytes });
     } else {
         dispatch.bindings.push_back({ match.route_weights->id, 0, match.route_weights->byte_count });
         dispatch.bindings.push_back({ match.routed_alternate->alternate_value, 0, match.routed_alternate->byte_count });

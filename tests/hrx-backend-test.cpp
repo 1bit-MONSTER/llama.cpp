@@ -6495,7 +6495,14 @@ static void append_qwen_weighted_reduce_tail(ggml_context *            ctx,
         REQUIRE(reduced != nullptr);
     }
 
-    tensors.hidden_state = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenMoeHiddenSize, tensors.output->ne[2]);
+    ggml_tensor * residual_base =
+        ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenMoeHiddenSize, tensors.output->ne[2]);
+    REQUIRE(residual_base != nullptr);
+    // In a real layer the residual input is the previous layer's transient, so the fused
+    // reduce + next-RMSNorm kernel may accumulate into it. An external (graph input) residual keeps
+    // its storage (#95), which is the case the non-fused arm of these checks covers; make the
+    // source transient here so the fused arm is reachable.
+    tensors.hidden_state = include_next_rmsnorm ? ggml_dup(ctx, residual_base) : residual_base;
     REQUIRE(tensors.hidden_state != nullptr);
     tensors.residual = ggml_add(ctx, tensors.hidden_state, reduced);
     REQUIRE(tensors.residual != nullptr);
@@ -10656,12 +10663,17 @@ static void run_qwen_weighted_reduce_next_rmsnorm_q8_publication_checks() {
         const size_t             weighted_index = producer_index_for_tensor(imported.graph, tensors.weighted);
         ggml::hrx::DispatchMatch weighted_match;
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, weighted_index, weighted_match));
+        // The corpus serves these two with one kernel each: _q8_1_x4 writes the quantized
+        // next-projection input in place of the f32 row, so both forms carry five bindings
+        // (route weights, routed-down f16 alternate, updated hidden state, norm weight, published
+        // next-projection input); the pre-re-head _publish_q8 kernel carried a sixth buffer for a
+        // separate f32 copy, which the current kernel does not materialize.
         const char * expected_kernel =
             test.publishes_q8 ?
-                "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8" :
+                "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4" :
                 "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32";
         REQUIRE(kernel_name_for_id(weighted_match.dispatches.back().kernel.kernel_id) == expected_kernel);
-        REQUIRE(weighted_match.dispatches.back().bindings.size() == (test.publishes_q8 ? 6 : 5));
+        REQUIRE(weighted_match.dispatches.back().bindings.size() == 5);
 
         const ggml::hrx::Value * next_output_value = imported.graph.values().find_tensor(tensors.next_output);
         REQUIRE(next_output_value != nullptr);
@@ -11190,7 +11202,7 @@ int main() {
         { "tiled_matmul_alternate_publish", [] { run_tiled_matmul_alternate_publish_checks(); }, "#449" },
         { "rmsnorm_binary_f16_output", [] { run_rmsnorm_binary_f16_output_checks(); }, "#449" },
         { "qwen_decode_publication_consumer_qualification", [] { run_qwen_decode_publication_consumer_qualification_checks(); }, "#449" },
-        { "qwen_weighted_reduce_next_rmsnorm_q8_publication", [] { run_qwen_weighted_reduce_next_rmsnorm_q8_publication_checks(); }, "#449" },
+        { "qwen_weighted_reduce_next_rmsnorm_q8_publication", [] { run_qwen_weighted_reduce_next_rmsnorm_q8_publication_checks(); } },
         { "symmetric_i4_consumer_qualification", [] { run_symmetric_i4_consumer_qualification_checks(); }, "#450" },    };
     int failed = run_cases("host", host_cases);
 
