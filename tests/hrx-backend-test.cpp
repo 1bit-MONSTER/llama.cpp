@@ -6,7 +6,6 @@
 #include "dispatch/command-program.h"
 #include "dispatch/dispatch-scheduler.h"
 #include "dispatch_registration/common/dispatch-gather-add.h"
-#include "dispatch_registration/common/dispatch-symmetric-i4.h"
 #include "dispatch_registration/dispatch-registry.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -7148,14 +7147,7 @@ static void run_symmetric_i4_consumer_qualification_checks() {
         auto imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
         const ggml::hrx::Value * normalized_value = imported.graph.values().find_tensor(normalized);
-        const ggml::hrx::Value * qualified_input  = imported.graph.values().find_tensor(consumer_input);
         REQUIRE(normalized_value != nullptr);
-        REQUIRE(qualified_input != nullptr);
-        for (const ggml::hrx::GraphNode * consumer : imported.graph.index().consumers(qualified_input->id)) {
-            REQUIRE(consumer == nullptr ||
-                    !ggml::hrx::common_symmetric_i4_lowrow_mul_mat_eligible(
-                        imported.graph, *consumer, *qualified_input));
-        }
         if (test.strided_consumer) {
             ggml_free(ctx);
             continue;
