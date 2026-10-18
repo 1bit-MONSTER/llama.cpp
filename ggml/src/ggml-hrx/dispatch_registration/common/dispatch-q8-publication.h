@@ -79,4 +79,59 @@ inline bool common_has_qualified_q8_projection_consumer(const Graph & graph, con
     return false;
 }
 
+// Routed-MoE qualification. A routed gate/up projection can consume the q8 hidden only when the whole
+// routed FFN around it is the fused shape: the same route ids feed the down projection through the
+// GLU, with the profile's expert geometry. A different route tensor (or a different route count) means
+// the chain will not fuse, so publishing q8 there would quantize a value nobody reads.
+struct CommonQ8RoutedProfile {
+    int64_t expert_hidden_size = 0;
+    int64_t expert_count       = 0;
+    int64_t route_count        = 0;
+};
+
+inline bool common_q8_consumer_is_qualified_routed_projection(const Graph &                  graph,
+                                                              const GraphNode &              consumer,
+                                                              const Value &                  activation,
+                                                              const CommonQ8RoutedProfile &  profile) {
+    if (consumer.op != GGML_OP_MUL_MAT_ID || consumer.inputs.size() != 3 || consumer.inputs[1] != activation.id ||
+        profile.expert_hidden_size <= 0 || profile.expert_count <= 0 || profile.route_count <= 0) {
+        return false;
+    }
+    const Value * gate_weight = graph.values().find(consumer.inputs[0]);
+    const Value * route_ids   = graph.values().find(consumer.inputs[2]);
+    const Value * gate_output = graph.values().find(consumer.output);
+    if (gate_weight == nullptr || route_ids == nullptr || gate_output == nullptr || !graph.has_index() ||
+        route_ids->type != GGML_TYPE_I32 || route_ids->ne[0] != profile.route_count ||
+        route_ids->ne[1] != activation.ne[1] || route_ids->ne[2] != 1 || route_ids->ne[3] != 1) {
+        return false;
+    }
+    if ((gate_weight->type != GGML_TYPE_Q4_K && gate_weight->type != GGML_TYPE_Q6_K) ||
+        gate_weight->ne[0] != activation.ne[0] || gate_weight->ne[1] != profile.expert_hidden_size ||
+        gate_weight->ne[2] != profile.expert_count || gate_weight->ne[3] != 1) {
+        return false;
+    }
+    for (const GraphNode * glu : graph.index().consumers(gate_output->id)) {
+        if (glu == nullptr || glu->op != GGML_OP_GLU || glu->inputs.size() != 2 ||
+            (glu->inputs[0] != gate_output->id && glu->inputs[1] != gate_output->id)) {
+            continue;
+        }
+        const Value * glu_output = graph.values().find(glu->output);
+        if (glu_output == nullptr || glu_output->type != GGML_TYPE_F32) {
+            continue;
+        }
+        for (const GraphNode * down : graph.index().consumers(glu_output->id)) {
+            if (down == nullptr || down->op != GGML_OP_MUL_MAT_ID || down->inputs.size() != 3 ||
+                down->inputs[1] != glu_output->id || down->inputs[2] != route_ids->id) {
+                continue;
+            }
+            const Value * down_weight = graph.values().find(down->inputs[0]);
+            if (down_weight != nullptr && down_weight->ne[0] == profile.expert_hidden_size &&
+                down_weight->ne[2] == profile.expert_count) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 }  // namespace ggml::hrx

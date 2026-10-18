@@ -1,6 +1,7 @@
 #include "dispatch-qwen-rmsnorm.h"
 
 #include "dispatch-llm-profiles.h"
+#include "dispatch_registration/common/dispatch-q8-publication.h"
 #include "ggml.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
@@ -46,12 +47,24 @@ static bool is_supported_token_count(int64_t token_count) {
     return is_llm_supported_query_length(kQwen30BMoeDispatchProfile, token_count);
 }
 
-static bool has_decode_q8_consumer(const Graph & graph, ValueId value) {
+// Publication is consumer-driven (engine #449): the value may only be quantized when a projection
+// will read the Q8_1 x4 alternate. "Any matmul consumes it" is too weak - a BF16 projection, a
+// transposed operand or an unqualified route tensor would never read the alternate, so the quantize
+// work and its buffer would be pure waste.
+static bool has_qualified_q8_consumer(const Graph & graph, const Value & value) {
     if (!graph.has_index()) {
         return false;
     }
-    for (const GraphNode * consumer : graph.index().consumers(value)) {
-        if (consumer != nullptr && (consumer->op == GGML_OP_MUL_MAT || consumer->op == GGML_OP_MUL_MAT_ID)) {
+    if (common_has_qualified_q8_projection_consumer(graph, value)) {
+        return true;
+    }
+    const CommonQ8RoutedProfile profile = {
+        kQwen30BMoeDispatchProfile.expert_hidden_size,
+        kQwen30BMoeDispatchProfile.expert_count,
+        kQwen30BMoeDispatchProfile.route_count,
+    };
+    for (const GraphNode * consumer : graph.index().consumers(value.id)) {
+        if (consumer != nullptr && common_q8_consumer_is_qualified_routed_projection(graph, *consumer, value, profile)) {
             return true;
         }
     }
@@ -330,7 +343,7 @@ static bool match_qwen_decode_rmsnorm_f32_quantize_q8_1_x4_dispatch(const Dispat
         context.covered_nodes[rms_match.mul_node_index]) {
         return false;
     }
-    if (!has_decode_q8_consumer(context.graph, rms_match.output->id)) {
+    if (!has_qualified_q8_consumer(context.graph, *rms_match.output)) {
         return false;
     }
 
