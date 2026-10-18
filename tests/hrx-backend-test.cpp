@@ -3490,10 +3490,10 @@ static void run_qwen_token_embedding_dispatch_checks() {
         manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_Q5_1, GGML_TYPE_I32, GGML_TYPE_F32, 640, 262144, 1));
     REQUIRE(manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_IQ4_XS, GGML_TYPE_I32, GGML_TYPE_F32, 2048, 151936,
                                                       1));
-    REQUIRE(!manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_IQ3_S, GGML_TYPE_I32, GGML_TYPE_F32, 2048, 151936,
-                                                       1));
-    REQUIRE(!manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_IQ4_NL, GGML_TYPE_I32, GGML_TYPE_F32, 2048,
-                                                       151936, 1));
+    REQUIRE(manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_IQ3_S, GGML_TYPE_I32, GGML_TYPE_F32, 2048, 151936,
+                                                      1));
+    REQUIRE(manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_IQ4_NL, GGML_TYPE_I32, GGML_TYPE_F32, 2048,
+                                                      151936, 1));
     REQUIRE(
         manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_Q8_0, GGML_TYPE_I32, GGML_TYPE_F32, 2048, 151936, 1));
     REQUIRE(

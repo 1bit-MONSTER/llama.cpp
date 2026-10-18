@@ -226,6 +226,8 @@ static std::map<std::string, std::string> flash_attention_config(const char * qu
         { "ggml.flash_attention.key_value_head_count", key_value_head_count },
         { "ggml.flash_attention.qk_head_size",         head_size            },
         { "ggml.flash_attention.value_head_size",      head_size            },
+        { "ggml.flash_attention.value_stride",
+          std::to_string(std::stoll(key_value_head_count) * std::stoll(head_size)) },
         { "ggml.flash_attention.attention_scale",      attention_scale      },
         { "ggml.flash_attention.apply_gate",           "0"                  },
         { "ggml.flash_attention.gate_stride_head",     "1"                  },
