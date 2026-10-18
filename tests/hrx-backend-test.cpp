@@ -4511,10 +4511,13 @@ static void run_qwen_token_embedding_dispatch_checks() {
         manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_Q5_1, GGML_TYPE_I32, GGML_TYPE_F32, 640, 262144, 1));
     REQUIRE(manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_IQ4_XS, GGML_TYPE_I32, GGML_TYPE_F32, 2048, 151936,
                                                       1));
-    REQUIRE(!manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_IQ3_S, GGML_TYPE_I32, GGML_TYPE_F32, 2048, 151936,
-                                                       1));
-    REQUIRE(!manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_IQ4_NL, GGML_TYPE_I32, GGML_TYPE_F32, 2048,
-                                                       151936, 1));
+    // #445 row qwen_token_embedding_dispatch (ACCEPT): IQ3_S and IQ4_NL manual token-embedding
+    // graphs are claimed now (they run as the same get_rows + matmul the supported types use) where
+    // the pre-re-head dispatcher refused them.
+    REQUIRE(
+        manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_IQ3_S, GGML_TYPE_I32, GGML_TYPE_F32, 2048, 151936, 1));
+    REQUIRE(
+        manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_IQ4_NL, GGML_TYPE_I32, GGML_TYPE_F32, 2048, 151936, 1));
     REQUIRE(
         manual_token_embedding_graph_is_supported(ctx, GGML_TYPE_Q8_0, GGML_TYPE_I32, GGML_TYPE_F32, 2048, 151936, 1));
     REQUIRE(
@@ -6509,7 +6512,10 @@ static void run_swiglu_q8_output_checks() {
             return kernel_name_for_id(dispatch.kernel.kernel_id) ==
                    "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot_q8_output";
         });
-        REQUIRE((producer != plan.dispatches.end()) == test.packed);
+        // #445 row swiglu_q8_output (ACCEPT): the q8-output publish kernel went with f2099e9b. The shape
+        // is AMD's kquant swiglu decode feeding the kquant matmul decode, which reads f32, so there is
+        // no alternate and the packed assertions below have nothing to bind to.
+        REQUIRE(producer == plan.dispatches.end());
         if (test.outputs > 32768) {
             REQUIRE(!scheduled);
             REQUIRE(status_contains(plan.status, "unsupported HRX node"));
@@ -6520,7 +6526,7 @@ static void run_swiglu_q8_output_checks() {
         REQUIRE(plan.valid());
         const auto * output = imported.graph.values().find_tensor(glu);
         REQUIRE(output != nullptr);
-        if (test.packed) {
+        if (test.packed && producer != plan.dispatches.end()) {
             const size_t bytes = static_cast<size_t>(test.tokens) * ggml_row_size(GGML_TYPE_Q8_1, test.outputs);
             const auto * alternate = plan.metadata.find_alternate_value(output->id, GGML_TYPE_Q8_1, bytes);
             REQUIRE(alternate != nullptr);
@@ -7064,13 +7070,13 @@ static void run_rmsnorm_gate_q8_output_checks() {
         const auto & plan = scheduler.plan();
         REQUIRE(plan.valid());
         const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
-            const auto publish_q8 = dispatch.kernel.compile_parameters.find("ggml.rmsnorm_gate_f32.publish_q8");
-            return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_rmsnorm_gate_f32_publish" &&
-                   publish_q8 != dispatch.kernel.compile_parameters.end() && publish_q8->second == "1";
+            // #445 row rmsnorm_gate_q8_output (ACCEPT): publication still happens, through AMD's
+            // ggml_rmsnorm_gate_f32_q8_1_x4 instead of our ggml_rmsnorm_gate_f32_publish; the q8
+            // selector is in the kernel's name now, not in a publish_q8 compile parameter.
+            return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_rmsnorm_gate_f32_q8_1_x4";
         });
         REQUIRE((producer != plan.dispatches.end()) == test.q8);
         if (test.q8) {
-            require_compile_parameter(*producer, "ggml.rmsnorm_gate_f32.publish_q8", "1");
             const auto * output = imported.graph.values().find_tensor(gated);
             REQUIRE(output != nullptr);
             const size_t bytes = static_cast<size_t>(test.tokens) * ggml_row_size(GGML_TYPE_Q8_1, test.channels);
@@ -7539,8 +7545,11 @@ static void run_gdn_native_projection_pair_dispatch_checks() {
         });
         REQUIRE((epilogue != plan.dispatches.end()) == (test.tokens > 16));
         if (epilogue != plan.dispatches.end()) {
-            REQUIRE(epilogue->kernel.integer_parameters.at("element_count") == test.heads * test.tokens);
-            REQUIRE(epilogue->kernel.compile_parameters.count("llm.gated_delta_net.epilogue_element_count") == 0);
+            // #445 row gdn_native_projection_pair_dispatch (ACCEPT): the epilogue's element count is a
+            // compile parameter now (dispatch-gated-delta-net.cpp sets
+            // llm.gated_delta_net.epilogue_element_count); the integer parameter is gone.
+            require_compile_parameter(*epilogue, "llm.gated_delta_net.epilogue_element_count",
+                                      std::to_string(test.heads * test.tokens));
         }
         const auto commands =
             ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
@@ -8841,29 +8850,22 @@ static void run_iq2_codebook_resource_reuse_checks() {
         REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
         REQUIRE(scheduler.plan().valid());
         REQUIRE(scheduler.plan().dispatches.size() == 2);
-        REQUIRE(scheduler.plan().constant_initializations.size() == 1);
-        REQUIRE(scheduler.plan().transients.size() == 1);
-
-        const char * expected_key =
-            type == GGML_TYPE_IQ2_XXS ? "common.iq2_xxs.grid.v1" : "common.iq2_xs.grid.v1";
-        const ggml::hrx::CommandPlanConstantInitialization & initialization =
-            scheduler.plan().constant_initializations.front();
-        REQUIRE(initialization.name == expected_key);
-        REQUIRE(scheduler.plan().transients.front().name == expected_key);
-        REQUIRE(scheduler.plan().transients.front().value == initialization.value);
+        // #445 row iq2_codebook_resource_reuse (ACCEPT): the IQ2 codebook path was replaced by AMD's
+        // generic kquant decode (loom-libs/ops/kquant_decode_f32.loom), which carries no codebook
+        // tables, so there is no constant initialization and no transient grid to reuse.
+        REQUIRE(scheduler.plan().constant_initializations.empty());
+        REQUIRE(scheduler.plan().transients.empty());
         REQUIRE(std::count_if(scheduler.plan().dispatches.begin(), scheduler.plan().dispatches.end(),
-                              [&](const ggml::hrx::Dispatch & dispatch) {
-                                  return std::any_of(dispatch.bindings.begin(), dispatch.bindings.end(),
-                                                     [&](const ggml::hrx::DispatchBinding & binding) {
-                                                         return binding.value == initialization.value;
-                                                     });
-                              }) == 2);
+                              [](const ggml::hrx::Dispatch & dispatch) {
+                                  return kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                                         "loom_libs:ggml_kquant_mul_mat_decode_f32";
+                              }) == 1);
 
         const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
             imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
         REQUIRE(commands.valid());
         REQUIRE(command_program_verifies(commands));
-        REQUIRE(commands.constant_initializations.size() == 1);
+        REQUIRE(commands.constant_initializations.empty());
         ggml_free(ctx);
     }
 }
