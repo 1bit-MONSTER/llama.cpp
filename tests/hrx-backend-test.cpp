@@ -11202,7 +11202,7 @@ int main() {
         { "tiled_matmul_alternate_publish", [] { run_tiled_matmul_alternate_publish_checks(); }, "#449" },
         { "rmsnorm_binary_f16_output", [] { run_rmsnorm_binary_f16_output_checks(); }, "#449" },
         { "qwen_decode_publication_consumer_qualification", [] { run_qwen_decode_publication_consumer_qualification_checks(); }, "#449" },
-        { "qwen_weighted_reduce_next_rmsnorm_q8_publication", [] { run_qwen_weighted_reduce_next_rmsnorm_q8_publication_checks(); }, "#449" },
+        { "qwen_weighted_reduce_next_rmsnorm_q8_publication", [] { run_qwen_weighted_reduce_next_rmsnorm_q8_publication_checks(); } },
         { "symmetric_i4_consumer_qualification", [] { run_symmetric_i4_consumer_qualification_checks(); }, "#450" },    };
     int failed = run_cases("host", host_cases);
 
