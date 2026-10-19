@@ -10674,6 +10674,15 @@ static void run_qwen_weighted_reduce_next_rmsnorm_q8_publication_checks() {
                 "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32";
         REQUIRE(kernel_name_for_id(weighted_match.dispatches.back().kernel.kernel_id) == expected_kernel);
         REQUIRE(weighted_match.dispatches.back().bindings.size() == 5);
+        // Both forms update the hidden state in place and write the next-projection input. A
+        // read-only declaration here fails the command program with "reads transient value ...
+        // before write" on every 2..8-token batch that selects the q8 form.
+        const ggml::hrx::KernelResolveResult weighted_kernel = ggml::hrx::resolve_kernel_definition(
+            ggml::hrx::get_qwen_kernel_corpus(), "gfx1151", weighted_match.dispatches.back().kernel.kernel_id);
+        REQUIRE(weighted_kernel.found());
+        REQUIRE(weighted_kernel.definition->bindings.size() == 5);
+        REQUIRE(weighted_kernel.definition->bindings[2].access == ggml::hrx::ResourceAccess::ReadWrite);
+        REQUIRE(weighted_kernel.definition->bindings[4].access == ggml::hrx::ResourceAccess::Write);
 
         const ggml::hrx::Value * next_output_value = imported.graph.values().find_tensor(tensors.next_output);
         REQUIRE(next_output_value != nullptr);
