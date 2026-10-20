@@ -253,7 +253,10 @@ kernel.def target(@ggml_rmsnorm_binary_gfx11_wave32) export("ggml_rmsnorm_binary
     %result3 = vector.insert %out3 into %result2[%c3] : f32, vector<4xf32>
     vector.store %result3, %output_view[%token, %channel] : vector<4xf32>, view<[%token_count]x[%hidden]xf32>
     %packed_column = index.div %channel, %c16 : index
-    %packed_lane = index.rem %channel, %c16 : index
+    %packed_lane0 = index.rem %channel, %c16 : index
+    // as above: a 4-wide store into an axis of 16 needs the lane pinned to a multiple of 4 for the
+    // footprint proof, and %channel steps by 4 from a multiple of 4 here
+    %packed_lane = index.assume %packed_lane0 [range(%packed_lane0, 0, 16), multiple_of(%packed_lane0, 4)] : index
     %half = vector.fptrunc %result3 : vector<4xf32> to vector<4xf16>
     vector.store %half, %packed_view[%packed_column, %token, %packed_lane] : vector<4xf16>, view<[%packed_columns]x[%token_count]x16xf16>
     %fence_pos = index.rem %pair, %c4 : index
@@ -857,7 +860,12 @@ template.def<@ggml.rmsnorm_gate_f32.publish_body> device @ggml_rmsnorm_gate_f32_
           %packed_row = index.div %flat, %row_width : index
           %packed_channel = index.rem %flat, %row_width : index
           %packed_column = index.div %packed_channel, %c16 : index
-          %packed_lane = index.rem %packed_channel, %c16 : index
+          %packed_lane0 = index.rem %packed_channel, %c16 : index
+          // The store is four f16 wide into an axis of 16. Both %row_width and %hidden are multiples of 128
+          // and %bounded_channel is a multiple of 4, so the residue is a multiple of 4: say so, or the
+          // full-vector footprint is unproven on this axis and the JIT refuses the specialization
+          // (SUBRANGE/010 at token_count 24576, the 27B MTP head's 8K prompt, census gap 8).
+          %packed_lane = index.assume %packed_lane0 [range(%packed_lane0, 0, 16), multiple_of(%packed_lane0, 4)] : index
           vector.store %out_half, %packed_view[%packed_column, %packed_row, %packed_lane] : vector<4xf16>, view<[%packed_columns]x[%packed_rows]x16xf16>
         } else {
           vector.store %out_half, %hv[%row, %bounded_channel] : vector<4xf16>, view<[%bounded_token_count]x[%hidden]xf16>
