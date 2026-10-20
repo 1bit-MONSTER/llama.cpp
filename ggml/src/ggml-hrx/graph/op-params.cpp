@@ -299,6 +299,7 @@ OpParams import_op_params(const ggml_tensor & tensor) {
                 ggml_get_op_params_i32(&tensor, 2), ggml_get_op_params_i32(&tensor, 3),
                 ggml_get_op_params_i32(&tensor, 4), ggml_get_op_params_i32(&tensor, 5),
                 ggml_get_op_params_i32(&tensor, 6), ggml_get_op_params_i32(&tensor, 7),
+                ggml_get_op_params_i32(&tensor, 8),
             };
         case GGML_OP_ROPE:
             return RopeParams{
@@ -327,7 +328,8 @@ namespace {
 
 bool pad_params_equivalent(const PadParams & lhs, const PadParams & rhs) {
     return lhs.lp0 == rhs.lp0 && lhs.rp0 == rhs.rp0 && lhs.lp1 == rhs.lp1 && lhs.rp1 == rhs.rp1 &&
-           lhs.lp2 == rhs.lp2 && lhs.rp2 == rhs.rp2 && lhs.lp3 == rhs.lp3 && lhs.rp3 == rhs.rp3;
+           lhs.lp2 == rhs.lp2 && lhs.rp2 == rhs.rp2 && lhs.lp3 == rhs.lp3 && lhs.rp3 == rhs.rp3 &&
+           lhs.circular == rhs.circular;
 }
 
 }  // namespace
