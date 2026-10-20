@@ -6,6 +6,7 @@
 #include "dispatch-rope-utils.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
+#include "hip/hip-dispatches.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cmath>
@@ -256,7 +257,7 @@ struct SetRowsMatch {
     const Value *     output          = nullptr;
     size_t            rows_span_bytes = 0;
     int64_t           input_stride    = 0;
-    int64_t           row_format      = 0;
+    int64_t           row_format      = 0;  // 0: a format outside the table, for the add-on hook
     int64_t           output_format   = 0;
     int64_t           token_count     = 0;
     int64_t           cache_row_count = 0;
@@ -386,11 +387,15 @@ static SetRowsMatch match_set_rows_2d(const Graph & graph,
 
     int64_t row_format    = 0;
     int64_t output_format = 0;
-    if (!format_value(rows->type, row_format) || !format_value(output->type, output_format)) {
-        log_set_rows_reject(status, "input or output format is unsupported", rows, indices, cache, output);
-        return {};
-    }
-    if (rows->type == GGML_TYPE_F16 && output->type != GGML_TYPE_F16) {
+    const bool known_formats = format_value(rows->type, row_format) && format_value(output->type, output_format);
+    if (!known_formats) {
+        // A quantized KV cache (q8_0) is not in the public format table: the HIP add-on's SET_ROWS hook takes
+        // it. Without such an add-on the node stays unmatched, as before.
+        if (!hip_set_rows_hook_installed() || rows->type != GGML_TYPE_F32 || output->type != GGML_TYPE_Q8_0) {
+            log_set_rows_reject(status, "input or output format is unsupported", rows, indices, cache, output);
+            return {};
+        }
+    } else if (rows->type == GGML_TYPE_F16 && output->type != GGML_TYPE_F16) {
         log_set_rows_reject(status, "f16 input requires f16 output", rows, indices, cache, output);
         return {};
     }
@@ -674,6 +679,19 @@ static bool match_set_rows_dispatch(const DispatchMatchContext & context, Dispat
         match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status, kUbatchMaxTokens);
     if (!match.matched()) {
         return false;
+    }
+
+    if (match.row_format == 0) {
+        Dispatch dispatch;
+        const HipSetRowsArgs args = { match.rows,       match.indices, match.cache,
+                                      match.output,     match.rows_span_bytes, match.input_stride,
+                                      match.hidden_size, match.token_count, match.cache_row_count };
+        if (!hip_set_rows_dispatch(args, dispatch)) {
+            return false;
+        }
+        dispatch_match.covered_nodes.push_back(context.root_index);
+        dispatch_match.dispatches.push_back(std::move(dispatch));
+        return true;
     }
 
     dispatch_match.covered_nodes.push_back(context.root_index);
