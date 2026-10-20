@@ -55,4 +55,27 @@ using HipAttentionSinkHook = bool (*)(const HipAttentionSinkArgs & args, Dispatc
 void set_hip_attention_sink_hook(HipAttentionSinkHook hook);
 bool hip_attention_sink_dispatch(const HipAttentionSinkArgs & args, Dispatch & dispatch);
 
+// SET_ROWS write hook. dispatch-rope-set-rows.cpp matches F16/F32 rows and caches itself; a cache format
+// outside that table (q8_0: the quantized KV cache) is offered to this hook, which has already checked the
+// node (rows [hidden][tokens] f32 or as the matcher allows, indices contiguous I64, cache contiguous and the
+// same storage as the in-place output). A hook that returns true has filled dispatch and replaces the Loom
+// kernel; false leaves the node unmatched, as before.
+struct HipSetRowsArgs {
+    const Value * rows;
+    const Value * indices;
+    const Value * cache;
+    const Value * output;
+    size_t        rows_span_bytes;
+    int64_t       rows_stride;
+    int64_t       hidden_size;
+    int64_t       token_count;
+    int64_t       cache_row_count;
+};
+// A hook may append several dispatches (one per batch slice of a 4-D SET_ROWS) and the nodes it covers;
+// the caller has already checked the format, the in-place storage contract and the contiguity.
+using HipSetRowsHook = bool (*)(const HipSetRowsArgs & args, DispatchMatch & match);
+void set_hip_set_rows_hook(HipSetRowsHook hook);
+bool hip_set_rows_dispatch(const HipSetRowsArgs & args, DispatchMatch & match);
+bool hip_set_rows_hook_installed();
+
 }  // namespace ggml::hrx

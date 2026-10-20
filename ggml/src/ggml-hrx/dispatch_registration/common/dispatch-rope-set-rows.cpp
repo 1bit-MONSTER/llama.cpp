@@ -6,6 +6,7 @@
 #include "dispatch-rope-utils.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
+#include "hip/hip-dispatches.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cmath>
@@ -256,7 +257,7 @@ struct SetRowsMatch {
     const Value *     output          = nullptr;
     size_t            rows_span_bytes = 0;
     int64_t           input_stride    = 0;
-    int64_t           row_format      = 0;
+    int64_t           row_format      = 0;  // 0: a format outside the table, for the add-on hook
     int64_t           output_format   = 0;
     int64_t           token_count     = 0;
     int64_t           cache_row_count = 0;
@@ -387,6 +388,7 @@ static SetRowsMatch match_set_rows_2d(const Graph & graph,
     int64_t row_format    = 0;
     int64_t output_format = 0;
     if (!format_value(rows->type, row_format) || !format_value(output->type, output_format)) {
+        // a quantized cache is the HIP add-on's business (match_set_rows_addon, before this matcher)
         log_set_rows_reject(status, "input or output format is unsupported", rows, indices, cache, output);
         return {};
     }
@@ -669,7 +671,46 @@ static bool match_set_rows_scatter_dispatch(const DispatchMatchContext & context
     return true;
 }
 
+// A cache format outside the public table (q8_0: the quantized KV cache) goes to the HIP add-on's hook, which
+// owns the shape contract too: test-backend-ops' SET_ROWS cases are 4-D and batched over dims 2 and 3, while
+// llama.cpp's KV writes are 2-D, and the hook emits one dispatch per batch slice. Without an add-on nothing
+// reaches this point and the node stays unmatched, exactly as before.
+static bool match_set_rows_addon(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->inputs.size() != 3 ||
+        !hip_set_rows_hook_installed()) {
+        return false;
+    }
+    const Value * rows    = graph_value(context.graph, node->inputs[0]);
+    const Value * indices = graph_value(context.graph, node->inputs[1]);
+    const Value * cache   = graph_value(context.graph, node->inputs[2]);
+    const Value * output  = graph_value(context.graph, node->output);
+    if (rows == nullptr || indices == nullptr || cache == nullptr || output == nullptr || !cache->contiguous ||
+        !same_shape(*cache, *output) || !context.graph.values().same_storage(cache->id, output->id) ||
+        output->type != GGML_TYPE_Q8_0 || rows->type != GGML_TYPE_F32 ||
+        (indices->type != GGML_TYPE_I64 && indices->type != GGML_TYPE_I32) || rows->nb[0] != sizeof(float)) {
+        return false;
+    }
+    const HipSetRowsArgs args = { rows,
+                                  indices,
+                                  cache,
+                                  output,
+                                  rows->byte_count,
+                                  static_cast<int64_t>(rows->nb[1] / sizeof(float)),
+                                  rows->ne[0],
+                                  rows->ne[1],
+                                  cache->ne[1] };
+    if (!hip_set_rows_dispatch(args, dispatch_match)) {
+        return false;
+    }
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    return true;
+}
+
 static bool match_set_rows_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    if (match_set_rows_addon(context, dispatch_match)) {
+        return true;
+    }
     const SetRowsMatch match =
         match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status, kUbatchMaxTokens);
     if (!match.matched()) {

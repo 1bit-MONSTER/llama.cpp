@@ -19,6 +19,7 @@ namespace ggml::hrx {
 namespace {
 
 HipAttentionSinkHook g_attention_sink_hook = nullptr;
+HipSetRowsHook g_set_rows_hook = nullptr;
 
 }  // namespace
 
@@ -35,6 +36,18 @@ void set_hip_attention_sink_hook(HipAttentionSinkHook hook) {
 
 bool hip_attention_sink_dispatch(const HipAttentionSinkArgs & args, Dispatch & dispatch) {
     return g_attention_sink_hook != nullptr && g_attention_sink_hook(args, dispatch);
+}
+
+void set_hip_set_rows_hook(HipSetRowsHook hook) {
+    g_set_rows_hook = hook;
+}
+
+bool hip_set_rows_hook_installed() {
+    return g_set_rows_hook != nullptr;
+}
+
+bool hip_set_rows_dispatch(const HipSetRowsArgs & args, DispatchMatch & match) {
+    return g_set_rows_hook != nullptr && g_set_rows_hook(args, match);
 }
 
 }  // namespace ggml::hrx
