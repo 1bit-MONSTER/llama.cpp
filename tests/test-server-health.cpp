@@ -17,6 +17,7 @@
 // model: the decision and the environment parser are pure.
 
 #include "server-health.h"
+#include "server-device-lost.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -61,6 +62,18 @@ int main() {
 
     // the environment reader is memoised; whatever the process has, it agrees with the parser
     REQUIRE(server_health::stall_us_from_env() == server_health::stall_us_from_env());
+
+    // a lost GPU (server-device-lost.h): the lines ggml-hrx and Vulkan print, and nothing else
+    REQUIRE(server_device_lost::line_says_lost("hrx: dispatch failed: DATA_LOSS; AMDGPU hardware exception\n"));
+    REQUIRE(server_device_lost::line_says_lost("vk::Queue::submit: ErrorDeviceLost"));
+    REQUIRE(server_device_lost::line_says_lost("VK_ERROR_DEVICE_LOST"));
+    REQUIRE(!server_device_lost::line_says_lost("slot update_slots: id  0 | task 1 | prompt done\n"));
+    REQUIRE(!server_device_lost::line_says_lost("compute error\n"));
+    REQUIRE(!server_device_lost::line_says_lost(nullptr));
+    // on unless "0"
+    REQUIRE(server_device_lost::enabled(nullptr));
+    REQUIRE(server_device_lost::enabled("1"));
+    REQUIRE(!server_device_lost::enabled("0"));
 
     std::printf("test-server-health: all checks passed\n");
     return 0;

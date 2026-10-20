@@ -338,7 +338,8 @@ if (TARGET gguf-model-data)
 endif()
 
 # the stall-aware /health decision: pure, no server and no model
-add_executable(test-server-health test-server-health.cpp ../tools/server/server-health.cpp)
+add_executable(test-server-health test-server-health.cpp ../tools/server/server-health.cpp ../tools/server/server-device-lost.cpp)
+target_link_libraries(test-server-health PRIVATE ggml)
 target_include_directories(test-server-health PRIVATE ../tools/server)
 add_test(NAME test-server-health COMMAND test-server-health)
 

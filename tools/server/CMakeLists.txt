@@ -13,6 +13,7 @@ add_library(${TARGET} STATIC
     server-queue.h
     server-common.cpp
     server-health.cpp
+    server-device-lost.cpp
     server-common.h
     server-context.cpp
     server-context.h

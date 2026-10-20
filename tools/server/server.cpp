@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "server-device-lost.h"
 #include "server-http.h"
 #include "server-models.h"
 #include "server-cors-proxy.h"
@@ -97,6 +98,7 @@ int llama_server(int argc, char ** argv) {
     common_params params;
 
     common_init();
+    server_device_lost::install();  // exit on a lost GPU (server-device-lost.h)
 
     // start the stream session manager GC right after common init, before any HTTP route can
     // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
