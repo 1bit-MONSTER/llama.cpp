@@ -17,6 +17,7 @@
 
 #include "backend-context.h"
 #include "ggml-impl.h"
+#include "graph-program-budget.h"
 #include "runtime/hrx-sleeping-wait.h"
 
 #include <atomic>
@@ -38,12 +39,16 @@ size_t graph_program_cache_limit() {
 }
 
 bool trim_graph_programs(ggml_backend_hrx_context & context, GraphProgram * current, uint64_t builds_before) {
-    const size_t limit = graph_program_cache_limit();
-    if (limit == 0 || current == nullptr || context.graph_programs.stats().builds == builds_before) {
+    const size_t max_programs = graph_program_cache_limit();
+    const size_t budget       = graph_program_cache_budget_bytes();
+    if (current == nullptr || context.graph_programs.stats().builds == builds_before) {
         return true;
     }
-    const size_t held = context.graph_programs.size();
-    if (held <= limit) {
+    // A program's transient arena stays alive while it is cached, about 1 GiB for a large prefill
+    // shape, so the count alone does not bound the GTT: evict least recently used programs until both
+    // the count and the byte budget hold, never the program being executed.
+    const std::vector<uint64_t> victims = context.graph_programs.plan_evictions(budget, max_programs, current);
+    if (victims.empty()) {
         return true;
     }
     static thread_local WaitHistory history;
@@ -54,13 +59,17 @@ bool trim_graph_programs(ggml_backend_hrx_context & context, GraphProgram * curr
         return false;
     }
     context.graph_replay_state.mark_stream_synchronized();
-    context.graph_programs.retain_only(current);
+    const size_t held_before   = context.graph_programs.size();
+    const size_t bytes_before  = context.graph_programs.bytes();
+    context.graph_programs.evict(victims);
     context.prepared_programs.clear();
-    // one line per flush: it should come every `limit` new shapes, never during steady decode
-    static std::atomic<uint64_t> flushes{ 0 };
-    GGML_LOG_WARN("%s: HRX graph program cache over its limit (%zu programs, limit %zu): kept the current one, "
-                  "flush %llu\n",
-                  __func__, held, limit, static_cast<unsigned long long>(++flushes));
+    // one line per trim: it should come when a new shape pushes the cache over, not during steady
+    // decode that reuses the programs already there
+    static std::atomic<uint64_t> trims{ 0 };
+    GGML_LOG_WARN("%s: HRX graph program cache trimmed (%zu of %zu programs, %zu -> %zu MiB of arenas, budget "
+                  "%zu MiB, %zu max): kept the current one, trim %llu\n",
+                  __func__, victims.size(), held_before, bytes_before >> 20, context.graph_programs.bytes() >> 20,
+                  budget >> 20, max_programs, static_cast<unsigned long long>(++trims));
     return true;
 }
 
