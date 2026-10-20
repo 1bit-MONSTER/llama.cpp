@@ -81,6 +81,15 @@ inline bool fused_context_fed_by_op(const ggml_tensor * op) {
     return false;
 }
 
+// q or k of a gated delta net: produced by an op, and when that op is the L2_NORM, its input too
+inline bool fused_context_gdn_qk_from_op(const ggml_tensor * tensor) {
+    const ggml_tensor * root = fused_context_root(tensor);
+    if (root == nullptr || root->op == GGML_OP_NONE) {
+        return false;
+    }
+    return root->op != GGML_OP_L2_NORM || fused_context_producer_op(root->src[0]) != GGML_OP_NONE;
+}
+
 // true when llama.cpp named the tensor `base` or `base-<layer>`
 inline bool fused_context_named(const ggml_tensor * op, const char * base) {
     const size_t length = std::strlen(base);
@@ -121,9 +130,16 @@ inline bool fused_context_claim(const ggml_tensor * op) {
         // past it leaves the node with no dispatch and fails the whole graph (engine #389)
         case GGML_OP_L2_NORM:
             return op->ne[2] <= kUbatchMaxTokens && fused_context_fed_by_op(op);
+        // The fused GATED_DELTA_NET dispatches read q, k and v from the delta-net conv output: in the
+        // qwen35/qwen35moe/qwen3next graphs v is a view of that conv and q, k are L2_NORMs of views of it. The
+        // test-backend-ops GATED_DELTA_NET cases feed q, k through L2_NORMs of leaves and v from a leaf; once
+        // the HIP add-on ran L2_NORM alone (gpu-kernels #12) "fed by an op" claimed those graphs, which have no
+        // dispatch, and 31 cases failed with "unsupported HRX node". So the claim also wants v and the
+        // L2_NORM inputs produced by ops.
         case GGML_OP_GATED_DELTA_NET:
-            return op->src[0] != nullptr && op->src[0]->ne[2] <= kUbatchMaxTokens &&
-                   fused_context_fed_by_op(op);
+            return op->src[0] != nullptr && op->src[1] != nullptr && op->src[2] != nullptr &&
+                   op->src[0]->ne[2] <= kUbatchMaxTokens && fused_context_producer_op(op->src[2]) != GGML_OP_NONE &&
+                   fused_context_gdn_qk_from_op(op->src[0]) && fused_context_gdn_qk_from_op(op->src[1]);
         case GGML_OP_UNARY:
             return ggml_get_unary_op(op) == GGML_UNARY_OP_SOFTPLUS &&
                    op->ne[1] * op->ne[2] <= 3 * kUbatchMaxTokens && fused_context_fed_by_op(op);
