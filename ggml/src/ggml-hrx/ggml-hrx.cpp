@@ -1183,17 +1183,24 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (op->op == GGML_OP_NONE) {
         return true;
     }
-    // a node already placed in HRX device memory (for example a KV cache view) cannot move to another backend
+    // a node already placed in HRX device memory (for example a KV cache view) keeps the eager claim only
+    // where the dispatcher can execute it: claiming a node no matcher takes fails the whole graph at
+    // compute time, and neither the placement report nor --strict-device can see it, because the node is
+    // "on HRX" as far as the scheduler is concerned (2026-10-20 census, finding 2: a q8_0 KV cache was
+    // refused at run time while both reported all-on-HRX). Everything else falls back to the CPU, where
+    // the report names it.
     const ggml_tensor * placed = op->view_src != nullptr ? op->view_src : op;
-    if (placed->buffer != nullptr && ggml_backend_buffer_get_type(placed->buffer) == &device_context(device)->buft) {
-        return eager_capability_declared(op->op);
-    }
-    // otherwise claim only nodes the dispatcher can execute, so the rest falls back to another backend instead of failing the graph
+    const bool          placed_on_hrx =
+        placed->buffer != nullptr && ggml_backend_buffer_get_type(placed->buffer) == &device_context(device)->buft;
     // a node that only a fused dispatch executes keeps the per-op claim inside a model graph (fused-context-claim.h)
-    return eager_capability_declared(op->op) &&
-           (ggml::hrx::fused_context_claim(
-                op, [device](const ggml_tensor * tensor) { return device_supports_op(device, tensor); }) ||
-            ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture));
+    const bool dispatchable =
+        ggml::hrx::fused_context_claim(op, [device](const ggml_tensor * tensor) { return device_supports_op(device, tensor); }) ||
+        ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture);
+    // a write into existing HRX storage (the output is a view, e.g. SET_ROWS into a KV cache) has no CPU
+    // placement to fall back to - nothing can move the result back into a buffer the CPU does not own - so
+    // it keeps the claim and fails loudly, naming the node, when it has no dispatch
+    const bool in_place_on_hrx = placed_on_hrx && op->view_src != nullptr;
+    return eager_capability_declared(op->op) && (dispatchable || in_place_on_hrx);
 }
 
 static bool device_supports_buffer_type(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
