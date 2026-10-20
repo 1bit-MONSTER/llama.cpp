@@ -682,6 +682,7 @@ GraphProgramLookup GraphProgramCache::build_from_imported(const ggml_cgraph &  g
         programs_[graph.uid] = std::move(program);
         cached_program       = programs_[graph.uid].get();
         last_program_        = cached_program;
+        budget_.note(graph.uid, cached_program->retained_bytes());
         ++stats_.builds;
     }
     result.program = cached_program;
@@ -692,6 +693,17 @@ GraphProgramLookup GraphProgramCache::build_from_imported(const ggml_cgraph &  g
 GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
                                                    const KernelCorpus & corpus,
                                                    const std::string &  target) {
+    GraphProgramLookup result = get_or_build_impl(graph, corpus, target);
+    if (result.program != nullptr) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        budget_.touch(result.program->uid());  // every hit path converges here
+    }
+    return result;
+}
+
+GraphProgramLookup GraphProgramCache::get_or_build_impl(const ggml_cgraph &  graph,
+                                                        const KernelCorpus & corpus,
+                                                        const std::string &  target) {
     GraphProgramLookup result;
     if (graph.uid != 0) {
         const bool     disable_fast_path  = environment_flag_enabled("GGML_HRX_DISABLE_GRAPH_UID_FAST_PATH");
@@ -783,6 +795,10 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
     return build_from_imported(graph, std::move(imported.graph), corpus, target);
 }
 
+size_t GraphProgram::retained_bytes() const {
+    return commands_ != nullptr ? commands_->transients.arena_size : 0;
+}
+
 GraphProgramCacheStats GraphProgramCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     GraphProgramCacheStats      stats = stats_;
@@ -799,6 +815,33 @@ size_t GraphProgramCache::size() const {
     return programs_.size();
 }
 
+size_t GraphProgramCache::bytes() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return budget_.total_bytes();
+}
+
+std::vector<uint64_t> GraphProgramCache::plan_evictions(size_t               budget_bytes,
+                                                        size_t               max_programs,
+                                                        const GraphProgram * keep) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return budget_.plan_evictions(budget_bytes, max_programs, keep != nullptr ? keep->uid() : 0, keep != nullptr);
+}
+
+void GraphProgramCache::evict(const std::vector<uint64_t> & uids) {
+    if (uids.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (uint64_t uid : uids) {
+        if (last_program_ != nullptr && last_program_->uid() == uid) {
+            last_program_ = nullptr;
+        }
+        programs_.erase(uid);
+        budget_.forget(uid);
+    }
+    validated_matches_.clear();  // it holds raw program pointers
+}
+
 void GraphProgramCache::retain_only(const GraphProgram * keep) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = programs_.begin(); it != programs_.end();) {
@@ -806,12 +849,17 @@ void GraphProgramCache::retain_only(const GraphProgram * keep) {
     }
     validated_matches_.clear();
     last_program_ = programs_.empty() ? nullptr : programs_.begin()->second.get();
+    budget_       = GraphProgramBudget{};
+    if (keep != nullptr) {
+        budget_.note(keep->uid(), keep->retained_bytes());
+    }
 }
 
 void GraphProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     validated_matches_.clear();
     programs_.clear();
+    budget_       = GraphProgramBudget{};
     last_program_ = nullptr;
 }
 

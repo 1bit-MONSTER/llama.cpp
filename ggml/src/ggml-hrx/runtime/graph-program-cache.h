@@ -3,6 +3,7 @@
 #include "dispatch/command-program.h"
 #include "graph/graph.h"
 #include "kernel-corpus/kernel-corpus.h"
+#include "runtime/graph-program-budget.h"
 #include "runtime/prepared-command-program-cache.h"
 #include "status.h"
 
@@ -57,6 +58,10 @@ class GraphProgram {
     const std::string & command_shape() const { return command_shape_; }
 
     uint64_t command_shape_hash() const { return command_shape_hash_; }
+
+    // What this program keeps alive while it stays cached: its transient arena, about 1 GiB for a
+    // large prefill shape (graph-program-budget.h).
+    size_t retained_bytes() const;
 
     const Graph & graph() const { return *graph_; }
 
@@ -135,16 +140,26 @@ class GraphProgramCache {
                                             const std::string &  target) const;
 
     GraphProgramLookup get_or_build(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target);
-
     GraphProgramCacheStats stats() const;
 
     size_t size() const;
+    // bytes held by the cached programs' transient arenas (graph-program-budget.h)
+    size_t bytes() const;
+    // the programs to drop so that at most budget_bytes and max_programs remain, least recently used
+    // first, never `keep`; empty when nothing has to go
+    std::vector<uint64_t> plan_evictions(size_t budget_bytes, size_t max_programs, const GraphProgram * keep) const;
+    // drop these programs, freeing their arenas; the caller has already waited for the stream
+    void evict(const std::vector<uint64_t> & uids);
     // drop every cached program except `keep` (graph-program-cache-limit.h)
     void   retain_only(const GraphProgram * keep);
 
     void clear();
 
   private:
+    GraphProgramLookup get_or_build_impl(const ggml_cgraph &  graph,
+                                         const KernelCorpus & corpus,
+                                         const std::string &  target);
+
     struct ValidatedGraphMatch {
         GraphProgram *              program = nullptr;
         const ggml_tensor * const * nodes   = nullptr;
@@ -166,6 +181,8 @@ class GraphProgramCache {
     std::unordered_map<uint64_t, ValidatedGraphMatch>           validated_matches_;
     GraphProgram *                                              last_program_ = nullptr;
     GraphProgramCacheStats                                      stats_;
+    // last-use order and byte accounting of the cached programs (graph-program-budget.h)
+    GraphProgramBudget                                          budget_;
 };
 
 bool can_execute_standalone_op_as_graph(const ggml_tensor * op, const std::string & target);

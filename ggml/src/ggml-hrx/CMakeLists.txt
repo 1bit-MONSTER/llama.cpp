@@ -306,6 +306,8 @@ ggml_add_backend_library(ggml-hrx
     runtime/graph-program-cache.cpp
     runtime/graph-program-cache-limit.cpp
     runtime/graph-program-cache-limit.h
+    runtime/graph-program-budget.cpp
+    runtime/graph-program-budget.h
     runtime/graph-record-order.cpp
     runtime/graph-record-order.h
     runtime/graph-program-cache.h
