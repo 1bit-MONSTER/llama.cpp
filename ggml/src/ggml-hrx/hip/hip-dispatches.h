@@ -71,9 +71,11 @@ struct HipSetRowsArgs {
     int64_t       token_count;
     int64_t       cache_row_count;
 };
-using HipSetRowsHook = bool (*)(const HipSetRowsArgs & args, Dispatch & dispatch);
+// A hook may append several dispatches (one per batch slice of a 4-D SET_ROWS) and the nodes it covers;
+// the caller has already checked the format, the in-place storage contract and the contiguity.
+using HipSetRowsHook = bool (*)(const HipSetRowsArgs & args, DispatchMatch & match);
 void set_hip_set_rows_hook(HipSetRowsHook hook);
-bool hip_set_rows_dispatch(const HipSetRowsArgs & args, Dispatch & dispatch);
+bool hip_set_rows_dispatch(const HipSetRowsArgs & args, DispatchMatch & match);
 bool hip_set_rows_hook_installed();
 
 }  // namespace ggml::hrx
