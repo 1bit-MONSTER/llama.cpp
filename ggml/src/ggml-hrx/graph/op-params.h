@@ -21,6 +21,14 @@ struct FlashAttnExtParams {
     ggml_prec prec          = GGML_PREC_DEFAULT;
 };
 
+// ggml_pad's eight amounts, in ggml's order (left/right per axis)
+struct PadParams {
+    int32_t lp0 = 0, rp0 = 0, lp1 = 0, rp1 = 0, lp2 = 0, rp2 = 0, lp3 = 0, rp3 = 0;
+    // ggml stores the circular-padding flag at op-param index 8 (ggml_pad_ext_circular). A circular pad
+    // wraps instead of filling with zero, so a matcher that ignores the flag computes wrong values.
+    int32_t circular = 0;
+};
+
 struct SoftMaxParams {
     float scale    = 0.0f;
     float max_bias = 0.0f;
@@ -123,6 +131,7 @@ using OpParams = std::variant<
     RmsNormParams,
     FlashAttnExtParams,
     SoftMaxParams,
+    PadParams,
     ArgsortParams,
     ClampParams,
     GluParams,
