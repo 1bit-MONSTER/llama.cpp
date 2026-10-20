@@ -611,7 +611,23 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
     const ggml::hrx::GraphExecutor        executor = ggml::hrx::GraphExecutor(*context);
     const ggml::hrx::GraphExecutionResult result   = executor.execute(*graph);
     if (!result.success()) {
-        GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(result.status));
+        // Print the LAST reason: a matcher that declined also logs why, and those lines come first, so
+        // errors().front() named a matcher while the graph failed on the node left without a dispatch
+        // (2026-10-20 census: a q8_0 KV cache printed the qwen postprocess refusal for a graph that broke
+        // on another node). The earlier reasons follow, bounded, for context.
+        const std::vector<std::string> & reasons = result.status.errors();
+        if (reasons.empty()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(result.status));
+        } else {
+            GGML_LOG_ERROR("%s: %s\n", __func__, reasons.back().c_str());
+            const size_t shown = std::min<size_t>(reasons.size() - 1, 4);
+            for (size_t i = 0; i < shown; ++i) {
+                GGML_LOG_ERROR("%s: also: %s\n", __func__, reasons[i].c_str());
+            }
+            if (reasons.size() - 1 > shown) {
+                GGML_LOG_ERROR("%s: (and %zu more reasons)\n", __func__, reasons.size() - 1 - shown);
+            }
+        }
     }
     return result.code;
 }
