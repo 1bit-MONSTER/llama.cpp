@@ -119,6 +119,13 @@ static bool node_inputs_are_available(const Graph &             graph,
                                       const GraphNode &         node,
                                       const std::vector<bool> & covered_nodes) {
     for (const ValueId input : node.inputs) {
+        // An in-place op lists its own destination as an input (a CPY whose dst is its own output value, which
+        // is how llama.cpp builds the empty logits copy). That input is not produced by another node, so it
+        // cannot make this node wait: without this, a zero-element in-place CPY can never be elided and the
+        // whole graph fails with "unsupported HRX node ... CPY".
+        if (input == node.output) {
+            continue;
+        }
         if (!value_is_available(graph, input, covered_nodes)) {
             return false;
         }

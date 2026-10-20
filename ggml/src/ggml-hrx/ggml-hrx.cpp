@@ -775,6 +775,7 @@ static bool zero_output_elision_safe_op(enum ggml_op op) {
         case GGML_OP_OUT_PROD:
         case GGML_OP_SCALE:
         case GGML_OP_CONT:
+        case GGML_OP_CPY:
         case GGML_OP_GET_ROWS:
         case GGML_OP_GET_ROWS_BACK:
         case GGML_OP_DIAG:
