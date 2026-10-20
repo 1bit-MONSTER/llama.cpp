@@ -46,6 +46,11 @@ static constexpr KernelCatalogRef kGatedDeltaNetSelectedRmsQ8Kernel = GGML_HRX_K
 static constexpr KernelCatalogRef kRmsNormGateQ8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_gate_f32_q8_1_x4");
 static constexpr KernelCatalogRef kCopyF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_f32");
+
+// Sequences one GATED_DELTA_NET node may carry. The Loom kernel puts the sequence on the grid
+// (workgroups(n_heads, n_seqs, col_blocks)) and declares sequence_count up to 4096, so the limit is only
+// what serve offers: --parallel 4 was refused because this said 3 (placement census 2026-10-20, gap 12).
+static constexpr int64_t kMaximumSequences = 8;
 static constexpr KernelCatalogRef kMulMatSymmetricI4LowRowAdjacentDualWmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_wmma");
 static constexpr KernelCatalogRef kMulMatDualQ4F32DecodeKernel =
@@ -182,7 +187,7 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
     const int64_t sequence_count = raw_q->ne[3];
     const int64_t head_count     = v->ne[1];
     if (width != 128 || q_head_count <= 0 || q_head_count > 4096 || head_count <= 0 || head_count > 4096 ||
-        token_count < 1 || token_count > kUbatchMaxTokens || sequence_count < 1 || sequence_count > 3) {
+        token_count < 1 || token_count > kUbatchMaxTokens || sequence_count < 1 || sequence_count > kMaximumSequences) {
         return {};
     }
     const int64_t hidden_size = width * (2 * q_head_count + head_count);
@@ -516,7 +521,7 @@ static GatedDeltaNetMatch match_direct_gated_delta_net(const Graph & graph, cons
     const int64_t sequence_count = q_norm->ne[3];
     const int64_t head_count     = v->ne[1];
     if (width != 128 || q_head_count <= 0 || q_head_count > 4096 || head_count <= 0 || head_count > 4096 ||
-        token_count < 1 || token_count > kUbatchMaxTokens || sequence_count < 1 || sequence_count > 3) {
+        token_count < 1 || token_count > kUbatchMaxTokens || sequence_count < 1 || sequence_count > kMaximumSequences) {
         return {};
     }
 
