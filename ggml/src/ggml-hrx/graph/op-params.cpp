@@ -293,6 +293,13 @@ OpParams import_op_params(const ggml_tensor & tensor) {
                 ggml_get_op_params_f32(&tensor, 0),
                 ggml_get_op_params_f32(&tensor, 1),
             };
+        case GGML_OP_PAD:
+            return PadParams{
+                ggml_get_op_params_i32(&tensor, 0), ggml_get_op_params_i32(&tensor, 1),
+                ggml_get_op_params_i32(&tensor, 2), ggml_get_op_params_i32(&tensor, 3),
+                ggml_get_op_params_i32(&tensor, 4), ggml_get_op_params_i32(&tensor, 5),
+                ggml_get_op_params_i32(&tensor, 6), ggml_get_op_params_i32(&tensor, 7),
+            };
         case GGML_OP_ROPE:
             return RopeParams{
                 ggml_get_op_params_i32(&tensor, 1),
@@ -315,6 +322,15 @@ OpParams import_op_params(const ggml_tensor & tensor) {
             return std::monostate{};
     }
 }
+
+namespace {
+
+bool pad_params_equivalent(const PadParams & lhs, const PadParams & rhs) {
+    return lhs.lp0 == rhs.lp0 && lhs.rp0 == rhs.rp0 && lhs.lp1 == rhs.lp1 && lhs.rp1 == rhs.rp1 &&
+           lhs.lp2 == rhs.lp2 && lhs.rp2 == rhs.rp2 && lhs.lp3 == rhs.lp3 && lhs.rp3 == rhs.rp3;
+}
+
+}  // namespace
 
 bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs) {
     switch (op) {
@@ -346,6 +362,8 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
         case GGML_OP_SIN:
         case GGML_OP_COS:
             return unary_params_equivalent(lhs, rhs);
+        case GGML_OP_PAD:
+            return pad_params_equivalent(std::get<PadParams>(lhs), std::get<PadParams>(rhs));
         case GGML_OP_ROPE:
             return rope_params_equivalent(lhs, rhs);
         default:
