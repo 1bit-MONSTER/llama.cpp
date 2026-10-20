@@ -46,8 +46,8 @@ bool hip_set_rows_hook_installed() {
     return g_set_rows_hook != nullptr;
 }
 
-bool hip_set_rows_dispatch(const HipSetRowsArgs & args, Dispatch & dispatch) {
-    return g_set_rows_hook != nullptr && g_set_rows_hook(args, dispatch);
+bool hip_set_rows_dispatch(const HipSetRowsArgs & args, DispatchMatch & match) {
+    return g_set_rows_hook != nullptr && g_set_rows_hook(args, match);
 }
 
 }  // namespace ggml::hrx
