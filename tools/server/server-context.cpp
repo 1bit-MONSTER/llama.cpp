@@ -5,6 +5,7 @@
 #include "server-http.h"
 #include "server-task.h"
 #include "server-queue.h"
+#include "server-health.h"
 #include "server-schema.h"
 #include "server-stream.h"
 
@@ -19,6 +20,7 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
@@ -904,6 +906,22 @@ public:
     server_queue    queue_tasks;
     server_response queue_results;
 
+    // 1bit: the stall-aware /health (server-health.h). The state lives outside this context, which
+    // the HTTP handler must not touch while the context is asleep or being torn down.
+    std::atomic<int64_t> health_pending_tasks{0};
+
+    void note_progress() {
+        bool busy = false;
+        for (const auto & slot : slots) {
+            if (slot.is_processing()) {
+                busy = true;
+                break;
+            }
+        }
+        server_health::state().work_queued.store(busy || health_pending_tasks.exchange(0) > 0);
+        server_health::state().last_progress_us.store(ggml_time_us());
+    }
+
     // note: chat_params must not be refreshed upon existing sleeping state
     server_chat_params chat_params;
 
@@ -1453,6 +1471,7 @@ private:
 
         // wiring up server queues
         queue_tasks.on_new_task([this](server_task && task) {
+            health_pending_tasks.fetch_add(1);  // /health: a task is queued for the main loop
             process_single_task(std::move(task));
         });
         queue_tasks.on_update_slots([this]() {
@@ -2788,6 +2807,8 @@ private:
 #endif
 
     void update_slots() {
+        // 1bit: reaching here is the main loop making progress (server-health.h)
+        note_progress();
 #ifdef DEBUG_TIMINGS
         static int64_t t_prev = 0;
         int64_t t_start = ggml_time_us();
@@ -4393,6 +4414,21 @@ void server_routes::init_routes() {
         // the next LOC is to avoid someone accidentally use ctx_server
         bool ctx_server; // do NOT delete this line
         GGML_UNUSED(ctx_server);
+
+        // 1bit: a wedged main loop (no progress with work queued) is not healthy, so a supervisor
+        // restarts the server instead of waiting for a request that never finishes (server-health.h)
+        const int64_t now_us   = ggml_time_us();
+        const int64_t last_us  = server_health::state().last_progress_us.load();
+        const int64_t stall_us = server_health::stall_us_from_env();
+        if (server_health::stalled(last_us, now_us, stall_us, server_health::state().work_queued.load())) {
+            json body = json::object();
+            body["status"]                  = "stalled";
+            body["seconds_since_progress"]  = (now_us - last_us) / 1000000;
+            body["threshold_seconds"]       = stall_us / 1000000;
+            res->status = 503;
+            res->data   = body.dump();
+            return res;
+        }
 
         res->ok({{"status", "ok"}});
         return res;

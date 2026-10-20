@@ -337,6 +337,11 @@ if (TARGET gguf-model-data)
     target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
 
+# the stall-aware /health decision: pure, no server and no model
+add_executable(test-server-health test-server-health.cpp ../tools/server/server-health.cpp)
+target_include_directories(test-server-health PRIVATE ../tools/server)
+add_test(NAME test-server-health COMMAND test-server-health)
+
 if (TARGET ggml-hrx)
     # the program cache's byte budget and LRU order: pure policy, no device and no HRX link
     add_executable(test-hrx-graph-program-budget test-hrx-graph-program-budget.cpp
