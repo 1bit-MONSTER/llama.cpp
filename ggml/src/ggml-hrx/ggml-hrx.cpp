@@ -308,10 +308,11 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
     // Direct command-program bindings require coherent CPU/GPU visibility. Otherwise HRX host buffers are pinned
     // transfer memory: DEVICE_VISIBLE permits handle-based stream copies without implying direct device access.
     if (host_visible) {
-        memory_type = HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE;
-        if (direct_host_binding) {
-            memory_type |= HRX_MEMORY_TYPE_HOST_COHERENT;
-        }
+        // These buffers are mapped and read by the host (buffer_get memcpy, staging), so they are allocated
+        // coherent regardless of whether direct bindings are enabled: without HOST_COHERENT a host read can
+        // return stale lines after a device write (#315). direct_host_binding still decides whether the
+        // command program binds them directly.
+        memory_type = HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE | HRX_MEMORY_TYPE_HOST_COHERENT;
     }
     hrx_buffer_params_t params = {
         memory_type,

@@ -1239,8 +1239,12 @@ Status allocate_mapped_host_staging_buffer(hrx_device_t device, size_t size, hrx
         status.log("cannot allocate an empty host staging buffer");
         return status;
     }
+    // This buffer exists to be read by the host after the device has written it (staging), so it must be
+    // allocated coherent: mapping it for READ without HOST_COHERENT lets the host observe stale lines, which
+    // is the divergence the #315 notes chased (the imported type was HOST_LOCAL|DEVICE_VISIBLE = 0x52, and
+    // HOST_COHERENT (0x04) was never in the mask).
     hrx_buffer_params_t params = {
-        HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
+        HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE | HRX_MEMORY_TYPE_HOST_COHERENT,
         HRX_MEMORY_ACCESS_ALL,
         HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED | HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
         0,
