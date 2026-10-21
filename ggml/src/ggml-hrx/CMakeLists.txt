@@ -253,6 +253,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-scale.h
     dispatch_registration/common/dispatch-unary.cpp
     dispatch_registration/common/dispatch-unary.h
+    dispatch_registration/common/dispatch-i4-prefill-opt-in.cpp
+    dispatch_registration/common/dispatch-i4-prefill-opt-in.h
     dispatch_registration/common/dispatch-row-chunks.cpp
     dispatch_registration/common/dispatch-row-chunks.h
     dispatch_registration/dispatch-registry.cpp
