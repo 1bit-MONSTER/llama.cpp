@@ -41,6 +41,32 @@ static constexpr size_t      GGML_HRX_ALIGNMENT     = 256;
 // Device-local HRX buffers have no host address to return, so expose a non-null sentinel base as an offset coordinate.
 static constexpr uintptr_t   GGML_HRX_FAKE_PTR_BASE = 0x1000;
 static std::atomic<uint64_t> g_allocation_generation{ 1 };
+// A device fault leaves the HRX device unusable: every later submit either fails with a driver error or, worse,
+// reports success while the ring is wedged. The first fault poisons the device, every entry point refuses
+// immediately with the reason, and the child exits instead of collecting a stream of confusing errors. The
+// engine side already exits on a lost GPU (llama.cpp #112); this makes the C API path say why.
+static std::atomic<bool>     g_device_poisoned{ false };
+static std::atomic<uint64_t> g_device_fault_address{ 0 };
+static std::atomic<uint32_t> g_device_fault_kind{ 0 };
+
+static bool hrx_device_poisoned(const char * what) {
+    if (!g_device_poisoned.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    static std::atomic<bool> reported{ false };
+    if (!reported.exchange(true)) {
+        GGML_LOG_ERROR("%s: HRX device unusable after a fault (access kind %u, address 0x%016" PRIx64
+                       "): refusing further work. Restart the process to recover.\n",
+                       what, g_device_fault_kind.load(), g_device_fault_address.load());
+    }
+    return true;
+}
+
+static void hrx_poison_device(uint32_t access_kind, uint64_t address) {
+    g_device_fault_kind.store(access_kind);
+    g_device_fault_address.store(address);
+    g_device_poisoned.store(true);
+}
 
 static bool environment_flag_enabled(const char * name) {
     const char * value = std::getenv(name);
@@ -54,6 +80,7 @@ static void log_hrx_device_event(void *, const hrx_device_event_t * event) {
     }
     hrx_device_asan_report_t report;
     std::memcpy(&report, event->payload.data, sizeof(report));
+    hrx_poison_device(report.access_kind, report.fault_address);
     GGML_LOG_ERROR("HRX ASAN: executable=%" PRIu64 " export=%u site=%" PRIu64 " access=%u address=0x%016" PRIx64
                    " length=%" PRIu64 " workgroup=(%u,%u,%u) workitem=(%u,%u,%u) shadow=0x%016" PRIx64
                    " value=0x%016" PRIx64 " dispatch=0x%016" PRIx64 "\n",
@@ -61,6 +88,15 @@ static void log_hrx_device_event(void *, const hrx_device_event_t * event) {
                    report.fault_address, report.access_length, report.workgroup_id[0], report.workgroup_id[1],
                    report.workgroup_id[2], report.workitem_id[0], report.workitem_id[1], report.workitem_id[2],
                    report.shadow_address, report.shadow_value, report.source_dispatch_ptr);
+}
+
+// Deterministic test of the recovery path without faulting the GPU: GGML_HRX_POISON_SELFTEST=1 poisons the
+// device as a fault report would, so the refusal and the exit can be observed.
+static void hrx_poison_selftest() {
+    const char * env = std::getenv("GGML_HRX_POISON_SELFTEST");
+    if (env != nullptr && std::atoi(env) != 0) {
+        hrx_poison_device(7, 0xDEADBEE0ull);
+    }
 }
 
 static bool hrx_check(hrx_status_t status, const char * expression, const char * file, int line) {
@@ -151,10 +187,20 @@ static bool buffer_submit_and_wait(ggml_backend_hrx_device_context * device,
                                    hrx_status_t (*submit)(hrx_stream_t, void *),
                                    void * user_data) {
     std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
-    if (!HRX_CHECK(submit(device->buffer_stream, user_data))) {
+    if (hrx_device_poisoned(__func__)) {
         return false;
     }
-    return HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
+    if (!HRX_CHECK(submit(device->buffer_stream, user_data))) {
+        // a submit or synchronize failure after a fault is the same condition: stop here rather than let the
+        // caller keep issuing work into a wedged ring
+        hrx_poison_device(0, 0);
+        return false;
+    }
+    if (!HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+        hrx_poison_device(0, 0);
+        return false;
+    }
+    return true;
 }
 
 struct FillBufferArgs {
@@ -301,6 +347,10 @@ static const ggml_backend_buffer_i buffer_i = {
 };
 
 static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_t size) {
+    hrx_poison_selftest();  // deterministic test hook, a no-op unless GGML_HRX_POISON_SELFTEST=1
+    if (hrx_device_poisoned(__func__)) {
+        return nullptr;
+    }
     auto *            type_context        = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context);
     const bool        host_visible        = type_context->host_visible;
     const bool        direct_host_binding = host_visible && type_context->device->use_direct_host_bindings;
