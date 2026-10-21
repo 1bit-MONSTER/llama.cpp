@@ -33,6 +33,8 @@ struct PendingHostWriteback {
     const void * mapped_source    = nullptr;
     size_t       size             = 0;
     hrx_buffer_t retained_buffer  = nullptr;
+    // the staging buffer came from the 1bit pool: hand it back on completion instead of releasing it
+    bool         pooled           = false;
 };
 
 struct GraphReplayStreamState {
@@ -43,7 +45,8 @@ struct GraphReplayStreamState {
     GraphReplayStreamState & operator=(const GraphReplayStreamState &) = delete;
 
     void mark_stream_synchronized();
-    void add_host_writeback(void * host_destination, const void * mapped_source, size_t size, hrx_buffer_t buffer);
+    void add_host_writeback(void * host_destination, const void * mapped_source, size_t size, hrx_buffer_t buffer,
+                            bool pooled = false);
     void clear();
 
     // True while a host download staged by an earlier replay has not been

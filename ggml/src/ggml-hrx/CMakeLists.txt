@@ -166,6 +166,7 @@ set_target_properties(ggml-hrx-kernel-corpus PROPERTIES POSITION_INDEPENDENT_COD
 ggml_add_backend_library(ggml-hrx
     backend-buffer-binding.cpp
     hrx-1bit-safety.cpp
+    hrx-1bit-staging-pool.cpp
     backend-buffer-binding.h
     backend-context.h
     dispatch/command-plan-metadata.cpp

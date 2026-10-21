@@ -1,4 +1,5 @@
 #include "command-program-executor.h"
+#include "../hrx-1bit-staging-pool.h"
 
 #include "dispatch/command-program-diagnostics.h"
 #include "dispatch/command-program-resolver.h"
@@ -28,11 +29,17 @@ GraphReplayStreamState::~GraphReplayStreamState() {
 void GraphReplayStreamState::clear() {
     for (PendingHostWriteback & writeback : pending_host_writebacks_) {
         if (writeback.retained_buffer != nullptr) {
-            hrx_buffer_release(writeback.retained_buffer);
+            if (writeback.pooled) {
+                ggml::hrx::onebit::staging_pool_give_back(writeback.retained_buffer,
+                                                          const_cast<void *>(writeback.mapped_source), writeback.size);
+            } else {
+                hrx_buffer_release(writeback.retained_buffer);
+            }
             writeback.retained_buffer = nullptr;
         }
     }
     pending_host_writebacks_.clear();
+    ggml::hrx::onebit::staging_pool_drain();
 }
 
 void GraphReplayStreamState::mark_stream_synchronized() {
@@ -41,7 +48,12 @@ void GraphReplayStreamState::mark_stream_synchronized() {
             std::memcpy(writeback.host_destination, writeback.mapped_source, writeback.size);
         }
         if (writeback.retained_buffer != nullptr) {
-            hrx_buffer_release(writeback.retained_buffer);
+            if (writeback.pooled) {
+                ggml::hrx::onebit::staging_pool_give_back(writeback.retained_buffer,
+                                                          const_cast<void *>(writeback.mapped_source), writeback.size);
+            } else {
+                hrx_buffer_release(writeback.retained_buffer);
+            }
             writeback.retained_buffer = nullptr;
         }
     }
@@ -51,11 +63,12 @@ void GraphReplayStreamState::mark_stream_synchronized() {
 void GraphReplayStreamState::add_host_writeback(void *       host_destination,
                                                 const void * mapped_source,
                                                 size_t       size,
-                                                hrx_buffer_t buffer) {
+                                                hrx_buffer_t buffer,
+                                                bool         pooled) {
     if (buffer != nullptr) {
         hrx_buffer_retain(buffer);
     }
-    pending_host_writebacks_.push_back({ host_destination, mapped_source, size, buffer });
+    pending_host_writebacks_.push_back({ host_destination, mapped_source, size, buffer, pooled });
 }
 
 PreparedProgramConstantBuffer::~PreparedProgramConstantBuffer() {
@@ -972,8 +985,9 @@ static Status download_prepared_host_staging(const CommandProgramExecutionContex
         }
         hrx_buffer_t download_buffer = nullptr;
         void *       download_data   = nullptr;
+        // one call into the 1bit pool: a fitting buffer is reused, otherwise a fresh driver allocation
         Status allocation_status =
-            allocate_mapped_host_staging_buffer(context.device, staging.length, download_buffer, download_data);
+            ggml::hrx::onebit::staging_pool_acquire(context.device, staging.length, download_buffer, download_data);
         if (!allocation_status.success()) {
             status.log("allocate HRX host download staging buffer for value %d failed", staging.value);
             status.append(allocation_status);
@@ -985,7 +999,8 @@ static Status download_prepared_host_staging(const CommandProgramExecutionContex
             hrx_buffer_release(download_buffer);
             return status;
         }
-        context.graph_replay_state->add_host_writeback(staging.host_data, download_data, staging.length, download_buffer);
+        context.graph_replay_state->add_host_writeback(staging.host_data, download_data, staging.length, download_buffer,
+                                                       /*pooled=*/true);
         hrx_buffer_release(download_buffer);
     }
     return status;
