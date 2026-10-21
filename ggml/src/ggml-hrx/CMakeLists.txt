@@ -257,6 +257,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-row-chunks.h
     dispatch_registration/common/dispatch-query-chunks.cpp
     dispatch_registration/common/dispatch-query-chunks.h
+    dispatch_registration/common/dispatch-token-chunks.cpp
+    dispatch_registration/common/dispatch-token-chunks.h
     dispatch_registration/dispatch-registry.cpp
     dispatch_registration/dispatch-registry.h
     dispatch_registration/llm/dispatch-attention-qkv.cpp

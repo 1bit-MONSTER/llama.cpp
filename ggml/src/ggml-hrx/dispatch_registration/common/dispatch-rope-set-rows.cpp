@@ -1,5 +1,7 @@
 #include "dispatch-rope-set-rows.h"
 #include "dispatch-row-chunks.h"
+#include "dispatch-query-chunks.h"
+#include "dispatch-token-chunks.h"
 #include "ubatch-token-limits.h"
 
 #include "dispatch-layout-utils.h"
@@ -24,6 +26,8 @@ static constexpr KernelCatalogRef kRopeF32Kernel        = GGML_HRX_KERNEL_REF("l
 static constexpr KernelCatalogRef kSetRowsKernel        = GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows");
 static constexpr KernelCatalogRef kSetRowsScatterKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows_scatter");
 static constexpr KernelCatalogRef kRopeSetRowsF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_set_rows_f32");
+// token range of the Loom rope kernels; a longer standalone ROPE runs as token chunks (dispatch-token-chunks.h)
+static constexpr int64_t kRopeKernelMaxTokens = 2048;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -94,7 +98,7 @@ static void log_set_rows_reject(Status *      status,
 
 static bool is_rope_shape(const Value & value) {
     return value.ne[0] >= 4 && value.ne[0] <= 1024 && value.ne[0] % 4 == 0 && value.ne[1] >= 1 && value.ne[1] <= 64 &&
-           value.ne[2] >= 1 && value.ne[2] <= 2048 && value.ne[3] == 1;
+           value.ne[2] >= 1 && value.ne[2] <= kUbatchMaxTokens && value.ne[3] == 1;
 }
 
 static bool is_packed_f32_rope_layout(const Value & value) {
@@ -579,7 +583,8 @@ static bool find_rope_set_rows_consumer(const Graph & graph, const GraphNode & r
 static RopeSetRowsMatch match_rope_set_rows_f32(const Graph & graph, const GraphNode * node) {
     RopeSetRowsMatch match;
     match.rope = match_rope_f32(graph, node);
-    if (!match.rope.matched() || !find_rope_set_rows_consumer(graph, *node, match)) {
+    if (!match.rope.matched() || match.rope.token_count > kRopeKernelMaxTokens ||
+        !find_rope_set_rows_consumer(graph, *node, match)) {
         return {};
     }
 
@@ -617,8 +622,23 @@ static bool match_rope_f32_dispatch(const DispatchMatchContext & context, Dispat
     }
 
     dispatch_match.covered_nodes.push_back(context.root_index);
-    dispatch_match.dispatches.push_back(make_rope_dispatch(context, match, dispatch_match));
-    return true;
+    // above the kernel range: token chunks, each binding its positions, its strided input rows and its packed
+    // output rows, with the token capacity and input span of its own row count
+    const size_t head_span = static_cast<size_t>(match.head_count - 1) * static_cast<size_t>(match.input_stride1) +
+                             static_cast<size_t>(match.head_size);
+    const size_t out_row   = static_cast<size_t>(match.head_count * match.head_size) * sizeof(float);
+    return append_token_chunked_dispatches(
+        make_rope_dispatch(context, match, dispatch_match), match.token_count, query_chunk_tokens(kRopeKernelMaxTokens),
+        { { 0, sizeof(int32_t), sizeof(int32_t) },
+          { 1, static_cast<size_t>(match.input_stride2) * sizeof(float), head_span * sizeof(float) },
+          { 4, out_row, out_row } },
+        "token_count",
+        [&](Dispatch & part, int64_t count) {
+            part.kernel.compile_parameters["ggml.rope_f32.token_capacity"] = to_config_value(count);
+            part.kernel.compile_parameters["ggml.rope_f32.input_span"] =
+                to_config_value(static_cast<int64_t>((count - 1) * match.input_stride2) + static_cast<int64_t>(head_span));
+        },
+        dispatch_match);
 }
 
 static SetRowsMatch match_set_rows_scatter(const Graph & graph, const GraphNode * node) {
