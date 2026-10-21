@@ -1,5 +1,6 @@
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
+#include "hrx-1bit-safety.h"
 #include "ggml-hrx-dmabuf.h"
 
 #include "backend-buffer-binding.h"
@@ -54,6 +55,7 @@ static void log_hrx_device_event(void *, const hrx_device_event_t * event) {
     }
     hrx_device_asan_report_t report;
     std::memcpy(&report, event->payload.data, sizeof(report));
+    ggml::hrx::onebit::poison_device(report.access_kind, report.fault_address);
     GGML_LOG_ERROR("HRX ASAN: executable=%" PRIu64 " export=%u site=%" PRIu64 " access=%u address=0x%016" PRIx64
                    " length=%" PRIu64 " workgroup=(%u,%u,%u) workitem=(%u,%u,%u) shadow=0x%016" PRIx64
                    " value=0x%016" PRIx64 " dispatch=0x%016" PRIx64 "\n",
@@ -151,10 +153,18 @@ static bool buffer_submit_and_wait(ggml_backend_hrx_device_context * device,
                                    hrx_status_t (*submit)(hrx_stream_t, void *),
                                    void * user_data) {
     std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
-    if (!HRX_CHECK(submit(device->buffer_stream, user_data))) {
+    if (ggml::hrx::onebit::device_poisoned(__func__)) {
         return false;
     }
-    return HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
+    if (!HRX_CHECK(submit(device->buffer_stream, user_data))) {
+        ggml::hrx::onebit::poison_device(0, 0);
+        return false;
+    }
+    if (!HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+        ggml::hrx::onebit::poison_device(0, 0);
+        return false;
+    }
+    return true;
 }
 
 struct FillBufferArgs {
@@ -191,6 +201,7 @@ static void buffer_free(ggml_backend_buffer_t buffer) {
     if (context->buffer != nullptr) {
         hrx_buffer_release(context->buffer);
     }
+    ggml::hrx::onebit::pool_release(buffer->size);
     delete context;
 }
 
@@ -301,6 +312,10 @@ static const ggml_backend_buffer_i buffer_i = {
 };
 
 static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_t size) {
+    ggml::hrx::onebit::poison_selftest();  // no-op unless GGML_HRX_POISON_SELFTEST=1
+    if (ggml::hrx::onebit::device_poisoned(__func__)) {
+        return nullptr;
+    }
     auto *            type_context        = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context);
     const bool        host_visible        = type_context->host_visible;
     const bool        direct_host_binding = host_visible && type_context->device->use_direct_host_bindings;
@@ -308,10 +323,8 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
     // Direct command-program bindings require coherent CPU/GPU visibility. Otherwise HRX host buffers are pinned
     // transfer memory: DEVICE_VISIBLE permits handle-based stream copies without implying direct device access.
     if (host_visible) {
-        memory_type = HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE;
-        if (direct_host_binding) {
-            memory_type |= HRX_MEMORY_TYPE_HOST_COHERENT;
-        }
+        // host-mapped buffers are read by the host, so they are coherent regardless of direct bindings
+        memory_type = HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE | HRX_MEMORY_TYPE_HOST_COHERENT;
     }
     hrx_buffer_params_t params = {
         memory_type,
@@ -321,9 +334,16 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
             HRX_BUFFER_USAGE_DEFAULT,
         0,
     };
+    // one call into our safety layer: charge the pool, and say no when it would not fit
+    if (size > 0 && !ggml::hrx::onebit::pool_reserve(
+                        ggml::hrx::onebit::pool_budget(type_context->device->memory_total), size,
+                        host_visible ? "a host buffer" : "a device buffer")) {
+        return nullptr;
+    }
     hrx_buffer_t allocation = nullptr;
     if (size > 0 && !HRX_CHECK(hrx_allocator_allocate_buffer(hrx_device_allocator(type_context->device->device), params,
                                                              size, &allocation))) {
+        ggml::hrx::onebit::pool_release(size);
         return nullptr;
     }
     uint8_t * base = reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
@@ -331,6 +351,7 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         void * mapped = nullptr;
         if (!HRX_CHECK(hrx_buffer_map(allocation, HRX_MAP_READ | HRX_MAP_WRITE, 0, size, &mapped))) {
             hrx_buffer_release(allocation);
+            ggml::hrx::onebit::pool_release(size);
             return nullptr;
         }
         base = static_cast<uint8_t *>(mapped);
@@ -343,6 +364,7 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         if (allocation != nullptr) {
             hrx_buffer_release(allocation);
         }
+        ggml::hrx::onebit::pool_release(size);
         return nullptr;
     }
     if (host_visible && allocation != nullptr) {
@@ -357,7 +379,9 @@ static size_t buffer_alignment(ggml_backend_buffer_type_t buft) {
 }
 
 static size_t buffer_max_size(ggml_backend_buffer_type_t buft) {
-    return static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->device->memory_total;
+    const size_t total  = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->device->memory_total;
+    const size_t budget = ggml::hrx::onebit::pool_budget(total);
+    return budget == 0 ? total : ggml::hrx::onebit::pool_remaining(budget);
 }
 
 static const ggml_backend_buffer_type_i buffer_type_i = {
