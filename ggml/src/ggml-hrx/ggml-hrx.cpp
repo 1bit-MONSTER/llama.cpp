@@ -1215,6 +1215,13 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     }
     // otherwise claim only nodes the dispatcher can execute, so the rest falls back to another backend instead of failing the graph
     // a node that only a fused dispatch executes keeps the per-op claim inside a model graph (fused-context-claim.h)
+    // a view of a quantized KV cache is a pure alias: the scheduler resolves it to its storage and the
+    // consuming FLASH_ATTN_EXT matcher decides whether it can run. test-backend-ops asks about the lone
+    // VIEW node, which no matcher claims, so without this the q8_0 KV attention cases were reported
+    // unsupported and silently skipped (29 of them).
+    if (op->op == GGML_OP_VIEW && op->view_src != nullptr && op->type == GGML_TYPE_Q8_0) {
+        return true;
+    }
     return eager_capability_declared(op->op) &&
            (ggml::hrx::fused_context_claim(
                 op, [device](const ggml_tensor * tensor) { return device_supports_op(device, tensor); }) ||
