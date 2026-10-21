@@ -183,6 +183,45 @@ static hrx_status_t submit_copy_buffer(hrx_stream_t stream, void * user_data) {
                                   args->destination_offset, args->size);
 }
 
+// Every HRX buffer is charged against one budget, and the planner is told what is left of it. Before this,
+// buffer_max_size reported the whole GPU (`memory_total`) and buffer_alloc failed silently, so llama.cpp
+// planned against memory that other allocations (services, other models in the same process, the KV cache
+// already granted) had taken, and an over-allocation surfaced as a driver fault or an OOM kill instead of a
+// refusal. GGML_HRX_POOL_LIMIT_MB caps the budget for tests and for co-tenancy.
+static std::atomic<size_t> g_pool_allocated{ 0 };
+
+static size_t hrx_pool_budget(const ggml_backend_hrx_device_context * device) {
+    const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
+    if (env != nullptr) {
+        const long long mb = std::atoll(env);
+        if (mb > 0) {
+            return static_cast<size_t>(mb) * 1024 * 1024;
+        }
+    }
+    return device != nullptr ? static_cast<size_t>(device->memory_total) : 0;
+}
+
+static bool hrx_pool_reserve(const ggml_backend_hrx_device_context * device, size_t size, const char * what) {
+    const size_t budget = hrx_pool_budget(device);
+    const size_t used   = g_pool_allocated.load();
+    if (budget == 0) {
+        return true;  // unknown device size: keep the old behaviour
+    }
+    if (size > budget || used > budget - size) {
+        GGML_LOG_ERROR("%s: HRX pool limit: %s of %.1f MiB does not fit (%.1f MiB of %.1f MiB already in use); "
+                       "set GGML_HRX_POOL_LIMIT_MB to change the budget\n",
+                       __func__, what, size / 1048576.0, used / 1048576.0, budget / 1048576.0);
+        return false;
+    }
+    g_pool_allocated.fetch_add(size);
+    return true;
+}
+
+static void hrx_pool_release(size_t size) {
+    const size_t used = g_pool_allocated.load();
+    g_pool_allocated.store(used > size ? used - size : 0);
+}
+
 static void buffer_free(ggml_backend_buffer_t buffer) {
     auto * context = buffer_context(buffer);
     if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
@@ -191,6 +230,7 @@ static void buffer_free(ggml_backend_buffer_t buffer) {
     if (context->buffer != nullptr) {
         hrx_buffer_release(context->buffer);
     }
+    hrx_pool_release(buffer->size);
     delete context;
 }
 
@@ -321,9 +361,13 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
             HRX_BUFFER_USAGE_DEFAULT,
         0,
     };
+    if (size > 0 && !hrx_pool_reserve(type_context->device, size, host_visible ? "a host buffer" : "a device buffer")) {
+        return nullptr;  // refused by the pool budget, not by the driver
+    }
     hrx_buffer_t allocation = nullptr;
     if (size > 0 && !HRX_CHECK(hrx_allocator_allocate_buffer(hrx_device_allocator(type_context->device->device), params,
                                                              size, &allocation))) {
+        hrx_pool_release(size);
         return nullptr;
     }
     uint8_t * base = reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
@@ -331,6 +375,7 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         void * mapped = nullptr;
         if (!HRX_CHECK(hrx_buffer_map(allocation, HRX_MAP_READ | HRX_MAP_WRITE, 0, size, &mapped))) {
             hrx_buffer_release(allocation);
+            hrx_pool_release(size);
             return nullptr;
         }
         base = static_cast<uint8_t *>(mapped);
@@ -343,6 +388,7 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         if (allocation != nullptr) {
             hrx_buffer_release(allocation);
         }
+        hrx_pool_release(size);
         return nullptr;
     }
     if (host_visible && allocation != nullptr) {
@@ -357,7 +403,15 @@ static size_t buffer_alignment(ggml_backend_buffer_type_t buft) {
 }
 
 static size_t buffer_max_size(ggml_backend_buffer_type_t buft) {
-    return static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->device->memory_total;
+    const auto * device = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->device;
+    const size_t budget = hrx_pool_budget(device);
+    if (budget == 0) {
+        return device->memory_total;
+    }
+    const size_t used = g_pool_allocated.load();
+    // what is left of the budget: llama.cpp plans against this, so a model that would not fit is refused by
+    // the planner instead of being allocated and faulting
+    return used >= budget ? 0 : budget - used;
 }
 
 static const ggml_backend_buffer_type_i buffer_type_i = {
