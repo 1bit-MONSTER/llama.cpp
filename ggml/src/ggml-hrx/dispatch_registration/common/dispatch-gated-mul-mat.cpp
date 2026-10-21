@@ -1,4 +1,5 @@
 #include "dispatch-gated-mul-mat.h"
+#include "dispatch-i4-prefill-opt-in.h"
 
 #include "dispatch-mul-mat-common.h"
 #include "ggml.h"
@@ -478,6 +479,9 @@ static MulMatSwiGLUProjectionMatch match_mul_mat_swiglu_q5_projection(const Disp
 
 static bool match_mul_mat_swiglu_q5_projection_dispatch(const DispatchMatchContext & context,
                                                         DispatchMatch &              dispatch_match) {
+    if (!symmetric_i4_prefill_enabled()) {  // opt-in: 4-bit activations (dispatch-i4-prefill-opt-in.h)
+        return false;
+    }
     const MulMatSwiGLUProjectionMatch match = match_mul_mat_swiglu_q5_projection(context);
     if (!match.matched()) {
         return false;
