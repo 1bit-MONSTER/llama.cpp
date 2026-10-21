@@ -1240,7 +1240,8 @@ Status allocate_mapped_host_staging_buffer(hrx_device_t device, size_t size, hrx
         return status;
     }
     hrx_buffer_params_t params = {
-        HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
+        // mapped for host reads after the device wrote it: coherent, or the host can observe stale lines (#315)
+        HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE | HRX_MEMORY_TYPE_HOST_COHERENT,
         HRX_MEMORY_ACCESS_ALL,
         HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED | HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
         0,
