@@ -327,6 +327,7 @@ struct common_params_speculative_draft {
 
     float p_split = 0.1f; // speculative decoding split probability
     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
+    float p_cum   = 0.0f; // cumulative top-1 product to keep drafting (0 = off, common/onebit-mtp-budget.h)
 
     bool backend_sampling = true; // offload draft sampling to the backend (default: on)
 

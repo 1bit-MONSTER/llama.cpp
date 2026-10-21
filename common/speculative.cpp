@@ -7,6 +7,7 @@
 #include "ngram-cache.h"
 #include "ngram-map.h"
 #include "ngram-mod.h"
+#include "onebit-mtp-budget.h" // our cumulative-confidence rule for MTP drafting
 #include "sampling.h"
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
@@ -1249,6 +1250,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
 
+    onebit::MtpBudgetTrace budget; // --spec-draft-cum-p-min state and the ONEBIT_MTP_TRACE log
+
     llama_batch batch;
 
     std::vector<common_sampler_ptr> smpls;
@@ -1545,6 +1548,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
 
+        budget.begin(n_seq);
+
         common_batch_clear(batch);
 
         // keep track of which sequences are still drafting
@@ -1638,7 +1643,17 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 auto & dp = dparams.at(seq_id);
                 auto & result = *dp.result;
 
+                // opt-in cumulative-confidence budget (common/onebit-mtp-budget.h): stop before a draft
+                // whose running product of top-1 probabilities has fallen below --spec-draft-cum-p-min.
+                // p_cum = 0 (the default) leaves this inert and drafting goes on to n_max.
+                if (!budget.keep(seq_id, cur_p->data[0].p, params.p_cum)) {
+                    drafting[seq_id] = false;
+                    n_drafting--;
+                    continue;
+                }
+
                 result.push_back(id);
+                budget.drafted(seq_id, result.size(), cur_p->data[0].p, id);
 
                 if (params.n_max <= (int) result.size()) {
                     drafting[seq_id] = false;
@@ -1677,6 +1692,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             ++i;
         }
 
+        budget.end(n_seq);
+
         if (chain_heads) {
             llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
         }
@@ -1697,6 +1714,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
         }
+
+        budget.accepted(seq_id, n_accepted);
 
         const int32_t n_rows = verify_h_rows[seq_id];
         if (n_rows <= 0) {
