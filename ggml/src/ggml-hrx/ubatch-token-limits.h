@@ -41,4 +41,13 @@ inline constexpr int64_t kSetRowsKernelMaxTokens = 2048;
 // bound of their own. 65536 is above any ubatch llama.cpp builds here.
 inline constexpr int64_t kUbatchMaxTokens = 65536;
 
+// Largest number of gated-delta-net rollback snapshots one node may carry. Nothing is allocated for this
+// number: llama_memory_recurrent sizes (1 + n_rs_seq) state planes, and
+// common_params_speculative::need_n_rs_seq() sets n_rs_seq to the draft n_max, so --spec-draft-n-max N
+// already commits N + 1 planes at context creation whether or not a graph writes them. The matcher checks
+// that the cache has exactly as many planes as the graph writes (cache->ne[2] == written_snapshot_count) and
+// that every plane it touches is inside it, so the useful bound is the ubatch; a hard 5 refused the 6th to
+// 8th snapshot of Qwen3.8-27B --mtp --spec-draft-n-max 5 and 7 for no reason (2026-10-21).
+inline constexpr int64_t kMaximumSnapshots = kUbatchMaxTokens;
+
 }  // namespace ggml::hrx

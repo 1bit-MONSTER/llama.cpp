@@ -207,7 +207,7 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
         return {};
     }
     const int64_t snapshot_count = (gdn_output->ne[1] - attention_rows) / snapshot_rows;
-    if (snapshot_count < 1 || snapshot_count > 5) {
+    if (snapshot_count < 1 || snapshot_count > kMaximumSnapshots) {
         return {};
     }
     if (!q_norm->contiguous || !k_norm->contiguous || !state->contiguous || !gdn_output->contiguous ||
@@ -547,7 +547,7 @@ static GatedDeltaNetMatch match_direct_gated_delta_net(const Graph & graph, cons
         return {};
     }
     const int64_t snapshot_count = (gdn_output->ne[1] - attention_rows) / snapshot_rows;
-    if (snapshot_count < 1 || snapshot_count > 5) {
+    if (snapshot_count < 1 || snapshot_count > kMaximumSnapshots) {
         return {};
     }
 
