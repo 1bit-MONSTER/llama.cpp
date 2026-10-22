@@ -1,5 +1,7 @@
 #include "dispatch-attention-sink.h"
 #include "dispatch-flash-attention.h"
+#include "dispatch-query-chunks.h"
+#include "ubatch-token-limits.h"
 
 #include "ggml.h"
 #include "graph/graph-matcher.h"
@@ -71,8 +73,12 @@ static bool nearly_equal(float lhs, float rhs) {
     return std::fabs(lhs - rhs) <= 1.0e-6f;
 }
 
+// The prompt kernel takes at most 2048 query rows (its launch range); larger batches run as query chunks
+// (dispatch-query-chunks.h).
+static constexpr int64_t kPrefillMaxQueryTokens = 2048;
+
 static bool is_supported_token_count(int64_t token_count) {
-    return token_count >= 1 && token_count <= 2048;
+    return token_count >= 1 && token_count <= kUbatchMaxTokens;
 }
 
 static bool is_supported_key_value_token_count(int64_t token_count) {
@@ -552,8 +558,13 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
     dispatch.bindings.push_back({ match.mask_binding_value, 0, match.mask_binding_bytes });
     dispatch.bindings.push_back({ raw_gate->id, 0, raw_gate->byte_count });
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
-    dispatch_match.dispatches.push_back(std::move(dispatch));
-    return true;
+    return append_query_chunked_dispatches(
+        dispatch, match.query_token_count, query_chunk_tokens(kPrefillMaxQueryTokens),
+        { { 0, match.query->nb[1] },
+          { 3, static_cast<size_t>(match.key_value_token_count) * sizeof(ggml_fp16_t) },
+          { 4, raw_gate->nb[2] },
+          { 5, output->nb[1] } },
+        "query_token_count", dispatch_match);
 }
 
 static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & context,
@@ -584,7 +595,15 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
             return false;
         }
     }
-    dispatch_match.dispatches.push_back(std::move(dispatch));
+    if (!append_query_chunked_dispatches(
+            dispatch, match.query_token_count, query_chunk_tokens(kPrefillMaxQueryTokens),
+            { { 0, match.query->nb[1] },
+              { 3, static_cast<size_t>(match.key_value_token_count) * sizeof(ggml_fp16_t) },
+              { 4, match.query->nb[1] },
+              { 5, match.output->nb[2] } },
+            "query_token_count", dispatch_match)) {
+        return false;
+    }
     if (context.root_node->inputs.size() == 5 &&
         !append_attention_sink_dispatch(context.graph, *context.root_node, dispatch_match)) {
         return false;
