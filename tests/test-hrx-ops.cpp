@@ -3096,7 +3096,6 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     require_matmul_route(sequence, expected_kernel, weight_type, token_count, input_size, false);
     if (normalize_input && (weight_type == GGML_TYPE_Q4_K || square_output)) {
         require_kernel_subsequence(sequence, { "loom_libs:ggml_rmsnorm_binary_q8_1_x4" });
-    require_matmul_route(sequence, expected_kernel, weight_type, token_count, input_size, false);
         REQUIRE(std::find(sequence.begin(), sequence.end(), "qwen3_moe:ggml_quantize_q8_1_x4_f32") == sequence.end());
     } else if (normalize_input) {
         REQUIRE(std::find(sequence.begin(), sequence.end(), "loom_libs:ggml_rmsnorm_binary_q8_1_x4") == sequence.end());
@@ -4306,8 +4305,10 @@ static void run_routed_moe_cpu_reference_case(ggml_type down_weight_type, bool i
         "loom_libs:ggml_moe_build_expert_partition_table",
         "loom_libs:ggml_mul_mat_id_swiglu_f16_f16_wmma",
         "loom_libs:ggml_mul_mat_id_f16_f16_wmma",
-        include_next_rmsnorm ? "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_f16_f32" :
-                               "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_f16_f32",
+        // engine #444 (device run at f1670b43): the fused next-rmsnorm variant is not scheduled for either
+        // shape - the reduce is followed by its own ggml_rmsnorm_binary_f32 - so `include_next_rmsnorm` no
+        // longer selects a kernel here.
+        "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_f16_f32",
     };
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), expected);
 
