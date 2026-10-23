@@ -29,6 +29,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_LAGUNA:
+        case LLM_ARCH_FLINT: // per-layer SWA + RoPE pattern is not written by the saver
             return false;
         default:
             return true;
