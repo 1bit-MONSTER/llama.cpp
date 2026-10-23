@@ -308,6 +308,14 @@ bool llama_hparams::has_kv(uint32_t il) const {
     return true;
 }
 
+bool llama_hparams::has_rope(uint32_t il) const {
+    if (il < n_layer_all) {
+        return rope_pattern[il] != 0;
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
+}
+
 uint32_t llama_hparams::n_layer() const {
     return n_layer_all - n_layer_nextn;
 }

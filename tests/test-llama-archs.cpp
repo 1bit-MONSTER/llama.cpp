@@ -190,13 +190,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,              10000.0f);
         // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
-    } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
+    } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_FLINT) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
             pattern.push_back(il % 2);
         }
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
+        if (arch == LLM_ARCH_FLINT) {
+            ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN, pattern);
+        }
     } else {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(2));
     }
@@ -254,6 +257,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,         uint32_t(2)); // sigmoid
         ms.add_kv(LLM_KV_EXPERT_GROUP_SCALE,         1.0f);
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
+        if (arch == LLM_ARCH_FLINT) {
+            ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, true);
+            ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE, 1.0f);
+            ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, n_ff / 2);
+        }
     }
 
     ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
@@ -362,6 +370,7 @@ static std::vector<float> get_logits(
 
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
+        case LLM_ARCH_FLINT:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_COHERE2MOE:
         case LLM_ARCH_GROK:
