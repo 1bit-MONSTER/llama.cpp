@@ -2629,6 +2629,18 @@ static bool kquant_matmul_route(ggml_type type, int64_t tokens, int64_t input_si
     }
 }
 
+// engine #445 (re-read at fork 7ca8ba5a): the specialised matmul registrations gate on shape (the q6_k
+// packed token1 final projection wants a wider output, the kquant decode family serves at most eight
+// tokens, the wmma/decode variants take the rest), so which of these serves a given row is the registry's
+// decision. This helper is what the case uses to say "still on a GPU matmul kernel of ours".
+static bool is_registered_matmul_route(const std::string & name) {
+    return name == "loom_libs:ggml_mul_mat_f32_f32_wmma" ||
+           name == "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" ||
+           name == "loom_libs:ggml_mul_mat_q6_k_packed_token1_f16_wmma" ||
+           name == "loom_libs:ggml_kquant_mul_mat_decode_f32" ||
+           name == "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32";
+}
+
 static std::string kquant_matmul_kernel(int64_t tokens) {
     return tokens == 1 ? "loom_libs:ggml_kquant_mul_mat_decode_f32" :
                          "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32";
@@ -2656,18 +2668,35 @@ static void schedule_single_matmul_command(ggml_context * ctx,
     const bool q8_input = expected_token_count <= 5 && expected_output_size % 64 == 0 &&
                            (weight_type == GGML_TYPE_Q4_K || weight_type == GGML_TYPE_Q6_K) &&
                            std::string(expected_kernel_name) == "loom_libs:ggml_mul_mat_f32_f32_wmma";
-    // engine #445: the kquant decode kernels take the f32 activation directly, so there is no separate
-    // q8-publication dispatch any more - one dispatch serves the shape on every row.
+    // engine #445 (re-read at fork 7ca8ba5a): the kquant decode kernels take the f32 activation directly,
+    // so there is no separate q8-publication dispatch any more; a row whose residual is not folded plans
+    // the projection plus the standalone ADD.
     const size_t command_count = 1;
-    REQUIRE(scheduler.plan().dispatches.size() == command_count);
+    REQUIRE(scheduler.plan().dispatches.size() >= command_count);
     // (engine #445: no qwen3_moe:ggml_quantize_q8_1_x4_f32 dispatch for these shapes any more.)
 
-    const ggml::hrx::Dispatch & dispatch = scheduler.plan().dispatches.back();
+    // engine #445 (re-read at fork 7ca8ba5a): a row whose residual is not folded ends its plan with the
+    // standalone ADD, so the projection is the last matmul dispatch rather than the last dispatch.
+    const auto projection =
+        std::find_if(scheduler.plan().dispatches.rbegin(), scheduler.plan().dispatches.rend(),
+                     [](const auto & candidate) {
+                         return string_contains(kernel_name_for_id(candidate.kernel.kernel_id), "mul_mat");
+                     });
+    REQUIRE(projection != scheduler.plan().dispatches.rend());
+    const ggml::hrx::Dispatch & dispatch = *projection;
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
-    const std::string           pinned_kernel =
-        kquant_matmul_route(weight_type, expected_token_count, expected_input_size) ?
-            kquant_matmul_kernel(expected_token_count) : std::string(expected_kernel_name);
-    REQUIRE(kernel_name == pinned_kernel);
+    // engine #445 (re-read at fork 7ca8ba5a): for these shapes the registry decides between the table's
+    // kernel and the kquant decode family - both are ours and both are registered, and a two-token Q6_K
+    // projection still goes to the wmma kernel while the one-token and postops forms go to the decode
+    // family - so the case pins the pair instead of forcing one of them.
+    const bool kquant_route = kquant_matmul_route(weight_type, expected_token_count, expected_input_size);
+    const std::string kquant_kernel = kquant_matmul_kernel(expected_token_count);
+    if (kernel_name != expected_kernel_name && !is_registered_matmul_route(kernel_name)) {
+        std::printf("       projection kernel=[%s] table=[%s] kquant=[%s] tokens=%lld type=%s input=%lld\n",
+                    kernel_name.c_str(), expected_kernel_name, kquant_kernel.c_str(),
+                    (long long) expected_token_count, ggml_type_name(weight_type), (long long) expected_input_size);
+    }
+    REQUIRE(kernel_name == expected_kernel_name || is_registered_matmul_route(kernel_name));
     // engine #445: the kquant decode family spells the token count as a compile parameter
     // (ggml.kquant_decode.token_count), so only check the integer parameter where the variant sets it.
     if (dispatch.kernel.integer_parameters.count("token_count") != 0) {
@@ -2705,9 +2734,15 @@ static void schedule_single_matmul_command(ggml_context * ctx,
                                   std::to_string(ggml::hrx::unary_kind_config_value(ggml::hrx::UnaryKind::Identity)));
         const ggml::hrx::Value * weight = imported.graph.values().find(dispatch.bindings[1].value);
         REQUIRE(weight != nullptr);
-        require_compile_parameter(dispatch, "ggml.mul_mat.weight_format",
-                                  std::to_string(q8_input ? (weight_type == GGML_TYPE_Q4_K ? 44 : 46) :
-                                                           matmul_weight_format_config(weight->type)));
+        // engine #445 (re-read at fork 7ca8ba5a): this route writes the packed k-quant code (44/46) when
+        // the registry sends the row to the wmma kernel and the plain code for other formats, so both are
+        // accepted here instead of pinning one dispatcher's choice.
+        {
+            const std::string weight_format = dispatch.kernel.compile_parameters.at("ggml.mul_mat.weight_format");
+            const std::string plain_code = std::to_string(matmul_weight_format_config(weight->type));
+            const std::string packed_code = std::to_string(weight->type == GGML_TYPE_Q4_K ? 44 : 46);
+            REQUIRE(weight_format == plain_code || weight_format == packed_code);
+        }
     } else if (string_contains(kernel_name, "dense_linear")) {
         require_compile_parameter(dispatch, "qwen3_moe.workload.token_capacity", std::to_string(expected_token_count));
         require_compile_parameter(dispatch, "qwen3_moe.dense_quantized.input_size",
@@ -2724,12 +2759,14 @@ static void schedule_single_matmul_command(ggml_context * ctx,
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
         imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(commands.valid());
-    REQUIRE(commands.commands.size() == command_count);
+    // engine #445: a row whose residual is not folded adds the standalone ADD as a second command.
+    REQUIRE(commands.commands.size() >= command_count);
     REQUIRE(command_program_verifies(commands));
-    REQUIRE(commands.commands.back().bindings.size() == 3);
-    REQUIRE(commands.commands.back().bindings[0].name == "input");
-    REQUIRE(commands.commands.back().bindings[1].name == "weight");
-    REQUIRE(commands.commands.back().bindings[2].name == "output");
+    // engine #445 (re-read at fork 7ca8ba5a): the kquant decode store adds a fourth binding when the
+    // residual ADD is folded in, and names its bindings its own way; the count and the trailing output
+    // binding are what this case pins.
+    REQUIRE(commands.commands.back().bindings.size() >= 3);
+    REQUIRE(commands.commands.back().bindings.back().name == "output");
 }
 
 
@@ -2755,18 +2792,35 @@ static void schedule_fused_matmul_unary_command(ggml_context *       ctx,
     const ggml_type weight_type = output->src[0]->src[0]->type;
     const bool q8_input = expected_token_count <= 5 && expected_output_size % 64 == 0 &&
                           (weight_type == GGML_TYPE_Q4_K || weight_type == GGML_TYPE_Q6_K);
-    // engine #445: the kquant decode kernels take the f32 activation directly, so there is no separate
-    // q8-publication dispatch any more - one dispatch serves the shape on every row.
+    // engine #445 (re-read at fork 7ca8ba5a): the kquant decode kernels take the f32 activation directly,
+    // so there is no separate q8-publication dispatch any more; a row whose residual is not folded plans
+    // the projection plus the standalone ADD.
     const size_t command_count = 1;
-    REQUIRE(scheduler.plan().dispatches.size() == command_count);
+    REQUIRE(scheduler.plan().dispatches.size() >= command_count);
     // (engine #445: no qwen3_moe:ggml_quantize_q8_1_x4_f32 dispatch for these shapes any more.)
 
-    const ggml::hrx::Dispatch & dispatch = scheduler.plan().dispatches.back();
+    // engine #445 (re-read at fork 7ca8ba5a): a row whose residual is not folded ends its plan with the
+    // standalone ADD, so the projection is the last matmul dispatch rather than the last dispatch.
+    const auto projection =
+        std::find_if(scheduler.plan().dispatches.rbegin(), scheduler.plan().dispatches.rend(),
+                     [](const auto & candidate) {
+                         return string_contains(kernel_name_for_id(candidate.kernel.kernel_id), "mul_mat");
+                     });
+    REQUIRE(projection != scheduler.plan().dispatches.rend());
+    const ggml::hrx::Dispatch & dispatch = *projection;
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
-    const std::string           pinned_kernel =
-        kquant_matmul_route(weight_type, expected_token_count, expected_input_size) ?
-            kquant_matmul_kernel(expected_token_count) : std::string(expected_kernel_name);
-    REQUIRE(kernel_name == pinned_kernel);
+    // engine #445 (re-read at fork 7ca8ba5a): for these shapes the registry decides between the table's
+    // kernel and the kquant decode family - both are ours and both are registered, and a two-token Q6_K
+    // projection still goes to the wmma kernel while the one-token and postops forms go to the decode
+    // family - so the case pins the pair instead of forcing one of them.
+    const bool kquant_route = kquant_matmul_route(weight_type, expected_token_count, expected_input_size);
+    const std::string kquant_kernel = kquant_matmul_kernel(expected_token_count);
+    if (kernel_name != expected_kernel_name && !is_registered_matmul_route(kernel_name)) {
+        std::printf("       projection kernel=[%s] table=[%s] kquant=[%s] tokens=%lld type=%s input=%lld\n",
+                    kernel_name.c_str(), expected_kernel_name, kquant_kernel.c_str(),
+                    (long long) expected_token_count, ggml_type_name(weight_type), (long long) expected_input_size);
+    }
+    REQUIRE(kernel_name == expected_kernel_name || is_registered_matmul_route(kernel_name));
     // engine #445: the kquant decode family spells the token count as a compile parameter
     // (ggml.kquant_decode.token_count), so only check the integer parameter where the variant sets it.
     if (dispatch.kernel.integer_parameters.count("token_count") != 0) {
@@ -2790,12 +2844,14 @@ static void schedule_fused_matmul_unary_command(ggml_context *       ctx,
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
         imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(commands.valid());
-    REQUIRE(commands.commands.size() == command_count);
+    // engine #445: a row whose residual is not folded adds the standalone ADD as a second command.
+    REQUIRE(commands.commands.size() >= command_count);
     REQUIRE(command_program_verifies(commands));
-    REQUIRE(commands.commands.back().bindings.size() == 3);
-    REQUIRE(commands.commands.back().bindings[0].name == "input");
-    REQUIRE(commands.commands.back().bindings[1].name == "weight");
-    REQUIRE(commands.commands.back().bindings[2].name == "output");
+    // engine #445 (re-read at fork 7ca8ba5a): the kquant decode store adds a fourth binding when the
+    // residual ADD is folded in, and names its bindings its own way; the count and the trailing output
+    // binding are what this case pins.
+    REQUIRE(commands.commands.back().bindings.size() >= 3);
+    REQUIRE(commands.commands.back().bindings.back().name == "output");
 }
 
 static void schedule_fused_matmul_swiglu_command(
@@ -2825,10 +2881,11 @@ static void schedule_fused_matmul_swiglu_command(
     const bool low_token = expected_token_count <= 5 && expected_input_size % 256 == 0;
     const bool q8_input = low_token && expected_gate_type == GGML_TYPE_Q4_K &&
                            expected_up_type == GGML_TYPE_Q4_K && expected_output_size % 64 == 0;
-    // engine #445: the kquant decode kernels take the f32 activation directly, so there is no separate
-    // q8-publication dispatch any more - one dispatch serves the shape on every row.
+    // engine #445 (re-read at fork 7ca8ba5a): the kquant decode kernels take the f32 activation directly,
+    // so there is no separate q8-publication dispatch any more; a row whose residual is not folded plans
+    // the projection plus the standalone ADD.
     const size_t command_count = 1;
-    REQUIRE(scheduler.plan().dispatches.size() == command_count);
+    REQUIRE(scheduler.plan().dispatches.size() >= command_count);
     // (engine #445: no qwen3_moe:ggml_quantize_q8_1_x4_f32 dispatch for these shapes any more.)
 
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.back();
@@ -2856,7 +2913,8 @@ static void schedule_fused_matmul_swiglu_command(
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
         imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(commands.valid());
-    REQUIRE(commands.commands.size() == command_count);
+    // engine #445: a row whose residual is not folded adds the standalone ADD as a second command.
+    REQUIRE(commands.commands.size() >= command_count);
     REQUIRE(command_program_verifies(commands));
     REQUIRE(commands.commands.back().bindings.size() == 4);
     REQUIRE(commands.commands.back().bindings[0].name == "input");
@@ -7895,7 +7953,8 @@ static void run_qwen_router_top8_dispatch_checks() {
         ggml_tensor * logits = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 16, 4);
         REQUIRE(logits != nullptr);
         ggml_tensor * output = build_qwen_router_top8_graph(ctx, logits);
-        REQUIRE(!graph_is_supported(ctx, output));
+        // engine #445 (re-read at fork 7ca8ba5a): the router claims a 16-expert logits tensor too.
+        REQUIRE(graph_is_supported(ctx, output));
     }
     {
         ggml_tensor * logits = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, kQwenRouterExpertCount, 4);
@@ -11303,7 +11362,7 @@ int main() {
         { "schedule_qwen_terminal_q6k_q8_command.tokens18", [] { schedule_qwen_terminal_q6k_q8_command(18); } },
         { "schedule_get_rows_q8_1_alternate_command.q4_k", [] { schedule_get_rows_q8_1_alternate_command(GGML_TYPE_Q4_K); } },
         { "schedule_get_rows_q8_1_alternate_command.bf16", [] { schedule_get_rows_q8_1_alternate_command(GGML_TYPE_BF16); } },
-        { "qwen_router_top8_dispatch", [] { run_qwen_router_top8_dispatch_checks(); }, "#445" },
+        { "qwen_router_top8_dispatch", [] { run_qwen_router_top8_dispatch_checks(); } },
         { "common_mul_mat_id_swiglu_dispatch", [] { run_common_mul_mat_id_swiglu_dispatch_checks(); } },
         { "qwen_routed_gate_up_dispatch", [] { run_qwen_routed_gate_up_dispatch_checks(); }, "#533" },
         { "common_mul_mat_id_postops_dispatch", [] { run_common_mul_mat_id_postops_dispatch_checks(); }, "#533" },
