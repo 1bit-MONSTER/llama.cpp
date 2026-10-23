@@ -21,6 +21,7 @@ static void test_whitespace_control(testing & t);
 static void test_conditionals(testing & t);
 static void test_loops(testing & t);
 static void test_expressions(testing & t);
+static void test_escapes(testing & t);
 static void test_set_statement(testing & t);
 static void test_filters(testing & t);
 static void test_literals(testing & t);
@@ -59,6 +60,7 @@ int main(int argc, char *argv[]) {
     t.test("conditionals", test_conditionals);
     t.test("loops", test_loops);
     t.test("expressions", test_expressions);
+    t.test("escapes", test_escapes);
     t.test("set statement", test_set_statement);
     t.test("filters", test_filters);
     t.test("literals", test_literals);
@@ -481,6 +483,41 @@ static void test_expressions(testing & t) {
         "{{ 'yes' if cond else 'no' }}",
         {{"cond", true}},
         "yes"
+    );
+}
+
+static void test_escapes(testing & t) {
+    // hexadecimal escapes: the Flint chat template opens with replace("\x00", ""), and a lexer that
+    // rejects \x used to abort --jinja before the model even loaded
+    test_template(t, "hex escape",
+        "{{ \"\\x41\" }}",
+        json::object(),
+        "A"
+    );
+
+    test_template(t, "hex escape, uppercase digits",
+        "{{ \"\\x4a\\x4B\" }}",
+        json::object(),
+        "JK"
+    );
+
+    // \x00 is the case the Flint template actually uses: one NUL byte, dropped by replace()
+    test_template(t, "hex escape, NUL byte",
+        "{{ \"\\x00\" | length }}",
+        json::object(),
+        "1"
+    );
+
+    test_template(t, "flint template opener",
+        "{{- t | replace(\"\\x00\", \"\") | replace(\"<think>\", \"\") -}}",
+        {{"t", "<think>hello"}},
+        "hello"
+    );
+
+    test_template(t, "named escapes still work",
+        "{{ \"a\\tb\\nc\\\"d\" }}",
+        json::object(),
+        "a\tb\nc\"d"
     );
 }
 
