@@ -194,6 +194,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-common.h
     dispatch_registration/common/dispatch-copy.cpp
     dispatch_registration/common/dispatch-copy.h
+    dispatch_registration/common/dispatch-permute.cpp
+    dispatch_registration/common/dispatch-permute.h
     dispatch_registration/common/dispatch-flash-attention.cpp
     dispatch_registration/common/dispatch-flash-attention.h
     dispatch_registration/common/dispatch-gated-mul-mat-id.cpp

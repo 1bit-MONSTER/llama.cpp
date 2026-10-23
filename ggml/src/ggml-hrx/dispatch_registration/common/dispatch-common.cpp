@@ -9,6 +9,7 @@
 #include "dispatch-get-rows.h"
 #include "dispatch-glu.h"
 #include "dispatch-mul-mat-id.h"
+#include "dispatch-permute.h"
 #include "dispatch-mul-mat.h"
 #include "dispatch-rmsnorm.h"
 #include "dispatch-rope-set-rows.h"
@@ -32,6 +33,7 @@ namespace ggml::hrx {
 void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_binary_dispatch(registry);
     register_copy_dispatch(registry);
+    register_permute_dispatch(registry);
     register_flash_attention_dispatches(registry);
     register_gated_mul_mat_id_dispatches(registry);
     register_gated_mul_mat_dispatches(registry);
