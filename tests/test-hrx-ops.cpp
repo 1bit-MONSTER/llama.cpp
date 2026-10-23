@@ -8,6 +8,8 @@
 #include "kernel-corpus/kernel-corpus.h"
 #include "runtime/graph-executor.h"
 
+#include "testing_suite.h"
+
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
@@ -18,6 +20,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -4469,257 +4472,1055 @@ static void run_ssm_conv_prefill_recurrent_case(ggml_type type, bool gathered, b
     ggml_backend_free(backend);
 }
 
-int main() {
-    run_rmsnorm_support_checks();
-    run_alternate_value_alias_lookup_checks();
+static void add(test_runner::Suite & suite, const std::string & name,
+                const std::function<void()> & run) {
+    suite.device_case(name, run);
+}
 
-    if (ggml_backend_hrx_get_device_count() == 0) {
-        std::fprintf(stderr, "test skipped: no HRX devices available\n");
-        return 0;
-    }
+// One entry per case: the runner gives every case its own process, so one failure no longer hides the
+// rest of the run and a run reports real per-case totals (engine #444).
+static void add_cases(test_runner::Suite & suite) {
+    // These two need no HRX device: they check the support predicate and the alternate-value lookup.
+    suite.host_case("rmsnorm_support", run_rmsnorm_support_checks);
+    suite.host_case("alternate_value_alias_lookup", run_alternate_value_alias_lookup_checks);
 
-    run_add_f32_cpu_reference_case();
-    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
-        run_ssm_conv_prefill_recurrent_case(type, false, false);
-        run_ssm_conv_prefill_recurrent_case(type, true, false);
-        run_ssm_conv_prefill_recurrent_case(type, true, true);
-    }
-    run_view_mul_f32_cpu_reference_case();
-    run_strided_cont_cpu_reference_case(2);
-    run_strided_cont_cpu_reference_case(23);
-    run_glu_split_f32_cpu_reference_case(GGML_GLU_OP_REGLU);
-    run_glu_split_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU);
-    run_glu_split_f32_cpu_reference_case(GGML_GLU_OP_GEGLU);
-    run_glu_split_f32_cpu_reference_case(GGML_GLU_OP_GEGLU_ERF);
-    run_glu_split_f32_cpu_reference_case(GGML_GLU_OP_GEGLU_QUICK);
-    run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_REGLU, false);
-    run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, false);
-    run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_GEGLU, false);
-    run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_GEGLU_ERF, false);
-    run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_GEGLU_QUICK, false);
-    run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, true);
-    run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, false, 8192, 2);
-    run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, false, 8192, 14);
-    run_gather_add_f32_cpu_reference_case();
-    run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q4_K);
-    run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q6_K);
-    run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q1_0, 2048);
-    run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q5_1, 640);
-    run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q8_0);
-    run_get_rows_q8_1_zero_weight_case();
-    run_get_rows_f32_cpu_reference_case(GGML_TYPE_F16);
-    run_get_rows_f32_cpu_reference_case(GGML_TYPE_BF16);
-    run_get_rows_f32_cpu_reference_case(GGML_TYPE_F32);
-    for (int64_t tokens : { 1, 3, 5 }) {
-        for (int64_t outputs : { 1, 4, 47, 48, 63 }) {
-            run_dense_matmul_cpu_reference_case(
-                GGML_TYPE_Q4_K,
-                tokens == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" :
-                              "loom_libs:ggml_mul_mat_f32_f32_wmma",
-                tokens, outputs);
-        }
-    }
-    for (ggml_type type : { GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0,
-                            GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32 }) {
-        run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47);
-    }
-    run_dense_matmul_unary_cpu_reference_case(
-        GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47);
-    run_get_rows_f32_cpu_reference_case(GGML_TYPE_F32, 262144, 4, 1);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 1, 128);
-    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
-        for (ggml_type cache_type : { GGML_TYPE_F16, GGML_TYPE_F32 }) {
-            run_dense_matmul_cpu_reference_case(type, "loom_libs:llm_attention_v_matmul_set_rows_f32_f32_wmma",
-                                               1, 1024, 2048, false, false, cache_type);
-        }
-    }
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q1_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q1_0, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_0, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_1, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_1, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 256, 640);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128, 544);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 256, 640);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_1, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_1, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ2_S, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 640);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ2_S, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 640);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_q6_k_packed_token1_f16_wmma", 1, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_NL, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 1024, 640);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_NL, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 1024, 640);
-    run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_f32_f32_wmma");
-    run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_BF16, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_BF16, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 256);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 256);
-    run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
-    run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_F16,
-                                               "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128);
-    run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_F16,
-                                               "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128, GGML_GLU_OP_GEGLU);
-    run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL,
-                                               "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma", 2, 2048, GGML_GLU_OP_GEGLU,
-                                               640);
-    run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_F16,
-                                               "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128, GGML_GLU_OP_REGLU);
-    run_dense_matmul_swiglu_cpu_reference_case(
-        GGML_TYPE_Q4_K, GGML_TYPE_F16, "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128, GGML_GLU_OP_GEGLU_ERF);
-    run_dense_matmul_swiglu_cpu_reference_case(
-        GGML_TYPE_Q4_K, GGML_TYPE_F16, "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128, GGML_GLU_OP_GEGLU_QUICK);
-    run_dense_matmul_packed_glu_cpu_reference_case(GGML_TYPE_Q4_K,
-                                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma", 2, 128);
-    run_dense_matmul_packed_glu_cpu_reference_case(GGML_TYPE_Q4_K,
-                                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma", 2, 128,
-                                                   GGML_GLU_OP_SWIGLU, true);
-    run_dense_matmul_binary_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_F16,
-                                               "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128);
-    for (ggml_glu_op op : { GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_REGLU,
-                           GGML_GLU_OP_GEGLU_ERF, GGML_GLU_OP_GEGLU_QUICK }) {
-        run_dense_matmul_swiglu_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", 4, 128, op);
-        run_dense_matmul_swiglu_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", 4, 4096, op);
-        run_dense_matmul_swiglu_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 256, 128, op);
-        run_dense_matmul_swiglu_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 256, 4096, op);
-        run_dense_matmul_swiglu_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 512, 4096, op);
-    }
-    for (const int64_t tokens : { 1, 2, 3, 5 }) {
-        run_dense_matmul_swiglu_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", tokens, 4160);
-    }
-    for (const int64_t tokens : { 1, 2, 5 }) {
-        run_dense_matmul_swiglu_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
-            tokens, 16384, GGML_GLU_OP_SWIGLU, 4096);
-    }
-    run_dense_matmul_swiglu_cpu_reference_case(
-        GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
-        3, 16384, GGML_GLU_OP_REGLU, 4352);
-    run_dense_matmul_binary_cpu_reference_case(
-        GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", 4, 128);
-    run_dense_matmul_binary_cpu_reference_case(
-        GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 256, 128);
-    run_dense_matmul_binary_cpu_reference_case(
-        GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 256, 4096);
-    run_dense_matmul_binary_cpu_reference_case(
-        GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 1024, 2048);
-    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_bias_f32_f32_wmma", 33, 256,
-                                                true, false, false);
-    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_add_f32_f32_wmma", 33, 256,
-                                                false, true, false);
-    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_bias_add_f32_f32_wmma", 33, 256,
-                                                true, true, false);
-    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_add_f32_f32_wmma", 33, 256,
-                                                false, true, true);
-    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_bias_add_f32_f32_wmma", 33, 256,
-                                                true, true, true);
-    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
-        const int64_t input_size = type == GGML_TYPE_Q4_K ? 20480 : 8192;
-        run_dense_matmul_cpu_reference_case(
-            type, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 4096, input_size);
-        run_dense_matmul_postops_cpu_reference_case(
-            type, "loom_libs:ggml_mul_mat_add_f32_f32_wmma", 5, 4160, false, true, false, input_size + 256);
-        run_dense_matmul_postops_cpu_reference_case(
-            type, "loom_libs:ggml_mul_mat_add_f32_f32_wmma", 5, 4224, false, true, true, input_size + 256);
-    }
-    run_dense_matmul_cpu_reference_case(
-        GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 4096, 8192);
-    for (const int64_t input_size : { 6144, 6400, 6656 }) {
-        run_dense_matmul_cpu_reference_case(
-            GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 5120, input_size);
-        run_dense_matmul_postops_cpu_reference_case(
-            GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_add_f32_f32_wmma", 5, 5120, false, true, true, input_size);
-    }
-    run_dense_matmul_cpu_reference_case(
-        GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 4, 4096, 4096);
-    run_dense_matmul_postops_cpu_reference_case(
-        GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_add_f32_f32_wmma", 4, 4160, false, true, false, 6400);
-    run_dense_matmul_postops_cpu_reference_case(
-        GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_add_f32_f32_wmma", 4, 4224, false, true, true, 6656);
-    run_endpoint_rmsnorm_q6k_q8_cpu_reference_case();
-    run_dense_matmul_cpu_reference_case(
-        GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 4096, 16384);
-    run_dense_matmul_postops_cpu_reference_case(
-        GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_add_f32_f32_wmma", 5, 4160, false, true, false, 16640);
-    run_dense_matmul_postops_cpu_reference_case(
-        GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_add_f32_f32_wmma", 5, 4224, false, true, true, 16640);
-    for (const int64_t tokens : { 1, 3, 5 }) {
-        run_dense_matmul_cpu_reference_case(
-            GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", tokens, 256, 5120, true);
-        run_dense_matmul_cpu_reference_case(
-            GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", tokens, 256, 5120, true, true);
-    }
-    run_dense_matmul_cpu_reference_case(
-        GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_q6_k_packed_token1_f16_wmma", 1, 256, 5120, true);
-    run_rmsnorm_cpu_reference_case();
-    run_rmsnorm_cpu_reference_case(3840, 18, 1.0e-6f);
-    run_strided_rmsnorm_cpu_reference_case(2);
-    run_strided_rmsnorm_cpu_reference_case(23);
-    run_rmsnorm_binary_add_cpu_reference_case();
-    run_rmsnorm_gate_cpu_reference_case(128, 1, 7, GGML_UNARY_OP_SILU);
-    run_rmsnorm_gate_cpu_reference_case(256, 3, 3, GGML_UNARY_OP_GELU);
-    run_rmsnorm_gate_cpu_reference_case(512, 3, 5, GGML_UNARY_OP_RELU);
-    run_rmsnorm_gate_cpu_reference_case(1024, 1, 4, GGML_UNARY_OP_GELU_ERF);
-    run_rmsnorm_gate_cpu_reference_case(128, 48, 512, GGML_UNARY_OP_SILU);
-    run_rmsnorm_mul_cpu_reference_case(3840, 18, 1.0e-6f);
-    run_gemma_scaled_rmsnorm_cpu_reference_case();
-    run_gemma_scaled_rmsnorm_mul_cpu_reference_case();
-    run_scheduled_hrx_scale_rmsnorm_case();
-    run_scheduled_hrx_rmsnorm_scale_case();
-    run_scheduled_hrx_rmsnorm_view_scale_case();
-    run_external_view_input_rmsnorm_case();
-    run_split_local_view_alias_import_case();
-    run_rope_set_rows_cpu_reference_case();
-    run_attention_postprocess_cpu_reference_case();
-    run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true);
-    run_asymmetric_flash_attention_cpu_reference_case();
-    run_routed_moe_cpu_reference_case(GGML_TYPE_Q6_K, false);
-    run_decode_attention_qkv_scheduling_case();
-    run_decode_routed_moe_scheduling_case(GGML_TYPE_Q4_K);
-    run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K);
-    run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, true);
-    run_rmsnorm_mul_case(256, 1);
-    run_rmsnorm_mul_case(256, 4);
-    run_rmsnorm_mul_case(2048, 1);
-    run_router_projection_case(4);
-    run_router_top8_case(4);
-    run_qwen_flash_attention_case();
-    for (int64_t head_size = 64; head_size <= 512; head_size += 64) {
-        run_common_flash_attention_cpu_reference_case(head_size, 2, 65,
-                                                      1.0f / std::sqrt(static_cast<float>(head_size)),
-                                                      "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
-        run_common_flash_attention_cpu_reference_case(head_size, 16, 64,
-                                                      1.0f / std::sqrt(static_cast<float>(head_size)),
-                                                      "loom_libs:ggml_flash_attention_f32_f16_wmma");
-        run_common_flash_attention_cpu_reference_case(head_size, 17, 65,
-                                                      1.0f / std::sqrt(static_cast<float>(head_size)),
-                                                      "loom_libs:ggml_flash_attention_f32_f16_wmma");
-    }
-    run_common_flash_attention_cpu_reference_case(96, 2, 4, 1.0f / std::sqrt(96.0f),
-                                                  "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8", 320);
-    run_common_flash_attention_cpu_reference_case(320, 2, 64, 1.0f / std::sqrt(320.0f),
-                                                  "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8", 64);
-    run_qwen_decode_split_flash_attention_scheduling_case(1, 512);
-    run_qwen_decode_split_flash_attention_scheduling_case(4, 513);
-    run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true);
-    run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true, 96, 64, 1.0f / std::sqrt(96.0f));
-    run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f));
-    run_qwen_decode_attention_output_next_q8_scheduling_case(false);
-    run_qwen_decode_attention_output_next_q8_scheduling_case(true);
-    run_qwen_full_cache_prefill_flash_attention_scheduling_case(512);
-    return 0;
+    add(suite, "add_f32_cpu_reference",
+        [=] { run_add_f32_cpu_reference_case(); });
+    add(suite, "ssm_conv.q4_k",
+        [=] { run_ssm_conv_prefill_recurrent_case(GGML_TYPE_Q4_K, false, false); });
+    add(suite, "ssm_conv.q4_k.true",
+        [=] { run_ssm_conv_prefill_recurrent_case(GGML_TYPE_Q4_K, true, false); });
+    add(suite, "ssm_conv.q4_k.true.true",
+        [=] { run_ssm_conv_prefill_recurrent_case(GGML_TYPE_Q4_K, true, true); });
+    add(suite, "ssm_conv.q6_k",
+        [=] { run_ssm_conv_prefill_recurrent_case(GGML_TYPE_Q6_K, false, false); });
+    add(suite, "ssm_conv.q6_k.true",
+        [=] { run_ssm_conv_prefill_recurrent_case(GGML_TYPE_Q6_K, true, false); });
+    add(suite, "ssm_conv.q6_k.true.true",
+        [=] { run_ssm_conv_prefill_recurrent_case(GGML_TYPE_Q6_K, true, true); });
+    add(suite, "view_mul_f32_cpu_reference",
+        [=] { run_view_mul_f32_cpu_reference_case(); });
+    add(suite, "strided_cont.2",
+        [=] { run_strided_cont_cpu_reference_case(2); });
+    add(suite, "strided_cont.23",
+        [=] { run_strided_cont_cpu_reference_case(23); });
+    add(suite, "glu_split.reglu",
+        [=] { run_glu_split_f32_cpu_reference_case(GGML_GLU_OP_REGLU); });
+    add(suite, "glu_split.swiglu",
+        [=] { run_glu_split_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU); });
+    add(suite, "glu_split.geglu",
+        [=] { run_glu_split_f32_cpu_reference_case(GGML_GLU_OP_GEGLU); });
+    add(suite, "glu_split.geglu_erf",
+        [=] { run_glu_split_f32_cpu_reference_case(GGML_GLU_OP_GEGLU_ERF); });
+    add(suite, "glu_split.geglu_quick",
+        [=] { run_glu_split_f32_cpu_reference_case(GGML_GLU_OP_GEGLU_QUICK); });
+    add(suite, "glu_packed.reglu",
+        [=] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_REGLU, false); });
+    add(suite, "glu_packed.swiglu",
+        [=] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, false); });
+    add(suite, "glu_packed.geglu",
+        [=] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_GEGLU, false); });
+    add(suite, "glu_packed.geglu_erf",
+        [=] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_GEGLU_ERF, false); });
+    add(suite, "glu_packed.geglu_quick",
+        [=] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_GEGLU_QUICK, false); });
+    add(suite, "glu_packed.swiglu.true",
+        [=] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, true); });
+    add(suite, "glu_packed.swiglu.8192.2",
+        [=] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, false, 8192, 2); });
+    add(suite, "glu_packed.swiglu.8192.14",
+        [=] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, false, 8192, 14); });
+    add(suite, "gather_add_f32_cpu_reference",
+        [=] { run_gather_add_f32_cpu_reference_case(); });
+    add(suite, "get_rows.q4_k",
+        [=] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q4_K); });
+    add(suite, "get_rows.q6_k",
+        [=] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q6_K); });
+    add(suite, "get_rows.q1_0.2048",
+        [=] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q1_0, 2048); });
+    add(suite, "get_rows.q5_1.640",
+        [=] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q5_1, 640); });
+    add(suite, "get_rows.q8_0",
+        [=] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q8_0); });
+    add(suite, "get_rows_q8_1_zero_weight",
+        [=] { run_get_rows_q8_1_zero_weight_case(); });
+    add(suite, "get_rows.f16",
+        [=] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_F16); });
+    add(suite, "get_rows.bf16",
+        [=] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_BF16); });
+    add(suite, "get_rows.f32",
+        [=] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_F32); });
+    add(suite, "dense.q4_k.f32_f32_decode_wave64.1.1",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   1 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   1,
+                                   1); });
+    add(suite, "dense.q4_k.f32_f32_decode_wave64.1.4",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   1 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   1,
+                                   4); });
+    add(suite, "dense.q4_k.f32_f32_decode_wave64.1.47",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   1 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   1,
+                                   47); });
+    add(suite, "dense.q4_k.f32_f32_decode_wave64.1.48",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   1 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   1,
+                                   48); });
+    add(suite, "dense.q4_k.f32_f32_decode_wave64.1.63",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   1 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   1,
+                                   63); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.3.1",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   3 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   3,
+                                   1); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.3.4",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   3 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   3,
+                                   4); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.3.47",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   3 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   3,
+                                   47); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.3.48",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   3 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   3,
+                                   48); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.3.63",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   3 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   3,
+                                   63); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.1",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   5 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   5,
+                                   1); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.4",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   5 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   5,
+                                   4); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.47",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   5 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   5,
+                                   47); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.48",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   5 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   5,
+                                   48); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.63",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   5 == 1 ? "loom_libs:ggml_mul_mat_f32_f32_decode_wave64" : "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   5,
+                                   63); });
+    add(suite, "dense.q5_k.mul_mat_f32_f32_wmma.3.47",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
+    add(suite, "dense.q6_k.mul_mat_f32_f32_wmma.3.47",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
+    add(suite, "dense.q8_0.mul_mat_f32_f32_wmma.3.47",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
+    add(suite, "dense.f16.mul_mat_f32_f32_wmma.3.47",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
+    add(suite, "dense.bf16.mul_mat_f32_f32_wmma.3.47",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_BF16, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
+    add(suite, "dense.f32.mul_mat_f32_f32_wmma.3.47",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
+    add(suite, "dense_unary.f32.mul_mat_f32_f32_wmma.3.47",
+        [=] { run_dense_matmul_unary_cpu_reference_case( GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
+    add(suite, "get_rows.f32.262144.4.1",
+        [=] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_F32, 262144, 4, 1); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.1.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 1, 128); });
+    add(suite, "dense.q4_k.llm_attention_v_matmul_set_rows_f32_f32_wmma.1.1024.2048.f16",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K,
+                                   "loom_libs:llm_attention_v_matmul_set_rows_f32_f32_wmma",
+                                   1,
+                                   1024,
+                                   2048,
+                                   false,
+                                   false,
+                                   GGML_TYPE_F16); });
+    add(suite, "dense.q4_k.llm_attention_v_matmul_set_rows_f32_f32_wmma.1.1024.2048.f32",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K,
+                                   "loom_libs:llm_attention_v_matmul_set_rows_f32_f32_wmma",
+                                   1,
+                                   1024,
+                                   2048,
+                                   false,
+                                   false,
+                                   GGML_TYPE_F32); });
+    add(suite, "dense.q6_k.llm_attention_v_matmul_set_rows_f32_f32_wmma.1.1024.2048.f16",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K,
+                                   "loom_libs:llm_attention_v_matmul_set_rows_f32_f32_wmma",
+                                   1,
+                                   1024,
+                                   2048,
+                                   false,
+                                   false,
+                                   GGML_TYPE_F16); });
+    add(suite, "dense.q6_k.llm_attention_v_matmul_set_rows_f32_f32_wmma.1.1024.2048.f32",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K,
+                                   "loom_libs:llm_attention_v_matmul_set_rows_f32_f32_wmma",
+                                   1,
+                                   1024,
+                                   2048,
+                                   false,
+                                   false,
+                                   GGML_TYPE_F32); });
+    add(suite, "dense.q1_0.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q1_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "dense.q1_0.f32_f32_decode_wave64.1.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q1_0, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128); });
+    add(suite, "dense.q4_0.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "dense.q4_0.f32_f32_decode_wave64.1.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_0, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128); });
+    add(suite, "dense.q4_1.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_1, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "dense.q4_1.f32_f32_decode_wave64.1.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_1, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128); });
+    add(suite, "dense.q5_0.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "dense.q5_0.f32_f32_decode_wave64.1.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128); });
+    add(suite, "dense.q5_0.mul_mat_f32_f32_wmma.2.256.640",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 256, 640); });
+    add(suite, "dense.q5_0.mul_mat_f32_f32_wmma.2.128.544",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128, 544); });
+    add(suite, "dense.q5_0.f32_f32_decode_wave64.1.256.640",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0,
+                                   "loom_libs:ggml_mul_mat_f32_f32_decode_wave64",
+                                   1,
+                                   256,
+                                   640); });
+    add(suite, "dense.q5_1.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_1, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "dense.q5_1.f32_f32_decode_wave64.1.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_1, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128); });
+    add(suite, "dense.iq2_s.mul_mat_f32_f32_wmma.2.640",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ2_S, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 640); });
+    add(suite, "dense.iq2_s.f32_f32_decode_wave64.1.640",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ2_S, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 640); });
+    add(suite, "dense.q6_k.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "dense.q6_k.q6_k_packed_token1_f16_wmma.1.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K,
+                                   "loom_libs:ggml_mul_mat_q6_k_packed_token1_f16_wmma",
+                                   1,
+                                   128); });
+    add(suite, "dense.q8_0.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "dense.q8_0.f32_f32_decode_wave64.1.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128); });
+    add(suite, "dense.iq4_nl.mul_mat_f32_f32_wmma.2.1024.640",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_NL, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 1024, 640); });
+    add(suite, "dense.iq4_nl.f32_f32_decode_wave64.1.1024.640",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_NL,
+                                   "loom_libs:ggml_mul_mat_f32_f32_decode_wave64",
+                                   1,
+                                   1024,
+                                   640); });
+    add(suite, "zero_weight.q8_1.mul_mat_f32_f32_wmma",
+        [=] { run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_f32_f32_wmma"); });
+    add(suite, "zero_weight.q8_1.f32_f32_decode_wave64.1",
+        [=] { run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1); });
+    add(suite, "dense.f16.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "dense.f16.f32_f32_decode_wave64.1.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128); });
+    add(suite, "dense.bf16.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_BF16, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "dense.bf16.f32_f32_decode_wave64.1.128",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_BF16, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128); });
+    add(suite, "dense.f32.mul_mat_f32_f32_wmma.2.256",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 256); });
+    add(suite, "dense.f32.f32_f32_decode_wave64.1.256",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 256); });
+    add(suite, "dense_unary.f32.mul_mat_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
+    add(suite, "swiglu.q4_k.f16.swiglu_f32_f32_lowtoken_dot.2.128",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K,
+                                   GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
+                                   2,
+                                   128); });
+    add(suite, "swiglu.q4_k.f16.swiglu_f32_f32_lowtoken_dot.2.128.geglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K,
+                                   GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
+                                   2,
+                                   128,
+                                   GGML_GLU_OP_GEGLU); });
+    add(suite, "swiglu.iq4_nl.iq4_nl.swiglu_f32_f32_wmma.2.2048.geglu.640",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_IQ4_NL,
+                                   GGML_TYPE_IQ4_NL,
+                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma",
+                                   2,
+                                   2048,
+                                   GGML_GLU_OP_GEGLU,
+                                   640); });
+    add(suite, "swiglu.q4_k.f16.swiglu_f32_f32_lowtoken_dot.2.128.reglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K,
+                                   GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
+                                   2,
+                                   128,
+                                   GGML_GLU_OP_REGLU); });
+    add(suite, "swiglu.q4_k.f16.swiglu_f32_f32_lowtoken_dot.2.128.geglu_erf",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
+                                   2,
+                                   128,
+                                   GGML_GLU_OP_GEGLU_ERF); });
+    add(suite, "swiglu.q4_k.f16.swiglu_f32_f32_lowtoken_dot.2.128.geglu_quick",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
+                                   2,
+                                   128,
+                                   GGML_GLU_OP_GEGLU_QUICK); });
+    add(suite, "packed_glu.q4_k.swiglu_f32_f32_wmma.2.128",
+        [=] { run_dense_matmul_packed_glu_cpu_reference_case(GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma",
+                                   2,
+                                   128); });
+    add(suite, "packed_glu.q4_k.swiglu_f32_f32_wmma.2.128.swiglu.true",
+        [=] { run_dense_matmul_packed_glu_cpu_reference_case(GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma",
+                                   2,
+                                   128,
+                                   GGML_GLU_OP_SWIGLU,
+                                   true); });
+    add(suite, "dense_binary.q4_k.f16.swiglu_f32_f32_lowtoken_dot.2.128",
+        [=] { run_dense_matmul_binary_cpu_reference_case(GGML_TYPE_Q4_K,
+                                   GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
+                                   2,
+                                   128); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.128.swiglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   128,
+                                   GGML_GLU_OP_SWIGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.4096.swiglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   4096,
+                                   GGML_GLU_OP_SWIGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.128.swiglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   128,
+                                   GGML_GLU_OP_SWIGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.4096.swiglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   4096,
+                                   GGML_GLU_OP_SWIGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.512.4096.swiglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   512,
+                                   4096,
+                                   GGML_GLU_OP_SWIGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.128.geglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   128,
+                                   GGML_GLU_OP_GEGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.4096.geglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   4096,
+                                   GGML_GLU_OP_GEGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.128.geglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   128,
+                                   GGML_GLU_OP_GEGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.4096.geglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   4096,
+                                   GGML_GLU_OP_GEGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.512.4096.geglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   512,
+                                   4096,
+                                   GGML_GLU_OP_GEGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.128.reglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   128,
+                                   GGML_GLU_OP_REGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.4096.reglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   4096,
+                                   GGML_GLU_OP_REGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.128.reglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   128,
+                                   GGML_GLU_OP_REGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.4096.reglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   4096,
+                                   GGML_GLU_OP_REGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.512.4096.reglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   512,
+                                   4096,
+                                   GGML_GLU_OP_REGLU); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.128.geglu_erf",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   128,
+                                   GGML_GLU_OP_GEGLU_ERF); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.4096.geglu_erf",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   4096,
+                                   GGML_GLU_OP_GEGLU_ERF); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.128.geglu_erf",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   128,
+                                   GGML_GLU_OP_GEGLU_ERF); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.4096.geglu_erf",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   4096,
+                                   GGML_GLU_OP_GEGLU_ERF); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.512.4096.geglu_erf",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   512,
+                                   4096,
+                                   GGML_GLU_OP_GEGLU_ERF); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.128.geglu_quick",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   128,
+                                   GGML_GLU_OP_GEGLU_QUICK); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.4096.geglu_quick",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   4096,
+                                   GGML_GLU_OP_GEGLU_QUICK); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.128.geglu_quick",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   128,
+                                   GGML_GLU_OP_GEGLU_QUICK); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.4096.geglu_quick",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   4096,
+                                   GGML_GLU_OP_GEGLU_QUICK); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.512.4096.geglu_quick",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   512,
+                                   4096,
+                                   GGML_GLU_OP_GEGLU_QUICK); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.1.4160",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   1,
+                                   4160); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.2.4160",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   2,
+                                   4160); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.3.4160",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   3,
+                                   4160); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.5.4160",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   5,
+                                   4160); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.1.16384.swiglu.4096",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   1,
+                                   16384,
+                                   GGML_GLU_OP_SWIGLU,
+                                   4096); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.2.16384.swiglu.4096",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   2,
+                                   16384,
+                                   GGML_GLU_OP_SWIGLU,
+                                   4096); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.5.16384.swiglu.4096",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   5,
+                                   16384,
+                                   GGML_GLU_OP_SWIGLU,
+                                   4096); });
+    add(suite, "swiglu.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.3.16384.reglu.4352",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   3,
+                                   16384,
+                                   GGML_GLU_OP_REGLU,
+                                   4352); });
+    add(suite, "dense_binary.q4_k.q4_k.swiglu_q4_q8_1_x4_lowtoken_dot.4.128",
+        [=] { run_dense_matmul_binary_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                   4,
+                                   128); });
+    add(suite, "dense_binary.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.128",
+        [=] { run_dense_matmul_binary_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   128); });
+    add(suite, "dense_binary.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.4096",
+        [=] { run_dense_matmul_binary_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   256,
+                                   4096); });
+    add(suite, "dense_binary.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.1024.2048",
+        [=] { run_dense_matmul_binary_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
+                                   1024,
+                                   2048); });
+    add(suite, "postops.f16.bias_f32_f32_wmma.33.256.true",
+        [=] { run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_bias_f32_f32_wmma",
+                                   33,
+                                   256,
+                                   true,
+                                   false,
+                                   false); });
+    add(suite, "postops.f16.add_f32_f32_wmma.33.256.true",
+        [=] { run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   33,
+                                   256,
+                                   false,
+                                   true,
+                                   false); });
+    add(suite, "postops.f16.bias_add_f32_f32_wmma.33.256.true.true",
+        [=] { run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_bias_add_f32_f32_wmma",
+                                   33,
+                                   256,
+                                   true,
+                                   true,
+                                   false); });
+    add(suite, "postops.f16.add_f32_f32_wmma.33.256.true.true",
+        [=] { run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   33,
+                                   256,
+                                   false,
+                                   true,
+                                   true); });
+    add(suite, "postops.f16.bias_add_f32_f32_wmma.33.256.true.true.true",
+        [=] { run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
+                                   "loom_libs:ggml_mul_mat_bias_add_f32_f32_wmma",
+                                   33,
+                                   256,
+                                   true,
+                                   true,
+                                   true); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.4096.20480",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 4096, 20480); });
+    add(suite, "postops.q4_k.add_f32_f32_wmma.5.4160.true.20480 + 256",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   5,
+                                   4160,
+                                   false,
+                                   true,
+                                   false,
+                                   20480 + 256); });
+    add(suite, "postops.q4_k.add_f32_f32_wmma.5.4224.true.true.20480 + 256",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   5,
+                                   4224,
+                                   false,
+                                   true,
+                                   true,
+                                   20480 + 256); });
+    add(suite, "dense.q6_k.mul_mat_f32_f32_wmma.5.4096.8192",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 4096, 8192); });
+    add(suite, "postops.q6_k.add_f32_f32_wmma.5.4160.true.8192 + 256",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q6_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   5,
+                                   4160,
+                                   false,
+                                   true,
+                                   false,
+                                   8192 + 256); });
+    add(suite, "postops.q6_k.add_f32_f32_wmma.5.4224.true.true.8192 + 256",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q6_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   5,
+                                   4224,
+                                   false,
+                                   true,
+                                   true,
+                                   8192 + 256); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.4096.8192",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 4096, 8192); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.5120.6144",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 5120, 6144); });
+    add(suite, "postops.q4_k.add_f32_f32_wmma.5.5120.true.true.6144",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   5,
+                                   5120,
+                                   false,
+                                   true,
+                                   true,
+                                   6144); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.5120.6400",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 5120, 6400); });
+    add(suite, "postops.q4_k.add_f32_f32_wmma.5.5120.true.true.6400",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   5,
+                                   5120,
+                                   false,
+                                   true,
+                                   true,
+                                   6400); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.5120.6656",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 5120, 6656); });
+    add(suite, "postops.q4_k.add_f32_f32_wmma.5.5120.true.true.6656",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   5,
+                                   5120,
+                                   false,
+                                   true,
+                                   true,
+                                   6656); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.4.4096.4096",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 4, 4096, 4096); });
+    add(suite, "postops.q4_k.add_f32_f32_wmma.4.4160.true.6400",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   4,
+                                   4160,
+                                   false,
+                                   true,
+                                   false,
+                                   6400); });
+    add(suite, "postops.q4_k.add_f32_f32_wmma.4.4224.true.true.6656",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   4,
+                                   4224,
+                                   false,
+                                   true,
+                                   true,
+                                   6656); });
+    add(suite, "endpoint_rmsnorm_q6k_q8_cpu_reference",
+        [=] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(); });
+    add(suite, "dense.q6_k.mul_mat_f32_f32_wmma.5.4096.16384",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 5, 4096, 16384); });
+    add(suite, "postops.q6_k.add_f32_f32_wmma.5.4160.true.16640",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q6_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   5,
+                                   4160,
+                                   false,
+                                   true,
+                                   false,
+                                   16640); });
+    add(suite, "postops.q6_k.add_f32_f32_wmma.5.4224.true.true.16640",
+        [=] { run_dense_matmul_postops_cpu_reference_case( GGML_TYPE_Q6_K,
+                                   "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
+                                   5,
+                                   4224,
+                                   false,
+                                   true,
+                                   true,
+                                   16640); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.1.256.5120.true",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   1,
+                                   256,
+                                   5120,
+                                   true); });
+    add(suite, "dense.q6_k.mul_mat_f32_f32_wmma.1.256.5120.true.true",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q6_K,
+                                   "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   1,
+                                   256,
+                                   5120,
+                                   true,
+                                   true); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.3.256.5120.true",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   3,
+                                   256,
+                                   5120,
+                                   true); });
+    add(suite, "dense.q6_k.mul_mat_f32_f32_wmma.3.256.5120.true.true",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q6_K,
+                                   "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   3,
+                                   256,
+                                   5120,
+                                   true,
+                                   true); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.5.256.5120.true",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q4_K,
+                                   "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   5,
+                                   256,
+                                   5120,
+                                   true); });
+    add(suite, "dense.q6_k.mul_mat_f32_f32_wmma.5.256.5120.true.true",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q6_K,
+                                   "loom_libs:ggml_mul_mat_f32_f32_wmma",
+                                   5,
+                                   256,
+                                   5120,
+                                   true,
+                                   true); });
+    add(suite, "dense.q6_k.q6_k_packed_token1_f16_wmma.1.256.5120.true",
+        [=] { run_dense_matmul_cpu_reference_case( GGML_TYPE_Q6_K,
+                                   "loom_libs:ggml_mul_mat_q6_k_packed_token1_f16_wmma",
+                                   1,
+                                   256,
+                                   5120,
+                                   true); });
+    add(suite, "rmsnorm",
+        [=] { run_rmsnorm_cpu_reference_case(); });
+    add(suite, "rmsnorm.3840.18.1.0e-6f",
+        [=] { run_rmsnorm_cpu_reference_case(3840, 18, 1.0e-6f); });
+    add(suite, "strided_rmsnorm.2",
+        [=] { run_strided_rmsnorm_cpu_reference_case(2); });
+    add(suite, "strided_rmsnorm.23",
+        [=] { run_strided_rmsnorm_cpu_reference_case(23); });
+    add(suite, "rmsnorm_binary_add_cpu_reference",
+        [=] { run_rmsnorm_binary_add_cpu_reference_case(); });
+    add(suite, "rmsnorm_gate.128.1.7.silu",
+        [=] { run_rmsnorm_gate_cpu_reference_case(128, 1, 7, GGML_UNARY_OP_SILU); });
+    add(suite, "rmsnorm_gate.256.3.3.gelu",
+        [=] { run_rmsnorm_gate_cpu_reference_case(256, 3, 3, GGML_UNARY_OP_GELU); });
+    add(suite, "rmsnorm_gate.512.3.5.relu",
+        [=] { run_rmsnorm_gate_cpu_reference_case(512, 3, 5, GGML_UNARY_OP_RELU); });
+    add(suite, "rmsnorm_gate.1024.1.4.gelu_erf",
+        [=] { run_rmsnorm_gate_cpu_reference_case(1024, 1, 4, GGML_UNARY_OP_GELU_ERF); });
+    add(suite, "rmsnorm_gate.128.48.512.silu",
+        [=] { run_rmsnorm_gate_cpu_reference_case(128, 48, 512, GGML_UNARY_OP_SILU); });
+    add(suite, "rmsnorm_mul.3840.18.1.0e-6f",
+        [=] { run_rmsnorm_mul_cpu_reference_case(3840, 18, 1.0e-6f); });
+    add(suite, "gemma_scaled_rmsnorm_cpu_reference",
+        [=] { run_gemma_scaled_rmsnorm_cpu_reference_case(); });
+    add(suite, "gemma_scaled_rmsnorm_mul_cpu_reference",
+        [=] { run_gemma_scaled_rmsnorm_mul_cpu_reference_case(); });
+    add(suite, "hrx_scale_rmsnorm",
+        [=] { run_scheduled_hrx_scale_rmsnorm_case(); });
+    add(suite, "hrx_rmsnorm_scale",
+        [=] { run_scheduled_hrx_rmsnorm_scale_case(); });
+    add(suite, "hrx_rmsnorm_view_scale",
+        [=] { run_scheduled_hrx_rmsnorm_view_scale_case(); });
+    add(suite, "external_view_input_rmsnorm",
+        [=] { run_external_view_input_rmsnorm_case(); });
+    add(suite, "split_local_view_alias_import",
+        [=] { run_split_local_view_alias_import_case(); });
+    add(suite, "rope_set_rows_cpu_reference",
+        [=] { run_rope_set_rows_cpu_reference_case(); });
+    add(suite, "attention_postprocess_cpu_reference",
+        [=] { run_attention_postprocess_cpu_reference_case(); });
+    add(suite, "routed_moe.q4_k.true",
+        [=] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true); });
+    add(suite, "asymmetric_flash_attention_cpu_reference",
+        [=] { run_asymmetric_flash_attention_cpu_reference_case(); });
+    add(suite, "routed_moe.q6_k",
+        [=] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q6_K, false); });
+    add(suite, "decode_attention_qkv_scheduling",
+        [=] { run_decode_attention_qkv_scheduling_case(); });
+    add(suite, "routed_moe_decode.q4_k",
+        [=] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q4_K); });
+    add(suite, "routed_moe_decode.q6_k",
+        [=] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K); });
+    add(suite, "routed_moe_decode.q6_k.true",
+        [=] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, true); });
+    add(suite, "rmsnorm_mul.256.1",
+        [=] { run_rmsnorm_mul_case(256, 1); });
+    add(suite, "rmsnorm_mul.256.4",
+        [=] { run_rmsnorm_mul_case(256, 4); });
+    add(suite, "rmsnorm_mul.2048.1",
+        [=] { run_rmsnorm_mul_case(2048, 1); });
+    add(suite, "router_projection.4",
+        [=] { run_router_projection_case(4); });
+    add(suite, "router_top8.4",
+        [=] { run_router_top8_case(4); });
+    add(suite, "qwen_flash_attention",
+        [=] { run_qwen_flash_attention_case(); });
+    add(suite, "flash_attention.64.2.65.1/sqrt(static_cast<float>(64)).flash_attention_decode_split_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(64,
+                                   2,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(64)),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"); });
+    add(suite, "flash_attention.64.16.64.1/sqrt(static_cast<float>(64)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(64,
+                                   16,
+                                   64,
+                                   1.0f / std::sqrt(static_cast<float>(64)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.64.17.65.1/sqrt(static_cast<float>(64)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(64,
+                                   17,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(64)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.128.2.65.1/sqrt(static_cast<float>(128)).flash_attention_decode_split_f32_f16_wm",
+        [=] { run_common_flash_attention_cpu_reference_case(128,
+                                   2,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(128)),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"); });
+    add(suite, "flash_attention.128.16.64.1/sqrt(static_cast<float>(128)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(128,
+                                   16,
+                                   64,
+                                   1.0f / std::sqrt(static_cast<float>(128)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.128.17.65.1/sqrt(static_cast<float>(128)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(128,
+                                   17,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(128)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.192.2.65.1/sqrt(static_cast<float>(192)).flash_attention_decode_split_f32_f16_wm",
+        [=] { run_common_flash_attention_cpu_reference_case(192,
+                                   2,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(192)),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"); });
+    add(suite, "flash_attention.192.16.64.1/sqrt(static_cast<float>(192)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(192,
+                                   16,
+                                   64,
+                                   1.0f / std::sqrt(static_cast<float>(192)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.192.17.65.1/sqrt(static_cast<float>(192)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(192,
+                                   17,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(192)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.256.2.65.1/sqrt(static_cast<float>(256)).flash_attention_decode_split_f32_f16_wm",
+        [=] { run_common_flash_attention_cpu_reference_case(256,
+                                   2,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(256)),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"); });
+    add(suite, "flash_attention.256.16.64.1/sqrt(static_cast<float>(256)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(256,
+                                   16,
+                                   64,
+                                   1.0f / std::sqrt(static_cast<float>(256)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.256.17.65.1/sqrt(static_cast<float>(256)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(256,
+                                   17,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(256)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.320.2.65.1/sqrt(static_cast<float>(320)).flash_attention_decode_split_f32_f16_wm",
+        [=] { run_common_flash_attention_cpu_reference_case(320,
+                                   2,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(320)),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"); });
+    add(suite, "flash_attention.320.16.64.1/sqrt(static_cast<float>(320)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(320,
+                                   16,
+                                   64,
+                                   1.0f / std::sqrt(static_cast<float>(320)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.320.17.65.1/sqrt(static_cast<float>(320)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(320,
+                                   17,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(320)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.384.2.65.1/sqrt(static_cast<float>(384)).flash_attention_decode_split_f32_f16_wm",
+        [=] { run_common_flash_attention_cpu_reference_case(384,
+                                   2,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(384)),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"); });
+    add(suite, "flash_attention.384.16.64.1/sqrt(static_cast<float>(384)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(384,
+                                   16,
+                                   64,
+                                   1.0f / std::sqrt(static_cast<float>(384)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.384.17.65.1/sqrt(static_cast<float>(384)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(384,
+                                   17,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(384)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.448.2.65.1/sqrt(static_cast<float>(448)).flash_attention_decode_split_f32_f16_wm",
+        [=] { run_common_flash_attention_cpu_reference_case(448,
+                                   2,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(448)),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"); });
+    add(suite, "flash_attention.448.16.64.1/sqrt(static_cast<float>(448)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(448,
+                                   16,
+                                   64,
+                                   1.0f / std::sqrt(static_cast<float>(448)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.448.17.65.1/sqrt(static_cast<float>(448)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(448,
+                                   17,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(448)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.512.2.65.1/sqrt(static_cast<float>(512)).flash_attention_decode_split_f32_f16_wm",
+        [=] { run_common_flash_attention_cpu_reference_case(512,
+                                   2,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(512)),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"); });
+    add(suite, "flash_attention.512.16.64.1/sqrt(static_cast<float>(512)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(512,
+                                   16,
+                                   64,
+                                   1.0f / std::sqrt(static_cast<float>(512)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.512.17.65.1/sqrt(static_cast<float>(512)).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(512,
+                                   17,
+                                   65,
+                                   1.0f / std::sqrt(static_cast<float>(512)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.96.2.4.1/sqrt(96.0f).flash_attention_decode_split_f32_f16_wmma_next_q8.320",
+        [=] { run_common_flash_attention_cpu_reference_case(96,
+                                   2,
+                                   4,
+                                   1.0f / std::sqrt(96.0f),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8",
+                                   320); });
+    add(suite, "flash_attention.320.2.64.1/sqrt(320.0f).flash_attention_decode_split_f32_f16_wmma_next_q8.64",
+        [=] { run_common_flash_attention_cpu_reference_case(320,
+                                   2,
+                                   64,
+                                   1.0f / std::sqrt(320.0f),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8",
+                                   64); });
+    add(suite, "fa_decode_split.1.512",
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512); });
+    add(suite, "fa_decode_split.4.513",
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513); });
+    add(suite, "fa_decode_split.1.512.true",
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true); });
+    add(suite, "fa_decode_split.1.512.true.96.64.1/sqrt(96.0f)",
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true, 96, 64, 1.0f / std::sqrt(96.0f)); });
+    add(suite, "fa_decode_split.4.513.true.96.64.1/sqrt(96.0f)",
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f)); });
+    add(suite, "fa_decode_next_q8.",
+        [=] { run_qwen_decode_attention_output_next_q8_scheduling_case(false); });
+    add(suite, "fa_decode_next_q8.true",
+        [=] { run_qwen_decode_attention_output_next_q8_scheduling_case(true); });
+    add(suite, "fa_prefill_full_cache.512",
+        [=] { run_qwen_full_cache_prefill_flash_attention_scheduling_case(512); });
+}
+
+int main(int argc, char ** argv) {
+    // One job: every case below drives the GPU, so they run one at a time.
+    test_runner::Suite suite(test_runner::Config::with_prefix("test-hrx-ops", "hrx-ops-test", "HRX_OPS_TEST", 1));
+    add_cases(suite);
+    return suite.run(argc, argv, ggml_backend_hrx_get_device_count() > 0);
 }
