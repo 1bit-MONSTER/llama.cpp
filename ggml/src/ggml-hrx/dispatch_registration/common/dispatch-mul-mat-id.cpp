@@ -244,15 +244,22 @@ static bool match_mul_mat_id_postops_dispatch(const DispatchMatchContext & conte
     dispatch.bindings.push_back({ routing_bundle.expert_table, 0, routing_bundle.expert_table_byte_count });
     dispatch.bindings.push_back({ routing_bundle.partition_table, 0, routing_bundle.partition_table_byte_count });
     dispatch.bindings.push_back({ match.root.weight->id, 0, match.root.weight->byte_count });
+    // The exports declare the bias and residual slots with read access whether or not the kernel uses
+    // them; the kernel only loads them when has_bias / has_residual is set, so an absent slot is
+    // filled with a read-only value the programme reads anyway. Binding the output transient here
+    // instead made the command-program verifier reject the plan ("reads transient value N before
+    // write", engine #533): the slot is declared read, and nothing writes the output before this
+    // command does.
+    const Value & absent_slot = *match.root.weight;
     if (match.has_bias) {
         dispatch.bindings.push_back({ match.bias->id, 0, match.bias->byte_count });
     } else {
-        dispatch.bindings.push_back({ match.residual_output->id, 0, match.residual_output->byte_count });
+        dispatch.bindings.push_back({ absent_slot.id, 0, absent_slot.byte_count });
     }
     if (match.has_residual) {
         dispatch.bindings.push_back({ match.residual_input->id, 0, match.residual_input->byte_count });
     } else {
-        dispatch.bindings.push_back({ match.residual_output->id, 0, match.residual_output->byte_count });
+        dispatch.bindings.push_back({ absent_slot.id, 0, absent_slot.byte_count });
     }
     dispatch.bindings.push_back({ match.residual_output->id, 0, match.residual_output->byte_count });
     if (match.has_rmsnorm) {

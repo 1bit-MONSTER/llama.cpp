@@ -11306,7 +11306,7 @@ int main() {
         { "qwen_router_top8_dispatch", [] { run_qwen_router_top8_dispatch_checks(); }, "#445" },
         { "common_mul_mat_id_swiglu_dispatch", [] { run_common_mul_mat_id_swiglu_dispatch_checks(); } },
         { "qwen_routed_gate_up_dispatch", [] { run_qwen_routed_gate_up_dispatch_checks(); }, "#533" },
-        { "common_mul_mat_id_postops_dispatch", [] { run_common_mul_mat_id_postops_dispatch_checks(); }, "#533" },
+        { "common_mul_mat_id_postops_dispatch", [] { run_common_mul_mat_id_postops_dispatch_checks(); } },
         { "alias_value_import", [] { run_alias_value_import_checks(); } },
         { "multi_dispatch", [] { run_multi_dispatch_checks(); } },
         { "layout_alias_scheduler_elision", [] { run_layout_alias_scheduler_elision_checks(); } },
