@@ -126,6 +126,19 @@ json op_params_json(const OpParams & params) {
                     { "scale",    value.scale    },
                     { "max_bias", value.max_bias }
                 };
+            } else if constexpr (std::is_same_v<T, PadParams>) {
+                return {
+                    { "kind",     "pad"         },
+                    { "lp0",      value.lp0     },
+                    { "rp0",      value.rp0     },
+                    { "lp1",      value.lp1     },
+                    { "rp1",      value.rp1     },
+                    { "lp2",      value.lp2     },
+                    { "rp2",      value.rp2     },
+                    { "lp3",      value.lp3     },
+                    { "rp3",      value.rp3     },
+                    { "circular", value.circular }
+                };
             } else if constexpr (std::is_same_v<T, ArgsortParams>) {
                 return {
                     { "kind",  "argsort"                     },
@@ -200,6 +213,11 @@ OpParams parse_op_params(const json & item) {
     }
     if (kind == "soft_max") {
         return SoftMaxParams{ item.value("scale", 0.0f), item.value("max_bias", 0.0f) };
+    }
+    if (kind == "pad") {
+        return PadParams{ item.value("lp0", 0), item.value("rp0", 0), item.value("lp1", 0), item.value("rp1", 0),
+                          item.value("lp2", 0), item.value("rp2", 0), item.value("lp3", 0), item.value("rp3", 0),
+                          item.value("circular", 0) };
     }
     if (kind == "argsort") {
         return ArgsortParams{ static_cast<ggml_sort_order>(
