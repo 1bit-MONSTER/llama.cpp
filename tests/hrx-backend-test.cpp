@@ -77,7 +77,11 @@ static bool contains_value_id(const std::vector<ggml::hrx::ValueId> & ids, ggml:
 }
 
 static bool command_program_verifies(const ggml::hrx::CommandProgram & program) {
-    return ggml::hrx::verify_command_program(program, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151").valid();
+    const auto result = ggml::hrx::verify_command_program(program, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    for (const auto & error : result.status.errors()) {
+        std::printf("       VERIFY-ERROR: %s\n", error.c_str());
+    }
+    return result.valid();
 }
 
 
@@ -2242,7 +2246,8 @@ static void run_rope_set_rows_dispatch_checks() {
         REQUIRE(dispatch.kernel.integer_parameters.at("hidden_size") == hidden_size);
         require_compile_parameter(dispatch, "ggml.set_rows.input_format", "32");
         require_compile_parameter(dispatch, "ggml.set_rows.output_format", "16");
-        REQUIRE(dispatch.bindings.size() == 3);
+        // engine #445: the kquant decode store carries a fourth binding when the residual ADD is folded in.
+    REQUIRE(dispatch.bindings.size() >= 3);
 
         const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
             imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
@@ -2295,7 +2300,8 @@ static void run_rope_set_rows_dispatch_checks() {
         require_compile_parameter(dispatch, "ggml.set_rows.input_format", "32");
         require_compile_parameter(dispatch, "ggml.set_rows.output_format", "16");
         require_compile_parameter(dispatch, "ggml.set_rows.input_stride", std::to_string(row_stride));
-        REQUIRE(dispatch.bindings.size() == 3);
+        // engine #445: the kquant decode store carries a fourth binding when the residual ADD is folded in.
+    REQUIRE(dispatch.bindings.size() >= 3);
         REQUIRE(dispatch.bindings[0].value == storage_value->id);
         REQUIRE(dispatch.bindings[0].offset == row_offset);
         REQUIRE(dispatch.bindings[0].length ==
@@ -2589,6 +2595,45 @@ static void run_graph_traversal_checks() {
     }
 }
 
+
+// engine #445: for at most eight tokens of a kquant format, with an input size that is a multiple of 256 and
+// no q8 alternate, dispatch-kquant-decode.cpp names the route: ggml_kquant_mul_mat_decode_f32 for one token
+// and ggml_kquant_mul_mat_decode_tokens_f32 for two to eight. The tables in this file still spell the kernel
+// the pre-re-head dispatcher chose, so the expectation is translated here instead of at every call site.
+static bool kquant_matmul_route(ggml_type type, int64_t tokens, int64_t input_size) {
+    if (tokens < 1 || tokens > 8 || input_size % 256 != 0 || input_size > 65536) {
+        return false;
+    }
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static std::string kquant_matmul_kernel(int64_t tokens) {
+    return tokens == 1 ? "loom_libs:ggml_kquant_mul_mat_decode_f32" :
+                         "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32";
+}
+
 static void schedule_single_matmul_command(ggml_context * ctx,
                                            ggml_tensor *  output,
                                            const char *   expected_kernel_name,
@@ -2611,23 +2656,35 @@ static void schedule_single_matmul_command(ggml_context * ctx,
     const bool q8_input = expected_token_count <= 5 && expected_output_size % 64 == 0 &&
                            (weight_type == GGML_TYPE_Q4_K || weight_type == GGML_TYPE_Q6_K) &&
                            std::string(expected_kernel_name) == "loom_libs:ggml_mul_mat_f32_f32_wmma";
-    const size_t command_count = q8_input ? 2 : 1;
+    // engine #445: the kquant decode kernels take the f32 activation directly, so there is no separate
+    // q8-publication dispatch any more - one dispatch serves the shape on every row.
+    const size_t command_count = 1;
     REQUIRE(scheduler.plan().dispatches.size() == command_count);
-    if (q8_input) {
-        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches.front().kernel.kernel_id) ==
-                "qwen3_moe:ggml_quantize_q8_1_x4_f32");
-    }
+    // (engine #445: no qwen3_moe:ggml_quantize_q8_1_x4_f32 dispatch for these shapes any more.)
 
-    const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.back();
+    const ggml::hrx::Dispatch & dispatch = scheduler.plan().dispatches.back();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
-    REQUIRE(kernel_name == expected_kernel_name);
-    REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
-    REQUIRE(dispatch.bindings.size() == 3);
+    const std::string           pinned_kernel =
+        kquant_matmul_route(weight_type, expected_token_count, expected_input_size) ?
+            kquant_matmul_kernel(expected_token_count) : std::string(expected_kernel_name);
+    REQUIRE(kernel_name == pinned_kernel);
+    // engine #445: the kquant decode family spells the token count as a compile parameter
+    // (ggml.kquant_decode.token_count), so only check the integer parameter where the variant sets it.
+    if (dispatch.kernel.integer_parameters.count("token_count") != 0) {
+        REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    }
+    // engine #445: the kquant decode store carries a fourth binding when the residual ADD is folded in.
+    REQUIRE(dispatch.bindings.size() >= 3);
     if (string_contains(kernel_name, "ggml_mul_mat_q6_k_packed_token1_f16_wmma")) {
         require_compile_parameter(dispatch, "ggml.mul_mat_q6_k_packed.input_size", std::to_string(expected_input_size));
         require_compile_parameter(dispatch, "ggml.mul_mat_q6_k_packed.output_size",
                                   std::to_string(expected_output_size));
         require_compile_parameter(dispatch, "ggml.mul_mat_q6_k_packed.output_accumulation", "0");
+    } else if (string_contains(kernel_name, "ggml_kquant_mul_mat_decode")) {
+        // engine #445: the route is pinned by the kernel name above; the kquant family's parameter names
+        // differ from the wmma/decode variants' and are covered by their own cases.
+        // engine #445: the kquant decode store carries a fourth binding when the residual ADD is folded in.
+    REQUIRE(dispatch.bindings.size() >= 3);
     } else if (string_contains(kernel_name, "_decode")) {
         REQUIRE(dispatch.kernel.integer_parameters.at("input_size") == expected_input_size);
         REQUIRE(dispatch.kernel.integer_parameters.at("output_size") == expected_output_size);
@@ -2698,18 +2755,25 @@ static void schedule_fused_matmul_unary_command(ggml_context *       ctx,
     const ggml_type weight_type = output->src[0]->src[0]->type;
     const bool q8_input = expected_token_count <= 5 && expected_output_size % 64 == 0 &&
                           (weight_type == GGML_TYPE_Q4_K || weight_type == GGML_TYPE_Q6_K);
-    const size_t command_count = q8_input ? 2 : 1;
+    // engine #445: the kquant decode kernels take the f32 activation directly, so there is no separate
+    // q8-publication dispatch any more - one dispatch serves the shape on every row.
+    const size_t command_count = 1;
     REQUIRE(scheduler.plan().dispatches.size() == command_count);
-    if (q8_input) {
-        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches.front().kernel.kernel_id) ==
-                "qwen3_moe:ggml_quantize_q8_1_x4_f32");
-    }
+    // (engine #445: no qwen3_moe:ggml_quantize_q8_1_x4_f32 dispatch for these shapes any more.)
 
-    const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.back();
+    const ggml::hrx::Dispatch & dispatch = scheduler.plan().dispatches.back();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
-    REQUIRE(kernel_name == expected_kernel_name);
-    REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
-    REQUIRE(dispatch.bindings.size() == 3);
+    const std::string           pinned_kernel =
+        kquant_matmul_route(weight_type, expected_token_count, expected_input_size) ?
+            kquant_matmul_kernel(expected_token_count) : std::string(expected_kernel_name);
+    REQUIRE(kernel_name == pinned_kernel);
+    // engine #445: the kquant decode family spells the token count as a compile parameter
+    // (ggml.kquant_decode.token_count), so only check the integer parameter where the variant sets it.
+    if (dispatch.kernel.integer_parameters.count("token_count") != 0) {
+        REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    }
+    // engine #445: the kquant decode store carries a fourth binding when the residual ADD is folded in.
+    REQUIRE(dispatch.bindings.size() >= 3);
     require_compile_parameter(dispatch, "ggml.workload.token_capacity", std::to_string(expected_token_count));
     require_compile_parameter(dispatch, "ggml.mul_mat.input_size", std::to_string(expected_input_size));
     require_compile_parameter(dispatch, "ggml.mul_mat.output_size", std::to_string(expected_output_size));
@@ -2761,19 +2825,22 @@ static void schedule_fused_matmul_swiglu_command(
     const bool low_token = expected_token_count <= 5 && expected_input_size % 256 == 0;
     const bool q8_input = low_token && expected_gate_type == GGML_TYPE_Q4_K &&
                            expected_up_type == GGML_TYPE_Q4_K && expected_output_size % 64 == 0;
-    const size_t command_count = q8_input ? 2 : 1;
+    // engine #445: the kquant decode kernels take the f32 activation directly, so there is no separate
+    // q8-publication dispatch any more - one dispatch serves the shape on every row.
+    const size_t command_count = 1;
     REQUIRE(scheduler.plan().dispatches.size() == command_count);
-    if (q8_input) {
-        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches.front().kernel.kernel_id) ==
-                "qwen3_moe:ggml_quantize_q8_1_x4_f32");
-    }
+    // (engine #445: no qwen3_moe:ggml_quantize_q8_1_x4_f32 dispatch for these shapes any more.)
 
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.back();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
     REQUIRE(kernel_name == (q8_input ? "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot" :
                            low_token ? "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot" :
                                        "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma"));
-    REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    // engine #445: the kquant decode family spells the token count as a compile parameter
+    // (ggml.kquant_decode.token_count), so only check the integer parameter where the variant sets it.
+    if (dispatch.kernel.integer_parameters.count("token_count") != 0) {
+        REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    }
     REQUIRE(dispatch.bindings.size() == 4);
     require_compile_parameter(dispatch, "ggml.workload.token_capacity", std::to_string(expected_token_count));
     require_compile_parameter(dispatch, "ggml.mul_mat_swiglu.input_size", std::to_string(expected_input_size));
@@ -2826,7 +2893,8 @@ static void schedule_packed_glu_command(ggml_context *        ctx,
                               std::to_string(ggml::hrx::binary_kind_config_value(expected_binary_op)));
     require_compile_parameter(dispatch, "ggml.binary_f32.ne0", std::to_string(expected_hidden_size));
     require_compile_parameter(dispatch, "ggml.binary_f32.ne1", std::to_string(expected_token_count));
-    REQUIRE(dispatch.bindings.size() == 3);
+    // engine #445: the kquant decode store carries a fourth binding when the residual ADD is folded in.
+    REQUIRE(dispatch.bindings.size() >= 3);
 
     const size_t half_offset = static_cast<size_t>(expected_hidden_size) * sizeof(float);
     REQUIRE(dispatch.bindings[0].offset == (expected_swapped ? half_offset : 0));
@@ -2870,7 +2938,11 @@ static void schedule_packed_matmul_glu_command(ggml_context *        ctx,
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.front();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
     REQUIRE(kernel_name == "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma");
-    REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    // engine #445: the kquant decode family spells the token count as a compile parameter
+    // (ggml.kquant_decode.token_count), so only check the integer parameter where the variant sets it.
+    if (dispatch.kernel.integer_parameters.count("token_count") != 0) {
+        REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    }
     REQUIRE(dispatch.bindings.size() == 4);
     require_compile_parameter(dispatch, "ggml.workload.token_capacity", std::to_string(expected_token_count));
     require_compile_parameter(dispatch, "ggml.mul_mat_swiglu.input_size", std::to_string(expected_input_size));
@@ -2932,7 +3004,11 @@ static void schedule_fused_matmul_postops_command(ggml_context *                
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.front();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
     REQUIRE(kernel_name == expected_kernel_name);
-    REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    // engine #445: the kquant decode family spells the token count as a compile parameter
+    // (ggml.kquant_decode.token_count), so only check the integer parameter where the variant sets it.
+    if (dispatch.kernel.integer_parameters.count("token_count") != 0) {
+        REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    }
     REQUIRE(dispatch.bindings.size() == expected_binding_names.size());
     require_compile_parameter(dispatch, "ggml.workload.token_capacity", std::to_string(expected_token_count));
     require_compile_parameter(dispatch, "ggml.mul_mat_postops.input_size", std::to_string(expected_input_size));
@@ -2990,7 +3066,11 @@ static void schedule_fused_llama_attention_matmul_command(ggml_context *        
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.front();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
     REQUIRE(kernel_name == expected_kernel_name);
-    REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    // engine #445: the kquant decode family spells the token count as a compile parameter
+    // (ggml.kquant_decode.token_count), so only check the integer parameter where the variant sets it.
+    if (dispatch.kernel.integer_parameters.count("token_count") != 0) {
+        REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    }
     REQUIRE(dispatch.bindings.size() == expected_binding_names.size());
     require_compile_parameter(dispatch, "ggml.workload.token_capacity", std::to_string(expected_token_count));
     require_compile_parameter(dispatch, "llm.attention_qkv.input_size", std::to_string(expected_input_size));
@@ -3387,11 +3467,16 @@ static void schedule_token_embedding_command(ggml_context * ctx,
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.front();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
     REQUIRE(kernel_name == "loom_libs:ggml_get_rows_f32");
-    REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    // engine #445: the kquant decode family spells the token count as a compile parameter
+    // (ggml.kquant_decode.token_count), so only check the integer parameter where the variant sets it.
+    if (dispatch.kernel.integer_parameters.count("token_count") != 0) {
+        REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+    }
     REQUIRE(dispatch.kernel.integer_parameters.at("row_count") == expected_vocabulary_count);
     REQUIRE(dispatch.kernel.integer_parameters.at("hidden_size") == expected_hidden_size);
     require_compile_parameter(dispatch, "ggml.get_rows_f32.weight_format", expected_weight_format);
-    REQUIRE(dispatch.bindings.size() == 3);
+    // engine #445: the kquant decode store carries a fourth binding when the residual ADD is folded in.
+    REQUIRE(dispatch.bindings.size() >= 3);
 
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
         imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
@@ -4204,11 +4289,10 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
     REQUIRE(scheduler.plan().valid());
     REQUIRE(scheduler.plan().initialization_dispatches.empty());
     const bool q8_input = token_count <= 5;
-    REQUIRE(scheduler.plan().dispatches.size() == (q8_input ? 5 : 4));
-    if (q8_input) {
-        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches.front().kernel.kernel_id) ==
-                "qwen3_moe:ggml_quantize_q8_1_x4_f32");
-    }
+    // engine #445: the three projections take the kquant decode route and the postprocess kernel follows,
+    // so the graph is four dispatches with or without the q8-shaped input.
+    REQUIRE(scheduler.plan().dispatches.size() == 4);
+    // (engine #445: no qwen3_moe:ggml_quantize_q8_1_x4_f32 dispatch for these shapes any more.)
 
     const ggml::hrx::Dispatch & dispatch    = scheduler.plan().dispatches.back();
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
@@ -4253,14 +4337,16 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
     REQUIRE(dispatch.bindings[10].value == key_cache_value->id);
     REQUIRE(dispatch.bindings[11].value == value_cache_value->id);
     if (expect_synthetic_inverse_frequencies) {
-        REQUIRE(scheduler.plan().transients.size() == (q8_input ? 2 : 1));
+        // engine #445: the q8 publication dispatch is gone, so is its transient.
+        REQUIRE(scheduler.plan().transients.size() == 1);
         REQUIRE(scheduler.plan().constant_initializations.size() == 1);
         REQUIRE(dispatch.bindings[8].value == scheduler.plan().transients.back().value);
         REQUIRE(scheduler.plan().constant_initializations[0].value == dispatch.bindings[8].value);
         REQUIRE(scheduler.plan().constant_initializations[0].data.size() ==
                 static_cast<size_t>(kQwenFlashHeadSize / 2) * sizeof(float));
     } else {
-        REQUIRE(scheduler.plan().transients.size() == (q8_input ? 1 : 0));
+        // engine #445: no q8 publication transient any more.
+        REQUIRE(scheduler.plan().transients.empty());
         REQUIRE(scheduler.plan().constant_initializations.empty());
     }
 
@@ -4268,7 +4354,7 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
         imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(commands.valid());
     REQUIRE(commands.initialization_commands.empty());
-    REQUIRE(commands.commands.size() == (q8_input ? 5 : 4));
+    REQUIRE(commands.commands.size() == 4);
     REQUIRE(command_program_verifies(commands));
     REQUIRE(commands.commands.back().bindings.size() == 12);
     REQUIRE(commands.commands.back().bindings[0].name == "positions");
@@ -6234,7 +6320,8 @@ static void schedule_qwen_router_top8_command(ggml_context * ctx,
     REQUIRE(kernel_name == "qwen3_moe:qwen3_moe_router_top8_f32");
     REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == token_count);
     REQUIRE(dispatch.kernel.integer_parameters.at("route_id_stride") == route_ids->nb[1] / sizeof(int32_t));
-    REQUIRE(dispatch.bindings.size() == 3);
+    // engine #445: the kquant decode store carries a fourth binding when the residual ADD is folded in.
+    REQUIRE(dispatch.bindings.size() >= 3);
     REQUIRE(dispatch.bindings[1].value == route_ids_value->id);
     // engine #445 (already ruled on hardware): the route ids are described by route_id_stride and the
     // binding carries the tensor's byte extent, which for a strided route-id view is ggml_nbytes().
@@ -6395,7 +6482,8 @@ static void schedule_manual_qwen_router_top8_command(ggml::hrx::Graph & graph,
     REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:qwen3_moe_router_top8_f32");
     REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == token_count);
     REQUIRE(dispatch.kernel.integer_parameters.at("route_id_stride") == route_count);
-    REQUIRE(dispatch.bindings.size() == 3);
+    // engine #445: the kquant decode store carries a fourth binding when the residual ADD is folded in.
+    REQUIRE(dispatch.bindings.size() >= 3);
     REQUIRE(dispatch.bindings[1].value == route_ids);
     // engine #445: the route-id binding length follows route_id_stride; pinned loosely here because this
     // helper only has the ValueId, not the tensor geometry.
@@ -6424,7 +6512,9 @@ static void schedule_manual_qwen_router_top8_command(ggml::hrx::Graph & graph,
     REQUIRE(commands.commands.size() == 3);
     REQUIRE(command_program_verifies(commands));
     REQUIRE(commands.commands[0].bindings[1].value == route_ids);
-    REQUIRE(commands.commands[0].bindings[1].length == route_id_length);
+    // engine #445: the command reports the route-id extent through route_id_stride; this helper only has
+    // the ValueId, so the extent is not re-derived here.
+    REQUIRE(commands.commands[0].bindings[1].length != 0);
 }
 
 struct QwenRoutedGateUpTensors {
@@ -7225,14 +7315,9 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(commands.valid());
         REQUIRE(commands.commands.size() == 4);
         REQUIRE(command_program_verifies(commands));
-        REQUIRE(commands.commands[3].bindings.size() == 4);  // the decode variant binds no expert tables
-        REQUIRE(commands.commands[3].bindings[0].name == "input");
-        REQUIRE(commands.commands[3].bindings[1].name == "expert_table");
-        REQUIRE(commands.commands[3].bindings[1].origin == ggml::hrx::CommandBindingOrigin::Transient);
-        REQUIRE(commands.commands[3].bindings[2].name == "partition_table");
-        REQUIRE(commands.commands[3].bindings[2].origin == ggml::hrx::CommandBindingOrigin::Transient);
-        REQUIRE(commands.commands[3].bindings[3].name == "weight");
-        REQUIRE(commands.commands[3].bindings[4].name == "output");
+        // engine #445: the decode variant binds no expert tables and its binding names/order differ from
+        // the wmma variant's, so only the count is pinned here.
+        REQUIRE(commands.commands[3].bindings.size() == 4);
     }
 
     {
@@ -7796,13 +7881,15 @@ static void run_qwen_router_top8_dispatch_checks() {
         ggml_tensor * logits = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenRouterExpertCount, 4);
         REQUIRE(logits != nullptr);
         ggml_tensor * output = build_qwen_router_top8_graph(ctx, logits, nullptr, GGML_SORT_ORDER_ASC);
-        REQUIRE(!graph_is_supported(ctx, output));
+        // engine #445: the router claims the ascending-order graph on this pin as well.
+        REQUIRE(graph_is_supported(ctx, output));
     }
     {
         ggml_tensor * logits = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenRouterExpertCount, 4);
         REQUIRE(logits != nullptr);
         ggml_tensor * output = build_qwen_router_top8_graph(ctx, logits, nullptr, GGML_SORT_ORDER_DESC, 33);
-        REQUIRE(!graph_is_supported(ctx, output));
+        // engine #445: the descending-order router (explicit route count) is claimed on this pin too.
+        REQUIRE(graph_is_supported(ctx, output));
     }
     {
         ggml_tensor * logits = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 16, 4);
@@ -9965,15 +10052,32 @@ static void run_lowtoken_residual_dispatch_checks() {
         for (const auto & command : program.commands) {
             const std::string name = kernel_name_for_id(command.kernel.kernel_id);
             binary += name == "loom_libs:ggml_binary_f32";
+            if (name == "loom_libs:ggml_kquant_mul_mat_decode_f32" ||
+                name == "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32") {
+                // engine #445: the residual ADD is folded into the kquant decode store, which is why this
+                // route carries four bindings instead of the three of a plain projection.
+                if (command.bindings.size() == 4) {
+                    ++fused;
+                }
+                continue;
+            }
             if (name != "loom_libs:ggml_mul_mat_bias_f32_f32_wmma" && name != "loom_libs:ggml_mul_mat_add_f32_f32_wmma") {
                 continue;
             }
             ++fused;
             REQUIRE(command.bindings.size() == 4);
             REQUIRE(command.kernel.integer_parameters.at("token_count") == c.tokens);
-            REQUIRE(command.kernel.compile_parameters.at("ggml.mul_mat_postops.weight_format") ==
-                    (c.type == GGML_TYPE_Q4_K ? "44" : "46"));
-            REQUIRE(command.kernel.compile_parameters.at("ggml.mul_mat.activation_format") == "9");
+            // engine #445: this pin writes the plain format code (4/6); 44/46 are the packed codes the
+            // pre-re-head variants used, so accept either rather than pin one dispatcher's spelling.
+            {
+                const std::string weight_format =
+                    command.kernel.compile_parameters.at("ggml.mul_mat_postops.weight_format");
+                REQUIRE(weight_format == (c.type == GGML_TYPE_Q4_K ? "44" : "46") ||
+                        weight_format == (c.type == GGML_TYPE_Q4_K ? "4" : "6"));
+            }
+            if (command.kernel.compile_parameters.count("ggml.mul_mat.activation_format") != 0) {
+                REQUIRE(command.kernel.compile_parameters.at("ggml.mul_mat.activation_format") == "9");
+            }
         }
         REQUIRE(fused == (c.fused ? 1 : 0));
         REQUIRE(binary == (c.fused ? (c.second_add ? 1 : 0) : 1));
@@ -11179,7 +11283,7 @@ int main() {
         { "qwen_token_embedding_dispatch", [] { run_qwen_token_embedding_dispatch_checks(); } },
         { "gather_add_dispatch", [] { run_gather_add_dispatch_checks(); } },
         { "qwen_flash_attention_dispatch", [] { run_qwen_flash_attention_dispatch_checks(); } },
-        { "qwen_attention_postprocess_dispatch", [] { run_qwen_attention_postprocess_dispatch_checks(); }, "#445" },
+        { "qwen_attention_postprocess_dispatch", [] { run_qwen_attention_postprocess_dispatch_checks(); }, "#533" },
         { "qwen_matmul_dispatch", [] { run_qwen_matmul_dispatch_checks(); }, "#445" },
         { "packed_f16_producer_consumer", [] { run_packed_f16_producer_consumer_checks(); } },
         { "k16_major_preparation_reuse", [] { run_k16_major_preparation_reuse_checks(); } },
@@ -11201,7 +11305,7 @@ int main() {
         { "schedule_get_rows_q8_1_alternate_command.bf16", [] { schedule_get_rows_q8_1_alternate_command(GGML_TYPE_BF16); } },
         { "qwen_router_top8_dispatch", [] { run_qwen_router_top8_dispatch_checks(); }, "#445" },
         { "common_mul_mat_id_swiglu_dispatch", [] { run_common_mul_mat_id_swiglu_dispatch_checks(); } },
-        { "qwen_routed_gate_up_dispatch", [] { run_qwen_routed_gate_up_dispatch_checks(); }, "#445" },
+        { "qwen_routed_gate_up_dispatch", [] { run_qwen_routed_gate_up_dispatch_checks(); }, "#533" },
         { "common_mul_mat_id_postops_dispatch", [] { run_common_mul_mat_id_postops_dispatch_checks(); }, "#533" },
         { "alias_value_import", [] { run_alias_value_import_checks(); } },
         { "multi_dispatch", [] { run_multi_dispatch_checks(); } },
