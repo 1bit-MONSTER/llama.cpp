@@ -1178,8 +1178,11 @@ static bool match_selected_gated_delta_net_dispatch(const DispatchMatchContext &
         dispatch.bindings.push_back(norm.bindings[1]);
         dispatch.bindings.push_back(norm.bindings[2]);
         dispatch.bindings.push_back(norm.bindings[4]);
-        selected.dispatches.clear();
-        selected.dispatches.push_back(std::move(dispatch));
+        // Replace only the dispatch this kernel supersedes: the earlier ones (the projections / gate
+        // producer) stay in the programme *before* the fused GDN. Clearing the list dropped them while
+        // their nodes stayed covered, so the value the fused kernel reads as raw_gate was written by a
+        // later command and the command-program verifier rejected the plan (engine #533).
+        selected.dispatches.back() = std::move(dispatch);
         selected.covered_nodes.insert(selected.covered_nodes.end(), rms_match.covered_nodes.begin(), rms_match.covered_nodes.end());
         selected.transients = std::move(rms_match.transients);
         if (!selected.metadata.append(std::move(rms_match.metadata), selected.status)) {
