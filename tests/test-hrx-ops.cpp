@@ -2938,6 +2938,55 @@ static auto allocate_test_weight(ggml_backend_t backend, ggml_tensor * weight) {
     return buffer;
 }
 
+
+// engine #444: for at most kMaxTokens (8) tokens of a kquant format with an input size that is a multiple
+// of 256, dispatch-kquant-decode.cpp is what names the route - the plain matmul family is
+// ggml_kquant_mul_mat_decode_f32 for one token and ggml_kquant_mul_mat_decode_tokens_f32 for two to eight,
+// and the fused gate/up pair is ggml_kquant_swiglu_decode_f32 / ggml_kquant_swiglu_decode_tokens_f32. The
+// tables in this file still spell the kernel the pre-pin dispatcher chose, so the expectation is translated
+// here, in one place, instead of in every call site.
+static bool kquant_decode_covers(ggml_type type, int64_t tokens, int64_t input_size) {
+    if (tokens < 1 || tokens > 8 || input_size % 256 != 0 || input_size > 65536) {
+        return false;
+    }
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static std::string kquant_decode_expectation(const char * expected_kernel, bool swiglu_family, ggml_type type,
+                                            int64_t tokens, int64_t input_size) {
+    if (!kquant_decode_covers(type, tokens, input_size)) {
+        return expected_kernel;
+    }
+    if (swiglu_family) {
+        return tokens == 1 ? "loom_libs:ggml_kquant_swiglu_decode_f32" :
+                             "loom_libs:ggml_kquant_swiglu_decode_tokens_f32";
+    }
+    return tokens == 1 ? "loom_libs:ggml_kquant_mul_mat_decode_f32" :
+                         "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32";
+}
+
 static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
                                                 const char * expected_kernel,
                                                 int64_t      token_count,
@@ -2998,9 +3047,12 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
     const auto sequence = scheduled_kernel_sequence(hrx_graph);
-    require_kernel_subsequence(sequence, { expected_kernel });
+    require_kernel_subsequence(
+        sequence, { kquant_decode_expectation(expected_kernel, false, weight_type, token_count, input_size) });
     if (normalize_input && (weight_type == GGML_TYPE_Q4_K || square_output)) {
-        require_kernel_subsequence(sequence, { "loom_libs:ggml_rmsnorm_binary_q8_1_x4", expected_kernel });
+        require_kernel_subsequence(sequence, { "loom_libs:ggml_rmsnorm_binary_q8_1_x4",
+                                               kquant_decode_expectation(expected_kernel, false, weight_type,
+                                                                         token_count, input_size) });
         REQUIRE(std::find(sequence.begin(), sequence.end(), "qwen3_moe:ggml_quantize_q8_1_x4_f32") == sequence.end());
     } else if (normalize_input) {
         REQUIRE(std::find(sequence.begin(), sequence.end(), "loom_libs:ggml_rmsnorm_binary_q8_1_x4") == sequence.end());
@@ -3089,7 +3141,9 @@ static void run_dense_matmul_unary_cpu_reference_case(ggml_type    weight_type,
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
+    require_kernel_subsequence(
+        scheduled_kernel_sequence(hrx_graph),
+        { kquant_decode_expectation(expected_kernel, false, weight_type, token_count, input_size) });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -3159,7 +3213,9 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
+    require_kernel_subsequence(
+        scheduled_kernel_sequence(hrx_graph),
+        { kquant_decode_expectation(expected_kernel, true, gate_weight_type, token_count, input_size) });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -3294,7 +3350,9 @@ static void run_dense_matmul_binary_cpu_reference_case(ggml_type    lhs_weight_t
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
+    require_kernel_subsequence(
+        scheduled_kernel_sequence(hrx_graph),
+        { kquant_decode_expectation(expected_kernel, false, lhs_weight_type, token_count, input_size) });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -3402,7 +3460,9 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
             scheduled_kernel_sequence(hrx_graph),
             { expected_kernel, "loom_libs:ggml_rmsnorm_binary_f32", "loom_libs:ggml_binary_f32" });
     } else {
-        require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
+        require_kernel_subsequence(
+        scheduled_kernel_sequence(hrx_graph),
+        { kquant_decode_expectation(expected_kernel, false, weight_type, token_count, input_size) });
     }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
