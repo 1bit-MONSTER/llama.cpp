@@ -1455,6 +1455,16 @@ ggml_tensor * llm_graph_context::build_norm(
          ggml_tensor * mb,
        llm_norm_type   type,
                  int   il) const {
+    // HRX norm kernels require a materialized (non-view) input. A view/reshape of a
+    // per-head slice (e.g. qwen4exp Q/K and the indexer queries) must be made contiguous
+    // first; a no-op for the plain residual-stream tensors other arches pass.
+    if (type == LLM_NORM || type == LLM_NORM_RMS) {
+        const bool is_view = cur->op == GGML_OP_VIEW || cur->op == GGML_OP_RESHAPE ||
+                             cur->op == GGML_OP_PERMUTE || cur->op == GGML_OP_TRANSPOSE;
+        if (is_view || !ggml_is_contiguous(cur)) {
+            cur = ggml_cont(ctx0, cur);
+        }
+    }
     switch (type) {
         case LLM_NORM:       cur = ggml_norm    (ctx0, cur, hparams.f_norm_eps);     break;
         case LLM_NORM_RMS:   cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps); break;
