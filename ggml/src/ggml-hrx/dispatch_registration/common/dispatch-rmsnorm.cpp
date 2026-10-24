@@ -80,14 +80,37 @@ static bool supported_rmsnorm_input_layout(const Value & input,
         return true;
     }
 
-    if (input.ne[1] != token_count || input.ne[2] != 1 || input.ne[3] != 1 ||
-        input.nb[1] % sizeof(float) != 0) {
+    // A non-contiguous input is accepted when its rows (every dimension above
+    // dim0) form a single uniform arithmetic progression, i.e. the tensor
+    // collapses to a 2-D [hidden_size, token_count] strided view with a
+    // constant row stride. This covers the plain 2-D strided case
+    // (ne[1] == token_count, ne[2] == ne[3] == 1) and per-head attention views
+    // such as f32[head_dim, n_head, seq, 1] whose head stride and token stride
+    // line up (nb[2] == nb[1]*ne[1], nb[3] == nb[2]*ne[2]); the per-row data is
+    // still contiguous (nb[0] == sizeof(float), ne[0] == hidden_size), so the
+    // kernel reads row r at offset r*input_stride exactly as for the 2-D case.
+    if (input.nb[1] % sizeof(float) != 0) {
         return false;
     }
-    input_stride = static_cast<int64_t>(input.nb[1] / sizeof(float));
-    if (input_stride < hidden_size || input_stride > 1048576) {
+    const int64_t collapsed_stride = static_cast<int64_t>(input.nb[1] / sizeof(float));
+    if (collapsed_stride < hidden_size || collapsed_stride > 1048576) {
         return false;
     }
+    size_t  expected_nb = input.nb[1];
+    int64_t rows        = input.ne[1];
+    for (int d = 2; d < GGML_MAX_DIMS; ++d) {
+        expected_nb *= static_cast<size_t>(input.ne[d - 1]);
+        if (input.ne[d] > 1) {
+            if (input.nb[d] != expected_nb) {
+                return false;
+            }
+            rows *= input.ne[d];
+        }
+    }
+    if (rows != token_count) {
+        return false;
+    }
+    input_stride = collapsed_stride;
 
     return strided_f32_storage_span_bytes(input, input_span_bytes);
 }
