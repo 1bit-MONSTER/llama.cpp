@@ -1008,11 +1008,17 @@ static void run_graph_import_checks() {
     REQUIRE(string_contains(binding_text, std::to_string(a_value->byte_count).c_str()));
 
     const std::string command_text = ggml::hrx::format_command(command);
+    // the class is always there; the kernel id, binding and dependency counts are detail, kept only when
+    // GGML_HRX_REPORT asks for them
     REQUIRE(string_contains(command_text, "command 0"));
     REQUIRE(string_contains(command_text, "kind=Kernel"));
-    REQUIRE(string_contains(command_text, "kernel_id="));
-    REQUIRE(string_contains(command_text, "bindings=3"));
-    REQUIRE(string_contains(command_text, "deps=0"));
+    REQUIRE(!string_contains(command_text, "kernel_id="));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    const std::string command_text_detailed = ggml::hrx::format_command(command);
+    unsetenv("GGML_HRX_REPORT");
+    REQUIRE(string_contains(command_text_detailed, "kernel_id="));
+    REQUIRE(string_contains(command_text_detailed, "bindings=3"));
+    REQUIRE(string_contains(command_text_detailed, "deps=0"));
 
     const std::string program_text = ggml::hrx::format_command_program(commands);
     REQUIRE(string_contains(program_text, "command_program commands=1"));
@@ -1137,6 +1143,13 @@ static void run_graph_import_checks() {
     invalid_kernel.commands.front().kernel.kernel_id = ggml::hrx::kUncatalogedKernelId;
     verification = ggml::hrx::verify_command_program(invalid_kernel, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(!verification.valid());
+    // the detailed text (which names the command and the kernel) is behind GGML_HRX_REPORT; a default run
+    // gets the neutral class, and that is what this asserts first
+    REQUIRE(status_contains(verification.status, "plan rejected"));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    verification = ggml::hrx::verify_command_program(invalid_kernel, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    unsetenv("GGML_HRX_REPORT");
+    REQUIRE(!verification.valid());
     REQUIRE(status_contains(verification.status, "command 0"));
     REQUIRE(status_contains(verification.status, "kernel_id="));
 
@@ -1223,6 +1236,11 @@ static void run_graph_import_checks() {
 
     ggml::hrx::PreparedCommandProgram prepared =
         ggml::hrx::prepare_command_program(prepare_context, invalid_kernel, runtime_bindings);
+    REQUIRE(!prepared.valid());
+    REQUIRE(status_contains(prepared.status, "command 0"));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    prepared = ggml::hrx::prepare_command_program(prepare_context, invalid_kernel, runtime_bindings);
+    unsetenv("GGML_HRX_REPORT");
     REQUIRE(!prepared.valid());
     REQUIRE(status_contains(prepared.status, "kernel_id="));
 

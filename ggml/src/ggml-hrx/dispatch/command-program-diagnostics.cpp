@@ -67,9 +67,13 @@ std::string format_command_binding(const CommandBinding & binding) {
 
 std::string format_command(const Command & command) {
     std::ostringstream out;
-    out << "command " << command.ordinal << " kind=" << command_kind_name(command.kind)
-        << " kernel_id=" << command.kernel.kernel_id << " bindings=" << command.bindings.size()
-        << " deps=" << command.dependencies.size();
+    out << "command " << command.ordinal << " kind=" << command_kind_name(command.kind);
+    // the kernel id, the binding count and the dependency count are detail: they describe the private
+    // kernel set, so a default run keeps only the class and GGML_HRX_REPORT=1 adds the rest
+    if (Status::detail_reported()) {
+        out << " kernel_id=" << command.kernel.kernel_id << " bindings=" << command.bindings.size()
+            << " deps=" << command.dependencies.size();
+    }
     return out.str();
 }
 
