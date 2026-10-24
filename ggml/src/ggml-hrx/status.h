@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cctype>
 #include <cstdarg>
+#include <cstdlib>
 #include <cstddef>
 #include <cstdio>
 #include <string>
@@ -25,6 +27,33 @@ class [[nodiscard]] Status {
 
     void append(const Status & other) {
         messages_.insert(messages_.end(), other.messages_.begin(), other.messages_.end());
+    }
+
+    // A message that names a kernel, a format or a dispatch path is detail: by default only the neutral
+    // class ("plan rejected: operand layout") is kept, so ordinary runs stay readable. GGML_HRX_REPORT=1
+    // keeps the detailed text as well, which is what we diagnose from.
+    void log_detail(const char * neutral, const char * format, ...) {
+        if (!detail_reported()) {
+            push(neutral != nullptr ? std::string(neutral) : std::string("rejected"));
+            return;
+        }
+        va_list args;
+        va_start(args, format);
+        log_va(format, args);
+        va_end(args);
+    }
+
+    // True when the detailed messages are wanted (GGML_HRX_REPORT set to anything but 0/false/no).
+    static bool detail_reported() {
+        const char * value = std::getenv("GGML_HRX_REPORT");
+        if (value == nullptr || *value == '\0') {
+            return false;
+        }
+        std::string text(value);
+        for (char & c : text) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        return text != "0" && text != "false" && text != "no" && text != "off";
     }
 
     void log(const char * format, ...) {

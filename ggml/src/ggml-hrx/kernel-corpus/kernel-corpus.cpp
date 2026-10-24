@@ -203,7 +203,8 @@ VerificationResult verify_kernel_corpus(const KernelCorpus & corpus) {
         }
         if (kernel.id != kernel_catalog_id(kernel.family != nullptr ? kernel.family : "",
                                            kernel.name != nullptr ? kernel.name : "")) {
-            result.status.log("kernel %s has an invalid catalog id", kernel.name != nullptr ? kernel.name : "");
+            result.status.log_detail("kernel corpus: invalid catalog id", "kernel %s has an invalid catalog id",
+                                     kernel.name != nullptr ? kernel.name : "");
         }
         const bool source_is_primary = contains_source_ref(kernel.compile_recipe.primary_sources, kernel.source);
         const bool source_is_library = contains_source_ref(kernel.compile_recipe.library_sources, kernel.source);
@@ -211,18 +212,20 @@ VerificationResult verify_kernel_corpus(const KernelCorpus & corpus) {
              !string_equal(kernel.compile_recipe.mode, "archive")) ||
             kernel.compile_recipe.primary_sources.empty() || (!source_is_primary && !source_is_library) ||
             (string_equal(kernel.compile_recipe.mode, "archive") && string_empty(kernel.compile_recipe.link_module))) {
-            result.status.log("kernel %s has an invalid BUILD compile recipe",
+            result.status.log_detail("kernel corpus: invalid compile recipe", "kernel %s has an invalid BUILD compile recipe",
                               kernel.name != nullptr ? kernel.name : "");
         }
         for (const KernelSourceRef & source : kernel.compile_recipe.primary_sources) {
             if (string_empty(source.path) || source.contents == nullptr) {
-                result.status.log("kernel %s has an invalid embedded primary source reference",
+                result.status.log_detail("kernel corpus: invalid embedded source reference",
+                                      "kernel %s has an invalid embedded primary source reference",
                                   kernel.name != nullptr ? kernel.name : "");
             }
         }
         for (const KernelSourceRef & source : kernel.compile_recipe.library_sources) {
             if (string_empty(source.path) || source.contents == nullptr) {
-                result.status.log("kernel %s has an invalid embedded library source reference",
+                result.status.log_detail("kernel corpus: invalid embedded source reference",
+                                      "kernel %s has an invalid embedded library source reference",
                                   kernel.name != nullptr ? kernel.name : "");
             }
         }
@@ -230,22 +233,26 @@ VerificationResult verify_kernel_corpus(const KernelCorpus & corpus) {
                                       std::string(kernel.name != nullptr ? kernel.name : "");
         const std::string target_selector = kernel.target_selector != nullptr ? kernel.target_selector : "";
         if (!variants.insert(full_name + "@" + target_selector).second) {
-            result.status.log("kernel corpus repeats target variant %s@%s", full_name.c_str(),
+            result.status.log_detail("kernel corpus: repeated target variant", "kernel corpus repeats target variant %s@%s",
+                                     full_name.c_str(),
                               target_selector.empty() ? "default" : target_selector.c_str());
         }
         const auto contract = contracts.emplace(full_name, &kernel);
         if (!contract.second && !kernel_variant_contract_equal(*contract.first->second, kernel)) {
-            result.status.log("kernel target variants disagree on ABI for %s", full_name.c_str());
+            result.status.log_detail("kernel corpus: target variants disagree on ABI",
+                                     "kernel target variants disagree on ABI for %s", full_name.c_str());
         }
         std::set<std::string> binding_names;
         for (const KernelBindingDefinition & binding : kernel.bindings) {
             if (string_empty(binding.name) ||
                 !binding_names.insert(binding.name != nullptr ? binding.name : "").second) {
-                result.status.log("kernel %s has invalid binding names", kernel.name != nullptr ? kernel.name : "");
+                result.status.log_detail("kernel corpus: invalid binding names", "kernel %s has invalid binding names",
+                                     kernel.name != nullptr ? kernel.name : "");
             }
         }
         if (kernel.bindings.size() == 0) {
-            result.status.log("kernel %s has no binding ABI", kernel.name != nullptr ? kernel.name : "");
+            result.status.log_detail("kernel corpus: missing binding ABI", "kernel %s has no binding ABI",
+                                     kernel.name != nullptr ? kernel.name : "");
         }
     }
     return result;
