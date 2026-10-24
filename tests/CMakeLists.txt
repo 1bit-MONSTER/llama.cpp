@@ -148,6 +148,9 @@ if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
 endif ()
 
+llama_build(test-onebit-moe-predict.cpp)
+target_include_directories(test-onebit-moe-predict PRIVATE ${PROJECT_SOURCE_DIR}/src)
+llama_test(test-onebit-moe-predict)
 llama_build(test-recurrent-state-rollback.cpp)
 llama_build(test-save-load-state.cpp)
 

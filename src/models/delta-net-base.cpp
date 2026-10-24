@@ -533,7 +533,8 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
         ggml_tensor *        g,
         ggml_tensor *        b,
         ggml_tensor *        s,
-        int                  il) {
+        int                  il,
+        bool                 register_fused) {
     const auto * mctx_cur   = inp->mctx;
     const auto   kv_head    = mctx_cur->get_head();
     const uint32_t mem_size = mctx_cur->get_size();
@@ -565,9 +566,11 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
 
     // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
     ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K);
-    if (n_seq_tokens > 1) {
+    // a speculative pass is not part of a layer's fused dispatch: no manifest entry, so the node
+    // runs as a plain op and cannot make the fused claim pick the wrong tensor
+    if (register_fused && n_seq_tokens > 1) {
         res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
-    } else {
+    } else if (register_fused) {
         res->add_fused_node({LLM_FUSED_OP_GDN_AR, gdn_out, il});
     }
 

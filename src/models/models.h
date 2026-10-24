@@ -97,7 +97,8 @@ struct llm_build_delta_net_base : public llm_graph_context {
             ggml_tensor *        g,
             ggml_tensor *        b,
             ggml_tensor *        s,
-            int                  il);
+            int                  il,
+            bool                 register_fused = true);
 };
 
 struct llm_build_rwkv6_base : public llm_graph_context {
@@ -2551,7 +2552,8 @@ struct llama_model_qwen4exp : public llama_model_base {
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
                             int * sections,
-                            int   il);
+                            int   il,
+                           bool   spec = false);
 
         // dense self-attention over the cells the QSA mask keeps
         ggml_tensor * build_attn_qsa(
@@ -2575,12 +2577,19 @@ struct llama_model_qwen4exp : public llama_model_base {
                     ggml_tensor * inp_pos,
                     ggml_tensor * kq_mask,
                             int * sections,
-                            int   il);
+                            int   il,
+                           bool   spec = false);
 
+        // ssm_override/conv_override: write the new state and the conv tail into scratch instead of
+        // the cache (the routing predictor's speculative pass); spec also skips the fused-node
+        // manifest entry -- a speculative node is not part of a fused dispatch
         ggml_tensor * build_layer_attn_linear(
              llm_graph_input_rs * inp,
                     ggml_tensor * cur,
-                            int   il);
+                            int   il,
+                    ggml_tensor * ssm_override  = nullptr,
+                    ggml_tensor * conv_override = nullptr,
+                           bool   spec          = false);
 
         ggml_tensor * build_layer_ffn(
                     ggml_tensor * cur,
@@ -2611,7 +2620,29 @@ struct llama_model_qwen4exp : public llama_model_base {
              llm_graph_input_rs * inp,
                     ggml_tensor * emb,
                     ggml_tensor * hidden,
+                            int   il,
+                    ggml_tensor * conv_override = nullptr);
+
+        // Next-layer routing predictor (src/onebit-moe-predict.*, ONEBIT_MOE_PREDICT): layer il+1's
+        // own mixer block on this layer's residual, before this layer's MoE output exists, and its
+        // router ranking. `res_hc` is the residual after this layer's attention is combined.
+        void build_moe_predict(
+             llm_graph_input_rs * inp_recr,
+       llm_graph_input_attn_kv * inp_attn,
+  const llama_memory_hybrid_idx_context * mctx_hyb,
+          llm_graph_input_kpool * inp_kpool,
+                    ggml_tensor * ple_emb,
+                    ggml_tensor * res_hc,
+                    ggml_tensor * inp_pos,
+                            int * sections,
                             int   il);
+
+        // a same-shaped scratch for the speculative pass's state writes: never read, so one per
+        // shape is enough for every layer
+        ggml_tensor * build_moe_predict_scratch(ggml_tensor * proto, ggml_tensor ** slot);
+        ggml_tensor * pred_ssm_  = nullptr;
+        ggml_tensor * pred_conv_ = nullptr;
+        ggml_tensor * pred_ple_  = nullptr;
 
         // returns pair of qkv, z
         std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(

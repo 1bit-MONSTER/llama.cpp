@@ -40,6 +40,7 @@ set(LLAMA_CORE_SOURCES
     llama-quant.cpp
     llama-sampler.cpp
     llama-vocab.cpp
+    onebit-moe-predict.cpp
     unicode-data.cpp
     unicode.cpp
 )
