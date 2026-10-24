@@ -1,5 +1,7 @@
 #include "llama-context.h"
 
+#include "onebit-moe-predict.h"
+
 #include "ggml.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
@@ -2646,6 +2648,10 @@ ggml_status llama_context::graph_compute(
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
     }
+
+    // the next-layer routing predictor's readback + hit-rate table (src/onebit-moe-predict.*);
+    // a no-op unless ONEBIT_MOE_PREDICT built a prediction in this graph
+    onebit::moe::step_end(sched.get());
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(sched));
 
