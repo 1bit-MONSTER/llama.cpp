@@ -787,10 +787,13 @@ static bool match_gated_delta_net_dispatch(const DispatchMatchContext & context,
     const int64_t written_snapshot_count = std::min(match.token_count, match.snapshot_count);
     const int64_t prefix_token_count     = match.token_count - written_snapshot_count;
     const size_t  cache_stride           = match.cache->nb[2];
+    // Up to 5 tokens take one fused snapshot dispatch; single-sequence batches of 6..16 (DFlash2 verify blocks)
+    // take consecutive fused dispatches of at most 5 tokens, each continuing from the previous one's final state.
+    const bool fuse_snapshot_chunks = match.sequence_count == 1 && match.token_count > 5 && match.token_count <= 16;
     const bool fuse_snapshot_projection_epilogue =
         can_fuse_projection_epilogue && match.snapshot_count != 1 && prefix_token_count == 0 &&
         written_snapshot_count == match.token_count && (match.token_count >= 2 || match.sequence_count > 1) &&
-        match.token_count <= 5 && cache_stride % sizeof(float) == 0;
+        (match.token_count <= 5 || fuse_snapshot_chunks) && cache_stride % sizeof(float) == 0;
 
     if (match.has_projection_epilogue() && !can_fuse_projection_epilogue) {
         Dispatch epilogue;
@@ -855,33 +858,51 @@ static bool match_gated_delta_net_dispatch(const DispatchMatchContext & context,
     const size_t  state_plane_bytes = state_bytes * static_cast<size_t>(match.sequence_count);
 
     if (prefix_token_count == 0 && written_snapshot_count == match.token_count &&
-        (match.token_count >= 2 || match.sequence_count > 1) && match.token_count <= 5 &&
-        cache_stride % sizeof(float) == 0) {
-        Dispatch gdn;
-        gdn.kernel = make_kernel_specialization(fuse_snapshot_projection_epilogue ?
-                                                    kGatedDeltaNetSnapshotProjectionEpilogueKernel :
-                                                    kGatedDeltaNetSnapshotKernel);
-        configure_gated_delta_net_kernel(gdn, match, match.token_count);
-        set_compile_parameter(gdn.kernel, "llm.gated_delta_net.snapshot_stride", cache_stride / sizeof(float));
-        gdn.bindings.push_back({ match.raw_q->id, 0, match.raw_q->byte_count });
-        gdn.bindings.push_back({ match.raw_k->id, 0, match.raw_k->byte_count });
-        gdn.bindings.push_back({ match.v->id, 0, match.v->byte_count });
-        if (fuse_snapshot_projection_epilogue) {
-            gdn.bindings.push_back({ match.alpha_raw->id, 0, match.alpha_raw->byte_count });
-            gdn.bindings.push_back({ match.beta_raw->id, 0, match.beta_raw->byte_count });
-            gdn.bindings.push_back({ match.bias->id, 0, match.bias->byte_count });
-            gdn.bindings.push_back({ match.a_scale->id, 0, match.a_scale->byte_count });
-        } else {
-            gdn.bindings.push_back({ match.gate->id, 0, match.gate->byte_count });
-            gdn.bindings.push_back({ match.beta->id, 0, match.beta->byte_count });
+        (match.token_count >= 2 || match.sequence_count > 1) && (match.token_count <= 5 || fuse_snapshot_chunks) &&
+        cache_stride % sizeof(float) == 0 && (!fuse_snapshot_chunks || cache_stride >= state_plane_bytes)) {
+        // The cache is reverse ordered (slot 0 = final state), so a chunk of tokens [begin, begin + count)
+        // publishes slots [token_count - begin - count, token_count - begin) and later chunks start from the
+        // state in the lowest slot of the chunk before.
+        const int64_t chunk_count = (match.token_count + 4) / 5;
+        for (int64_t chunk = 0; chunk < chunk_count; ++chunk) {
+            const int64_t begin = match.token_count * chunk / chunk_count;
+            const int64_t count = match.token_count * (chunk + 1) / chunk_count - begin;
+            const size_t  first_slot = static_cast<size_t>(match.token_count - begin - count);
+            const size_t  t          = static_cast<size_t>(begin);
+            const bool    whole      = chunk_count == 1;
+            Dispatch gdn;
+            gdn.kernel = make_kernel_specialization(fuse_snapshot_projection_epilogue ?
+                                                        kGatedDeltaNetSnapshotProjectionEpilogueKernel :
+                                                        kGatedDeltaNetSnapshotKernel);
+            configure_gated_delta_net_kernel(gdn, match, whole ? match.token_count : count);
+            set_compile_parameter(gdn.kernel, "llm.gated_delta_net.snapshot_stride", cache_stride / sizeof(float));
+            gdn.bindings.push_back({ match.raw_q->id, t * match.raw_q->nb[2], match.raw_q->byte_count - t * match.raw_q->nb[2] });
+            gdn.bindings.push_back({ match.raw_k->id, t * match.raw_k->nb[2], match.raw_k->byte_count - t * match.raw_k->nb[2] });
+            gdn.bindings.push_back({ match.v->id, t * match.v->nb[2], match.v->byte_count - t * match.v->nb[2] });
+            if (fuse_snapshot_projection_epilogue) {
+                gdn.bindings.push_back({ match.alpha_raw->id, t * match.alpha_raw->nb[1],
+                                         match.alpha_raw->byte_count - t * match.alpha_raw->nb[1] });
+                gdn.bindings.push_back({ match.beta_raw->id, t * match.beta_raw->nb[1],
+                                         match.beta_raw->byte_count - t * match.beta_raw->nb[1] });
+                gdn.bindings.push_back({ match.bias->id, 0, match.bias->byte_count });
+                gdn.bindings.push_back({ match.a_scale->id, 0, match.a_scale->byte_count });
+            } else {
+                gdn.bindings.push_back({ match.gate->id, t * match.gate->nb[2], match.gate->byte_count - t * match.gate->nb[2] });
+                gdn.bindings.push_back({ match.beta->id, t * match.beta->nb[2], match.beta->byte_count - t * match.beta->nb[2] });
+            }
+            if (chunk == 0) {
+                gdn.bindings.push_back({ match.state->id, 0, state_plane_bytes });
+            } else {
+                gdn.bindings.push_back({ match.cache->id, (first_slot + static_cast<size_t>(count)) * cache_stride,
+                                         state_plane_bytes });
+            }
+            gdn.bindings.push_back({ match.cache->id, first_slot * cache_stride,
+                                     state_plane_bytes + static_cast<size_t>(count - 1) * cache_stride });
+            gdn.bindings.push_back({ match.gdn_output->id, t * attention_token_bytes,
+                                     static_cast<size_t>((whole ? match.token_count : count) * match.sequence_count) *
+                                         attention_token_bytes });
+            dispatch_match.dispatches.push_back(std::move(gdn));
         }
-        gdn.bindings.push_back({ match.state->id, 0, state_plane_bytes });
-        gdn.bindings.push_back(
-            { match.cache->id, 0, state_plane_bytes + static_cast<size_t>(written_snapshot_count - 1) * cache_stride });
-        gdn.bindings.push_back(
-            { match.gdn_output->id, 0,
-              static_cast<size_t>(match.token_count * match.sequence_count) * attention_token_bytes });
-        dispatch_match.dispatches.push_back(std::move(gdn));
         return true;
     }
 
