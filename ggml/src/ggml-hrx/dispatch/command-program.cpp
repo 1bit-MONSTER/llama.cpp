@@ -143,11 +143,14 @@ static void append_command(const Graph &          graph,
     const KernelResolveResult resolved   = resolve_kernel_definition(corpus, target, command.kernel.kernel_id);
     const KernelDefinition *  definition = resolved.definition;
     if (!resolved.found()) {
-        status.log("%s", format_kernel_resolve_error(resolved, command.kernel.kernel_id).c_str());
+        status.log_detail("plan rejected: kernel not resolvable", "%s",
+                          format_kernel_resolve_error(resolved, command.kernel.kernel_id).c_str());
         definition = nullptr;
     } else if (dispatch.bindings.size() != definition->bindings.size()) {
-        status.log("command %u kernel %s has %zu bindings but its ABI requires %zu", command.ordinal,
-                   kernel_definition_name(*definition).c_str(), dispatch.bindings.size(), definition->bindings.size());
+        status.log_detail("plan rejected: binding count disagrees with the ABI",
+                          "command %u kernel %s has %zu bindings but its ABI requires %zu", command.ordinal,
+                          kernel_definition_name(*definition).c_str(), dispatch.bindings.size(),
+                          definition->bindings.size());
     }
     command.bindings.reserve(dispatch.bindings.size());
     for (size_t binding_index = 0; binding_index < dispatch.bindings.size(); ++binding_index) {
@@ -215,13 +218,14 @@ static void verify_command_list(const std::vector<Command> & commands,
             definition = resolved.definition;
         }
         if (command.kind == CommandKind::Kernel && !resolved.found()) {
-            status.log("%s: %s", command_context.c_str(),
-                       format_kernel_resolve_error(resolved, command.kernel.kernel_id).c_str());
+            status.log_detail("plan rejected: kernel not resolvable", "%s: %s", command_context.c_str(),
+                          format_kernel_resolve_error(resolved, command.kernel.kernel_id).c_str());
         } else if (definition != nullptr) {
             if (command.bindings.size() != definition->bindings.size()) {
-                status.log("%s kernel %s has %zu bindings but its ABI requires %zu", command_context.c_str(),
-                           kernel_definition_name(*definition).c_str(), command.bindings.size(),
-                           definition->bindings.size());
+                status.log_detail("plan rejected: binding count disagrees with the ABI",
+                               "%s kernel %s has %zu bindings but its ABI requires %zu",
+                               command_context.c_str(), kernel_definition_name(*definition).c_str(),
+                               command.bindings.size(), definition->bindings.size());
             }
             const size_t shared_count = std::min(command.bindings.size(), definition->bindings.size());
             for (size_t binding_index = 0; binding_index < shared_count; ++binding_index) {
