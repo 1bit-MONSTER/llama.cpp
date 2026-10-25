@@ -1,4 +1,10 @@
 #include "cli-context.h"
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include "cli-ui.h"
 
 #include "arg.h"
@@ -461,6 +467,15 @@ int cli_context::run() {
     // interactive loop
     std::string cur_msg;
 
+    // A redirected or closed stdin cannot answer a "> " prompt: treat the first empty read as the end of
+    // the session instead of looping on it forever (engine#561: an accidental interactive run under a job
+    // wrapper wrote 169 MB of prompt characters in 20 s, and 20 GB in the field, into its output file).
+#ifdef _WIN32
+    const bool stdin_is_tty = _isatty(_fileno(stdin)) != 0;
+#else
+    const bool stdin_is_tty = isatty(fileno(stdin)) != 0;
+#endif
+
     auto add_text_file = [&](const std::string & fname) -> bool {
         std::ifstream file(fname, std::ios::binary);
         if (!file) {
@@ -483,6 +498,9 @@ int cli_context::run() {
 
             if (params.prompt.empty()) {
                 buffer = user_turn.read_input(params.multiline_input);
+                if (buffer.empty() && !stdin_is_tty) {
+                    break;  // EOF on a non-interactive stdin
+                }
             } else {
                 // process input prompt from args
                 for (auto & fname : params.image) {
