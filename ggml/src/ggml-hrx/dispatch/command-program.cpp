@@ -142,14 +142,19 @@ static void append_command(const Graph &          graph,
     }
     const KernelResolveResult resolved   = resolve_kernel_definition(corpus, target, command.kernel.kernel_id);
     const KernelDefinition *  definition = resolved.definition;
+    // The neutral class keeps the command ordinal: which command was rejected is graph structure, while the
+    // kernel name, the kernel id and the ABI slot names are the detail GGML_HRX_REPORT adds.
     if (!resolved.found()) {
-        status.log_detail("plan rejected: kernel not resolvable", "%s",
+        const std::string neutral =
+            "command " + std::to_string(command.ordinal) + ": plan rejected: kernel not resolvable";
+        status.log_detail(neutral.c_str(), "%s",
                           format_kernel_resolve_error(resolved, command.kernel.kernel_id).c_str());
         definition = nullptr;
     } else if (dispatch.bindings.size() != definition->bindings.size()) {
-        status.log_detail("plan rejected: binding count disagrees with the ABI",
-                          "command %u kernel %s has %zu bindings but its ABI requires %zu", command.ordinal,
-                          kernel_definition_name(*definition).c_str(), dispatch.bindings.size(),
+        const std::string neutral = "command " + std::to_string(command.ordinal) +
+                                    ": plan rejected: binding count disagrees with the ABI";
+        status.log_detail(neutral.c_str(), "command %u kernel %s has %zu bindings but its ABI requires %zu",
+                          command.ordinal, kernel_definition_name(*definition).c_str(), dispatch.bindings.size(),
                           definition->bindings.size());
     }
     command.bindings.reserve(dispatch.bindings.size());
@@ -218,22 +223,26 @@ static void verify_command_list(const std::vector<Command> & commands,
             definition = resolved.definition;
         }
         if (command.kind == CommandKind::Kernel && !resolved.found()) {
-            status.log_detail("plan rejected: kernel not resolvable", "%s: %s", command_context.c_str(),
-                          format_kernel_resolve_error(resolved, command.kernel.kernel_id).c_str());
+            // the neutral class keeps the command context ("command 0 kind=Kernel"); the kernel name and id are
+            // the detail GGML_HRX_REPORT adds
+            status.log_detail((command_context + ": plan rejected: kernel not resolvable").c_str(), "%s: %s",
+                              command_context.c_str(),
+                              format_kernel_resolve_error(resolved, command.kernel.kernel_id).c_str());
         } else if (definition != nullptr) {
             if (command.bindings.size() != definition->bindings.size()) {
-                status.log_detail("plan rejected: binding count disagrees with the ABI",
-                               "%s kernel %s has %zu bindings but its ABI requires %zu",
-                               command_context.c_str(), kernel_definition_name(*definition).c_str(),
-                               command.bindings.size(), definition->bindings.size());
+                status.log_detail((command_context + ": plan rejected: binding count disagrees with the ABI").c_str(),
+                                  "%s kernel %s has %zu bindings but its ABI requires %zu", command_context.c_str(),
+                                  kernel_definition_name(*definition).c_str(), command.bindings.size(),
+                                  definition->bindings.size());
             }
             const size_t shared_count = std::min(command.bindings.size(), definition->bindings.size());
             for (size_t binding_index = 0; binding_index < shared_count; ++binding_index) {
                 const CommandBinding &          binding = command.bindings[binding_index];
                 const KernelBindingDefinition & abi     = definition->bindings[binding_index];
                 if (!string_equal(binding.name.c_str(), abi.name) || binding.access != abi.access) {
-                    status.log("%s %s does not match ABI binding %zu", command_context.c_str(),
-                               format_command_binding(binding).c_str(), binding_index);
+                    status.log_detail((command_context + ": plan rejected: binding does not match the ABI").c_str(),
+                                      "%s %s does not match ABI binding %zu", command_context.c_str(),
+                                      format_command_binding(binding).c_str(), binding_index);
                 }
             }
         }

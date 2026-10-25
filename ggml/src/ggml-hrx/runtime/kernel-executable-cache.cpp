@@ -16,6 +16,15 @@
 namespace ggml::hrx {
 namespace {
 
+// The cache key is a kernel name plus its configuration, and a compiled-ABI mismatch names the kernel too: both
+// describe the private kernel set, so a default run names the class and GGML_HRX_REPORT=1 names the detail.
+static const char * disclosed(const char * detail) {
+    return ggml::hrx::Status::detail_reported() ? detail : "<withheld: GGML_HRX_REPORT=1>";
+}
+static const char * disclosed(const std::string & detail) {
+    return disclosed(detail.c_str());
+}
+
 static ggml_hrx_loom_jit_source_format to_jit_source_format(KernelSourceFormat format) {
     switch (format) {
         case KERNEL_SOURCE_FORMAT_TEXT:
@@ -43,8 +52,8 @@ static bool pack_kernel_constants(const KernelDefinition & definition,
         if (item == dispatch.kernel.integer_parameters.end() || std::strcmp(type, "index") != 0 || item->second < 0 ||
             static_cast<uint64_t>(item->second) > std::numeric_limits<uint32_t>::max()) {
             constants.clear();
-            GGML_LOG_ERROR("%s: invalid launch scalar %s for %s\n", __func__, name,
-                           kernel_definition_name(definition).c_str());
+            GGML_LOG_ERROR("%s: invalid launch scalar %s for %s\n", __func__, disclosed(name),
+                           disclosed(kernel_definition_name(definition)));
             return false;
         }
         append_u32(constants, static_cast<uint32_t>(item->second));
@@ -81,13 +90,13 @@ static bool build_compile_request(const KernelDefinition &   definition,
                                   const Dispatch &           dispatch,
                                   LoomKernelCompileRequest & request) {
     if (definition.compile_recipe.primary_sources.empty()) {
-        GGML_LOG_ERROR("%s: kernel %s has no primary source\n", __func__, kernel_definition_name(definition).c_str());
+        GGML_LOG_ERROR("%s: kernel %s has no primary source\n", __func__, disclosed(kernel_definition_name(definition)));
         return false;
     }
     const KernelSourceRef & primary_source = definition.compile_recipe.primary_sources.front();
     const KernelSource *    source         = primary_source.contents;
     if (source == nullptr) {
-        GGML_LOG_ERROR("%s: missing embedded source for %s\n", __func__, primary_source.path);
+        GGML_LOG_ERROR("%s: missing embedded source for %s\n", __func__, disclosed(primary_source.path));
         return false;
     }
 
@@ -102,7 +111,7 @@ static bool build_compile_request(const KernelDefinition &   definition,
     for (const KernelSourceRef & dependency_ref : definition.compile_recipe.library_sources) {
         const KernelSource * dependency = dependency_ref.contents;
         if (dependency == nullptr) {
-            GGML_LOG_ERROR("%s: missing embedded dependency for %s\n", __func__, dependency_ref.path);
+            GGML_LOG_ERROR("%s: missing embedded dependency for %s\n", __func__, disclosed(dependency_ref.path));
             return false;
         }
         request.dependencies.push_back({
@@ -131,7 +140,7 @@ static bool build_compile_request(const KernelDefinition &   definition,
         const char * type = parameter.type != nullptr ? parameter.type : "";
         const auto   item = dispatch.kernel.integer_parameters.find(name);
         if (item == dispatch.kernel.integer_parameters.end() || std::strcmp(type, "index") != 0) {
-            GGML_LOG_ERROR("%s: invalid workload scalar %s for %s\n", __func__, name,
+            GGML_LOG_ERROR("%s: invalid workload scalar %s for %s\n", __func__, disclosed(name),
                            kernel_definition_name(definition).c_str());
             return false;
         }
@@ -149,12 +158,12 @@ static std::shared_ptr<KernelExecutable> load_kernel_executable(const KernelExec
                                                                 std::string &                          error_message) {
     if (context.device == nullptr) {
         error_message = "missing HRX device";
-        GGML_LOG_ERROR("%s: load %s: %s\n", __func__, key.c_str(), error_message.c_str());
+        GGML_LOG_ERROR("%s: load %s: %s\n", __func__, disclosed(key), disclosed(error_message));
         return nullptr;
     }
     if (context.target == nullptr) {
         error_message = "missing HRX target";
-        GGML_LOG_ERROR("%s: load %s: %s\n", __func__, key.c_str(), error_message.c_str());
+        GGML_LOG_ERROR("%s: load %s: %s\n", __func__, disclosed(key), disclosed(error_message));
         return nullptr;
     }
 
@@ -164,31 +173,31 @@ static std::shared_ptr<KernelExecutable> load_kernel_executable(const KernelExec
             take_status(hrx_executable_load_data(context.device, compiled.hsaco_data, compiled.hsaco_size, "amdgpu",
                                                  context.target, &executable->executable))) {
         error_message = "load " + key + ": " + *error;
-        GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
+        GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(error_message));
         return nullptr;
     }
     if (ErrorResult error = take_status(hrx_executable_lookup_export_by_name(executable->executable, definition.name,
                                                                              &executable->export_ordinal))) {
         error_message = "lookup " + key + ": " + *error;
-        GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
+        GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(error_message));
         return nullptr;
     }
     if (ErrorResult error = take_status(
             hrx_executable_export_info(executable->executable, executable->export_ordinal, &executable->export_info))) {
         error_message = "inspect " + key + ": " + *error;
-        GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
+        GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(error_message));
         return nullptr;
     }
     if (executable->export_info.binding_count != dispatch.bindings.size() ||
         executable->export_info.constant_byte_length != constants.size() ||
         executable->export_info.parameter_count != dispatch.bindings.size() + definition.launch_parameters.size()) {
         error_message = "compiled ABI does not match manifest for " + key;
-        GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
+        GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(error_message));
         return nullptr;
     }
     if (executable->launch.workgroup_count[0] == 0 || executable->launch.workgroup_size[0] == 0) {
         error_message = "compiled launch geometry is empty for " + key;
-        GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
+        GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(error_message));
         return nullptr;
     }
     return executable;
@@ -241,14 +250,14 @@ KernelExecutableCache::~KernelExecutableCache() {
 bool KernelExecutableCache::ensure_jit_locked(const char * target, std::string & error_message) {
     if (target == nullptr || target[0] == '\0') {
         error_message = "missing HRX target";
-        GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
+        GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(error_message));
         return false;
     }
     if (jit_ != nullptr) {
         if (target_ != target) {
             error_message =
                 "HRX kernel executable cache target mismatch: existing " + target_ + ", requested " + target;
-            GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
+            GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(error_message));
             return false;
         }
         return true;
@@ -321,7 +330,7 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
     }
     if (load_state == KernelExecutableCacheEntry::LoadState::Failed) {
         std::lock_guard<std::mutex> entry_lock(entry.mutex);
-        GGML_LOG_ERROR("%s: %s\n", __func__, entry.error.c_str());
+        GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(entry.error));
         return nullptr;
     }
 
@@ -335,7 +344,7 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
                    current == KernelExecutableCacheEntry::LoadState::Failed;
         });
         if (entry.load_state.load(std::memory_order_acquire) == KernelExecutableCacheEntry::LoadState::Failed) {
-            GGML_LOG_ERROR("%s: %s\n", __func__, entry.error.c_str());
+            GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(entry.error));
             return nullptr;
         }
         return entry.executable.load(std::memory_order_acquire);
@@ -350,7 +359,7 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
     std::string error_message;
     if (compiled_ref == nullptr || !compiled_ref->resolve()) {
         error_message = compiled_ref ? compiled_ref->error_message() : "missing compiled kernel";
-        GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
+        GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(error_message));
 
         {
             std::lock_guard<std::mutex> entry_lock(entry.mutex);
