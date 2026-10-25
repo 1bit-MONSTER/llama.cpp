@@ -29,6 +29,11 @@ struct PadParams {
     int32_t circular = 0;
 };
 
+// ggml_fill's constant (op-param 0): part of the program-cache key, so a cached FILL never replays another value
+struct FillParams {
+    float value = 0.0f;
+};
+
 struct SoftMaxParams {
     float scale    = 0.0f;
     float max_bias = 0.0f;
@@ -132,6 +137,7 @@ using OpParams = std::variant<
     FlashAttnExtParams,
     SoftMaxParams,
     PadParams,
+    FillParams,
     ArgsortParams,
     ClampParams,
     GluParams,

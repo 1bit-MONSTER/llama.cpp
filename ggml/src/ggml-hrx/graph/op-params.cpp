@@ -3,6 +3,7 @@
 #include "ggml-impl.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace ggml::hrx {
 namespace {
@@ -273,6 +274,8 @@ OpParams import_op_params(const ggml_tensor & tensor) {
                 ggml_get_op_params_f32(&tensor, 2),
                 ggml_flash_attn_ext_get_prec(&tensor),
             };
+        case GGML_OP_FILL:
+            return FillParams{ ggml_get_op_params_f32(&tensor, 0) };
         case GGML_OP_ARGSORT:
             return ArgsortParams{ static_cast<ggml_sort_order>(ggml_get_op_params_i32(&tensor, 0)) };
         case GGML_OP_CLAMP:
@@ -366,6 +369,9 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
             return unary_params_equivalent(lhs, rhs);
         case GGML_OP_PAD:
             return pad_params_equivalent(std::get<PadParams>(lhs), std::get<PadParams>(rhs));
+        case GGML_OP_FILL:
+            return std::holds_alternative<FillParams>(lhs) && std::holds_alternative<FillParams>(rhs) &&
+                   std::memcmp(&std::get<FillParams>(lhs).value, &std::get<FillParams>(rhs).value, sizeof(float)) == 0;
         case GGML_OP_ROPE:
             return rope_params_equivalent(lhs, rhs);
         default:
