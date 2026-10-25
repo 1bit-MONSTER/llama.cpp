@@ -9168,16 +9168,26 @@ static void run_disjoint_transient_plan_packing_checks() {
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
         imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(commands.valid());
+    // engine #534: the guarded packer (dispatch/transient-reuse-guard.h) hands a freed arena range to the
+    // next value only when that value's first command already depends on every command that used the range
+    // before. These two chains are independent - out0 does not feed out1 - so sharing the slot would add a
+    // write-after-read barrier between two commands that share no data. sum1 therefore gets fresh space: two
+    // 32-byte allocations at offsets 0 and 256, arena 512.
+    //
+    // The old expectation here was arena 256 with both values at offset 0, which is exactly what the stock
+    // packer does: the same graph with GGML_HRX_TRANSIENT_REUSE=legacy measures 256 / offsets 0 and 0. The
+    // split is the guard working as designed, and its own policy bounds the cost (a program keeps the guarded
+    // packing only while its arena stays within twice the unguarded one plus 8 MiB).
     REQUIRE(commands.transients.allocations.size() == 2);
-    REQUIRE(commands.transients.arena_size == 256);
+    REQUIRE(commands.transients.arena_size == 512);
     const ggml::hrx::TransientAllocation * sum0_allocation =
         ggml::hrx::find_transient_allocation(commands.transients, sum0_value->id);
     const ggml::hrx::TransientAllocation * sum1_allocation =
         ggml::hrx::find_transient_allocation(commands.transients, sum1_value->id);
     REQUIRE(sum0_allocation != nullptr);
     REQUIRE(sum1_allocation != nullptr);
-    REQUIRE(sum0_allocation->arena_offset == sum1_allocation->arena_offset);
-    REQUIRE(sum0_allocation->arena_offset % 256 == 0);
+    REQUIRE(sum0_allocation->arena_offset == 0);
+    REQUIRE(sum1_allocation->arena_offset == 256);
     REQUIRE(command_program_verifies(commands));
 
     ggml_free(ctx);
@@ -11586,7 +11596,7 @@ int main() {
         { "chained_dispatch_requires_transients", [] { run_chained_dispatch_requires_transients(); } },
         { "graph_replay_host_staging_is_not_ineligible", [] { run_graph_replay_host_staging_is_not_ineligible(); } },
         { "multiple_transient_plan", [] { run_multiple_transient_plan_checks(); } },
-        { "disjoint_transient_plan_packing", [] { run_disjoint_transient_plan_packing_checks(); }, "#534" },
+        { "disjoint_transient_plan_packing", [] { run_disjoint_transient_plan_packing_checks(); } },
         { "command_program_kernel_dump", [] { run_command_program_kernel_dump_checks(); } },
         { "command_shape_hash", [] { run_command_shape_hash_checks(); } },
         { "graph_program_cache_uid_mismatch", [] { run_graph_program_cache_uid_mismatch_checks(); } },
