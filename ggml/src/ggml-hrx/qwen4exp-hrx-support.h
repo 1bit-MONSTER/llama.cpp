@@ -82,7 +82,18 @@ inline int rope_kernel_mode(const RopeParams & params) {
 //   * IQ2_S   -- no HRX MUL_MAT_ID path dequantizes IQ2_S at all.
 // Verified by real-model KLD/PPL (test-backend-ops does not exercise MUL_MAT_ID).
 inline bool mul_mat_id_weight_type_requires_cpu(ggml_type type) {
+#ifdef GGML_HRX_HIP_ADDON
+    // With the HIP kernel add-on (gpu-kernels addons/hip-hrx) built in, routed-expert MUL_MAT_ID runs on
+    // HRX via the add-on's decode + prefill mmid, which carry the real GGUF code books for IQ4_NL / IQ3_S
+    // / Q5_1 / Q8_0 (and Q4_K/Q5_K/Q6_K/MXFP4/NVFP4/Q2_0). IQ2_S has no add-on path, so it alone stays on
+    // CPU. (The historical IQ4_NL XOR-12 garbage was the Loom shared-f16-dequant path, which the add-on
+    // mmid replaces.)
+    return type == GGML_TYPE_IQ2_S;
+#else
+    // Without the add-on, the only HRX MUL_MAT_ID is the Loom WMMA path: it mis-applies the IQ4_NL XOR-12
+    // nibble remap (garbage) and has no IQ2_S path, so both stay on CPU.
     return type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_IQ2_S;
+#endif
 }
 
 // Whole-node decision for whether a MUL_MAT_ID must stay on CPU. In addition to
@@ -96,7 +107,18 @@ inline bool mul_mat_id_requires_cpu(const ggml_tensor * op) {
         return false;
     }
     const ggml_tensor * weight = op->src[0];
-    return mul_mat_id_weight_type_requires_cpu(weight->type) || (weight->ne[0] % 256 != 0);
+    if (mul_mat_id_weight_type_requires_cpu(weight->type)) {
+        return true;
+    }
+#ifndef GGML_HRX_HIP_ADDON
+    // The Loom WMMA MUL_MAT_ID requires input_size % 256 == 0 ("value 640 violates constraint 'mul'"),
+    // so a 640-wide contraction cannot compile there and must stay on CPU. The HIP add-on's mmid handles
+    // input_size % 32 (and % 256 for the K-quant / IQ3_S formats), so this restriction lifts when it is built.
+    if (weight->ne[0] % 256 != 0) {
+        return true;
+    }
+#endif
+    return false;
 }
 
 }  // namespace ggml::hrx
