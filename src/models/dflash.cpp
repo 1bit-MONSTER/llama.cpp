@@ -524,12 +524,16 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     // tok_embd from the target model (shared via ctx_other)
     auto * tok_embd = model.tok_embd;
+    // the target's prism.hadamard folds (Ternary-Bonsai): its token table is stored rotated and its lm_head folded,
+    // so rows read from it need the target's inverse and the lm_head input its forward transform
+    const llama_hadamard * target_hadamard = nullptr;
     if (tok_embd == nullptr) {
         GGML_ASSERT(cparams.ctx_other != nullptr);
         const auto * model_other = llama_get_model(cparams.ctx_other);
 
         GGML_ASSERT(model_other->tok_embd != nullptr && "DFlash decoder requires the target model's token embeddings");
         tok_embd = model_other->tok_embd;
+        target_hadamard = model_other->hadamard.empty() ? nullptr : &model_other->hadamard;
     }
 
     auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
@@ -541,6 +545,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     ggml_tensor * inp_tokens = inp->tokens;
 
     ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp->tokens);
+    if (target_hadamard != nullptr) {
+        inpL = target_hadamard->inverse(ctx0, tok_embd, inpL);
+    }
     cb(inpL, "inp_noise_embd", -1);
 
     res->add_input(std::move(inp));
@@ -629,6 +636,10 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         const auto * model_other = llama_get_model(cparams.ctx_other);
         GGML_ASSERT(model_other->output != nullptr && "DFlash decoder requires the target model's output projection");
         output = model_other->output;
+        if (!model_other->hadamard.empty()) {
+            llama_hadamard_memo memo;
+            cur = model_other->hadamard.forward(ctx0, output, cur, memo);
+        }
     }
 
     cur = build_lora_mm(output, cur);
