@@ -3,6 +3,7 @@
 #include "dispatch-layout-utils.h"
 #include "dispatch-rope-utils.h"
 #include "ggml.h"
+#include "qwen4exp-hrx-support.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
@@ -122,7 +123,8 @@ static bool is_supported_rope_input_layout(const Value & value, size_t & span_el
 }
 
 static bool is_supported_rope_params(const RopeParams & params, int64_t head_size) {
-    const bool supported_mode = params.mode == GGML_ROPE_TYPE_NORMAL || params.mode == GGML_ROPE_TYPE_NEOX;
+    const bool supported_mode = params.mode == GGML_ROPE_TYPE_NORMAL || params.mode == GGML_ROPE_TYPE_NEOX ||
+                                rope_mode_is_collapsible_imrope(params);
     return params.n_dims >= 4 && params.n_dims <= head_size && params.n_dims % 4 == 0 && supported_mode &&
            std::isfinite(params.freq_base) && params.freq_base > 0.0f && std::isfinite(params.freq_scale) &&
            params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);
@@ -297,7 +299,8 @@ static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Sta
     const int64_t      head_count  = input->ne[1];
     const int64_t      token_count = input->ne[2];
     const RopeParams * params      = op_params_as<RopeParams>(node->params);
-    if (params == nullptr || !is_supported_rope_params(*params, head_size) || !is_1d_shape(*positions, token_count)) {
+    const int64_t positions_ne0 = params != nullptr ? rope_expected_positions_ne0(*params, token_count) : token_count;
+    if (params == nullptr || !is_supported_rope_params(*params, head_size) || !is_1d_shape(*positions, positions_ne0)) {
         std::string reason = "ROPE params or positions shape is unsupported";
         if (params == nullptr) {
             reason += " params=missing";
@@ -353,7 +356,7 @@ static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Sta
     match.input_span         = input_span;
     match.input_span_bytes   = input_span * sizeof(float);
     match.rope_mscale        = rope_mscale;
-    match.mode               = params->mode;
+    match.mode               = rope_kernel_mode(*params);
     match.theta_bytes        = theta_data.size();
     match.freq_factors_bytes = freq_factors_bytes;
     match.theta_data         = std::move(theta_data);

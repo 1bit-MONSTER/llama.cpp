@@ -7,6 +7,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "graph/op-params.h"
+#include "qwen4exp-hrx-support.h"
 #include "hrx_runtime.h"
 #include "kernel-corpus/kernel-corpus.h"
 #include "loom-jit.h"
@@ -1037,6 +1038,12 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     // GET_ROWS gives wrong rows for batched IQ3_S sources (test-backend-ops GET_ROWS)
     if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr &&
         op->src[0]->type == GGML_TYPE_IQ3_S && op->src[0]->ne[2] * op->src[0]->ne[3] > 1) {
+        return false;
+    }
+    // Qwen3.8-Flash-Next routed experts have no correct/compilable HRX MUL_MAT_ID
+    // kernel (IQ4_NL/IQ2_S weight types, or a 640-wide contraction that violates the
+    // kernel's 256-multiple input_size constraint), so keep the expert GEMM on CPU.
+    if (op->op == GGML_OP_MUL_MAT_ID && ggml::hrx::mul_mat_id_requires_cpu(op)) {
         return false;
     }
     if (zero_output_elision_supported(op)) {
