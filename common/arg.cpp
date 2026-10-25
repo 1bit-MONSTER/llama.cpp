@@ -1819,6 +1819,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "(default: auto enabled if chat template is available)",
         [](common_params & params, bool value) {
             params.conversation_mode = value ? COMMON_CONVERSATION_MODE_ENABLED : COMMON_CONVERSATION_MODE_DISABLED;
+            // "-no-cnv" reads as "do not start a conversation": one turn, then exit. Without this the CLI
+            // ran its interactive loop anyway (engine#561: 20 GB of "> " into a redirected output file).
+            if (!value) {
+                params.single_turn = true;
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
