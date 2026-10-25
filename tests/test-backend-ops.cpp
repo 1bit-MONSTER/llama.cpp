@@ -9428,6 +9428,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // DFlash2 selector: 16 candidates per block position (dflash.selector_top_k of the Qwen3.8-27B drafters)
+    // over the 248320-entry vocabulary, 2 or 8 positions
+    for (int k : {7, 16}) {
+        for (int nrows : {1, 2, 8}) {
+            test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {248320, nrows, 1, 1}, k));
+            test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {248320, nrows, 1, 1}, k, true));
+        }
+    }
+
     for (int k : {1, 2, 3, 7, 15}) {
         test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {16, 10, 10, 10}, k));
         test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {60, 10, 10, 10}, k));
