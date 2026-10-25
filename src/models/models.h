@@ -14,6 +14,10 @@ class llama_memory_hybrid_idx_context;
 static inline ggml_tensor * build_gdn_l2_norm(ggml_context * ctx, ggml_tensor * x, float eps) {
     const float n = x->ne[0];
 
+    // HRX rms_norm needs a materialized input; q/k here are strided views of the conv output.
+    if (!ggml_is_contiguous(x)) {
+        x = ggml_cont(ctx, x);
+    }
     return ggml_scale(ctx, ggml_rms_norm(ctx, x, eps/n), 1.0f/sqrtf(n));
 }
 
