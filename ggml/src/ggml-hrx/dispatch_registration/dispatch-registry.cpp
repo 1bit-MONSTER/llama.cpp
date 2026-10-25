@@ -4,6 +4,7 @@
 #include <set>
 #include <string>
 #include "dispatch-registry.h"
+#include "dispatch-fusion-order.h"
 
 #include "common/dispatch-common.h"
 #include "llm/dispatch-attention-qkv.h"
@@ -122,7 +123,8 @@ bool DispatchRegistry::match(const DispatchMatchContext & context,
             continue;
         }
         DispatchMatch candidate;
-        if (registration.matcher != nullptr && registration.matcher(context, candidate)) {
+        if (registration.matcher != nullptr && registration.matcher(context, candidate) &&
+            fusion_order_accepts(context, candidate, registration.name)) {
             dispatch_log_match(registration);
             if (diagnostics != nullptr) {
                 diagnostics->attempts.push_back({
