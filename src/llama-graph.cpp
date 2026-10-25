@@ -1457,8 +1457,10 @@ ggml_tensor * llm_graph_context::build_norm(
                  int   il) const {
     // HRX norm kernels require a materialized (non-view) input. A view/reshape of a
     // per-head slice (e.g. qwen4exp Q/K and the indexer queries) must be made contiguous
-    // first; a no-op for the plain residual-stream tensors other arches pass.
-    if (type == LLM_NORM || type == LLM_NORM_RMS) {
+    // first. qwen4exp only: on qwen35 (Qwen3.5/3.8, Ternary-Bonsai) the copy broke the HRX
+    // add-on's fused one-token gated-delta-net match (RMS_NORM of a view of its output) and
+    // added 160+ copies per decoded token.
+    if (arch == LLM_ARCH_QWEN4EXP && (type == LLM_NORM || type == LLM_NORM_RMS)) {
         const bool is_view = cur->op == GGML_OP_VIEW || cur->op == GGML_OP_RESHAPE ||
                              cur->op == GGML_OP_PERMUTE || cur->op == GGML_OP_TRANSPOSE;
         if (is_view || !ggml_is_contiguous(cur)) {
