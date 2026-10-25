@@ -25,6 +25,12 @@
 #include "graph/op-params.h"
 
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+
+#ifdef GGML_HRX_HIP_ADDON
+#    include "hip/hip-code-objects.h"
+#endif
 
 namespace ggml::hrx {
 
@@ -85,8 +91,8 @@ inline bool mul_mat_id_weight_type_requires_cpu(ggml_type type) {
 #ifdef GGML_HRX_HIP_ADDON
     // With the HIP kernel add-on (gpu-kernels addons/hip-hrx) built in, routed-expert MUL_MAT_ID runs on
     // HRX via the add-on's decode + prefill mmid, which carry the real GGUF code books for IQ4_NL / IQ3_S
-    // / Q5_1 / Q8_0 (and Q4_K/Q5_K/Q6_K/MXFP4/NVFP4/Q2_0). IQ2_S has no add-on path, so it alone stays on
-    // CPU. (The historical IQ4_NL XOR-12 garbage was the Loom shared-f16-dequant path, which the add-on
+    // / Q5_1 / Q8_0 (and Q4_K/Q5_K/Q6_K/MXFP4/NVFP4/Q2_0). IQ2_S runs on the add-on prefill GEMM when the
+    // code object carries it (mul_mat_id_iq2s_on_hip below), else on the CPU. (The historical IQ4_NL XOR-12 garbage was the Loom shared-f16-dequant path, which the add-on
     // mmid replaces.)
     return type == GGML_TYPE_IQ2_S;
 #else
@@ -95,6 +101,58 @@ inline bool mul_mat_id_weight_type_requires_cpu(ggml_type type) {
     return type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_IQ2_S;
 #endif
 }
+
+#ifdef GGML_HRX_HIP_ADDON
+// True when the add-on prefill GEMM code object carries the IQ2_S routed-expert kernels (plain and gate/up
+// SwiGLU). Looked up by export name in the embedded code object, so the answer does not depend on when the
+// dispatch registry is built.
+inline bool hip_addon_has_iq2s_prefill() {
+    static const bool present = [] {
+        for (const char * target : { "gfx1151", "gfx1100" }) {
+            size_t       size = 0;
+            const void * data = hip_code_object_data("hrx_prefill_gemm", target, &size);
+            if (data == nullptr || size == 0) {
+                continue;
+            }
+            const char * bytes = static_cast<const char *>(data);
+            bool         all   = true;
+            for (const char * name : { "hrx_prefill_mmid_iq2_s_m64_w4", "hrx_prefill_mmid_swiglu_iq2_s_m64_w4" }) {
+                const size_t n     = std::strlen(name) + 1;  // with the terminator: an exact symbol-table entry
+                bool         found = false;
+                for (size_t i = 0; !found && i + n <= size; ++i) {
+                    found = bytes[i] == name[0] && std::memcmp(bytes + i, name, n) == 0;
+                }
+                all = all && found;
+            }
+            if (all) {
+                return true;
+            }
+        }
+        return false;
+    }();
+    return present;
+}
+
+// IQ2_S routed experts (Qwen3.8-Flash-Next UD-IQ3_XXS gate / up) run on the add-on IQ2_S prefill GEMM when the
+// code object has it, at every batch size: the loader probes support with a 512-token MUL_MAT_ID and then places
+// the expert weights in HRX memory, where a CPU decode is far slower (UD-IQ3_XXS tg128 12.82 -> 0.64 tok/s with
+// one-token batches left on the CPU). GGML_HRX_HIP_IQ2S_MIN_TOKENS (default 1) raises the floor; the add-on
+// matcher reads the same variable.
+inline int64_t iq2s_min_tokens() {
+    static const int64_t value = [] {
+        const char * env = std::getenv("GGML_HRX_HIP_IQ2S_MIN_TOKENS");
+        const int64_t v  = env == nullptr || *env == '\0' ? 1 : std::atoll(env);
+        return v < 1 ? int64_t{ 1 } : v;
+    }();
+    return value;
+}
+
+inline bool mul_mat_id_iq2s_on_hip(const ggml_tensor * op) {
+    const ggml_tensor * ids = op->src[2];
+    return op->src[0]->ne[0] % 256 == 0 && ids != nullptr && ids->ne[1] >= iq2s_min_tokens() &&
+           hip_addon_has_iq2s_prefill();
+}
+#endif
 
 // Whole-node decision for whether a MUL_MAT_ID must stay on CPU. In addition to
 // the correctness-broken weight types above, the HRX WMMA MUL_MAT_ID kernels
@@ -107,6 +165,11 @@ inline bool mul_mat_id_requires_cpu(const ggml_tensor * op) {
         return false;
     }
     const ggml_tensor * weight = op->src[0];
+#ifdef GGML_HRX_HIP_ADDON
+    if (weight->type == GGML_TYPE_IQ2_S && mul_mat_id_iq2s_on_hip(op)) {
+        return false;
+    }
+#endif
     if (mul_mat_id_weight_type_requires_cpu(weight->type)) {
         return true;
     }
