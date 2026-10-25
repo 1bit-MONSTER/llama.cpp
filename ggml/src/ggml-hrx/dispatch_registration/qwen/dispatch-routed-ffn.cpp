@@ -1,6 +1,7 @@
 #include "dispatch-routed-ffn.h"
 
 #include "dispatch-llm-shapes.h"
+#include "dispatch_registration/dispatch-fusion-order.h"
 #include "dispatch_registration/common/dispatch-mul-mat-weight-format.h"
 #include "dispatch_registration/common/dispatch-q8-publication.h"
 #include "ggml.h"
@@ -461,7 +462,9 @@ static RoutedGateUpMatch match_routed_ffn_gate_up_swiglu(const DispatchMatchCont
 
     const Value * glu_output = graph_value(context.graph, glu_node->output);
     if (glu_output == nullptr || glu_output->kind != ValueKind::Transient ||
-        !is_routed_ffn_projection_output(*glu_output, token_count)) {
+        !is_routed_ffn_projection_output(*glu_output, token_count) ||
+        // engine #533: only the f16 alternate of the GLU output is written, so each reader must take it.
+        !every_consumer_is_mul_mat_id_with_weight(context.graph, glu_output->id, is_routed_ffn_down_weight)) {
         return {};
     }
 

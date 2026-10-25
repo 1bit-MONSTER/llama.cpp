@@ -3905,6 +3905,14 @@ static void require_gather_add_rejects_unavailable_sources(ggml_context * ctx) {
 
     REQUIRE(!gather_add_registry.match(context, match));
 
+    // engine #533: the producer must have been scheduled (its dispatch is in the plan), not only marked covered;
+    // the registry refuses a match that reads a value no dispatch has written.
+    ggml::hrx::Dispatch producer;
+    producer.kernel =
+        ggml::hrx::make_kernel_specialization(ggml::hrx::kernel_catalog_ref("loom_libs", "ggml_scale_f32"));
+    producer.bindings.push_back({ raw_attention_value, 0, graph.values().find(raw_attention_value)->byte_count });
+    producer.bindings.push_back({ attention_value, 0, graph.values().find(attention_value)->byte_count });
+    plan.dispatches.push_back(std::move(producer));
     covered_nodes[producer_index] = true;
     const ggml::hrx::DispatchMatchContext available_context = {
         graph,
@@ -4620,6 +4628,14 @@ static void run_qwen_attention_postprocess_dispatch_checks() {
 
         std::vector<bool>        covered_nodes(imported.graph.nodes().size(), false);
         ggml::hrx::CommandPlan   plan;
+        // engine #533: the postprocess kernel reads the three projection outputs, so their dispatches go into the
+        // plan first; matching it on an empty plan read values nothing had written.
+        for (const ggml_tensor * projection : { tensors.query_raw, tensors.key_raw, tensors.value_raw }) {
+            ggml::hrx::DispatchMatch projection_match;
+            REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes,
+                                            producer_index_for_tensor(imported.graph, projection), projection_match));
+            append_match_to_plan(plan, projection_match, covered_nodes);
+        }
         ggml::hrx::DispatchMatch match;
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes,
                                         producer_index_for_tensor(imported.graph, tensors.query_reshape), match));
@@ -6862,6 +6878,23 @@ static ggml::hrx::CommandPlan build_qwen_router_plan_for_graph(ggml::hrx::Graph 
     return plan;
 }
 
+// engine #533: the down projection reads the GLU output, so a hand-built plan schedules gate, up and GLU first;
+// the registry refuses a match that reads a value nothing has written yet.
+static void append_qwen_routed_down_producers(ggml::hrx::Graph &              graph,
+                                              const QwenRoutedGateUpTensors & tensors,
+                                              std::vector<bool> &             covered_nodes,
+                                              ggml::hrx::CommandPlan &        plan) {
+    for (const ggml_tensor * tensor : { tensors.gate, tensors.up, tensors.glu }) {
+        const size_t index = producer_index_for_tensor(graph, tensor);
+        if (covered_nodes[index]) {
+            continue;
+        }
+        ggml::hrx::DispatchMatch match;
+        REQUIRE(match_dispatch_at_index(graph, plan, covered_nodes, index, match));
+        append_match_to_plan(plan, match, covered_nodes, &graph);
+    }
+}
+
 static void append_qwen_routed_gate_up_for_graph(ggml::hrx::Graph &              graph,
                                                  const QwenRoutedGateUpTensors & tensors,
                                                  std::vector<bool> &             covered_nodes,
@@ -7472,44 +7505,51 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
     }
 
     {
+        // engine #533: GEGLU keeps gate, up and GLU on their own dispatches (SWIGLU takes the fused routed gate/up,
+        // whose f16 publication moves the down projection off the common route this block checks).
         constexpr int64_t             token_count = 4;
-        const QwenRoutedGateUpTensors tensors     = build_qwen_routed_gate_up_graph(ctx, token_count);
+        const QwenRoutedGateUpTensors tensors     = build_qwen_routed_gate_up_graph(ctx, token_count, GGML_GLU_OP_GEGLU);
         ggml::hrx::GraphImportResult  imported    = import_qwen_routed_gate_up_graph(ctx, tensors);
         std::vector<bool>             covered_nodes(imported.graph.nodes().size(), false);
-        ggml::hrx::CommandPlan        plan       = build_qwen_router_plan_for_graph(imported.graph, covered_nodes);
-        ggml::hrx::DispatchMatch      down_match = require_common_mul_mat_id_for_graph(
+        ggml::hrx::CommandPlan        plan = build_qwen_router_plan_for_graph(imported.graph, covered_nodes);
+        append_qwen_routed_down_producers(imported.graph, tensors, covered_nodes, plan);
+        const size_t             producer_dispatches = plan.dispatches.size();
+        ggml::hrx::DispatchMatch down_match          = require_common_mul_mat_id_for_graph(
             imported.graph, plan, covered_nodes, tensors.output, tensors.glu, tensors.down_weight, tensors.route_ids);
         append_match_to_plan(plan, down_match, covered_nodes, &imported.graph);
 
-        REQUIRE(plan.dispatches.size() == 4);
-        REQUIRE(plan.transients.size() == 2);
+        REQUIRE(plan.dispatches.size() == producer_dispatches + 1);
         const ggml::hrx::CommandProgram commands =
             ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
         REQUIRE(commands.valid());
-        REQUIRE(commands.commands.size() == 4);
+        REQUIRE(commands.commands.size() == plan.dispatches.size());
         REQUIRE(command_program_verifies(commands));
-        REQUIRE(commands.commands[3].bindings[0].name == "input");
-        REQUIRE(commands.commands[3].bindings[2].name == "partition_table");
-        REQUIRE(commands.commands[3].bindings[3].name == "weight");
-        REQUIRE(commands.commands[3].bindings[4].name == "output");
+        // engine #445: the decode variant's ABI is input, weight, ids, output (no expert tables).
+        REQUIRE(commands.commands.back().bindings.size() == 4);
+        REQUIRE(commands.commands.back().bindings[0].name == "input");
+        REQUIRE(commands.commands.back().bindings[1].name == "weight");
+        REQUIRE(commands.commands.back().bindings[2].name == "ids");
+        REQUIRE(commands.commands.back().bindings[3].name == "output");
     }
 
     {
         constexpr int64_t             token_count = 4;
         const QwenRoutedGateUpTensors tensors =
-            build_qwen_routed_gate_up_graph(ctx, token_count, GGML_GLU_OP_SWIGLU, GGML_TYPE_Q4_K, true, GGML_TYPE_BF16);
+            build_qwen_routed_gate_up_graph(ctx, token_count, GGML_GLU_OP_GEGLU, GGML_TYPE_Q4_K, true, GGML_TYPE_BF16);
         ggml::hrx::GraphImportResult imported = import_qwen_routed_gate_up_graph(ctx, tensors);
         std::vector<bool>            covered_nodes(imported.graph.nodes().size(), false);
-        ggml::hrx::CommandPlan       plan       = build_qwen_router_plan_for_graph(imported.graph, covered_nodes);
-        ggml::hrx::DispatchMatch     down_match = require_common_mul_mat_id_for_graph(
+        ggml::hrx::CommandPlan       plan = build_qwen_router_plan_for_graph(imported.graph, covered_nodes);
+        append_qwen_routed_down_producers(imported.graph, tensors, covered_nodes, plan);
+        const size_t             producer_dispatches = plan.dispatches.size();
+        ggml::hrx::DispatchMatch down_match          = require_common_mul_mat_id_for_graph(
             imported.graph, plan, covered_nodes, tensors.output, tensors.glu, tensors.down_weight, tensors.route_ids);
         append_match_to_plan(plan, down_match, covered_nodes, &imported.graph);
 
-        REQUIRE(plan.dispatches.size() == 4);
+        REQUIRE(plan.dispatches.size() == producer_dispatches + 1);
         const ggml::hrx::CommandProgram commands =
             ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
         REQUIRE(commands.valid());
-        REQUIRE(commands.commands.size() == 4);
+        REQUIRE(commands.commands.size() == plan.dispatches.size());
         REQUIRE(command_program_verifies(commands));
     }
 
@@ -7838,13 +7878,27 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         append_qwen_routed_gate_up_for_graph(imported.graph, tensors, covered_nodes, plan);
         append_qwen_routed_down_for_graph(imported.graph, tensors, covered_nodes, plan,
                                           "loom_libs:ggml_mul_mat_id_f16_f16_wmma");
+        // engine #533: the weighted reduce reads the hidden state (a DUP here, which no registration takes on its
+        // own), so a copy that writes it goes into the plan first.
+        {
+            const ggml::hrx::Value * base   = imported.graph.values().find_tensor(tensors.hidden_state->src[0]);
+            const ggml::hrx::Value * hidden = imported.graph.values().find_tensor(tensors.hidden_state);
+            REQUIRE(base != nullptr && hidden != nullptr);
+            ggml::hrx::Dispatch copy;
+            copy.kernel = ggml::hrx::make_kernel_specialization(ggml::hrx::kernel_catalog_ref("loom_libs", "ggml_copy_f32"));
+            copy.kernel.integer_parameters.emplace("element_count", hidden->element_count);
+            copy.bindings.push_back({ base->id, 0, base->byte_count });
+            copy.bindings.push_back({ hidden->id, 0, hidden->byte_count });
+            plan.dispatches.push_back(std::move(copy));
+            covered_nodes[producer_index_for_tensor(imported.graph, tensors.hidden_state)] = true;
+        }
 
         const size_t             weighted_index = producer_index_for_tensor(imported.graph, tensors.weighted);
         ggml::hrx::DispatchMatch weighted_match;
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, weighted_index, weighted_match));
         append_match_to_plan(plan, weighted_match, covered_nodes, &imported.graph);
 
-        REQUIRE(plan.dispatches.size() == 6);
+        REQUIRE(plan.dispatches.size() == 7);
         REQUIRE(kernel_name_for_id(plan.dispatches.back().kernel.kernel_id) ==
                 "qwen3_moe:qwen3_moe_routed_down_weighted_reduce_f16_f32");
         REQUIRE(weighted_match.value_aliases.empty());
@@ -7882,9 +7936,33 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         ggml::hrx::GraphImportResult  imported   = import_qwen_routed_gate_up_graph(ctx, tensors);
         const size_t                  gate_index = producer_index_for_tensor(imported.graph, tensors.gate);
         std::vector<bool>             covered_nodes(imported.graph.nodes().size(), false);
-        const ggml::hrx::CommandPlan  empty_plan;
-        ggml::hrx::DispatchMatch      gate_up_match;
-        REQUIRE(match_dispatch_at_index(imported.graph, empty_plan, covered_nodes, gate_index, gate_up_match));
+        // engine #533: the route ids must be written before the gate/up match reads them. Only the router's
+        // dispatches go into the plan, not its routing bundle, so the match still builds its own expert tables.
+        ggml::hrx::CommandPlan plan_without_bundle;
+        {
+            size_t softmax_index = imported.graph.nodes().size();
+            for (size_t i = 0; i < imported.graph.nodes().size(); ++i) {
+                if (imported.graph.nodes()[i].op == GGML_OP_SOFT_MAX) {
+                    softmax_index = i;
+                    break;
+                }
+            }
+            ggml::hrx::DispatchMatch router_match;
+            REQUIRE(match_dispatch_at_index(imported.graph, plan_without_bundle, covered_nodes, softmax_index,
+                                            router_match));
+            for (ggml::hrx::Dispatch & dispatch : router_match.dispatches) {
+                plan_without_bundle.dispatches.push_back(std::move(dispatch));
+            }
+            for (ggml::hrx::CommandPlanTransient & transient : router_match.transients) {
+                plan_without_bundle.transients.push_back(std::move(transient));
+            }
+            for (const size_t node : router_match.covered_nodes) {
+                covered_nodes[node] = true;
+            }
+            REQUIRE(plan_without_bundle.metadata.moe_routing_bundles().empty());
+        }
+        ggml::hrx::DispatchMatch gate_up_match;
+        REQUIRE(match_dispatch_at_index(imported.graph, plan_without_bundle, covered_nodes, gate_index, gate_up_match));
         REQUIRE(gate_up_match.dispatches.size() == 3);
         REQUIRE(gate_up_match.transients.size() == 2);
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[0].kernel.kernel_id) ==
@@ -7909,8 +7987,9 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         ggml::hrx::DispatchMatch      gate_up_match;
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, gate_index, gate_up_match));
         REQUIRE(gate_up_match.dispatches.size() == 1);
+        // engine #445: four tokens take common.mul_mat_id.decode_f32_wave64, as in the first block of this case.
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[0].kernel.kernel_id) ==
-                "loom_libs:ggml_mul_mat_id_f32_f32_wmma");
+                "loom_libs:ggml_mul_mat_id_decode_f32_wave64");
     }
 
     {
@@ -7944,16 +8023,19 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
     }
 
     {
-        const QwenRoutedGateUpTensors tensors  = build_qwen_routed_gate_up_graph(ctx, 4);
+        // engine #533: gate, up and GLU are scheduled before the down projection that reads the GLU output.
+        const QwenRoutedGateUpTensors tensors  = build_qwen_routed_gate_up_graph(ctx, 4, GGML_GLU_OP_GEGLU);
         ggml::hrx::GraphImportResult  imported = import_qwen_routed_gate_up_graph(ctx, tensors);
         std::vector<bool>             covered_nodes(imported.graph.nodes().size(), false);
-        ggml::hrx::CommandPlan        plan       = build_qwen_router_plan_for_graph(imported.graph, covered_nodes);
-        const size_t                  down_index = producer_index_for_tensor(imported.graph, tensors.output);
-        ggml::hrx::DispatchMatch      down_match;
+        ggml::hrx::CommandPlan        plan = build_qwen_router_plan_for_graph(imported.graph, covered_nodes);
+        append_qwen_routed_down_producers(imported.graph, tensors, covered_nodes, plan);
+        const size_t             down_index = producer_index_for_tensor(imported.graph, tensors.output);
+        ggml::hrx::DispatchMatch down_match;
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, down_index, down_match));
         REQUIRE(down_match.dispatches.size() == 1);
+        // engine #445: four tokens take common.mul_mat_id.decode_f32_wave64.
         REQUIRE(kernel_name_for_id(down_match.dispatches[0].kernel.kernel_id) ==
-                "loom_libs:ggml_mul_mat_id_f32_f32_wmma");
+                "loom_libs:ggml_mul_mat_id_decode_f32_wave64");
     }
 
     {
@@ -7963,12 +8045,22 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         std::vector<bool>            covered_nodes(imported.graph.nodes().size(), false);
         ggml::hrx::CommandPlan       plan = build_qwen_router_plan_for_graph(imported.graph, covered_nodes);
         append_qwen_routed_gate_up_for_graph(imported.graph, tensors, covered_nodes, plan);
+        // engine #533: a Q5_K down projection cannot take the f16 alternate, so the gate/up programme must write
+        // the f32 GLU output the down projection reads.
+        REQUIRE(plan.metadata.find_alternate_value(imported.graph.values().find_tensor(tensors.glu)->id, GGML_TYPE_F16,
+                                                   qwen_routed_gate_up_f16_output_size(4)) == nullptr);
         const size_t             down_index = producer_index_for_tensor(imported.graph, tensors.output);
         ggml::hrx::DispatchMatch down_match;
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, down_index, down_match));
         REQUIRE(down_match.dispatches.size() == 1);
+        // engine #445: four tokens take common.mul_mat_id.decode_f32_wave64.
         REQUIRE(kernel_name_for_id(down_match.dispatches[0].kernel.kernel_id) ==
-                "loom_libs:ggml_mul_mat_id_f32_f32_wmma");
+                "loom_libs:ggml_mul_mat_id_decode_f32_wave64");
+        append_match_to_plan(plan, down_match, covered_nodes, &imported.graph);
+        const ggml::hrx::CommandProgram commands =
+            ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        REQUIRE(commands.valid());
+        REQUIRE(command_program_verifies(commands));
     }
 
     ggml_free(ctx);
@@ -11461,7 +11553,7 @@ int main() {
         { "qwen_token_embedding_dispatch", [] { run_qwen_token_embedding_dispatch_checks(); } },
         { "gather_add_dispatch", [] { run_gather_add_dispatch_checks(); } },
         { "qwen_flash_attention_dispatch", [] { run_qwen_flash_attention_dispatch_checks(); } },
-        { "qwen_attention_postprocess_dispatch", [] { run_qwen_attention_postprocess_dispatch_checks(); }, "#533" },
+        { "qwen_attention_postprocess_dispatch", [] { run_qwen_attention_postprocess_dispatch_checks(); } },
         { "qwen_matmul_dispatch", [] { run_qwen_matmul_dispatch_checks(); }, "#445" },
         { "packed_f16_producer_consumer", [] { run_packed_f16_producer_consumer_checks(); } },
         { "k16_major_preparation_reuse", [] { run_k16_major_preparation_reuse_checks(); } },
@@ -11474,7 +11566,7 @@ int main() {
         { "gdn_rmsnorm_gate_dispatch", [] { run_gdn_rmsnorm_gate_dispatch_checks(); } },
         { "gdn_native_projection_pair_dispatch", [] { run_gdn_native_projection_pair_dispatch_checks(); } },
         { "gdn_selected_snapshot_dispatch", [] { run_gdn_selected_snapshot_dispatch_checks(); } },
-        { "gdn_selected_rms_q8_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(); }, "#533" },
+        { "gdn_selected_rms_q8_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(); } },
         { "llama_attention_matmul_dispatch", [] { run_llama_attention_matmul_dispatch_checks(); } },
         { "quantized_value_projection_dispatch", [] { run_quantized_value_projection_dispatch_checks(); } },
         { "schedule_qwen_terminal_q6k_q8_command.tokens1", [] { schedule_qwen_terminal_q6k_q8_command(1); } },
@@ -11483,7 +11575,7 @@ int main() {
         { "schedule_get_rows_q8_1_alternate_command.bf16", [] { schedule_get_rows_q8_1_alternate_command(GGML_TYPE_BF16); } },
         { "qwen_router_top8_dispatch", [] { run_qwen_router_top8_dispatch_checks(); } },
         { "common_mul_mat_id_swiglu_dispatch", [] { run_common_mul_mat_id_swiglu_dispatch_checks(); } },
-        { "qwen_routed_gate_up_dispatch", [] { run_qwen_routed_gate_up_dispatch_checks(); }, "#533" },
+        { "qwen_routed_gate_up_dispatch", [] { run_qwen_routed_gate_up_dispatch_checks(); } },
         { "common_mul_mat_id_postops_dispatch", [] { run_common_mul_mat_id_postops_dispatch_checks(); } },
         { "alias_value_import", [] { run_alias_value_import_checks(); } },
         { "multi_dispatch", [] { run_multi_dispatch_checks(); } },
