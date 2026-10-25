@@ -10232,11 +10232,23 @@ static void run_gdn_selected_rms_q8_dispatch_checks() {
             const size_t bytes = static_cast<size_t>(test.tokens * heads) * ggml_row_size(GGML_TYPE_Q8_1, width);
             const auto * alternate = plan.metadata.find_alternate_value(output->id, GGML_TYPE_Q8_1, bytes);
             REQUIRE(alternate != nullptr && alternate->alternate_value == fused->bindings.back().value);
+            // engine #533: the fused programme legitimately carries a copy for the selected-snapshot
+            // plane - it runs *before* the fused kernel and feeds one of its bindings - so the case checks
+            // that ordering instead of forbidding the copy. The fallback kernels stay forbidden.
             REQUIRE(std::none_of(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
                 const auto name = kernel_name_for_id(dispatch.kernel.kernel_id);
-                return name == "loom_libs:ggml_get_rows_f32" || name == "loom_libs:ggml_copy_f32" ||
-                       name == "loom_libs:ggml_rmsnorm_gate_f32_q8_1_x4";
+                return name == "loom_libs:ggml_get_rows_f32" || name == "loom_libs:ggml_rmsnorm_gate_f32_q8_1_x4";
             }));
+            const auto snapshot_copy =
+                std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
+                    return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_copy_f32";
+                });
+            if (snapshot_copy != plan.dispatches.end()) {
+                REQUIRE(snapshot_copy < fused);
+                const auto copied = snapshot_copy->bindings.back().value;
+                REQUIRE(std::any_of(fused->bindings.begin(), fused->bindings.end(),
+                                    [&](const auto & binding) { return binding.value == copied; }));
+            }
         }
         const auto commands = ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
         REQUIRE(commands.valid());
@@ -11296,7 +11308,7 @@ int main() {
         { "gdn_rmsnorm_gate_dispatch", [] { run_gdn_rmsnorm_gate_dispatch_checks(); } },
         { "gdn_native_projection_pair_dispatch", [] { run_gdn_native_projection_pair_dispatch_checks(); } },
         { "gdn_selected_snapshot_dispatch", [] { run_gdn_selected_snapshot_dispatch_checks(); } },
-        { "gdn_selected_rms_q8_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(); }, "#533" },
+        { "gdn_selected_rms_q8_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(); } },
         { "llama_attention_matmul_dispatch", [] { run_llama_attention_matmul_dispatch_checks(); } },
         { "quantized_value_projection_dispatch", [] { run_quantized_value_projection_dispatch_checks(); } },
         { "schedule_qwen_terminal_q6k_q8_command.tokens1", [] { schedule_qwen_terminal_q6k_q8_command(1); } },

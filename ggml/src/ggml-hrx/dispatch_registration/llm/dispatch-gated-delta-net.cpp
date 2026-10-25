@@ -1036,6 +1036,26 @@ static bool match_gated_delta_net_rmsnorm_q8(const DispatchMatchContext & contex
     return true;
 }
 
+// engine #533: a value may only be taken over by a fused kernel when nothing outside the fused programme
+// reads it. A side reader (the copy that materialises the snapshot plane, a scale on the gate output) would
+// otherwise be scheduled before the fused kernel that writes it, and the command-program verifier rejects the
+// plan for reading a transient nothing has written yet.
+static bool consumers_covered_by(const Graph & graph, ValueId id, const std::vector<size_t> & first,
+                                 const std::vector<size_t> & second) {
+    for (const GraphNode * consumer : graph.index().consumers(id)) {
+        size_t index = 0;
+        if (!graph.index().node_index(consumer, index)) {
+            return false;
+        }
+        const bool covered = std::find(first.begin(), first.end(), index) != first.end() ||
+                             std::find(second.begin(), second.end(), index) != second.end();
+        if (!covered) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool match_selected_gated_delta_net_dispatch(const DispatchMatchContext & context, DispatchMatch & result) {
     const Graph & graph = context.graph;
     const GraphNode * gather = context.root_node;
@@ -1159,6 +1179,14 @@ static bool match_selected_gated_delta_net_dispatch(const DispatchMatchContext &
         return false;
     }
     if (fuse_rms_q8) {
+        // The fused kernel writes the selected-snapshot plane and the cache; if a node outside this
+        // programme reads either, fusion would order that reader before the write (engine #533).
+        const Dispatch & candidate = selected.dispatches.back();
+        const DispatchBinding snapshot_binding = candidate.bindings[match.token_count == 1 ? 7 : 8];
+        if (!consumers_covered_by(graph, snapshot_binding.value, selected.covered_nodes, rms_match.covered_nodes) ||
+            !consumers_covered_by(graph, cache->id, selected.covered_nodes, rms_match.covered_nodes)) {
+            return false;
+        }
         Dispatch dispatch = std::move(selected.dispatches.back());
         const Dispatch & norm = rms_match.dispatches.front();
         const auto snapshot = dispatch.bindings[match.token_count == 1 ? 7 : 8];
