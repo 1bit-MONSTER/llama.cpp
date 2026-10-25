@@ -2280,9 +2280,19 @@ static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t 
 
     std::vector<bool>        covered_nodes(imported.graph.nodes().size(), false);
     ggml::hrx::CommandPlan   plan;
+    // engine #533 (fusion order): the postprocess programme reads the three projections, and the registry now
+    // refuses a match that reads a value no dispatch has written yet - schedule the projection MUL_MATs before it.
+    const size_t postprocess_index = producer_index_for_tensor(imported.graph, attention.query_reshape);
+    for (size_t index = 0; index < postprocess_index; ++index) {
+        if (covered_nodes[index] || imported.graph.nodes()[index].op != GGML_OP_MUL_MAT) {
+            continue;
+        }
+        ggml::hrx::DispatchMatch projection_match;
+        match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes, index, projection_match);
+        append_match_to_plan(plan, projection_match, covered_nodes);
+    }
     ggml::hrx::DispatchMatch postprocess_match;
-    match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes,
-                            producer_index_for_tensor(imported.graph, attention.query_reshape), postprocess_match);
+    match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes, postprocess_index, postprocess_match);
     ggml::hrx::DispatchMatch flash_match;
     match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes,
                             producer_index_for_tensor(imported.graph, flash_output), flash_match);
