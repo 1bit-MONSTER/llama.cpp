@@ -104,8 +104,8 @@ inline bool mul_mat_id_weight_type_requires_cpu(ggml_type type) {
 
 #ifdef GGML_HRX_HIP_ADDON
 // True when the add-on prefill GEMM code object carries the IQ2_S routed-expert kernels (plain and gate/up
-// SwiGLU). Looked up by export name in the embedded code object, so the answer does not depend on when the
-// dispatch registry is built.
+// SwiGLU). Looked up by export name in the embedded code object (translated through hip_addon_kernel_symbol),
+// so the answer does not depend on when the dispatch registry is built.
 inline bool hip_addon_has_iq2s_prefill() {
     static const bool present = [] {
         for (const char * target : { "gfx1151", "gfx1100" }) {
@@ -116,7 +116,9 @@ inline bool hip_addon_has_iq2s_prefill() {
             }
             const char * bytes = static_cast<const char *>(data);
             bool         all   = true;
-            for (const char * name : { "hrx_prefill_mmid_iq2_s_m64_w4", "hrx_prefill_mmid_swiglu_iq2_s_m64_w4" }) {
+            for (const char * kernel : { "hrx_prefill_mmid_iq2_s_m64_w4", "hrx_prefill_mmid_swiglu_iq2_s_m64_w4" }) {
+                // the add-on may compile it under another symbol (hip-code-objects.h)
+                const char * name  = hip_addon_kernel_symbol(kernel);
                 const size_t n     = std::strlen(name) + 1;  // with the terminator: an exact symbol-table entry
                 bool         found = false;
                 for (size_t i = 0; !found && i + n <= size; ++i) {
