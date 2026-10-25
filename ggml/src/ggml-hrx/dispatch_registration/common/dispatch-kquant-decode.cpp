@@ -77,11 +77,17 @@ bool kquant_format(CommonMulMatWeightFormat format) {
     }
 }
 
-// Q4_0 joins as packed ternary (format 90, dispatch/ternary-q4-0.h) when GGML_HRX_TERNARY_Q4_0 is set: the
-// weight binding asks for the repacked layout, which the upload verifies value by value.
+// Q4_0 joins as packed ternary (format 90, dispatch/ternary-q4-0.h) when GGML_HRX_TERNARY_Q4_0 is set, and
+// TQ2_0 (BitNet b1.58's ternary GGUF format) always joins -- it is ternary by definition, so it is repacked
+// to the same k128 layout at upload (which verifies every value and fails on a non-ternary code) and rides
+// this fast decode kernel instead of the generic dequant-to-f32 mul_mat. The weight binding asks for the
+// repacked layout; prefill (> kMaxTokens tokens) still uses the native WMMA mul_mat path.
 bool kquant_ternary(const CommonMulMatMatch & match) {
-    return match.weight_format == CommonMulMatWeightFormat::Q4_0 && ternary_q4_0_enabled() &&
-           match.input_size % 256 == 0;
+    if (match.input_size % 256 != 0) {
+        return false;
+    }
+    return (match.weight_format == CommonMulMatWeightFormat::Q4_0 && ternary_q4_0_enabled()) ||
+           match.weight_format == CommonMulMatWeightFormat::TQ2_0;
 }
 
 bool kquant_supported(const CommonMulMatMatch & match) {
