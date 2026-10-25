@@ -139,6 +139,11 @@ json op_params_json(const OpParams & params) {
                     { "rp3",      value.rp3     },
                     { "circular", value.circular }
                 };
+            } else if constexpr (std::is_same_v<T, FillParams>) {
+                return {
+                    { "kind",  "fill"      },
+                    { "value", value.value }
+                };
             } else if constexpr (std::is_same_v<T, ArgsortParams>) {
                 return {
                     { "kind",  "argsort"                     },
@@ -218,6 +223,9 @@ OpParams parse_op_params(const json & item) {
         return PadParams{ item.value("lp0", 0), item.value("rp0", 0), item.value("lp1", 0), item.value("rp1", 0),
                           item.value("lp2", 0), item.value("rp2", 0), item.value("lp3", 0), item.value("rp3", 0),
                           item.value("circular", 0) };
+    }
+    if (kind == "fill") {
+        return FillParams{ item.value("value", 0.0f) };
     }
     if (kind == "argsort") {
         return ArgsortParams{ static_cast<ggml_sort_order>(
