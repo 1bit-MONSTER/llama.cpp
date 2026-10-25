@@ -2720,12 +2720,24 @@ static void schedule_single_matmul_command(ggml_context * ctx,
     // standalone ADD, so the projection is the last matmul dispatch rather than the last dispatch.
     const auto projection =
         std::find_if(scheduler.plan().dispatches.rbegin(), scheduler.plan().dispatches.rend(),
-                     [](const auto & candidate) {
-                         return string_contains(kernel_name_for_id(candidate.kernel.kernel_id), "mul_mat");
+                     [expected_kernel_name](const auto & candidate) {
+                         const std::string name = kernel_name_for_id(candidate.kernel.kernel_id);
+                         return string_contains(name, "mul_mat") || name == expected_kernel_name;
                      });
     REQUIRE(projection != scheduler.plan().dispatches.rend());
     const ggml::hrx::Dispatch & dispatch = *projection;
     const std::string           kernel_name = kernel_name_for_id(dispatch.kernel.kernel_id);
+    if (!string_contains(kernel_name, "mul_mat")) {
+        // engine #445 (device run at the pin): a specialised projection is not named after mul_mat - the router's
+        // four-row wave32 kernel is the plan's only dispatch for this row. The table asks for it by name, so pin
+        // that and stop: the checks below spell their parameters under the mul_mat prefix and do not apply.
+        REQUIRE(kernel_name == expected_kernel_name);
+        REQUIRE(dispatch.bindings.size() >= 3);
+        REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == expected_token_count);
+        REQUIRE(command_program_verifies(ggml::hrx::build_command_program(
+            imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151")));
+        return;
+    }
     // engine #445 (re-read at fork 7ca8ba5a): for these shapes the registry decides between the table's
     // kernel and the kquant decode family - both are ours and both are registered, and a two-token Q6_K
     // projection still goes to the wmma kernel while the one-token and postops forms go to the decode
@@ -5336,7 +5348,9 @@ static void run_gdn_selected_snapshot_dispatch_checks() {
 
 static void run_qwen_matmul_dispatch_checks() {
     ggml_init_params params = {};
-    params.mem_size         = 8 * 1024 * 1024;
+    // engine #445: the whole case shares one context and only now runs every row to the end (it used to stop at
+    // the first stale block), so the bookkeeping for ~40 weight and input tensors no longer fits in 8 MiB.
+    params.mem_size         = 64 * 1024 * 1024;
     params.no_alloc         = true;
     ggml_context * ctx      = ggml_init(params);
     REQUIRE(ctx != nullptr);
@@ -6266,7 +6280,9 @@ static void run_qwen_matmul_dispatch_checks() {
         REQUIRE(input != nullptr);
         ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
         REQUIRE(output != nullptr);
-        REQUIRE(!matmul_graph_is_supported(ctx, output));
+        // engine #445 (device run at the pin): a 128-input f32 projection is schedulable now - the route that used
+        // to refuse it is gone - so the block pins that the plan is built and verifies rather than the refusal.
+        REQUIRE(matmul_graph_is_supported(ctx, output));
     }
 
     ggml_free(ctx);
@@ -11564,7 +11580,7 @@ int main() {
         { "gather_add_dispatch", [] { run_gather_add_dispatch_checks(); } },
         { "qwen_flash_attention_dispatch", [] { run_qwen_flash_attention_dispatch_checks(); } },
         { "qwen_attention_postprocess_dispatch", [] { run_qwen_attention_postprocess_dispatch_checks(); } },
-        { "qwen_matmul_dispatch", [] { run_qwen_matmul_dispatch_checks(); }, "#445" },
+        { "qwen_matmul_dispatch", [] { run_qwen_matmul_dispatch_checks(); } },
         { "packed_f16_producer_consumer", [] { run_packed_f16_producer_consumer_checks(); } },
         { "k16_major_preparation_reuse", [] { run_k16_major_preparation_reuse_checks(); } },
         { "rmsnorm_binary_k16_output", [] { run_rmsnorm_binary_k16_output_checks(); } },
