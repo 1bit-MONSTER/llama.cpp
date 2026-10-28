@@ -2612,6 +2612,218 @@ static void run_add_f32_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
+static void run_gdn_snapshot_cpu_reference_case(int64_t tokens) {
+    ggml_backend_t cpu = init_cpu_backend();
+    ggml_backend_t hrx = ggml_backend_hrx_init(0);
+    REQUIRE(hrx != nullptr);
+    constexpr int64_t width = 128;
+    constexpr int64_t heads = 2;
+    constexpr int64_t state_size = width * width * heads;
+    constexpr size_t state_bytes = state_size * sizeof(float);
+    struct fixture {
+        ggml_context * ctx;
+        ggml_cgraph * graph;
+        ggml_tensor * raw;
+        ggml_tensor * bias;
+        ggml_tensor * decay;
+        ggml_tensor * q;
+        ggml_tensor * k;
+        ggml_tensor * v;
+        ggml_tensor * g;
+        ggml_tensor * beta;
+        ggml_tensor * state;
+        ggml_tensor * cache;
+        ggml_tensor * attention;
+        ggml_backend_buffer_t buffer;
+    };
+    const auto build = [&](ggml_backend_t backend) {
+        fixture f{};
+        f.ctx = ggml_init({ 2 * 1024 * 1024, nullptr, true });
+        REQUIRE(f.ctx != nullptr);
+        constexpr int64_t hidden = 3 * width * heads;
+        f.raw = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, hidden, tokens);
+        const auto view = [&](size_t offset) {
+            return ggml_view_4d(f.ctx, f.raw, width, heads, tokens, 1,
+                    width * sizeof(float), hidden * sizeof(float), hidden * tokens * sizeof(float), offset);
+        };
+        f.q = view(0);
+        f.k = view(width * heads * sizeof(float));
+        f.v = view(2 * width * heads * sizeof(float));
+        f.g = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, heads, tokens);
+        f.beta = ggml_dup_tensor(f.ctx, f.g);
+        f.bias = ggml_new_tensor_1d(f.ctx, GGML_TYPE_F32, heads);
+        f.decay = ggml_dup_tensor(f.ctx, f.bias);
+        auto * gate = ggml_mul(f.ctx, ggml_softplus(f.ctx, ggml_add(f.ctx,
+                ggml_reshape_3d(f.ctx, f.g, heads, tokens, 1), f.bias)), f.decay);
+        gate = ggml_reshape_4d(f.ctx, gate, 1, heads, tokens, 1);
+        auto * beta = ggml_sigmoid(f.ctx, ggml_reshape_4d(f.ctx, f.beta, 1, heads, tokens, 1));
+        f.state = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, 1);
+        auto * state = ggml_reshape_4d(f.ctx, f.state, width, width, heads, 1);
+        f.cache = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, tokens);
+        auto * gdn = ggml_gated_delta_net(f.ctx, ggml_l2_norm(f.ctx, f.q, 1.e-6f),
+                ggml_l2_norm(f.ctx, f.k, 1.e-6f), f.v, gate, beta, state, tokens);
+        f.attention = ggml_view_4d(f.ctx, gdn, width, heads, tokens, 1,
+                width * sizeof(float), width * heads * sizeof(float), width * heads * tokens * sizeof(float), 0);
+        auto * snapshots = ggml_view_3d(f.ctx, gdn, state_size, 1, tokens,
+                state_bytes, state_bytes, width * heads * tokens * sizeof(float));
+        auto * target = ggml_view_3d(f.ctx, f.cache, state_size, 1, tokens, state_bytes, state_bytes, 0);
+        f.graph = ggml_new_graph(f.ctx);
+        ggml_build_forward_expand(f.graph, ggml_cpy(f.ctx, snapshots, target));
+        f.attention = ggml_scale(f.ctx, f.attention, 0.5f);
+        ggml_build_forward_expand(f.graph, f.attention);
+        f.buffer = ggml_backend_alloc_ctx_tensors(f.ctx, backend);
+        REQUIRE(f.buffer != nullptr);
+        return f;
+    };
+    fixture c = build(cpu);
+    fixture h = build(hrx);
+    require_kernel_subsequence(scheduled_kernel_sequence(h.graph),
+            { "loom_libs:llm_gated_delta_net_f32_wmma_head128_snapshot_projection_epilogue" });
+    const auto q = make_pattern_f32(width * heads * tokens, 31, 0.03125f);
+    const auto k = make_pattern_f32(q.size(), 19, 0.046875f);
+    const auto v = make_pattern_f32(q.size(), 17, 0.03125f);
+    const auto state = make_pattern_f32(state_size, 23, 0.015625f);
+    std::vector<float> gate(heads * tokens, -0.1f);
+    const std::vector<float> beta(heads * tokens, 0.5f);
+    const auto set = [&](ggml_tensor * ct, ggml_tensor * ht, const std::vector<float> & values) {
+        set_tensor_pair_bytes(cpu, ct, hrx, ht, values.data(), values.size() * sizeof(float));
+    };
+    std::vector<float> raw(3 * q.size());
+    const size_t row_width = width * heads;
+    for (int64_t t = 0; t < tokens; ++t) {
+        std::copy_n(q.data() + t * row_width, row_width, raw.data() + 3 * t * row_width);
+        std::copy_n(k.data() + t * row_width, row_width, raw.data() + (3 * t + 1) * row_width);
+        std::copy_n(v.data() + t * row_width, row_width, raw.data() + (3 * t + 2) * row_width);
+    }
+    set(c.raw, h.raw, raw);
+    set(c.g, h.g, gate);
+    set(c.beta, h.beta, beta);
+    set(c.bias, h.bias, std::vector<float>(heads, 0.0f));
+    // The second head underflows cumulative decay, while the first retains ordinary decay.
+    set(c.decay, h.decay, { -1.0f, -200.0f });
+    set(c.state, h.state, state);
+    const auto compute_and_compare = [&] {
+        REQUIRE(ggml_backend_graph_compute(cpu, c.graph) == GGML_STATUS_SUCCESS);
+        REQUIRE(ggml_backend_graph_compute(hrx, h.graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(cpu);
+        ggml_backend_synchronize(hrx);
+        require_close(get_f32_tensor(hrx, h.attention), get_f32_tensor(cpu, c.attention), 5.0e-4f);
+        require_close(get_f32_tensor(hrx, h.cache), get_f32_tensor(cpu, c.cache), 5.0e-4f);
+    };
+    compute_and_compare();
+
+    // Keep later contributions alive after the first cumulative decay underflows.
+    for (int64_t t = 1; t < tokens; ++t) {
+        gate[t * heads + 1] = -6.0f + 0.1f * t;
+    }
+    set(c.g, h.g, gate);
+    for (float & value : raw) {
+        value *= -0.75f;
+    }
+    set(c.raw, h.raw, raw);
+    compute_and_compare();
+    const auto cpu_snapshots = get_f32_tensor(cpu, c.cache);
+    const auto hrx_snapshots = get_f32_tensor(hrx, h.cache);
+
+    // Snapshots are newest first. Continue independently from every accepted prefix.
+    // Mild decay makes the resumed output sensitive to the restored state.
+    set(c.decay, h.decay, { -1.0f, -1.0f });
+    for (int64_t accepted = 0; accepted <= tokens; ++accepted) {
+        const size_t offset = (tokens - accepted) * state_size;
+        const float * cpu_state = accepted == 0 ? state.data() : cpu_snapshots.data() + offset;
+        const float * hrx_state = accepted == 0 ? state.data() : hrx_snapshots.data() + offset;
+        ggml_backend_tensor_set(c.state, cpu_state, 0, state_bytes);
+        ggml_backend_tensor_set(h.state, hrx_state, 0, state_bytes);
+        compute_and_compare();
+    }
+    for (auto * f : { &c, &h }) {
+        ggml_backend_buffer_free(f->buffer);
+        ggml_free(f->ctx);
+    }
+    ggml_backend_free(cpu);
+    ggml_backend_free(hrx);
+}
+
+static void run_dynamic_generic_ops_cpu_reference_case() {
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = 512 * 1024;
+    params.no_alloc         = true;
+    ggml_context * cpu_ctx  = ggml_init(params);
+    ggml_context * hrx_ctx  = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+
+    constexpr int64_t element_count = 257;
+    ggml_tensor * cpu_input = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_F32, element_count);
+    ggml_tensor * hrx_input = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_F32, element_count);
+    ggml_tensor * cpu_unary = ggml_sqr(cpu_ctx, cpu_input);
+    ggml_tensor * hrx_unary = ggml_sqr(hrx_ctx, hrx_input);
+    ggml_tensor * cpu_copy_target = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_F32, element_count);
+    ggml_tensor * hrx_copy_target = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_F32, element_count);
+    ggml_tensor * cpu_copy = ggml_cpy(cpu_ctx, cpu_input, cpu_copy_target);
+    ggml_tensor * hrx_copy = ggml_cpy(hrx_ctx, hrx_input, hrx_copy_target);
+    ggml_tensor * cpu_concat_lhs = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, 64, 7);
+    ggml_tensor * cpu_concat_rhs = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, 32, 7);
+    ggml_tensor * hrx_concat_lhs = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_F32, 64, 7);
+    ggml_tensor * hrx_concat_rhs = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_F32, 32, 7);
+    ggml_tensor * cpu_concat = ggml_concat(cpu_ctx, cpu_concat_lhs, cpu_concat_rhs, 0);
+    ggml_tensor * hrx_concat = ggml_concat(hrx_ctx, hrx_concat_lhs, hrx_concat_rhs, 0);
+    REQUIRE(cpu_unary != nullptr && hrx_unary != nullptr);
+    REQUIRE(cpu_copy != nullptr && hrx_copy != nullptr);
+    REQUIRE(cpu_concat != nullptr && hrx_concat != nullptr);
+
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    REQUIRE(cpu_graph != nullptr && hrx_graph != nullptr);
+    ggml_build_forward_expand(cpu_graph, cpu_unary);
+    ggml_build_forward_expand(cpu_graph, cpu_copy);
+    ggml_build_forward_expand(cpu_graph, cpu_concat);
+    ggml_build_forward_expand(hrx_graph, hrx_unary);
+    ggml_build_forward_expand(hrx_graph, hrx_copy);
+    ggml_build_forward_expand(hrx_graph, hrx_concat);
+
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
+                               { "loom_libs:ggml_unary_f32", "loom_libs:ggml_copy_f32",
+                                 "loom_libs:ggml_concat_dim0_f32" });
+    for (const char * kernel_name :
+         { "loom_libs:ggml_unary_f32", "loom_libs:ggml_copy_f32", "loom_libs:ggml_concat_dim0_f32" }) {
+        const ggml::hrx::KernelSpecialization specialization =
+            scheduled_kernel_specialization(hrx_graph, kernel_name);
+        REQUIRE(specialization.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+    }
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr && hrx_buffer != nullptr);
+    const std::vector<float> input = make_pattern_f32(element_count, 73, 0.03125f);
+    set_tensor_pair_bytes(cpu_backend, cpu_input, hrx_backend, hrx_input, input.data(), input.size() * sizeof(float));
+    const std::vector<float> concat_lhs = make_pattern_f32(64 * 7, 79, 0.015625f);
+    const std::vector<float> concat_rhs = make_pattern_f32(32 * 7, 83, 0.0234375f);
+    set_tensor_pair_bytes(cpu_backend, cpu_concat_lhs, hrx_backend, hrx_concat_lhs, concat_lhs.data(),
+                          concat_lhs.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu_concat_rhs, hrx_backend, hrx_concat_rhs, concat_rhs.data(),
+                          concat_rhs.size() * sizeof(float));
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    require_close(get_f32_tensor(hrx_backend, hrx_unary), get_f32_tensor(cpu_backend, cpu_unary), 0.0f);
+    require_close(get_f32_tensor(hrx_backend, hrx_copy), get_f32_tensor(cpu_backend, cpu_copy), 0.0f);
+    require_close(get_f32_tensor(hrx_backend, hrx_concat), get_f32_tensor(cpu_backend, cpu_concat), 0.0f);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_view_mul_f32_cpu_reference_case() {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
@@ -5681,6 +5893,667 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_qwen_decode_attention_output_next_q8_scheduling_case(true); });
     add(suite, "fa_prefill_full_cache.512",
         [=] { run_qwen_full_cache_prefill_flash_attention_scheduling_case(512); });
+    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_vector_bias_residual_f32_f32", 1,
+                                                kVectorOutputSize, true, false, false, kVectorInputSize);
+    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_vector_bias_residual_f32_f32", 1,
+                                                kVectorOutputSize, true, true, false, kVectorInputSize);
+}
+
+static const char * glu_op_name(ggml_glu_op op) {
+    switch (op) {
+        case GGML_GLU_OP_REGLU:
+            return "reglu";
+        case GGML_GLU_OP_GEGLU:
+            return "geglu";
+        case GGML_GLU_OP_SWIGLU:
+            return "swiglu";
+        case GGML_GLU_OP_SWIGLU_OAI:
+            return "swiglu_oai";
+        case GGML_GLU_OP_GEGLU_ERF:
+            return "geglu_erf";
+        case GGML_GLU_OP_GEGLU_QUICK:
+            return "geglu_quick";
+        case GGML_GLU_OP_COUNT:
+            break;
+    }
+    return "unknown_glu";
+}
+
+static std::string type_name(ggml_type type) {
+    return ggml_type_name(type);
+}
+
+using test_runner::Suite;
+
+static void register_basic_ops_cases(Suite & suite) {
+    suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
+    suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
+    suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });
+    suite.device_case("add_f32.cpu_reference", [] { run_add_f32_cpu_reference_case(); });
+    suite.device_case("dynamic_generic_ops.cpu_reference", [] { run_dynamic_generic_ops_cpu_reference_case(); });
+    for (int64_t tokens = 2; tokens <= 5; ++tokens) {
+        suite.device_case("gdn_snapshot.cpu_reference." + std::to_string(tokens),
+                          [tokens] { run_gdn_snapshot_cpu_reference_case(tokens); });
+    }
+    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        suite.device_case("ssm_conv_prefill_recurrent." + type_name(type) + ".plain",
+                          [type] { run_ssm_conv_prefill_recurrent_case(type, false, false); });
+        suite.device_case("ssm_conv_prefill_recurrent." + type_name(type) + ".gathered",
+                          [type] { run_ssm_conv_prefill_recurrent_case(type, true, false); });
+        suite.device_case("ssm_conv_prefill_recurrent." + type_name(type) + ".gathered_clear_state",
+                          [type] { run_ssm_conv_prefill_recurrent_case(type, true, true); });
+    }
+    suite.device_case("view_mul_f32.cpu_reference", [] { run_view_mul_f32_cpu_reference_case(); });
+    for (const int64_t token_count : { 2, 23 }) {
+        suite.device_case("strided_cont.tokens" + std::to_string(token_count),
+                          [token_count] { run_strided_cont_cpu_reference_case(token_count); });
+    }
+    for (const ggml_glu_op op :
+         { GGML_GLU_OP_REGLU, GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_GEGLU_ERF, GGML_GLU_OP_GEGLU_QUICK }) {
+        suite.device_case(std::string("glu_split_f32.") + glu_op_name(op),
+                          [op] { run_glu_split_f32_cpu_reference_case(op); });
+        suite.device_case(std::string("glu_packed_f32.") + glu_op_name(op) + ".normal",
+                          [op] { run_glu_packed_f32_cpu_reference_case(op, false); });
+    }
+    suite.device_case("glu_packed_f32.swiglu.gated",
+                      [] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, true); });
+    suite.device_case("glu_packed_f32.swiglu.outputs8192.tokens2",
+                      [] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, false, 8192, 2); });
+    suite.device_case("glu_packed_f32.swiglu.outputs8192.tokens14",
+                      [] { run_glu_packed_f32_cpu_reference_case(GGML_GLU_OP_SWIGLU, false, 8192, 14); });
+    suite.device_case("gather_add_f32.cpu_reference", [] { run_gather_add_f32_cpu_reference_case(); });
+    suite.device_case("scale_add_f32.cpu_reference.packed", [] { run_scale_add_f32_cpu_reference_case(false); });
+    suite.device_case("scale_add_f32.cpu_reference.strided", [] { run_scale_add_f32_cpu_reference_case(true); });
+    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_XS, GGML_TYPE_F16,
+                                  GGML_TYPE_BF16, GGML_TYPE_F32 }) {
+        suite.device_case("get_rows_f32." + type_name(type), [type] { run_get_rows_f32_cpu_reference_case(type); });
+    }
+    suite.device_case("get_rows_f32.q1_0.rows2048", [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q1_0, 2048); });
+    suite.device_case("get_rows_f32.q5_1.rows640", [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q5_1, 640); });
+    suite.device_case("get_rows_q8_1.zero_weight", [] { run_get_rows_q8_1_zero_weight_case(); });
+    suite.device_case("get_rows_scale_f32.cpu_reference", [] { run_get_rows_scale_f32_cpu_reference_case(); });
+    suite.device_case("get_rows_scale_f32.q5_1.cpu_reference",
+                      [] { run_get_rows_scale_f32_cpu_reference_case(GGML_TYPE_Q5_1, 640); });
+}
+
+static void register_dense_matmul_cases(Suite & suite) {
+    // Distinct gate/up weights cover cached metadata, multiple K blocks, and tile tails.
+    for (const ggml_type gate : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+        for (const ggml_type up : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+            for (const int64_t input_size : { 256, 768 }) {
+                suite.device_case("dense_matmul.metadata_pair." + type_name(gate) + "." + type_name(up) + ".k" + std::to_string(input_size), [gate, up, input_size] {
+                    run_dense_matmul_swiglu_cpu_reference_case(gate, up, "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32", 33, 65, GGML_GLU_OP_SWIGLU, input_size);
+                });
+            }
+        }
+    }
+
+    // Multiple blocks and output tails check the prepared state lifetime and row guards.
+    for (const ggml_type type : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+        for (const int64_t input_size : { 256, 768 }) {
+            suite.device_case("dense_metadata_reuse." + type_name(type) + ".input" + std::to_string(input_size), [type, input_size] {
+                run_dense_matmul_postops_cpu_reference_case(
+                    type, "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                    33, 65, true, true, false, input_size);
+            });
+        }
+    }
+
+    // K=384 exercises a partial 256-weight tile; N=65 exercises an unpaired output row.
+    for (const int64_t input_size : { 256, 384, 768 }) {
+        suite.device_case("dense_matmul.q1_0.vector_tail.k" + std::to_string(input_size), [input_size] {
+            run_dense_matmul_cpu_reference_case(
+                GGML_TYPE_Q1_0, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 65, input_size);
+        });
+    }
+
+    for (const ggml_type type : { GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M }) {
+        const char * type_suffix   = type == GGML_TYPE_IQ1_S ? "iq1_s" : "iq1_m";
+        const char * vector_kernel = type == GGML_TYPE_IQ1_S ?
+                                         "loom_libs:ggml_mul_mat_vector_iq1_s_f32_f32" :
+                                         "loom_libs:ggml_mul_mat_vector_iq1_m_f32_f32";
+        const char * tiled_kernel  = type == GGML_TYPE_IQ1_S ?
+                                         "loom_libs:ggml_mul_mat_tiled_input_f32_iq1_s_publish_f32" :
+                                         "loom_libs:ggml_mul_mat_tiled_input_f32_iq1_m_publish_f32";
+        suite.device_case(std::string("dense_matmul.") + type_suffix + ".vector.tokens1.outputs128", [=] {
+            run_dense_matmul_cpu_reference_case(type, vector_kernel, 1, 128, 2048);
+        });
+        suite.device_case(std::string("dense_matmul.") + type_suffix + ".tiled.tokens64.outputs128", [=] {
+            run_dense_matmul_cpu_reference_case(type, tiled_kernel, 64, 128, 2048);
+        });
+    }
+    for (const int64_t tokens : { 1, 3, 5 }) {
+        for (const int64_t outputs : { 1, 4, 47, 48, 63 }) {
+            suite.device_case(
+                "dense_matmul.q4_k.tokens" + std::to_string(tokens) + ".outputs" + std::to_string(outputs),
+                [tokens, outputs] {
+                    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K,
+                                                        tokens == 1 ?
+                                                            "loom_libs:ggml_mul_mat_vector_f32_f32" :
+                                      "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
+                        tokens, outputs);
+                });
+        }
+    }
+    for (const ggml_type type :
+         { GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32 }) {
+        suite.device_case("dense_matmul." + type_name(type) + ".tokens3.outputs47", [type] {
+            run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 3, 47);
+        });
+    }
+    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        suite.device_case("dense_matmul." + type_name(type) + ".tiled.tokens33.outputs65.input512", [type] {
+            run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32", 33, 65,
+                                                512);
+        });
+    }
+    suite.device_case("dense_matmul_unary.f32.tokens3.outputs47", [] {
+        run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
+                                                  3, 47);
+    });
+    suite.device_case("get_rows_f32.f32.rows262144.tokens4.outputs1",
+                      [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_F32, 262144, 4, 1); });
+    suite.device_case("dense_matmul.q4_k.skinny.tokens2.outputs128", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 2,
+                                            128);
+    });
+    suite.device_case("dense_matmul.q4_k.vector.tokens1.outputs128", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 128);
+    });
+    for (const ggml_type type : { GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS }) {
+        suite.device_case("dense_matmul." + type_name(type) + ".codebook.vector.tokens1.outputs128", [type] {
+            run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32", 1, 128,
+                                                2048);
+        });
+        suite.device_case("dense_matmul." + type_name(type) + ".codebook.tiled.tokens64.outputs128", [type] {
+            run_dense_matmul_cpu_reference_case(
+                type, "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32", 64, 128, 2048);
+        });
+    }
+    suite.device_case("dense_matmul.iq3_xxs.codebook.vector.tokens1.outputs128", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ3_XXS,
+                                            "loom_libs:ggml_mul_mat_vector_iq3_xxs_f32_f32", 1, 128, 2048);
+    });
+    suite.device_case("dense_matmul.iq3_xxs.codebook.tiled.tokens64.outputs128", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ3_XXS,
+                                            "loom_libs:ggml_mul_mat_tiled_input_f32_iq3_xxs_publish_f32", 64,
+                                            128, 2048);
+    });
+    for (const ggml_type type : { GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_S }) {
+        const char * vector_kernel = type == GGML_TYPE_IQ2_S ?
+                                         "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32" :
+                                         "loom_libs:ggml_mul_mat_vector_iq3_s_f32_f32";
+        const char * tiled_kernel = type == GGML_TYPE_IQ2_S ?
+                                        "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32" :
+                                        "loom_libs:ggml_mul_mat_tiled_input_f32_iq3_s_publish_f32";
+        suite.device_case("dense_matmul." + type_name(type) + ".codebook_control.vector.tokens1.outputs128",
+                          [type, vector_kernel] {
+                              run_dense_matmul_cpu_reference_case(type, vector_kernel, 1, 128, 2048);
+                          });
+        suite.device_case("dense_matmul." + type_name(type) + ".codebook_control.tiled.tokens64.outputs128",
+                          [type, tiled_kernel] {
+                              run_dense_matmul_cpu_reference_case(type, tiled_kernel, 64, 128, 2048);
+                          });
+    }
+    suite.device_case("dense_matmul.iq4_xs.vector.tokens1.outputs128", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_XS, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 128);
+    });
+    suite.device_case("dense_matmul.iq4_xs.tiled.tokens64.outputs128", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_XS,
+                                            "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 64, 128);
+    });
+    suite.device_case("dense_matmul.iq4_xs.prefill.tokens256.outputs128", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_XS,
+                                            "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 256, 128,
+                                            kQwenHiddenSize, true);
+    });
+    // Exercise the production K dimension and a partial output tile.
+    suite.device_case("dense_matmul.iq4_xs.prefill.tokens512.outputs64", [] {
+        run_dense_matmul_cpu_reference_case(
+            GGML_TYPE_IQ4_XS, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 512, 64, 3072, true);
+    });
+    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        for (const ggml_type cache_type : { GGML_TYPE_F16, GGML_TYPE_F32 }) {
+            suite.device_case(
+                "attention_v_matmul." + type_name(type) + ".cache_" + type_name(cache_type), [type, cache_type] {
+                    run_dense_matmul_cpu_reference_case(type,
+                                                        "loom_libs:llm_attention_v_matmul_set_rows_vector_f32_f32", 1,
+                                                        1024, 2048, false, false, cache_type);
+                });
+        }
+    }
+    suite.device_case("attention_v_matmul.q6_k.prefill_f16.repeated_indices",
+                      [] { run_prefill_value_cache_repeated_indices_case(); });
+    for (const ggml_type type :
+         { GGML_TYPE_Q1_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_IQ2_S,
+           GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
+        const char *  vector_kernel = type == GGML_TYPE_IQ2_S ? "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32" :
+                                     type == GGML_TYPE_Q6_K ? "loom_libs:ggml_mul_mat_vector_q6_f32_f32" :
+                                                               "loom_libs:ggml_mul_mat_vector_f32_f32";
+        const int64_t outputs       = type == GGML_TYPE_IQ2_S ? 640 : (type == GGML_TYPE_IQ4_NL ? 1024 : 128);
+        const int64_t input         = type == GGML_TYPE_IQ4_NL ? 640 : kQwenHiddenSize;
+        const char *  route         = type == GGML_TYPE_IQ4_NL ? "tiled" : "skinny";
+        const char *  kernel        = type == GGML_TYPE_IQ2_S ? "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32" :
+                                     type == GGML_TYPE_IQ4_NL ? "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32" :
+                                                                 "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32";
+        suite.device_case(
+            "dense_matmul." + type_name(type) + "." + route + ".tokens2.outputs" + std::to_string(outputs),
+            [type, outputs, input, kernel] { run_dense_matmul_cpu_reference_case(type, kernel, 2, outputs, input); });
+        suite.device_case("dense_matmul." + type_name(type) + ".vector.tokens1.outputs" + std::to_string(outputs),
+                          [type, vector_kernel, outputs, input] {
+                              run_dense_matmul_cpu_reference_case(type, vector_kernel, 1, outputs, input);
+                          });
+    }
+    suite.device_case("dense_matmul.iq4_nl.tiled.tokens64.outputs1024", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_NL,
+                                            "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 64, 1024,
+                                            640);
+    });
+    suite.device_case("dense_matmul.q5_0.tiled.tokens2.outputs256.input640", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32", 2,
+                                            256, 640);
+    });
+    suite.device_case("dense_matmul.q5_0.tiled.tokens2.outputs128.input544", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32", 2,
+                                            128, 544);
+    });
+    suite.device_case("dense_matmul.q5_0.vector.tokens1.outputs256.input640", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 256, 640);
+    });
+    suite.device_case("dense_matmul.q8_1.zero_weight.skinny", [] {
+        run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32");
+    });
+    suite.device_case("dense_matmul.q8_1.zero_weight.vector", [] {
+        run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_vector_f32_f32", 1);
+    });
+    suite.device_case("dense_matmul.f32.skinny.tokens2.outputs256", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 2,
+                                            256);
+    });
+    suite.device_case("dense_matmul.f32.vector.tokens1.outputs256", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 256);
+    });
+    suite.device_case("dense_matmul_unary.f32.tokens2.outputs128", [] {
+        run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
+                                                  2, 128);
+    });
+    suite.device_case("dense_matmul_swiglu.q4_k.f16.swiglu.tokens2.outputs128", [] {
+        run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_F16,
+                                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128);
+    });
+    suite.device_case("dense_matmul_swiglu.q4_k.f16.geglu.tokens2.outputs128", [] {
+        run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_F16,
+                                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128,
+                                                   GGML_GLU_OP_GEGLU);
+    });
+    suite.device_case("dense_matmul_swiglu.iq4_nl.iq4_nl.geglu.tokens2.outputs2048.input640", [] {
+        run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL,
+                                                   "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32", 2,
+                                                   2048, GGML_GLU_OP_GEGLU, 640);
+    });
+    suite.device_case("dense_matmul_swiglu.iq4_nl.iq4_nl.geglu.tokens64.outputs128.input640", [] {
+        run_dense_matmul_swiglu_cpu_reference_case(
+            GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL,
+            "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_aligned",
+            64, 128, GGML_GLU_OP_GEGLU, 640);
+    });
+    for (const ggml_glu_op op : { GGML_GLU_OP_REGLU, GGML_GLU_OP_GEGLU_ERF, GGML_GLU_OP_GEGLU_QUICK }) {
+        suite.device_case(std::string("dense_matmul_swiglu.q4_k.f16.") + glu_op_name(op) + ".tokens2.outputs128", [op] {
+            run_dense_matmul_swiglu_cpu_reference_case(
+                GGML_TYPE_Q4_K, GGML_TYPE_F16, "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128, op);
+        });
+    }
+    suite.device_case("dense_matmul_packed_glu.q4_k.tokens2.outputs128", [] {
+        run_dense_matmul_packed_glu_cpu_reference_case(
+            GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32", 2, 128);
+    });
+    suite.device_case("dense_matmul_packed_glu.q4_k.swiglu.tokens2.outputs128.gated", [] {
+        run_dense_matmul_packed_glu_cpu_reference_case(GGML_TYPE_Q4_K,
+                                                       "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
+                                                       2, 128, GGML_GLU_OP_SWIGLU, true);
+    });
+    suite.device_case("dense_matmul_binary.q4_k.f16.tokens2.outputs128", [] {
+        run_dense_matmul_binary_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_F16,
+                                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128);
+    });
+    suite.device_case("vector_q8_publish.cpu_reference", [] { run_vector_q8_publish_cpu_reference_case(); });
+    for (const ggml_glu_op op :
+         { GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_REGLU, GGML_GLU_OP_GEGLU_ERF, GGML_GLU_OP_GEGLU_QUICK }) {
+        for (const int64_t outputs : { 128, 4096 }) {
+            suite.device_case(std::string("dense_matmul_swiglu.q4_k.q4_k.lowtoken.") + glu_op_name(op) +
+                                  ".tokens4.outputs" + std::to_string(outputs),
+                              [op, outputs] {
+                                  run_dense_matmul_swiglu_cpu_reference_case(
+                                      GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+                                      "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", 4, outputs, op);
+                              });
+        }
+        for (const int64_t tokens : { 256, 512 }) {
+            if (tokens == 512) {
+                suite.device_case(
+                    std::string("dense_matmul_swiglu.q4_k.q4_k.prefill.") + glu_op_name(op) + ".tokens512.outputs4096",
+                    [op] {
+                        run_dense_matmul_swiglu_cpu_reference_case(
+                            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+                            "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 512, 4096, op);
+                    });
+            } else {
+                for (const int64_t outputs : { 128, 4096 }) {
+                    suite.device_case(std::string("dense_matmul_swiglu.q4_k.q4_k.prefill.") + glu_op_name(op) +
+                                          ".tokens256.outputs" + std::to_string(outputs),
+                                      [op, outputs] {
+                                          run_dense_matmul_swiglu_cpu_reference_case(
+                                              GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+                                              "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 256,
+                                              outputs, op);
+                                      });
+                }
+            }
+        }
+    }
+    for (const int64_t tokens : { 1, 2, 3, 5 }) {
+        suite.device_case(
+            "dense_matmul_swiglu.q4_k.q4_k.lowtoken.tokens" + std::to_string(tokens) + ".outputs4160", [tokens] {
+                run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+                                                           "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                                           tokens, 4160);
+            });
+    }
+    for (const int64_t tokens : { 1, 2, 5 }) {
+        suite.device_case(
+            "dense_matmul_swiglu.q4_k.q4_k.swiglu.tokens" + std::to_string(tokens) + ".outputs16384.input4096",
+            [tokens] {
+                run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+                                                           "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                                           tokens, 16384, GGML_GLU_OP_SWIGLU, 4096);
+            });
+    }
+    suite.device_case("dense_matmul_swiglu.q4_k.q4_k.reglu.tokens3.outputs16384.input4352", [] {
+        run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+                                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", 3, 16384,
+                                                   GGML_GLU_OP_REGLU, 4352);
+    });
+    suite.device_case("dense_matmul_binary.q4_k.q4_k.lowtoken.tokens4.outputs128", [] {
+        run_dense_matmul_binary_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+                                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", 4, 128);
+    });
+    suite.device_case("dense_matmul_binary.q4_k.q4_k.prefill.tokens256.outputs128", [] {
+        run_dense_matmul_binary_cpu_reference_case(
+            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 256, 128);
+    });
+    suite.device_case("dense_matmul_binary.q4_k.q4_k.prefill.tokens256.outputs4096", [] {
+        run_dense_matmul_binary_cpu_reference_case(
+            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 256, 4096);
+    });
+    suite.device_case("dense_matmul_binary.q4_k.q4_k.prefill.tokens1024.outputs2048", [] {
+        run_dense_matmul_binary_cpu_reference_case(
+            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 1024, 2048);
+    });
+    suite.device_case("dense_matmul_postops.f16.bias.tokens33.outputs256", [] {
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
+                                                    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                                                    33, 256, true, false, false);
+    });
+    suite.device_case("dense_matmul_postops.f16.residual.tokens33.outputs256", [] {
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
+                                                    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                                                    33, 256, false, true, false);
+    });
+    suite.device_case("dense_matmul_postops.f16.bias_residual.tokens33.outputs256", [] {
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
+                                                    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                                                    33, 256, true, true, false);
+    });
+    suite.device_case("dense_matmul_postops.f16.residual.alias.tokens33.outputs256", [] {
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
+                                                    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                                                    33, 256, false, true, true);
+    });
+    suite.device_case("dense_matmul_postops.f16.bias_residual.alias.tokens33.outputs256", [] {
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
+                                                    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                                                    33, 256, true, true, true);
+    });
+    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        const int64_t input_size = type == GGML_TYPE_Q4_K ? 20480 : 8192;
+        suite.device_case(
+            "dense_matmul." + type_name(type) + ".skinny.tokens5.outputs4096.input" + std::to_string(input_size),
+            [type, input_size] {
+                run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 5,
+                                                    4096, input_size);
+            });
+        suite.device_case("dense_matmul_postops." + type_name(type) + ".add.tokens5.outputs4160", [type, input_size] {
+            run_dense_matmul_postops_cpu_reference_case(
+                type, "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32", 5, 4160, false, true, false,
+                input_size + 256);
+        });
+        suite.device_case("dense_matmul_postops." + type_name(type) + ".add.alias.tokens5.outputs4224",
+                          [type, input_size] {
+                run_dense_matmul_postops_cpu_reference_case(
+                                  type, "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32", 5, 4224,
+                                  false, true, true, input_size + 256);
+            });
+    }
+    suite.device_case("dense_matmul.q4_k.skinny.tokens5.outputs4096.input8192", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 5,
+                                            4096, 8192);
+    });
+    for (const int64_t input_size : { 6144, 6400, 6656 }) {
+        suite.device_case(
+            "dense_matmul.q4_k.skinny.tokens5.outputs5120.input" + std::to_string(input_size), [input_size] {
+                              run_dense_matmul_cpu_reference_case(
+                    GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 5, 5120, input_size);
+                          });
+        suite.device_case("dense_matmul_postops.q4_k.add.alias.tokens5.outputs5120.input" + std::to_string(input_size),
+                          [input_size] {
+                run_dense_matmul_postops_cpu_reference_case(
+                                  GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
+                                  5, 5120, false, true, true, input_size);
+            });
+    }
+    suite.device_case("dense_matmul.q4_k.skinny.tokens4.outputs4096.input4096", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 4,
+                                            4096, 4096);
+    });
+    suite.device_case("dense_matmul_postops.q4_k.add.tokens4.outputs4160.input6400", [] {
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q4_K,
+                                                    "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
+                                                    4, 4160, false, true, false, 6400);
+    });
+    suite.device_case("dense_matmul_postops.q4_k.add.alias.tokens4.outputs4224.input6656", [] {
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q4_K,
+                                                    "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
+                                                    4, 4224, false, true, true, 6656);
+    });
+    suite.device_case("endpoint_rmsnorm_q6k_q8.cpu_reference",
+                      [] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(); });
+    suite.device_case("dense_matmul.q6_k.skinny.tokens5.outputs4096.input16384", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 5,
+                                            4096, 16384);
+    });
+    suite.device_case("dense_matmul_postops.q6_k.add.tokens5.outputs4160.input16640", [] {
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q6_K,
+                                                    "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
+                                                    5, 4160, false, true, false, 16640);
+    });
+    suite.device_case("dense_matmul_postops.q6_k.add.alias.tokens5.outputs4224.input16640", [] {
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q6_K,
+                                                    "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
+                                                    5, 4224, false, true, true, 16640);
+    });
+    for (const int64_t tokens : { 1, 3, 5 }) {
+        suite.device_case(
+            "dense_matmul.q4_k.contiguous.tokens" + std::to_string(tokens) + ".outputs256.input5120", [tokens] {
+                run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K,
+                    tokens == 1 ? "loom_libs:ggml_mul_mat_vector_f32_f32" :
+                                  "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
+                    tokens, 256, 5120, true);
+            });
+        suite.device_case(
+            "dense_matmul.q6_k.contiguous.tokens" + std::to_string(tokens) + ".outputs256.input5120", [tokens] {
+                run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K,
+                    tokens == 1 ? "loom_libs:ggml_mul_mat_vector_f32_f32" :
+                                  "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
+                    tokens, 256, 5120, true, true);
+            });
+    }
+    suite.device_case("dense_matmul.q6_k.vector_q6.tokens1.outputs256.input5120", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_vector_q6_f32_f32", 1, 256, 5120,
+                                            true);
+    });
+    suite.device_case("dense_matmul.q6_k.vector_q6.tokens1.outputs320.input512", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_vector_q6_f32_f32", 1, 320, 512,
+                                            true);
+    });
+}
+
+static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
+    suite.host_case("support.lfm_head_rope.availability", [] { run_lfm_head_rope_availability_checks(); });
+    suite.host_case("gemma_post_proj.matcher_negatives", [] { run_gemma_post_proj_matcher_negatives(); });
+    for (const int64_t token_count : { 1, 3, 64 }) {
+        suite.device_case("gemma_post_proj.tokens" + std::to_string(token_count),
+                          [token_count] { run_gemma_post_proj_cpu_reference_case(token_count); });
+    }
+    suite.device_case("gemma_post_proj.normalized_add.tokens3",
+                      [] { run_gemma_post_proj_cpu_reference_case(3, true); });
+    suite.device_case("rmsnorm.default", [] { run_rmsnorm_cpu_reference_case(); });
+    suite.device_case("rmsnorm.hidden3840.tokens18", [] { run_rmsnorm_cpu_reference_case(3840, 18, 1.0e-6f); });
+    for (const int64_t token_count : { 2, 23 }) {
+        suite.device_case("strided_rmsnorm.tokens" + std::to_string(token_count),
+                          [token_count] { run_strided_rmsnorm_cpu_reference_case(token_count); });
+    }
+    suite.device_case("strided_rmsnorm_binary.minicpm_pp512_witness",
+                      [] { run_strided_rmsnorm_binary_cpu_reference_case(); });
+    suite.device_case("rmsnorm_binary_add.cpu_reference", [] { run_rmsnorm_binary_add_cpu_reference_case(); });
+    suite.device_case("rmsnorm_gate.silu.hidden128.tokens1.stride7",
+                      [] { run_rmsnorm_gate_cpu_reference_case(128, 1, 7, GGML_UNARY_OP_SILU); });
+    suite.device_case("rmsnorm_gate.gelu.hidden256.tokens3.stride3",
+                      [] { run_rmsnorm_gate_cpu_reference_case(256, 3, 3, GGML_UNARY_OP_GELU); });
+    suite.device_case("rmsnorm_gate.relu.hidden512.tokens3.stride5",
+                      [] { run_rmsnorm_gate_cpu_reference_case(512, 3, 5, GGML_UNARY_OP_RELU); });
+    suite.device_case("rmsnorm_gate.gelu_erf.hidden1024.tokens1.stride4",
+                      [] { run_rmsnorm_gate_cpu_reference_case(1024, 1, 4, GGML_UNARY_OP_GELU_ERF); });
+    suite.device_case("rmsnorm_gate.silu.hidden128.tokens48.stride512",
+                      [] { run_rmsnorm_gate_cpu_reference_case(128, 48, 512, GGML_UNARY_OP_SILU); });
+    suite.device_case("rmsnorm_mul.hidden3840.tokens18", [] { run_rmsnorm_mul_cpu_reference_case(3840, 18, 1.0e-6f); });
+    for (const int64_t hidden_size : { 1024, 2048, 2560, 3072, 4096, 5120 }) {
+        suite.device_case("rmsnorm_mul.lowtoken.random.hidden" + std::to_string(hidden_size) + ".tokens1",
+                          [hidden_size] { run_rmsnorm_mul_cpu_reference_case(hidden_size, 1, 1.0e-6f); });
+        suite.device_case("rmsnorm_mul.lowtoken.adversarial.hidden" + std::to_string(hidden_size) + ".tokens1",
+                          [hidden_size] { run_rmsnorm_mul_cpu_reference_case(hidden_size, 1, 1.0e-5f, true); });
+    }
+    for (const int64_t hidden_size : { 2048, 5120 }) {
+        for (const int64_t token_count : { 2, 4 }) {
+            suite.device_case("rmsnorm_mul.lowtoken.random.hidden" + std::to_string(hidden_size) + ".tokens" +
+                                  std::to_string(token_count),
+                              [hidden_size, token_count] {
+                                  run_rmsnorm_mul_cpu_reference_case(hidden_size, token_count, 1.0e-6f);
+                              });
+        }
+    }
+    suite.device_case("gemma_scaled_rmsnorm.cpu_reference", [] { run_gemma_scaled_rmsnorm_cpu_reference_case(); });
+    suite.device_case("gemma_scaled_rmsnorm_mul.cpu_reference",
+                      [] { run_gemma_scaled_rmsnorm_mul_cpu_reference_case(); });
+    suite.device_case("scheduled.scale_rmsnorm", [] { run_scheduled_hrx_scale_rmsnorm_case(); });
+    suite.device_case("scheduled.rmsnorm_scale", [] { run_scheduled_hrx_rmsnorm_scale_case(); });
+    suite.device_case("scheduled.rmsnorm_view_scale", [] { run_scheduled_hrx_rmsnorm_view_scale_case(); });
+    suite.device_case("external_view_input_rmsnorm", [] { run_external_view_input_rmsnorm_case(); });
+    suite.device_case("split_local_view_alias_import", [] { run_split_local_view_alias_import_case(); });
+    suite.device_case("rope_set_rows.cpu_reference", [] { run_rope_set_rows_cpu_reference_case(); });
+    for (const int64_t head_count : { 8, 32 }) {
+        for (const int64_t token_count : { 1, 64 }) {
+            suite.device_case(
+                "lfm_head_rope.query.heads" + std::to_string(head_count) + ".tokens" + std::to_string(token_count),
+                [head_count, token_count] { run_lfm_head_rope_cpu_reference_case(head_count, token_count, false); });
+        }
+    }
+    suite.device_case("lfm_head_rope.query.heads7.tokens3", [] { run_lfm_head_rope_cpu_reference_case(7, 3, false); });
+    for (const int64_t token_count : { 1, 64 }) {
+        suite.device_case("lfm_head_rope.cache.heads8.tokens" + std::to_string(token_count),
+                          [token_count] { run_lfm_head_rope_cpu_reference_case(8, token_count, true); });
+    }
+    suite.device_case("attention_postprocess.cpu_reference", [] { run_attention_postprocess_cpu_reference_case(); });
+    suite.device_case("routed_moe.q4_k.next_rmsnorm", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true); });
+    suite.device_case("flash_attention.asymmetric", [] { run_asymmetric_flash_attention_cpu_reference_case(); });
+    suite.device_case("routed_moe.q6_k", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q6_K, false); });
+    suite.device_case("decode_attention_qkv.scheduling", [] { run_decode_attention_qkv_scheduling_case(); });
+    suite.device_case("decode_routed_moe.q4_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q4_K); });
+    suite.device_case("decode_routed_moe.q6_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K); });
+    suite.device_case("decode_routed_moe.q6_k.alias_gate_input",
+                      [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, true); });
+    suite.device_case("rmsnorm_mul.hidden256.tokens1", [] { run_rmsnorm_mul_case(256, 1); });
+    suite.device_case("rmsnorm_mul.hidden256.tokens4", [] { run_rmsnorm_mul_case(256, 4); });
+    suite.device_case("rmsnorm_mul.hidden2048.tokens1", [] { run_rmsnorm_mul_case(2048, 1); });
+    suite.device_case("router_projection.tokens4", [] { run_router_projection_case(4); });
+    suite.device_case("router_top8.tokens4", [] { run_router_top8_case(4); });
+    for (int64_t experts : { 128, 256, 512 }) {
+        for (int64_t tokens : { 1, 2, 512 }) {
+            suite.device_case("router_common_matmul.experts" + std::to_string(experts) + ".tokens" + std::to_string(tokens),
+                              [=] { run_router_common_matmul_case(experts, tokens); });
+        }
+    }
+    suite.device_case("qwen_flash_attention", [] { run_qwen_flash_attention_case(); });
+}
+
+static void register_flash_attention_cases(Suite & suite) {
+    suite.device_case("common_flash_attention.prefill.head128.query256.kv256.exact", [] {
+        run_common_flash_attention_cpu_reference_case(128, 256, 256, 1.0f / std::sqrt(128.0f),
+                                                      "loom_libs:ggml_flash_attention_f32_f16_wmma");
+    });
+    for (int64_t head_size = 64; head_size <= 512; head_size += 64) {
+        suite.device_case("common_flash_attention.decode.head" + std::to_string(head_size) + ".query2.kv65",
+                          [head_size] {
+                              run_common_flash_attention_cpu_reference_case(
+                                  head_size, 2, 65, 1.0f / std::sqrt(static_cast<float>(head_size)),
+                                  "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
+                          });
+        suite.device_case(
+            "common_flash_attention.prefill.head" + std::to_string(head_size) + ".query16.kv64", [head_size] {
+                run_common_flash_attention_cpu_reference_case(head_size, 16, 64,
+                                                              1.0f / std::sqrt(static_cast<float>(head_size)),
+                                                              "loom_libs:ggml_flash_attention_f32_f16_wmma");
+            });
+        suite.device_case(
+            "common_flash_attention.prefill.head" + std::to_string(head_size) + ".query17.kv65", [head_size] {
+                run_common_flash_attention_cpu_reference_case(head_size, 17, 65,
+                                                              1.0f / std::sqrt(static_cast<float>(head_size)),
+                                                              "loom_libs:ggml_flash_attention_f32_f16_wmma");
+            });
+    }
+    suite.device_case("common_flash_attention.decode.head96.query2.kv4.capacity320", [] {
+        run_common_flash_attention_cpu_reference_case(
+            96, 2, 4, 1.0f / std::sqrt(96.0f), "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8", 320);
+    });
+    suite.device_case("common_flash_attention.decode.head320.query2.kv64.capacity64", [] {
+        run_common_flash_attention_cpu_reference_case(
+            320, 2, 64, 1.0f / std::sqrt(320.0f), "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8",
+            64);
+    });
+    suite.device_case("qwen_decode_split_flash_attention.query1.kv512",
+                      [] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512); });
+    suite.device_case("qwen_decode_split_flash_attention.query4.kv513",
+                      [] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513); });
+    suite.device_case("qwen_decode_split_flash_attention.query1.kv512.masked",
+                      [] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true); });
+    suite.device_case("qwen_decode_split_flash_attention.query1.kv512.masked.head96.value64", [] {
+        run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true, 96, 64, 1.0f / std::sqrt(96.0f));
+    });
+    suite.device_case("qwen_decode_split_flash_attention.query4.kv513.masked.head96.value64", [] {
+        run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f));
+    });
+    suite.device_case("qwen_decode_attention_output_next_q8.no_selectors",
+                      [] { run_qwen_decode_attention_output_next_q8_scheduling_case(false); });
+    suite.device_case("qwen_decode_attention_output_next_q8.selectors",
+                      [] { run_qwen_decode_attention_output_next_q8_scheduling_case(true); });
+    suite.device_case("qwen_full_cache_prefill_flash_attention.tokens512",
+                      [] { run_qwen_full_cache_prefill_flash_attention_scheduling_case(512); });
+}
+
+static void register_hrx_ops_cases(Suite & suite) {
+    register_basic_ops_cases(suite);
+    register_dense_matmul_cases(suite);
+    register_rmsnorm_and_scheduling_cases(suite);
+    register_flash_attention_cases(suite);
 }
 
 int main(int argc, char ** argv) {

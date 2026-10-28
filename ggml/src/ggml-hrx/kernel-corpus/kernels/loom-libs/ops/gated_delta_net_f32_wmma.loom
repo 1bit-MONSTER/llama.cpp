@@ -3045,6 +3045,11 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
     %rowh_r = index.rem %row0, %k64 : index
     %rowh = index.assume %rowh_r [range(%rowh_r, 0, 60)] : index
+    // Prefix factors can underflow to zero. Form decay ratios from log differences.
+    %snapshot_log0 = vector.extract %gq0[3] : vector<4xf32> -> f32
+    %snapshot_log1 = vector.extract %gq1[3] : vector<4xf32> -> f32
+    %snapshot_log2 = vector.extract %gq2[3] : vector<4xf32> -> f32
+    %snapshot_log3 = vector.extract %gq3[3] : vector<4xf32> -> f32
     %snapshot_next0, %snapshot_next1, %snapshot_next2, %snapshot_next3, %snapshot_next4, %snapshot_next5, %snapshot_next6, %snapshot_next7, %snapshot_next8, %snapshot_next9, %snapshot_next10, %snapshot_next11, %snapshot_next12, %snapshot_next13, %snapshot_next14, %snapshot_next15 = scf.if %reuse_snapshot_fragments -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
       scf.if %publish_snapshots {
         %snapshot_c0o = index.constant 0 : offset
@@ -3238,7 +3243,7 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix1 {
           %snapshot_index1 = index.sub %snapshot_last, %k1 : index
           %snapshot_slot1 = index.mul %snapshot_stride, %snapshot_index1 : index
-          %p10_log = scalar.subf<nnan|ninf|nsz> %lc1, %lc0 : f32
+          %p10_log = scalar.subf<nnan|ninf|nsz> %snapshot_log1, %snapshot_log0 : f32
           %p10 = scalar.expf<afn> %p10_log : f32
           %p1d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p10 : f32
           %p1d0 = scalar.fptrunc %p1d0f : f32 to f16
@@ -3256,9 +3261,9 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix2 {
           %snapshot_index2 = index.sub %snapshot_last, %k2 : index
           %snapshot_slot2 = index.mul %snapshot_stride, %snapshot_index2 : index
-          %p20_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc0 : f32
+          %p20_log = scalar.subf<nnan|ninf|nsz> %snapshot_log2, %snapshot_log0 : f32
           %p20 = scalar.expf<afn> %p20_log : f32
-          %p21_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc1 : f32
+          %p21_log = scalar.subf<nnan|ninf|nsz> %snapshot_log2, %snapshot_log1 : f32
           %p21 = scalar.expf<afn> %p21_log : f32
           %p2d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p20 : f32
           %p2d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p21 : f32
@@ -3278,11 +3283,11 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix3 {
           %snapshot_index3 = index.sub %snapshot_last, %k3 : index
           %snapshot_slot3 = index.mul %snapshot_stride, %snapshot_index3 : index
-          %p30_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc0 : f32
+          %p30_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log0 : f32
           %p30 = scalar.expf<afn> %p30_log : f32
-          %p31_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc1 : f32
+          %p31_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log1 : f32
           %p31 = scalar.expf<afn> %p31_log : f32
-          %p32_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc2 : f32
+          %p32_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log2 : f32
           %p32 = scalar.expf<afn> %p32_log : f32
           %p3d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p30 : f32
           %p3d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p31 : f32
@@ -3335,7 +3340,7 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix1 {
           %snapshot_index1 = index.sub %snapshot_last, %k1 : index
           %snapshot_slot1 = index.mul %snapshot_stride, %snapshot_index1 : index
-          %p10_log = scalar.subf<nnan|ninf|nsz> %lc1, %lc0 : f32
+          %p10_log = scalar.subf<nnan|ninf|nsz> %snapshot_log1, %snapshot_log0 : f32
           %p10 = scalar.expf<afn> %p10_log : f32
           %p1d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p10 : f32
           %p1d0 = scalar.fptrunc %p1d0f : f32 to f16
@@ -3353,9 +3358,9 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix2 {
           %snapshot_index2 = index.sub %snapshot_last, %k2 : index
           %snapshot_slot2 = index.mul %snapshot_stride, %snapshot_index2 : index
-          %p20_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc0 : f32
+          %p20_log = scalar.subf<nnan|ninf|nsz> %snapshot_log2, %snapshot_log0 : f32
           %p20 = scalar.expf<afn> %p20_log : f32
-          %p21_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc1 : f32
+          %p21_log = scalar.subf<nnan|ninf|nsz> %snapshot_log2, %snapshot_log1 : f32
           %p21 = scalar.expf<afn> %p21_log : f32
           %p2d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p20 : f32
           %p2d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p21 : f32
@@ -3375,11 +3380,11 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix3 {
           %snapshot_index3 = index.sub %snapshot_last, %k3 : index
           %snapshot_slot3 = index.mul %snapshot_stride, %snapshot_index3 : index
-          %p30_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc0 : f32
+          %p30_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log0 : f32
           %p30 = scalar.expf<afn> %p30_log : f32
-          %p31_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc1 : f32
+          %p31_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log1 : f32
           %p31 = scalar.expf<afn> %p31_log : f32
-          %p32_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc2 : f32
+          %p32_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log2 : f32
           %p32 = scalar.expf<afn> %p32_log : f32
           %p3d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p30 : f32
           %p3d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p31 : f32
