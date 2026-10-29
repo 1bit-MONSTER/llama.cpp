@@ -53,11 +53,16 @@ std::string resource_access_name(ResourceAccess access) {
 
 std::string format_command_binding(const CommandBinding & binding) {
     std::ostringstream out;
-    out << "binding " << binding_name(binding) << " value=" << binding.value.value
-        << " origin=" << command_binding_origin_name(binding.origin)
+    out << "binding";
+    // the ABI slot name ("gate_weight", "partition_table", ...) and the packed weight layout describe the
+    // private kernel set, so only the graph-side facts are printed by default
+    if (Status::detail_reported()) {
+        out << ' ' << binding_name(binding);
+    }
+    out << " value=" << binding.value.value << " origin=" << command_binding_origin_name(binding.origin)
         << " access=" << resource_access_name(binding.access) << " range=[" << binding.offset << ", "
         << binding.offset + binding.length << ")";
-    if (binding.layout != kNativeWeightLayout) {
+    if (binding.layout != kNativeWeightLayout && Status::detail_reported()) {
         out << " layout=" << binding.layout << " source_type=" << static_cast<int>(binding.source_type)
             << " input_size=" << binding.input_size << " output_size=" << binding.output_size
             << " source_length=" << binding.source_length;
@@ -67,9 +72,13 @@ std::string format_command_binding(const CommandBinding & binding) {
 
 std::string format_command(const Command & command) {
     std::ostringstream out;
-    out << "command " << command.ordinal << " kind=" << command_kind_name(command.kind)
-        << " kernel_id=" << command.kernel.kernel_id << " bindings=" << command.bindings.size()
-        << " deps=" << command.dependencies.size();
+    out << "command " << command.ordinal << " kind=" << command_kind_name(command.kind);
+    // the kernel id, the binding count and the dependency count are detail: they describe the private
+    // kernel set, so a default run keeps only the class and GGML_HRX_REPORT=1 adds the rest
+    if (Status::detail_reported()) {
+        out << " kernel_id=" << command.kernel.kernel_id << " bindings=" << command.bindings.size()
+            << " deps=" << command.dependencies.size();
+    }
     return out.str();
 }
 

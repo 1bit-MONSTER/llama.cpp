@@ -859,6 +859,9 @@ static void run_dispatch_registry_checks() {
 }
 
 static void run_graph_import_checks() {
+    // this case checks both verbosities itself: it turns GGML_HRX_REPORT on for the detail assertions and off for
+    // the class-only ones, so an ambient value must not decide what the first block sees
+    unsetenv("GGML_HRX_REPORT");
     ggml_init_params params = {};
     params.mem_size         = 1024 * 1024;
     params.no_alloc         = true;
@@ -1015,7 +1018,13 @@ static void run_graph_import_checks() {
     REQUIRE(ggml::hrx::resource_access_name(static_cast<ggml::hrx::ResourceAccess>(255)) == "Unknown(255)");
 
     const std::string binding_text = ggml::hrx::format_command_binding(command.bindings[0]);
-    REQUIRE(string_contains(binding_text, "binding lhs"));
+    // the ABI slot name is kernel-set detail; the default text keeps the graph-side facts only
+    REQUIRE(!string_contains(binding_text, "binding lhs"));
+    REQUIRE(string_contains(binding_text, "binding"));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    const std::string binding_text_detailed = ggml::hrx::format_command_binding(command.bindings[0]);
+    unsetenv("GGML_HRX_REPORT");
+    REQUIRE(string_contains(binding_text_detailed, "binding lhs"));
     REQUIRE(string_contains(binding_text, "value="));
     REQUIRE(string_contains(binding_text, "origin=GraphValue"));
     REQUIRE(string_contains(binding_text, "access=Read"));
@@ -1026,18 +1035,31 @@ static void run_graph_import_checks() {
     REQUIRE(string_contains(binding_text, std::to_string(a_value->byte_count).c_str()));
 
     const std::string command_text = ggml::hrx::format_command(command);
+    // the class is always there; the kernel id, binding and dependency counts are detail, kept only when
+    // GGML_HRX_REPORT asks for them
     REQUIRE(string_contains(command_text, "command 0"));
     REQUIRE(string_contains(command_text, "kind=Kernel"));
-    REQUIRE(string_contains(command_text, "kernel_id="));
-    REQUIRE(string_contains(command_text, "bindings=3"));
-    REQUIRE(string_contains(command_text, "deps=0"));
+    REQUIRE(!string_contains(command_text, "kernel_id="));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    const std::string command_text_detailed = ggml::hrx::format_command(command);
+    unsetenv("GGML_HRX_REPORT");
+    REQUIRE(string_contains(command_text_detailed, "kernel_id="));
+    REQUIRE(string_contains(command_text_detailed, "bindings=3"));
+    REQUIRE(string_contains(command_text_detailed, "deps=0"));
 
     const std::string program_text = ggml::hrx::format_command_program(commands);
     REQUIRE(string_contains(program_text, "command_program commands=1"));
     REQUIRE(string_contains(program_text, "command 0"));
-    REQUIRE(string_contains(program_text, "binding lhs"));
-    REQUIRE(string_contains(program_text, "binding rhs"));
-    REQUIRE(string_contains(program_text, "binding output"));
+    // the binding rundown is the same text as format_command_binding(): graph-side facts by default, the ABI slot
+    // names only when GGML_HRX_REPORT asks for them
+    REQUIRE(!string_contains(program_text, "binding lhs"));
+    REQUIRE(string_contains(program_text, "binding value="));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    const std::string program_text_detailed = ggml::hrx::format_command_program(commands);
+    unsetenv("GGML_HRX_REPORT");
+    REQUIRE(string_contains(program_text_detailed, "binding lhs"));
+    REQUIRE(string_contains(program_text_detailed, "binding rhs"));
+    REQUIRE(string_contains(program_text_detailed, "binding output"));
 
     ggml::hrx::ResolvedCommandProgram resolved =
         ggml::hrx::resolve_command_program_bindings(commands, runtime_bindings);
@@ -1102,8 +1124,14 @@ static void run_graph_import_checks() {
     resolved = ggml::hrx::resolve_command_program_bindings(commands, missing_bindings);
     REQUIRE(!resolved.valid());
     REQUIRE(status_contains(resolved.status, "is not bound"));
+    // the binding rundown in this message is format_command_binding(): the ABI slot name is detail
+    REQUIRE(!status_contains(resolved.status, "binding output"));
+    REQUIRE(status_contains(resolved.status, "binding value="));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    resolved = ggml::hrx::resolve_command_program_bindings(commands, missing_bindings);
+    unsetenv("GGML_HRX_REPORT");
+    REQUIRE(!resolved.valid());
     REQUIRE(status_contains(resolved.status, "binding output"));
-    REQUIRE(status_contains(resolved.status, "value="));
 
     resolved = ggml::hrx::resolve_command_program_bindings(commands, partial_bindings);
     REQUIRE(!resolved.valid());
@@ -1122,7 +1150,7 @@ static void run_graph_import_checks() {
     resolved = ggml::hrx::resolve_command_program_bindings(commands, null_bindings);
     REQUIRE(!resolved.valid());
     REQUIRE(status_contains(resolved.status, "null buffer"));
-    REQUIRE(status_contains(resolved.status, "binding lhs"));
+    REQUIRE(status_contains(resolved.status, "binding value="));
 
     ggml::hrx::CommandProgram empty_resolve_binding           = copy_command_program_shape(commands);
     empty_resolve_binding.commands.front().bindings[0].length = 0;
@@ -1137,7 +1165,7 @@ static void run_graph_import_checks() {
     resolved = ggml::hrx::resolve_command_program_bindings(out_of_range_binding, runtime_bindings);
     REQUIRE(!resolved.valid());
     REQUIRE(status_contains(resolved.status, "outside runtime binding length"));
-    REQUIRE(status_contains(resolved.status, "binding lhs"));
+    REQUIRE(status_contains(resolved.status, "binding value="));
 
     ggml::hrx::CommandProgram unsupported_origin           = copy_command_program_shape(commands);
     unsupported_origin.commands.front().bindings[0].origin = static_cast<ggml::hrx::CommandBindingOrigin>(255);
@@ -1155,6 +1183,13 @@ static void run_graph_import_checks() {
     invalid_kernel.commands.front().kernel.kernel_id = ggml::hrx::kUncatalogedKernelId;
     verification = ggml::hrx::verify_command_program(invalid_kernel, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(!verification.valid());
+    // the detailed text (which names the command and the kernel) is behind GGML_HRX_REPORT; a default run
+    // gets the neutral class, and that is what this asserts first
+    REQUIRE(status_contains(verification.status, "plan rejected"));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    verification = ggml::hrx::verify_command_program(invalid_kernel, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    unsetenv("GGML_HRX_REPORT");
+    REQUIRE(!verification.valid());
     REQUIRE(status_contains(verification.status, "command 0"));
     REQUIRE(status_contains(verification.status, "kernel_id="));
 
@@ -1162,13 +1197,13 @@ static void run_graph_import_checks() {
     empty_bindings.commands.front().bindings.clear();
     verification = ggml::hrx::verify_command_program(empty_bindings, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(!verification.valid());
-    REQUIRE(status_contains(verification.status, "bindings=0"));
+    REQUIRE(status_contains(verification.status, "has no bindings"));
 
     ggml::hrx::CommandProgram empty_binding           = copy_command_program_shape(commands);
     empty_binding.commands.front().bindings[0].length = 0;
     verification = ggml::hrx::verify_command_program(empty_binding, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(!verification.valid());
-    REQUIRE(status_contains(verification.status, "binding lhs"));
+    REQUIRE(status_contains(verification.status, "binding value="));
     REQUIRE(status_contains(verification.status, "range=[0, 0)"));
 
     ggml::hrx::CommandProgram invalid_value          = copy_command_program_shape(commands);
@@ -1189,12 +1224,25 @@ static void run_graph_import_checks() {
     verification =
         ggml::hrx::verify_command_program(wrong_binding_name, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
     REQUIRE(!verification.valid());
+    REQUIRE(status_contains(verification.status, "binding does not match the ABI"));
+    REQUIRE(!status_contains(verification.status, "binding wrong"));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    verification =
+        ggml::hrx::verify_command_program(wrong_binding_name, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    unsetenv("GGML_HRX_REPORT");
+    REQUIRE(!verification.valid());
     REQUIRE(status_contains(verification.status, "binding wrong"));
 
     ggml::hrx::CommandProgram wrong_binding_access           = copy_command_program_shape(commands);
     wrong_binding_access.commands.front().bindings[0].access = ggml::hrx::ResourceAccess::Write;
     verification =
         ggml::hrx::verify_command_program(wrong_binding_access, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(!verification.valid());
+    REQUIRE(status_contains(verification.status, "binding does not match the ABI"));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    verification =
+        ggml::hrx::verify_command_program(wrong_binding_access, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    unsetenv("GGML_HRX_REPORT");
     REQUIRE(!verification.valid());
     REQUIRE(status_contains(verification.status, "access=Write"));
 
@@ -1241,6 +1289,11 @@ static void run_graph_import_checks() {
 
     ggml::hrx::PreparedCommandProgram prepared =
         ggml::hrx::prepare_command_program(prepare_context, invalid_kernel, runtime_bindings);
+    REQUIRE(!prepared.valid());
+    REQUIRE(status_contains(prepared.status, "command 0"));
+    setenv("GGML_HRX_REPORT", "1", 1);
+    prepared = ggml::hrx::prepare_command_program(prepare_context, invalid_kernel, runtime_bindings);
+    unsetenv("GGML_HRX_REPORT");
     REQUIRE(!prepared.valid());
     REQUIRE(status_contains(prepared.status, "kernel_id="));
 
