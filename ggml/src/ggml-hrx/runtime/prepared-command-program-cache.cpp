@@ -1,5 +1,7 @@
 #include "prepared-command-program-cache.h"
 
+#include "runtime/host-gap-profile.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -110,7 +112,11 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         return result;
     }
 
-    const Key              key = cache_key(graph_uid, context, command_shape_hash, bindings);
+    Key                    key;
+    {
+        const HostGapScope scope("cache.key");
+        key = cache_key(graph_uid, context, command_shape_hash, bindings);
+    }
     std::shared_ptr<Entry> entry;
     bool                   created_entry = false;
     {
@@ -137,8 +143,11 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
             }
             return result;
         }
-        const RecordedCommandGraphExecutionResult replay =
-            bind_and_launch_recorded_command_graph(context, commands, bindings, entry->program, entry->recorded);
+        RecordedCommandGraphExecutionResult replay;
+        {
+            const HostGapScope scope("cache.replay");
+            replay = bind_and_launch_recorded_command_graph(context, commands, bindings, entry->program, entry->recorded);
+        }
         apply_graph_replay_result(result, replay);
         if (replay.success) {
             result.success = true;
