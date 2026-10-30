@@ -6,6 +6,7 @@
 #include "backend-buffer-binding.h"
 #include "backend-context.h"
 #include "fused-context-claim.h"
+#include "host-weight-placement.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "graph/op-params.h"
@@ -1286,6 +1287,13 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     // so anything else keeps its CPU fallback instead of becoming an unsupported HRX node (engine #679).
     if (op->op == GGML_OP_TOP_K) {
         return ggml::hrx::hip_top_k_tensor_supported(op);
+    }
+    // A model weight that is host resident (llama.cpp's CPU_Mapped buffers and any other host buffer) is not
+    // device addressable, so serving this node would have the executor materialize it into device memory for
+    // the life of the backend (engine #669: ~107 GiB of GTT with -ngl 0 and nothing offloaded). Leave such
+    // nodes on the CPU; weights the scheduler did place on HRX are in HRX buffers and are bound directly.
+    if (ggml::hrx::host_weight_requires_cpu(op)) {
+        return false;
     }
     if (zero_output_elision_supported(op)) {
         return true;
