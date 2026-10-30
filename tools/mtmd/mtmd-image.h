@@ -129,6 +129,15 @@ struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
+// ref: inference/image_processor.py in the HF repo (DeepSeek-V4.1-Flash): plan_image_grid / load_image
+struct mtmd_image_preprocessor_deepseek41v : mtmd_image_preprocessor {
+    mtmd_image_preprocessor_deepseek41v(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    // target pixel size (multiples of patch_size) for an image of the given size, exposed for tests
+    static void plan_grid(int width, int height, int p, int r, int max_n_token, int min_pixels,
+                          int & best_width, int & best_height);
+};
+
 // custom llava-uhd slicing logic for MiniCPM-V
 struct mtmd_image_preprocessor_minicpmv : mtmd_image_preprocessor_llava_uhd {
     using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
