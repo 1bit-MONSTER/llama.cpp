@@ -20,7 +20,9 @@ static constexpr int64_t          kMaximumHiddenElements = int64_t{ 1 } << 30;
 static constexpr int64_t          kQ1_0GetRowsFormat    = 10;
 static constexpr int64_t          kQwenHiddenSize       = kQwen30BMoeDispatchProfile.hidden_size;
 static constexpr int64_t          kQwenVocabularyCount  = 151936;
-static constexpr int64_t          kMaxGetRowsRowCount   = 262208;
+// 2^18 + 64 was the Qwen vocabulary bound; a per-layer token embedding table is 320,001,536 rows
+// (Qwen3.8-Flash-Next), so the cap follows the kernel's own id range of 2^29 (engine #572).
+static constexpr int64_t          kMaxGetRowsRowCount   = 536870912;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
