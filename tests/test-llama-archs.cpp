@@ -451,6 +451,11 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
         return false; // FIXME @ngxson
     }
+    if (arch == LLM_ARCH_DEEPSEEK41) {
+        // TODO(dsv41): no synthetic fixture yet - deepseek41 needs the Engram/indexer/compressor
+        // metadata (V4.1 hparams) that this fixture builder does not know how to write.
+        return false;
+    }
     if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_T5ENCODER) {
         return false; // FIXME Embedding (?) models produce inconsistent results.
     }
