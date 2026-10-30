@@ -770,7 +770,8 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
 }
 
 llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_graph_params & params) :
-    llama_model_deepseek4::graph(model_base, params) {
+    // helpers only: V4.1 has no hc_head (single-pass mHC), so the V4 graph body must not run here
+    llama_model_deepseek4::graph(params) {
     const auto & model = static_cast<const llama_model_deepseek41 &>(model_base);
 
     static const bool sparse_env = dsv41_env_on("LLAMA_DSV41_SPARSE");
@@ -939,4 +940,6 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
+
+    ggml_build_forward_expand(gf, cur);
 }
