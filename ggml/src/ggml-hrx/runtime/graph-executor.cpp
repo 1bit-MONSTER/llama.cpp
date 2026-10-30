@@ -3,6 +3,8 @@
 #include "backend-buffer-binding.h"
 #include "ggml-impl.h"
 #include "runtime/graph-program-cache-limit.h"
+#include "runtime/graph-replay.h"
+#include "runtime/host-gap-profile.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
@@ -86,9 +88,16 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         return result;
     }
 
+    const uint64_t     graph_start_ns = host_gap_enabled() ? hrx_graph_replay_now_ns() : 0;
+    host_gap_begin_graph();
     const KernelCorpus & corpus = get_qwen_kernel_corpus();
     const uint64_t       builds_before = context_.graph_programs.stats().builds;
-    GraphProgramLookup   lookup = context_.graph_programs.get_or_build(graph, corpus, context_.device->architecture);
+    GraphProgramLookup   lookup;
+    {
+        // a graph-program cache hit, or a match of every node against the dispatch registry
+        const HostGapScope scope("graph.lookup");
+        lookup = context_.graph_programs.get_or_build(graph, corpus, context_.device->architecture);
+    }
     if (lookup.valid()) {
         trim_graph_programs(context_, lookup.program, builds_before);  // graph-program-cache-limit.h
     }
@@ -114,7 +123,11 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         }
     }
 
-    CommandProgramBindings bindings = bind_external_value_buffers(binding_match);
+    CommandProgramBindings bindings;
+    {
+        const HostGapScope scope("graph.bind");
+        bindings = bind_external_value_buffers(binding_match);
+    }
     if (!bindings.valid()) {
         result.status.append(bindings.status);
         if (result.status.success()) {
@@ -134,11 +147,16 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         &context_.device->host_buffers,
         &context_.graph_replay_state,
     };
-    const PreparedCommandProgramCacheExecutionResult execution =
-        use_graph_prepared ? lookup.program->execute_with_result(execution_context, bindings) :
-                             context_.prepared_programs.execute_with_result(execution_context, lookup.program->uid(),
-                                                                            lookup.program->command_shape_hash(),
-                                                                            lookup.program->commands(), bindings);
+    PreparedCommandProgramCacheExecutionResult execution;
+    {
+        const HostGapScope scope("graph.execute");
+        execution = use_graph_prepared ? lookup.program->execute_with_result(execution_context, bindings) :
+                                        context_.prepared_programs.execute_with_result(execution_context, lookup.program->uid(),
+                                                                                       lookup.program->command_shape_hash(),
+                                                                                       lookup.program->commands(), bindings);
+    }
+    host_gap_end_graph(hrx_graph_replay_now_ns() - graph_start_ns, execution.graph_replay_build_ns,
+                       execution.graph_replay_launch_ns, execution.graph_replay_dispatches);
     if (!execution.success) {
         result.status.append(execution.status);
         if (result.status.success()) {

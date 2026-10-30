@@ -5,6 +5,7 @@
 #include "ggml-impl.h"
 #include "hrx-interop-utils.h"
 #include "runtime/graph-record-order.h"
+#include "runtime/host-gap-profile.h"
 #include "runtime/hrx-sleeping-wait.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/transient-arena.h"
@@ -1885,7 +1886,11 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
     }
 
     const uint64_t launch_start_ns = hrx_graph_replay_now_ns();
-    Status upload_status = upload_prepared_host_staging(context, prepared);
+    Status upload_status;
+    {
+        const HostGapScope scope("replay.upload");
+        upload_status = upload_prepared_host_staging(context, prepared);
+    }
     if (!upload_status.success()) {
         result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
         result.status.append(upload_status);
@@ -1898,14 +1903,22 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
         result.event = HrxGraphReplayEvent::LaunchFailed;
         return result;
     }
-    Status replay_flush_status = flush_stream_commands(context, "flush HRX graph replay commands");
+    Status replay_flush_status;
+    {
+        const HostGapScope scope("replay.flush");
+        replay_flush_status = flush_stream_commands(context, "flush HRX graph replay commands");
+    }
     if (!replay_flush_status.success()) {
         result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
         result.status.append(replay_flush_status);
         result.event = HrxGraphReplayEvent::LaunchFailed;
         return result;
     }
-    Status replay_wait_status = wait_stream_commands(context, "wait for HRX graph replay commands", recorded.exec);
+    Status replay_wait_status;
+    {
+        const HostGapScope scope("replay.wait");  // device time plus the wake-up latency
+        replay_wait_status = wait_stream_commands(context, "wait for HRX graph replay commands", recorded.exec);
+    }
     if (!replay_wait_status.success()) {
         result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
         result.status.append(replay_wait_status);

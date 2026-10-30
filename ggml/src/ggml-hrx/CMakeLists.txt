@@ -337,6 +337,8 @@ ggml_add_backend_library(ggml-hrx
     runtime/transient-arena.h
     runtime/host-buffer-registry.cpp
     runtime/host-buffer-registry.h
+    runtime/host-gap-profile.cpp
+    runtime/host-gap-profile.h
 )
 target_link_libraries(ggml-hrx PRIVATE ggml-hrx-kernel-corpus hrx::hrx loomc::loomc)
 target_include_directories(ggml-hrx PRIVATE . "${CMAKE_CURRENT_BINARY_DIR}" ../../../vendor)
