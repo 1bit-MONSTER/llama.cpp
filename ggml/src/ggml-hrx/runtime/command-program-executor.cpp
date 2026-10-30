@@ -5,6 +5,7 @@
 #include "ggml-impl.h"
 #include "hrx-interop-utils.h"
 #include "runtime/graph-record-order.h"
+#include "runtime/host-gap-profile.h"
 #include "runtime/hrx-sleeping-wait.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/transient-arena.h"
@@ -1744,6 +1745,7 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
     const CommandProgramBindings &         bindings,
     PreparedCommandProgram &               prepared,
     RecordedCommandGraph &                 recorded) {
+    const HostGapScope                  function_scope("replay.total");
     RecordedCommandGraphExecutionResult result;
     result.event = HrxGraphReplayEvent::Ineligible;
 
@@ -1760,7 +1762,11 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
         return result;
     }
 
-    Status rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
+    Status rebind_status;
+    {
+        const HostGapScope scope("replay.rebind");
+        rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
+    }
     if (!rebind_status.success()) {
         result.status.append(rebind_status);
         result.event = HrxGraphReplayEvent::BuildFailed;
@@ -1770,6 +1776,7 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
     TransientArenaAllocationRef transient_allocation;
     TransientArena::AllocationLease lease;
     if (commands.transients.arena_size == 0) {
+        const HostGapScope scope("replay.transient");
         if (!bind_prepared_command_program_transients(commands, {}, prepared)) {
             result.status.log("bind transient-free prepared command program failed");
             result.event = HrxGraphReplayEvent::BuildFailed;
@@ -1782,16 +1789,19 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
             result.event = HrxGraphReplayEvent::BuildFailed;
             return result;
         }
-        lease  = context.transient_arena->acquire_allocation_lease();
-        status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size);
+        {
+            const HostGapScope scope("replay.transient");
+            lease  = context.transient_arena->acquire_allocation_lease();
+            status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size);
+            if (status.success()) {
+                transient_allocation = lease.current_allocation();
+                if (!bind_prepared_command_program_transients(commands, transient_allocation, prepared)) {
+                    status.log("bind prepared command program transients for graph replay failed");
+                }
+            }
+        }
         if (!status.success()) {
             result.status.append(status);
-            result.event = HrxGraphReplayEvent::BuildFailed;
-            return result;
-        }
-        transient_allocation = lease.current_allocation();
-        if (!bind_prepared_command_program_transients(commands, transient_allocation, prepared)) {
-            result.status.log("bind prepared command program transients for graph replay failed");
             result.event = HrxGraphReplayEvent::BuildFailed;
             return result;
         }
@@ -1885,27 +1895,44 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
     }
 
     const uint64_t launch_start_ns = hrx_graph_replay_now_ns();
-    Status upload_status = upload_prepared_host_staging(context, prepared);
+    Status upload_status;
+    {
+        const HostGapScope scope("replay.upload");
+        upload_status = upload_prepared_host_staging(context, prepared);
+    }
     if (!upload_status.success()) {
         result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
         result.status.append(upload_status);
         result.event = HrxGraphReplayEvent::LaunchFailed;
         return result;
     }
-    if (ErrorResult error = take_status(hrx_graph_exec_launch(recorded.exec, context.stream))) {
+    ErrorResult launch_error;
+    {
+        const HostGapScope scope("replay.launch");
+        launch_error = take_status(hrx_graph_exec_launch(recorded.exec, context.stream));
+    }
+    if (launch_error) {
         result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
-        result.status.log("launch HRX graph replay: %s", error->c_str());
+        result.status.log("launch HRX graph replay: %s", launch_error->c_str());
         result.event = HrxGraphReplayEvent::LaunchFailed;
         return result;
     }
-    Status replay_flush_status = flush_stream_commands(context, "flush HRX graph replay commands");
+    Status replay_flush_status;
+    {
+        const HostGapScope scope("replay.flush");
+        replay_flush_status = flush_stream_commands(context, "flush HRX graph replay commands");
+    }
     if (!replay_flush_status.success()) {
         result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
         result.status.append(replay_flush_status);
         result.event = HrxGraphReplayEvent::LaunchFailed;
         return result;
     }
-    Status replay_wait_status = wait_stream_commands(context, "wait for HRX graph replay commands", recorded.exec);
+    Status replay_wait_status;
+    {
+        const HostGapScope scope("replay.wait");  // device time plus the wake-up latency
+        replay_wait_status = wait_stream_commands(context, "wait for HRX graph replay commands", recorded.exec);
+    }
     if (!replay_wait_status.success()) {
         result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
         result.status.append(replay_wait_status);
@@ -1925,7 +1952,11 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
         }
         mark_graph_replay_synchronized(context);
     }
-    Status download_status = download_prepared_host_staging(context, prepared, false);
+    Status download_status;
+    {
+        const HostGapScope scope("replay.download");
+        download_status = download_prepared_host_staging(context, prepared, false);
+    }
     if (!download_status.success()) {
         result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
         result.status.append(download_status);
