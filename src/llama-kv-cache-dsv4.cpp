@@ -1,4 +1,5 @@
 #include "llama-kv-cache-dsv4.h"
+#include "llama-dsv41-compat.h"
 
 #include "ggml-backend.h"
 #include "llama-impl.h"
@@ -83,7 +84,7 @@ static llama_ubatch dsv4_build_raw_write_ubatch(const llama_ubatch & ubatch) {
     if (!dsv4_ubatch_has_coupled(ubatch)) {
         return ubatch;
     }
-    ASSERT_EMBD_OR_TOKEN(ubatch);
+    DSV41_ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd) {
         throw std::runtime_error("DSV4 coupled embedding ubatches are not supported");
     }
@@ -159,15 +160,12 @@ static llama_ubatch dsv4_build_raw_write_ubatch(const llama_ubatch & ubatch) {
         /*.n_pos        =*/ ubatch.n_pos,
         /*.token        =*/ data->token.empty() ? nullptr : data->token.data(),
         /*.embd         =*/ nullptr,
-        /*.embd_state   =*/ nullptr,
         /*.pos          =*/ data->pos.data(),
         /*.n_seq_id     =*/ data->n_seq_id.data(),
         /*.seq_id       =*/ data->seq_id.data(),
         /*.seq_id_unq   =*/ data->seq_id_unq.data(),
         /*.seq_idx      =*/ data->seq_idx.data(),
         /*.output       =*/ data->output.data(),
-        /*.type         =*/ nullptr,
-        /*.decision_order =*/ nullptr,
         /*.data         =*/ data,
     };
 

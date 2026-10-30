@@ -1,4 +1,5 @@
 #include "models.h"
+#include "llama-dsv41-compat.h"
 
 #include "llama-kv-cache-dsv4.h"
 
@@ -189,6 +190,17 @@ static ggml_tensor * dsv4_hc_affine(
     return x;
 }
 
+// mean over the hc dim: the collapsed hidden state (t_layer_inp); V4.1's single-pass mHC reads it
+ggml_tensor * llama_model_deepseek4::graph::build_hc_mean(ggml_tensor * x) const {
+    const int64_t hc = x->ne[1];
+
+    ggml_tensor * acc = ggml_view_2d(ctx0, x, x->ne[0], x->ne[2], x->nb[2], 0);
+    for (int64_t s = 1; s < hc; ++s) {
+        acc = ggml_add(ctx0, acc, ggml_view_2d(ctx0, x, x->ne[0], x->ne[2], x->nb[2], s*x->nb[1]));
+    }
+    return ggml_scale(ctx0, acc, 1.0f/hc);
+}
+
 ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
         ggml_tensor * x,
         ggml_tensor * weights,
@@ -286,7 +298,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_mixes(
     ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
     if (f32_src && !ggml_is_quantized(hc_fn->type)) {
         // F32 weights (model.py hc_pre runs in fp32): request F32 inputs, the mixes are near-tie sensitive
-        ggml_prec_set_src(mixes, GGML_PREC_F32, 1);
+        dsv41_prec_src(mixes, GGML_PREC_F32, 1);
     }
     cb(mixes, "hc_mixes", il);
 

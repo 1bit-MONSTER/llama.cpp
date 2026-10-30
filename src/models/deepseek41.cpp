@@ -1,4 +1,5 @@
 #include "models.h"
+#include "llama-dsv41-compat.h"
 #include "llama-impl.h"
 
 #include "llama-kv-cache-dsv4.h"
@@ -133,7 +134,7 @@ void llama_model_deepseek41::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t q_lora_rank     = hparams.n_lora_q;
-    const int64_t n_ff_exp        = hparams.n_ff_exp();
+    const int64_t n_ff_exp        = hparams.n_ff_exp;
     const int64_t n_expert_shared = hparams.n_expert_shared;
     const int64_t n_embd_head     = hparams.n_embd_head_k();
     const int64_t o_groups        = hparams.dsv4_o_group_count;
@@ -258,7 +259,7 @@ void llama_model_deepseek41::engram_hash(int e, const llama_ubatch & ubatch, con
     std::vector<uint64_t> toks(n_gram);
     for (int64_t i = 0; i < ubatch.n_tokens; ++i) {
         // shift 0 is the token itself; once a shift is blocked (sequence start or dead token) every longer one is too
-        const bool is_embd = !ubatch.token || (ubatch.is_mixed() && ubatch.type[i]);
+        const bool is_embd = dsv41_ubatch_i_is_embd(ubatch, (int) i);
         int64_t c = is_embd ? DSV41_ENGRAM_DEAD : cid(ubatch.token[i]);
         bool blocked = c == DSV41_ENGRAM_DEAD;
         toks[0] = blocked ? pad : c;
@@ -308,15 +309,10 @@ void llm_graph_input_dsv41::set_input(const llama_ubatch * ubatch) {
         // a token shared by several sequences has the same history in each, so its first sequence resolves it
         std::vector<llama_token> prev;
         mctx->get_raw()->get_prev_tokens(*ubatch, model.hparams.ple_ngram_size - 1, prev);
-        // hash all Engram layers first so a lazily read table gets one batched readahead before the first gather
+        // hash every Engram layer up front, then hand the whole set of rows to the backend in one go
         std::vector<std::vector<int32_t>> ids(engram_ids.size());
-        std::vector<int32_t> all;
         for (size_t e = 0; e < engram_ids.size(); ++e) {
             model.engram_hash((int) e, *ubatch, prev, ids[e]);
-            all.insert(all.end(), ids[e].begin(), ids[e].end());
-        }
-        if (model.can_prefetch.count(model.per_layer_tok_embd)) {
-            llama_prefetch_rows(model.per_layer_tok_embd, all.data(), all.size());
         }
         for (size_t e = 0; e < engram_ids.size(); ++e) {
             if (engram_ids[e]->buffer) {
@@ -329,7 +325,7 @@ void llm_graph_input_dsv41::set_input(const llama_ubatch * ubatch) {
     if (engram_keep && engram_keep->buffer) {
         std::vector<float> keep(ubatch->n_tokens);
         for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
-            const bool is_embd = !ubatch->token || (ubatch->is_mixed() && ubatch->type[i]);
+            const bool is_embd = dsv41_ubatch_i_is_embd(*ubatch, (int) i);
             keep[i] = is_embd ? 0.0f : 1.0f;
         }
         ggml_backend_tensor_set(engram_keep, keep.data(), 0, keep.size()*sizeof(float));
@@ -440,9 +436,8 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
     const int32_t n_ctx_orig_l  = comp_rope ? n_ctx_orig : 0;
 
     const auto rope = [&](ggml_tensor * t, ggml_tensor * pos, int64_t n_nope) {
-        t = ggml_rope_ext(ctx0, t, pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
+        return dsv41_rope_off(ctx0, t, pos, (int) n_embd_head_rope, (int) n_nope, rope_type, n_ctx_orig_l,
                 freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
-        return ggml_rope_set_offset(t, n_nope);
     };
 
     ggml_tensor * qr = build_norm(build_lora_mm(layer.wq_a, cur), layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
@@ -583,7 +578,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
 
                     ggml_tensor * kq = ggml_mul_mat(ctx0, ik_p, ggml_permute(ctx0, iqc, 0, 2, 1, 3));
                     if (!ggml_is_quantized(ik->type)) {
-                        ggml_prec_set_src(kq, GGML_PREC_F32, 1);
+                        dsv41_prec_src(kq, GGML_PREC_F32, 1);
                     }
                     kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 2, 1, 0, 3));
                     score = ggml_sum_rows(ctx0, ggml_mul(ctx0, ggml_relu(ctx0, kq), rows(iw)));
@@ -724,7 +719,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                 cb(kq_mask, "comp_kq_mask_sel", il);
             }
 
-            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, 0, kq_scale, il);
+            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, kq_scale, il);
         } else {
             // dense attention over [window | all compressed rows], selection applied as a mask
             ggml_tensor * comp_k = ggml_view_4d(ctx0, comp_all, n_embd_head, 1, n_comp, n_stream,
@@ -750,9 +745,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
             ggml_tensor * kq_mask  = ggml_concat(ctx0, raw_mask, sel_mask, 0);
             cb(kq_mask, "comp_kq_mask", il);
 
-            // at most window + top-k visible columns per query: lets CUDA FA gather only those
-            const int64_t n_kv_max = sparse ? std::min<int64_t>(raw_mask->ne[0], hparams.n_swa) + k_sel : 0;
-            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, n_kv_max, kq_scale, il);
+            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, kq_scale, il);
         }
         if (k_rot) {
             out = llama_mul_mat_hadamard(ctx0, out, k_rot);
@@ -761,9 +754,8 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
     }
 
     out = ggml_reshape_3d(ctx0, out, n_embd_head, n_head, nt);
-    out = ggml_rope_ext_back(ctx0, out, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
-            freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
-    out = ggml_rope_set_offset(out, n_embd_head_nope);
+    out = dsv41_rope_off(ctx0, out, inp_pos, (int) n_embd_head_rope, (int) n_embd_head_nope, rope_type, n_ctx_orig_l,
+            freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l, /*back*/ true);
     cb(out, "attn_derope", il);
 
     out = ggml_permute(ctx0, ggml_reshape_3d(ctx0, out, n_head/n_groups*n_embd_head, n_groups, nt), 0, 2, 1, 3);
@@ -778,7 +770,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
 }
 
 llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_graph_params & params) :
-    llama_model_deepseek4::graph(params) {
+    llama_model_deepseek4::graph(model_base, params) {
     const auto & model = static_cast<const llama_model_deepseek41 &>(model_base);
 
     static const bool sparse_env = dsv41_env_on("LLAMA_DSV41_SPARSE");
@@ -891,9 +883,9 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
 
         // F32 router inputs: expert selection is near-tie sensitive
         ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur);
-        ggml_prec_set_acc(logits, GGML_PREC_F32);
+        dsv41_prec_acc(logits, GGML_PREC_F32);
         if (!ggml_is_quantized(layer.ffn_gate_inp->type)) {
-            ggml_prec_set_src(logits, GGML_PREC_F32, 1);
+            dsv41_prec_src(logits, GGML_PREC_F32, 1);
         }
         cb(logits, "ffn_moe_logits", il);
 
@@ -910,8 +902,8 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
                 layer.ffn_gate_exps,
                 layer.ffn_down_exps,
                 exp_probs_b,
-                n_expert, hparams.n_expert_used(),
-                LLM_FFN_SILU, hparams.expert_weights_norm && hparams.n_expert_used() > 1,
+                n_expert, hparams.n_expert_used,
+                LLM_FFN_SILU, hparams.expert_weights_norm && hparams.n_expert_used > 1,
                 hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il, logits);

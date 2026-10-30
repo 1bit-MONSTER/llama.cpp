@@ -394,8 +394,6 @@ enum projector_type {
     PROJECTOR_TYPE_DOTS_OCR,
     PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_DEEPSEEKOCR2,
-    PROJECTOR_TYPE_DEEPSEEK4V,
-    PROJECTOR_TYPE_DEEPSEEK41V,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
@@ -453,8 +451,6 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_DOTS_OCR,          "dots_ocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR,       "deepseekocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR2,      "deepseekocr2"},
-    { PROJECTOR_TYPE_DEEPSEEK4V,        "deepseek4v"},
-    { PROJECTOR_TYPE_DEEPSEEK41V,       "deepseek41v"},
     { PROJECTOR_TYPE_LFM2A,             "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,             "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,           "youtuvl"},
@@ -636,46 +632,6 @@ struct clip_image_f32 {
         return (size_t) nx_ * (size_t) ny_;
     }
 };
-
-// token area kept after removing the padding added by the anyres resize
-// ref: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/llava_next/modeling_llava_next.py#L109
-static inline void clip_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_h,
-                                     int & off_x, int & off_y, int & out_w, int & out_h) {
-    off_x = 0;
-    off_y = 0;
-    out_w = cur_w;
-    out_h = cur_h;
-    if ((float) orig_w / orig_h > (float) cur_w / cur_h) {
-        const int new_h = (int) std::floor((double) orig_h * cur_w / orig_w + 1e-7);
-        off_y = (cur_h - new_h) / 2;
-        out_h = cur_h - 2 * off_y;
-    } else {
-        const int new_w = (int) std::floor((double) orig_w * cur_h / orig_h + 1e-7);
-        off_x = (cur_w - new_w) / 2;
-        out_w = cur_w - 2 * off_x;
-    }
-}
-
-// deepseek41v: [START] ([IMAGE]*n_llm_w [NEWLINE])*n_llm_h [END], ref: num_image_tokens() in image_processor.py
-static inline int dsv41_n_block_tokens(int n_llm_w, int n_llm_h) {
-    return n_llm_h * (n_llm_w + 1) + 2;
-}
-
-// deepseek4v: layout of the LLM token block built from the aligner grid
-struct dsv4_block_layout {
-    int rows;     // grid rows, padded to an even count
-    int row_len;  // grid width + 1 newline
-    int pad_last; // trailing pads
-    int n_out;    // total block size, including lead pads and the start/end sentinels
-};
-static inline dsv4_block_layout dsv4_get_block_layout(int n_llm_w, int n_llm_h, int lead_pad) {
-    dsv4_block_layout bl;
-    bl.rows     = n_llm_h + (n_llm_h % 2);
-    bl.row_len  = n_llm_w + 1;
-    bl.pad_last = (bl.rows / 2 * bl.row_len) % 2 * 2;
-    bl.n_out    = lead_pad + 1 + bl.rows * bl.row_len + bl.pad_last + 1;
-    return bl;
-}
 
 //
 // logging

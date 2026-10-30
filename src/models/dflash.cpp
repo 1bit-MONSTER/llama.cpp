@@ -1,4 +1,5 @@
 #include "models.h"
+#include "llama-dsv41-compat.h"
 
 #include "llama-impl.h"
 #include "llama-kv-cache.h"
@@ -40,7 +41,7 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     if (hparams.dsv4_hc_mult > 0) {
         ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,                hparams.n_lora_q);
         ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,             hparams.n_swa);
-        ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,    hparams.n_ff_exp_arr, hparams.n_layer_all);
+        ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,    hparams.n_ff_arr, hparams.n_layer_all);
         ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,                  hparams.n_expert_shared);
         ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,                 hparams.expert_weights_scale);
         ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,                  hparams.expert_weights_norm);
@@ -149,11 +150,12 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
     // optional: reduced-vocab drafts ship their own lm head, full-vocab drafts can share the target's via ctx_other
     // a draft with its own embeddings + head references no target tensors and can run on devices the target does not use (e.g. -devd with a tensor-split target)
+    const int64_t n_vocab_draft = n_vocab;
     output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab_draft }, TENSOR_NOT_REQUIRED);
 
     if (hparams.dsv4_hc_mult > 0) {
         const int64_t q_lora_rank     = hparams.n_lora_q;
-        const int64_t n_ff_exp        = hparams.n_ff_exp();
+        const int64_t n_ff_exp        = hparams.n_ff_exp;
         const int64_t n_expert_shared = hparams.n_expert_shared;
         const int64_t n_embd_head     = hparams.n_embd_head_k();
         const int64_t o_groups        = hparams.dsv4_o_group_count;
@@ -234,17 +236,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const llm_graph_params & params) const {
-    switch (params.gtype) {
-        case LLM_GRAPH_TYPE_ENCODER:
-            return std::make_unique<graph<true>>(*this, params);
-        case LLM_GRAPH_TYPE_DEFAULT:
-        case LLM_GRAPH_TYPE_DECODER:
-            return std::make_unique<graph<false>>(*this, params);
-        default:
-            GGML_ABORT("invalid graph type");
-    };
-}
 
 template <>
 ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const {
@@ -794,10 +785,10 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
 
     ggml_tensor * inp_pos = build_inp_pos();
 
-    llm_graph_input_attn_k_iswa * inp_attn = build_attn_inp_k_iswa();
+    llm_graph_input_attn_kv_iswa * inp_attn = build_attn_inp_kv_iswa();
 
     // KV cache injection: fused target features from the encoder
-    ASSERT_EMBD_OR_TOKEN(ubatch);
+    DSV41_ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
@@ -810,7 +801,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         res->add_input(std::move(inp));
 
         // fuse the target features through the encoder
-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
+        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target);
         inp_g = build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
         cb(inp_g, "inp_g_embeddings", -1);
 
@@ -825,7 +816,8 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
 
             kv = ggml_rope_ext(ctx0, kv, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
                     freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-            kv = ggml_rope_set_offset(kv, n_embd_head_nope);
+            kv = dsv41_rope_off(ctx0, kv, inp_pos, (int) n_embd_head_rope, (int) n_embd_head_nope, rope_type, 0,
+                    freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
             cb(kv, "kv_injected", il);
 
             if (inp_attn->self_k_rot_swa) {
@@ -884,7 +876,60 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        cur = build_attention(model, inp_attn, cur, inp_pos, il);
+        // windowed MLA over the draft KV ring. Upstream shares this with the DSV4 graph's
+        // build_attention_impl; this tree's build_attention takes the compressed-KV input, so the
+        // draft stages (all ratio 0, uncompressed) build their own attention, as graph_dsv41 does.
+        {
+            const int64_t n_embd_head      = hparams.n_embd_head_k();
+            const int64_t n_embd_head_rope = hparams.n_rot();
+            const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
+            const int64_t n_groups         = hparams.dsv4_o_group_count;
+            const int64_t n_heads_group    = n_head / n_groups;
+            const int64_t o_lora_rank      = hparams.dsv4_o_lora_rank;
+            const int64_t o_group_dim      = n_heads_group*n_embd_head;
+            const float   kq_scale_l       = 1.0f/sqrtf(float(n_embd_head));
+
+            GGML_ASSERT(n_embd_head == n_embd_head_v);
+            GGML_ASSERT(n_head % n_groups == 0);
+
+            ggml_tensor * q = build_norm(build_lora_mm(layer.wq_a, cur), layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
+            q = build_lora_mm(layer.wq_b, q);
+            q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, n_tokens);
+            q = ggml_rms_norm(ctx0, q, norm_rms_eps);   // V4 drafters normalize per head, V4.1 does not
+            cb(q, "q_norm", il);
+            q = dsv41_rope_off(ctx0, q, inp_pos, (int) n_embd_head_rope, (int) n_embd_head_nope, rope_type, 0,
+                    freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            cb(q, "q", il);
+
+            ggml_tensor * kv = build_lora_mm(layer.wkv, cur);
+            kv = build_norm(kv, layer.attn_kv_norm, nullptr, LLM_NORM_RMS, il);
+            kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, n_tokens);
+            kv = dsv41_rope_off(ctx0, kv, inp_pos, (int) n_embd_head_rope, (int) n_embd_head_nope, rope_type, 0,
+                    freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            cb(kv, "kv", il);
+
+            ggml_tensor * out = build_attn(inp_attn,
+                    nullptr, nullptr, nullptr,
+                    q, kv, kv,
+                    nullptr, layer.attn_sinks, nullptr,
+                    kq_scale_l, il);
+            cb(out, "attn_raw", il);
+
+            out = ggml_reshape_3d(ctx0, out, n_embd_head, n_head, n_tokens);
+            out = dsv41_rope_off(ctx0, out, inp_pos, (int) n_embd_head_rope, (int) n_embd_head_nope, rope_type, 0,
+                    freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, /*back*/ true);
+            cb(out, "attn_derope", il);
+
+            out = ggml_reshape_3d(ctx0, out, o_group_dim, n_groups, n_tokens);
+            out = ggml_permute(ctx0, out, 0, 2, 1, 3);
+            ggml_tensor * oa = ggml_mul_mat(ctx0, layer.wo_a, out);
+            cb(oa, "attn_wo_a", il);
+            oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
+            oa = ggml_cont_2d(ctx0, oa, o_lora_rank*n_groups, n_tokens);
+
+            cur = build_lora_mm(layer.wo_b, oa);
+            cb(cur, "attn_out", il);
+        }
 
         inpL = build_hc_post(cur, residual, post, comb, il);
         cb(inpL, "hc_attn_post", il);
@@ -906,7 +951,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
                 layer.ffn_gate_exps,
                 layer.ffn_down_exps,
                 layer.ffn_exp_probs_b,
-                n_expert, hparams.n_expert_used(),
+                n_expert, hparams.n_expert_used,
                 LLM_FFN_SILU, hparams.expert_weights_norm,
                 hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
@@ -970,16 +1015,15 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const ll
 
     ggml_tensor * inp_pos = build_inp_pos();
 
-    llm_graph_input_attn_k_iswa * inp_attn = build_attn_inp_k_iswa();
+    llm_graph_input_attn_kv_iswa * inp_attn = build_attn_inp_kv_iswa();
 
     // ratio-0 layers: plain rope at rope_theta, no YaRN (original_seq_len 0)
     const auto rope = [&](ggml_tensor * t) {
-        t = ggml_rope_ext(ctx0, t, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
+        return dsv41_rope_off(ctx0, t, inp_pos, (int) n_embd_head_rope, (int) n_embd_head_nope, rope_type, 0,
                 freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        return ggml_rope_set_offset(t, n_embd_head_nope);
     };
 
-    ASSERT_EMBD_OR_TOKEN(ubatch);
+    DSV41_ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
@@ -991,7 +1035,7 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const ll
 
         res->add_input(std::move(inp));
 
-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
+        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target);
         inp_g = build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
         cb(inp_g, "main_x", -1);
 
@@ -1112,9 +1156,8 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const ll
             cb(out, "attn_raw", il);
 
             out = ggml_reshape_3d(ctx0, out, n_embd_head, n_head, n_tokens);
-            out = ggml_rope_ext_back(ctx0, out, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
-                    freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-            out = ggml_rope_set_offset(out, n_embd_head_nope);
+            out = dsv41_rope_off(ctx0, out, inp_pos, (int) n_embd_head_rope, (int) n_embd_head_nope, rope_type, 0,
+                    freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, /*back*/ true);
             cb(out, "attn_derope", il);
 
             out = ggml_reshape_3d(ctx0, out, o_group_dim, n_groups, n_tokens);
@@ -1146,7 +1189,7 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const ll
                 layer.ffn_gate_exps,
                 layer.ffn_down_exps,
                 layer.ffn_exp_probs_b,
-                n_expert, hparams.n_expert_used(),
+                n_expert, hparams.n_expert_used,
                 LLM_FFN_SILU, hparams.expert_weights_norm,
                 hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,

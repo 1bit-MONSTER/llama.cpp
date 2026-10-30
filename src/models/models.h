@@ -1195,6 +1195,11 @@ struct llama_model_deepseek4 : public llama_model_base {
 
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
+        // helpers only: no graph built (base of the DSpark drafters, dflash.cpp)
+        explicit graph(const llm_graph_params & params) : llm_graph_context(params) {}
+
+        // mean over the hc (hyper-connection) dim: the collapsed hidden state, t_layer_inp
+        ggml_tensor * build_hc_mean(ggml_tensor * x) const;
 
         ggml_tensor * build_hc_pre(
                 ggml_tensor * x,
