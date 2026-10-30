@@ -1364,6 +1364,13 @@ struct test_case {
         std::string unsupported_str;
         for (ggml_backend_t backend : {backend1, backend2}) {
             for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != NULL; t = ggml_get_next_tensor(ctx.get(), t)) {
+                // a view is not executed: it describes the layout of storage that its consumer runs on, and
+                // the consumer (and the storage's producer) are checked in this same loop. ggml-hrx claims
+                // only the nodes its dispatcher runs, so counting the alias node made every FLASH_ATTN_EXT
+                // case "not supported" on HRX and it never ran (engine #528).
+                if (ggml_is_view_op(t->op) && t->view_src != nullptr) {
+                    continue;
+                }
                 if (!ggml_backend_supports_op(backend, t)) {
                     supported = false;
                     if (unsupported_str.empty()) {
@@ -6972,6 +6979,68 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
+// engine #528: a KV cache's padded columns may hold anything, including NaN (a failed buffer clear
+// leaves the tail of the cache as it was, ggml-hrx's clear only logs it). The reference skips a key
+// whose mask is -INFINITY before it reads K or V, so a masked column cannot reach the output; a
+// backend that applies the mask as a multiplication (or adds it to a score that is already NaN)
+// returns a whole NaN row instead. Same buffers on both backends: only the padding differs.
+struct test_flash_attn_ext_pad_nan : public test_flash_attn_ext {
+    const int pad_nan; // 0: finite padding, 1: NaN in K and V, 2: NaN in K, 3: NaN in V
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",pad_nan=" + std::to_string(pad_nan);
+    }
+
+    test_flash_attn_ext_pad_nan(int64_t hsk, int64_t hsv, int64_t nh, std::array<int64_t, 2> nr23,
+                                int64_t kv, int64_t nb, int pad_nan,
+                                std::array<int32_t, 4> permute = {0, 1, 2, 3})
+        : test_flash_attn_ext(hsk, hsv, nh, nr23, kv, nb, /*mask =*/ true, /*sinks =*/ false, 0.0f, 0.0f,
+                              GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, permute),
+          pad_nan(pad_nan) {
+        GGML_ASSERT(kv > nb && "the case needs at least one padded KV column");
+        GGML_ASSERT(pad_nan >= 0 && pad_nan <= 3);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        const ggml_fp16_t nan_f16 = (ggml_fp16_t) 0x7E00;
+
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "m") == 0) {
+                // every query row attends to [0, nb) and masks the padded columns with -INFINITY
+                GGML_ASSERT(t->ne[0] == kv);
+                std::vector<ggml_fp16_t> data(ggml_nelements(t));
+                for (int64_t i1 = 0; i1 < t->ne[1]; i1++) {
+                    for (int64_t i0 = 0; i0 < t->ne[0]; i0++) {
+                        data[i1*t->ne[0] + i0] = (ggml_fp16_t) (i0 < nb ? 0x0000 : 0xFC00);
+                    }
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(ggml_fp16_t));
+                continue;
+            }
+
+            init_tensor_uniform(t);
+
+            const bool nan_k = pad_nan == 1 || pad_nan == 2;
+            const bool nan_v = pad_nan == 1 || pad_nan == 3;
+            if (!((nan_k && strcmp(t->name, "k") == 0) || (nan_v && strcmp(t->name, "v") == 0))) {
+                continue;
+            }
+
+            // overwrite the padded columns: K is [hsk][kv][nh][nr23[1]], V is [hsv][kv][nh][nr23[1]]
+            GGML_ASSERT(t->type == GGML_TYPE_F16);
+            std::vector<ggml_fp16_t> row(t->ne[0], nan_f16);
+            for (int64_t i3 = 0; i3 < t->ne[3]; i3++) {
+                for (int64_t i2 = 0; i2 < t->ne[2]; i2++) {
+                    for (int64_t i1 = nb; i1 < t->ne[1]; i1++) {
+                        ggml_backend_tensor_set(t, row.data(), i1*t->nb[1] + i2*t->nb[2] + i3*t->nb[3],
+                                                row.size()*sizeof(ggml_fp16_t));
+                    }
+                }
+            }
+        }
+    }
+};
+
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -9672,6 +9741,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q2_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 128, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q2_0));
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 64, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q2_0, GGML_TYPE_F16));
+
+    // engine #528: a KV cache's padded columns hold zeros - llama-kv-zero.cpp verifies that at allocation and
+    // on every reset, because a padded column with garbage in it (a clear that did not take) turns a whole
+    // output row into NaN. pad_nan=0 is that case: real K/V, padded columns that are finite, a mask that puts
+    // -INFINITY over them. It must pass on every backend, or the mask is not being honoured at all.
+    // pad_nan=1..3 poison the padding instead. Do not read them as "the CPU tolerates this": it does not.
+    // Measured at 40c4ccb7, `-b CPU`, this case set: the batched (prefill) shape returns NaN on the CPU backend
+    // for all three poisonings, only the decode shape survives there, and HRX returns NaN in both shapes. No
+    // backend promises to skip a non-finite padded column before it reads it - the reference skips a masked key
+    // in ggml_compute_forward_flash_attn_ext_f16_one_chunk, but the batched paths multiply and a -INFINITY mask
+    // cannot undo a NaN - which is exactly why the padding is zeroed and verified instead of tolerated. Opt-in
+    // diagnostics:
+    //   GGML_TEST_FA_NAN_PAD=1 test-backend-ops test -b HRX0 -o FLASH_ATTN_EXT -p pad_nan
+    const bool nan_pad = getenv("GGML_TEST_FA_NAN_PAD") != nullptr;
+    const int  pad_max = nan_pad ? 3 : 0;
+    for (int pad_nan = 0; pad_nan <= pad_max; pad_nan++) {
+        test_cases.emplace_back(new test_flash_attn_ext_pad_nan(128, 128, 8, {1, 1}, 256, 175, pad_nan));
+        // the same in the decode shape: one query token against a long padded cache, in the K/V cache
+        // layout a model uses ([head_dim][position][head], the permuted variant)
+        test_cases.emplace_back(new test_flash_attn_ext_pad_nan(128, 128, 8, {1, 1}, 1024, 1, pad_nan, {0, 2, 1, 3}));
+    }
 
     // large-KV F16 cases (Qwen3.6-27B geometry and a llama-class control): the upstream matrix
     // stops at kv=1024, blind to long-context FA bugs (e.g. the oneDNN SDPA ordering race on BMG).

@@ -4,6 +4,7 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-kv-zero.h"  // [1bit] engine #528: verified zero padding
 
 #include <algorithm>
 #include <cassert>
@@ -309,6 +310,12 @@ llama_kv_cache::llama_kv_cache(
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
 
         ggml_backend_buffer_clear(buf, 0);
+        // [1bit] the clear above is best-effort on some backends: verify it and repair it (engine #528)
+        if (!llama_kv_zero_fill(buf, ctx.get(), "KV cache")) {
+            throw std::runtime_error("the kv cache padding is not zero: every attention kernel masks those "
+                                     "columns with -INFINITY and a non-finite one there returns NaN logits "
+                                     "(engine #528)");
+        }
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
 
@@ -401,8 +408,14 @@ void llama_kv_cache::clear(bool data) {
     }
 
     if (data) {
-        for (auto & [_, buf] : ctxs_bufs) {
+        for (auto & [ctx, buf] : ctxs_bufs) {
             ggml_backend_buffer_clear(buf.get(), 0);
+            // [1bit] verify and repair as at allocation (engine #528). This runs per reset, i.e. once per
+            // request in a server; a buffer that cannot be made zero would serve NaN logits, so stop instead
+            // (the guard in common/sampling.cpp aborts on those for the same reason).
+            if (!llama_kv_zero_fill(buf.get(), ctx.get(), "KV cache reset")) {
+                GGML_ABORT("KV cache reset left non-zero padding (engine #528)");
+            }
         }
     }
 }
