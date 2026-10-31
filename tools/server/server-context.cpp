@@ -13,6 +13,7 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "../../src/llama-ext.h" // [1bit] llama_kv_share_next (target 1)
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -1205,6 +1206,13 @@ private:
         {
             params_base.load_progress_callback = load_progress_callback;
             params_base.load_progress_callback_user_data = &load_progress_text;
+        }
+
+        // [1bit] target 1: this context owns the KV region and exports it as a dma-buf, so an outside prefill
+        // provider can write the prompt's cells straight into it (llama-kv-share.cpp, docs/hybrid.md).
+        if (const char * kv_share = getenv("ONEBIT_KV_SHARE"); kv_share != nullptr && *kv_share != '\0') {
+            llama_kv_share_next(true);
+            SRV_INF("%s", "KV cache exports its region: a shared prompt handoff moves no bytes\n");
         }
 
         llama_init = common_init_from_params(params_base);

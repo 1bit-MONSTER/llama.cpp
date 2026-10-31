@@ -121,7 +121,16 @@ public:
 
     // [1bit] zero-copy KV sharing (llama-kv-share.cpp)
     bool share_from(const llama_kv_cache & src);
+    bool share_import(const std::vector<llama_kv_shared_region_pod> & regions);
     bool cells_copy_from(const llama_kv_cache & src);
+
+    // [1bit] target 1: this cache owns the KV region and an outside prefill provider has already written the
+    // prompt's K/V into it. Adopt n cells at positions 0..n-1 of seq_id without touching the tensor data.
+    bool cells_adopt(uint32_t n_tokens, llama_seq_id seq_id);
+
+    // [1bit] the exported regions of this cache, owner side: flattened [buffer][chunk]. A POD (not
+    // llama_kv_shared_region, whose destructor closes the fd) so the list can be handed out without closing it.
+    bool share_regions(std::vector<llama_kv_shared_region_pod> & out) const;
 
     //
     // llama_memory_i
