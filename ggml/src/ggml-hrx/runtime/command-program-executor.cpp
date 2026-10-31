@@ -868,6 +868,7 @@ static Status rebind_prepared_host_weights(const CommandProgramExecutionContext 
         status.log("missing HRX host weight residency for a program that materialized weights");
         return status;
     }
+    size_t refilled = 0;
     for (HostWeightBinding & resident : prepared.resident_host_weights) {
         if (resident.lease.valid()) {
             continue;
@@ -882,6 +883,7 @@ static Status rebind_prepared_host_weights(const CommandProgramExecutionContext 
             continue;
         }
         resident.lease          = std::move(materialized.lease);
+        ++refilled;
         const hrx_buffer_t buffer = resident.lease.buffer();
         const size_t       length = resident.lease.length();
         for (std::vector<PreparedCommand> * list : { &prepared.initialization_commands, &prepared.commands }) {
@@ -894,6 +896,19 @@ static Status rebind_prepared_host_weights(const CommandProgramExecutionContext 
                     }
                 }
             }
+        }
+    }
+    // engine #669 instrumentation: residency per execution. A miss here is a re-materialization, so (misses -
+    // distinct weights) is churn, and resident_bytes vs the limit says whether the bound is holding.
+    if (const char * trace = std::getenv("GGML_HRX_HOST_WEIGHT_TRACE")) {
+        if (std::atoi(trace) != 0) {
+            const HostWeightCacheStats stats = context.host_weights->stats();
+            GGML_LOG_INFO("hrx host weights: refilled=%zu of %zu | hit=%llu miss=%llu evict=%llu resident=%.1f MiB "
+                          "allocs=%zu limit=%.1f MiB\n",
+                          refilled, prepared.resident_host_weights.size(), (unsigned long long) stats.hits,
+                          (unsigned long long) stats.misses, (unsigned long long) stats.evictions,
+                          stats.resident_bytes / (1024.0 * 1024.0), stats.allocation_count,
+                          HostWeightCache::residency_limit() / (1024.0 * 1024.0));
         }
     }
     return status;
