@@ -21,8 +21,11 @@ static constexpr int64_t          kQ1_0GetRowsFormat    = 10;
 static constexpr int64_t          kQwenHiddenSize       = kQwen30BMoeDispatchProfile.hidden_size;
 static constexpr int64_t          kQwenVocabularyCount  = 151936;
 // 2^18 + 64 was the Qwen vocabulary bound; a per-layer token embedding table is 320,001,536 rows
-// (Qwen3.8-Flash-Next), so the cap follows the kernel's own id range of 2^29 (engine #572).
-static constexpr int64_t          kMaxGetRowsRowCount   = 536870912;
+// (Qwen3.8-Flash-Next), so the cap follows the kernel's own id range (engine #572). DeepSeek-V4.1's Engram
+// table is 768,022,850 rows (256 x 768,022,850, IQ4_NL), which is past 2^29: the id range is 2^30 now. The ids
+// are I32, so this keeps a 2x margin to INT32_MAX, and the row byte offset is computed in `offset` (64 bit):
+// worst case here is 2^30 * 144 B = 155 GB, far past 32-bit.
+static constexpr int64_t          kMaxGetRowsRowCount   = 1073741824;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
