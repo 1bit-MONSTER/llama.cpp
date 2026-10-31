@@ -19,6 +19,7 @@
 #include "log.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <stdexcept>
@@ -50,18 +51,29 @@ bool server_prefill_device::load(const char * device_name, common_params & param
     cparams.n_batch   = llama_n_batch(ctx_tgt);
     cparams.n_ubatch  = llama_n_ubatch(ctx_tgt);
     cparams.n_seq_max = llama_n_seq_max(ctx_tgt);
-    llama_kv_share_next(true); // this context owns the KV region; ctx_tgt maps it
+    // [1bit] target 1: with ONEBIT_KV_SHARE the DECODE context owns and exports the KV region (server-context.cpp
+    // calls llama_kv_share_next before it is created), and this prefill context maps it. That is the direction a
+    // prefill provider outside llama-server needs: the decoder keeps its own KV memory and the provider writes
+    // the prompt's cells straight into it, so the handoff moves no bytes at all. Without the env var the old
+    // direction stands: this context allocates the region and the target maps it.
+    const bool invert = []() {
+        const char * v = getenv("ONEBIT_KV_SHARE");
+        return v != nullptr && *v != '\0';
+    }();
+    llama_kv_share_next(!invert); // this context owns the KV region; ctx_tgt maps it
     try {
         ctx.reset(llama_init_from_model(model.get(), cparams));
     } catch (const std::exception & e) {
         LOG_WRN("prefill context: %s\n", e.what());
     }
-    if (!ctx || !llama_kv_share_from(ctx_tgt, ctx.get()) || !llama_kv_cells_copy(ctx.get(), ctx_tgt)) {
+    const bool shared = invert ? llama_kv_share_from(ctx.get(), ctx_tgt) : llama_kv_share_from(ctx_tgt, ctx.get());
+    if (!ctx || !shared || !llama_kv_cells_copy(ctx.get(), ctx_tgt)) {
         LOG_WRN("prefill device '%s' cannot share the KV cache (set -fa on explicitly so both devices lay it out the same way)\n", device_name);
         reset();
         return false;
     }
-    LOG_INF("prompt prefill on %s (from %d tokens), decode on the main device; KV cache shared, zero copy\n", device_name, min_tokens);
+    LOG_INF("prompt prefill on %s (from %d tokens), decode on the main device; KV cache shared, zero copy%s\n", device_name,
+            min_tokens, invert ? " (the decode context owns the region)" : "");
     return true;
 }
 
@@ -81,13 +93,21 @@ int32_t server_prefill_device::prefill(llama_context * ctx_tgt, const llama_batc
     }
     llama_batch prefix = view;
     prefix.n_tokens    = k;
+    const auto t_pre0 = std::chrono::steady_clock::now();
     if (llama_decode(ctx.get(), prefix) != 0) {
         LOG_WRN("prefill device decode failed (n = %d), using the main device\n", k);
         return 0;
     }
     llama_synchronize(ctx.get());
+    const double prefill_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_pre0).count();
+    // [1bit] target 1: the handoff itself. The prefill context's KV tensors ARE the decode context's, so this
+    // copies cell metadata only; the number this prints is what the file route's restore costs instead.
+    const auto t_hand0 = std::chrono::steady_clock::now();
     if (!llama_kv_cells_copy(ctx_tgt, ctx.get())) {
         throw std::runtime_error("prefill device: KV cells handoff failed");
     }
+    const double handoff_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_hand0).count();
+    LOG_INF("shared KV handoff: %d cells, %.3f ms, 0 bytes copied (prefill %.1f ms on the prefill device)\n", k,
+            handoff_ms, prefill_ms);
     return k;
 }
