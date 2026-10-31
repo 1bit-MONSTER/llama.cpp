@@ -1602,9 +1602,54 @@ json server_task_result_slot_erase::to_json() {
 }
 
 //
+// server_task_result_slot_share [1bit] target 1
+//
+json server_task_result_slot_share::to_json() {
+    json out_regions = json::array();
+    for (const auto & r : regions) {
+        // no fd here on purpose: the reply goes over HTTP, the fds went over the socket
+        out_regions.push_back(json {
+            { "offset", r.offset },
+            { "size",   r.size   },
+            { "layout", r.layout },
+        });
+    }
+    return json {
+        { "id_slot",   id_slot },
+        { "n_regions", regions.size() },
+        { "regions",   out_regions },
+        { "params", {
+            { "n_ctx",      n_ctx      },
+            { "n_batch",    n_batch    },
+            { "n_ubatch",   n_ubatch   },
+            { "n_seq_max",  n_seq_max  },
+            { "flash_attn", flash_attn },
+            { "type_k",     type_k     },
+            { "type_v",     type_v     },
+        }},
+        { "timings", {
+            { "share_ms", t_ms }
+        }},
+    };
+}
+
+//
+// server_task_result_slot_adopt [1bit] target 1
+//
+json server_task_result_slot_adopt::to_json() {
+    return json {
+        { "id_slot",   id_slot  },
+        { "n_adopted", n_tokens },
+        { "n_read",    0        },
+        { "timings", {
+            { "adopt_ms", t_ms }
+        }},
+    };
+}
+
+//
 // server_task_result_get_lora
 //
-
 json server_task_result_get_lora::to_json() {
     json result = json::array();
     for (size_t i = 0; i < loras.size(); ++i) {

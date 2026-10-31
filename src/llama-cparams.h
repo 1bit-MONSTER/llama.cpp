@@ -55,6 +55,11 @@ struct llama_cparams {
 
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
 
+    // [1bit] the KV cache types this context asked for, so a shared-KV provider can be told what to build
+    // (llama_kv_share_params, llama-kv-share.cpp); kept here because llama_memory_params only lives in init.
+    ggml_type type_k = GGML_TYPE_F16;
+    ggml_type type_v = GGML_TYPE_F16;
+
     enum llama_context_type ctx_type;
     enum llama_pooling_type pooling_type;
 

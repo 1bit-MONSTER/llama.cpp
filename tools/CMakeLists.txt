@@ -27,6 +27,7 @@ else()
         add_subdirectory(server)
     endif()
     add_subdirectory(tokenize)
+    add_subdirectory(kvshare-prefill) # [1bit] target 1: reference provider for a shared KV region
     add_subdirectory(parser)
     add_subdirectory(tts)
     add_subdirectory(mtmd)

@@ -268,6 +268,8 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+    cparams.type_k     = params.type_k;
+    cparams.type_v     = params.type_v;
 
     // initialized later
     cparams.pipeline_parallel = false;

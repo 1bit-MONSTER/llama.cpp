@@ -322,3 +322,19 @@ bool llama_kv_cells_adopt(llama_context * ctx, uint32_t n_tokens, llama_seq_id s
         return d.cells_adopt(n_tokens, seq_id);
     });
 }
+
+// [1bit] what a provider in another process has to reproduce for its own cache to lay out like this one's.
+bool llama_kv_share_params(const llama_context * ctx, struct llama_kv_share_cparams * out) {
+    if (ctx == nullptr || out == nullptr) {
+        return false;
+    }
+    const llama_cparams & cp = ctx->get_cparams();
+    out->n_ctx        = cp.n_ctx;
+    out->n_batch      = cp.n_batch;
+    out->n_ubatch     = cp.n_ubatch;
+    out->n_seq_max    = cp.n_seq_max;
+    out->flash_attn   = cp.flash_attn ? 1 : 0;
+    out->type_k       = (int32_t) cp.type_k;
+    out->type_v       = (int32_t) cp.type_v;
+    return true;
+}
