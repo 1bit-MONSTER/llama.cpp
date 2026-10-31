@@ -1189,6 +1189,11 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (op->op == GGML_OP_MUL_MAT_ID && ggml::hrx::mul_mat_id_requires_cpu(op)) {
         return false;
     }
+    // TOP_K is declared by hip/dispatch-hip-top-k.cpp (hip_declare_eager_op); claim only the shapes it executes,
+    // so anything else keeps its CPU fallback instead of becoming an unsupported HRX node (engine #679).
+    if (op->op == GGML_OP_TOP_K) {
+        return ggml::hrx::hip_top_k_tensor_supported(op);
+    }
     if (zero_output_elision_supported(op)) {
         return true;
     }

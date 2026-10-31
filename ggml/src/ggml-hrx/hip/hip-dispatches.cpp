@@ -24,6 +24,7 @@ HipSetRowsHook g_set_rows_hook = nullptr;
 }  // namespace
 
 void register_hip_dispatches(DispatchRegistryBuilder & registry) {
+    register_hip_top_k_dispatch(registry);
     register_hip_scale_dispatch(registry);
 #ifdef GGML_HRX_HIP_ADDON
     ggml_hrx_hip_addon_register(registry);
