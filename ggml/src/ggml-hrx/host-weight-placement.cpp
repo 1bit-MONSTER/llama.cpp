@@ -19,6 +19,10 @@
 #include "ggml-backend-impl.h"
 #include "ggml.h"
 
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
 namespace ggml::hrx {
 
 namespace {
@@ -48,6 +52,45 @@ bool host_resident_weight(const ggml_tensor * tensor) {
 bool host_weight_requires_cpu(const ggml_tensor * op) {
     if (op == nullptr) {
         return false;
+    }
+    // TODO(i669): temporary bisect knob, remove before the PR. GGML_HRX_169_DECLINE="MUL_MAT,CONT" restricts the
+    // decline to those ops; unset means every op below is declined.
+    if (const char * only = std::getenv("GGML_HRX_169_DECLINE")) {
+        if (std::strcmp(only, "none") == 0) {
+            return false;
+        }
+        struct Named {
+            const char *  name;
+            enum ggml_op op;
+        };
+        static const Named kNamed[] = {
+            { "MUL_MAT", GGML_OP_MUL_MAT },     { "MUL_MAT_ID", GGML_OP_MUL_MAT_ID },
+            { "GET_ROWS", GGML_OP_GET_ROWS },   { "RMS_NORM", GGML_OP_RMS_NORM },
+            { "ROPE", GGML_OP_ROPE },           { "CONT", GGML_OP_CONT },
+            { "CPY", GGML_OP_CPY },             { "GLU", GGML_OP_GLU },
+            { "MUL", GGML_OP_MUL },             { "ADD", GGML_OP_ADD },
+        };
+        if (std::strcmp(only, "all") != 0) {
+            bool listed = false;
+            const std::string list(only);
+            size_t            start = 0;
+            while (start <= list.size()) {
+                const size_t end  = list.find(',', start);
+                const std::string name = list.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                for (const Named & entry : kNamed) {
+                    if (name == entry.name && op->op == entry.op) {
+                        listed = true;
+                    }
+                }
+                if (end == std::string::npos) {
+                    break;
+                }
+                start = end + 1;
+            }
+            if (!listed) {
+                return false;
+            }
+        }
     }
     for (int i = 0; i < GGML_MAX_SRC; ++i) {
         if (host_resident_weight(op->src[i])) {
