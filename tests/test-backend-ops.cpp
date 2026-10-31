@@ -10330,7 +10330,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_from_file(const c
 }
 
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
-                         printer * output_printer, const char * test_file_path, int parallel_workers) {
+                         printer * output_printer, const char * test_file_path, int parallel_workers, size_t * tests_run_out) {
+    // a run that matches no case must not be reportable as a pass: report how many cases this backend ran
+    if (tests_run_out) {
+        *tests_run_out = 0;
+    }
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
         if (params_filter == nullptr) {
             return;
@@ -10463,6 +10467,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
             }
         }
 
+        if (tests_run_out) {
+            *tests_run_out = tests_run;
+        }
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
@@ -10483,6 +10490,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
                 n_ok++;
             }
         }
+        if (tests_run_out) {
+            *tests_run_out = test_cases.size();
+        }
         output_printer->print_summary(test_summary_info(n_ok, test_cases.size(), false));
 
         return n_ok == test_cases.size();
@@ -10491,6 +10501,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
     if (mode == MODE_PERF) {
         for (auto & test : test_cases) {
             test->eval_perf(backend, op_names_filter, output_printer);
+        }
+        if (tests_run_out) {
+            *tests_run_out = test_cases.size();
         }
         return true;
     }
@@ -10506,6 +10519,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
 
         for (auto & test : test_cases) {
             test->eval_support(backend, op_names_filter, output_printer);
+        }
+        if (tests_run_out) {
+            *tests_run_out = test_cases.size();
         }
         return true;
     }
@@ -10720,6 +10736,7 @@ int main(int argc, char ** argv) {
     output_printer->print_testing_start(testing_start_info(ggml_backend_dev_count()));
 
     size_t n_ok = 0;
+    size_t n_cases_run = 0;
 
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -10754,7 +10771,9 @@ int main(int argc, char ** argv) {
                                                              false, "", ggml_backend_dev_description(dev),
                                                              total / 1024 / 1024, free / 1024 / 1024, true));
 
-        bool ok = test_backend(backend.get(), dev, mode, op_names_filter, params_filter, output_printer.get(), test_file_path, parallel_workers);
+        size_t cases_run = 0;
+        bool ok = test_backend(backend.get(), dev, mode, op_names_filter, params_filter, output_printer.get(), test_file_path, parallel_workers, &cases_run);
+        n_cases_run += cases_run;
 
         if (ok) {
             n_ok++;
@@ -10767,6 +10786,15 @@ int main(int argc, char ** argv) {
 
     if (output_printer) {
         output_printer->print_footer();
+    }
+
+    // engine#657: a run that executed no case is not a pass. Without this, `-b HRX` (an exact device-name
+    // match, so it matches nothing), `-o NO_SUCH_OP` or a params filter that matches nothing print OK and
+    // exit 0, and a device verification that measured nothing looks green.
+    if (n_cases_run == 0) {
+        fflush(stdout);
+        fprintf(stderr, "error: no test case ran (check -b/-o/-p and --test-file): refusing to report a pass\n");
+        return 1;
     }
 
     output_printer->print_overall_summary(
