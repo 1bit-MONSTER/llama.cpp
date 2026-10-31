@@ -116,6 +116,7 @@ target_sources(ggml-hrx PRIVATE
     hip/hip-dispatches.cpp
     hip/hip-dispatches.h
     hip/dispatch-hip-scale.cpp
+    hip/dispatch-hip-top-k.cpp
     ${GGML_HRX_HIP_ADDON_SOURCES})
 if (GGML_HRX_HIP_ADDON_DIR)
     target_compile_definitions(ggml-hrx PRIVATE GGML_HRX_HIP_ADDON)
