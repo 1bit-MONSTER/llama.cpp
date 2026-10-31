@@ -72,6 +72,16 @@ struct PreparedCommandBinding {
     ResolvedBufferRef ref;
 };
 
+// A weight that has to be materialized into device memory because it lives in a host buffer (engine #669). The lease
+// is a borrowed snapshot: the cache may evict it, so the program keeps the source around and re-acquires - and
+// rewrites the prepared bindings - before the next dispatch. Holding the bytes here instead would make the
+// residency grow with the model, which is the bug.
+struct HostWeightBinding {
+    ValueId          value;
+    HostWeightSource source;
+    HostWeightLease  lease;
+};
+
 struct PreparedKernelCommand {
     KernelSpecialization                specialization;
     std::shared_ptr<KernelExecutable>   executable;
@@ -105,7 +115,7 @@ struct PreparedCommandProgram {
     std::vector<PreparedCommand>               initialization_commands;
     std::vector<PreparedCommand>               commands;
     std::vector<HostStagingBuffer>             host_staging;
-    std::vector<HostWeightLease>               resident_host_weights;
+    std::vector<HostWeightBinding>             resident_host_weights;
     std::vector<PreparedProgramConstantBuffer> program_constants;
     Status                                     status;
     uint64_t                                   bound_transient_arena_allocation_id = kInvalidTransientArenaAllocationId;

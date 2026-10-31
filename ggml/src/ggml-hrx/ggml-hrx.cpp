@@ -6,6 +6,7 @@
 #include "backend-buffer-binding.h"
 #include "backend-context.h"
 #include "fused-context-claim.h"
+#include "host-weight-placement.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "graph/op-params.h"
@@ -1187,6 +1188,12 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     // kernel (IQ4_NL/IQ2_S weight types, or a 640-wide contraction that violates the
     // kernel's 256-multiple input_size constraint), so keep the expert GEMM on CPU.
     if (op->op == GGML_OP_MUL_MAT_ID && ggml::hrx::mul_mat_id_requires_cpu(op)) {
+        return false;
+    }
+    // A model weight in a host buffer has to be materialized into device memory before this backend can bind it, and
+    // that residency is bounded (HostWeightCache::limit). A weight that cannot fit is declined here so the CPU serves
+    // it, instead of failing the graph or staging a model-sized tensor per execution (engine #669).
+    if (ggml::hrx::host_weight_exceeds_residency(op)) {
         return false;
     }
     if (zero_output_elision_supported(op)) {

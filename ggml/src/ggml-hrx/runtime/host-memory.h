@@ -69,6 +69,7 @@ struct HostWeightSource {
 struct HostWeightCacheStats {
     uint64_t hits             = 0;
     uint64_t misses           = 0;
+    uint64_t evictions        = 0;
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
 };
@@ -84,9 +85,16 @@ class HostWeightLease {
 
   private:
     struct Entry;
-    std::shared_ptr<Entry> entry_;
+    // The cache owns the entry, so a lease is a *borrowed* snapshot: `buffer_`/`length_`/`layout_` are what the
+    // caller binds, and `entry_` only says whether it is still there. On eviction (which synchronizes the stream
+    // first) the entry goes away, valid() turns false, and the next execution re-acquires and rebinds. This is what
+    // makes the residency bounded: a prepared program no longer keeps a materialized weight alive by holding it.
+    std::weak_ptr<Entry> entry_;
+    hrx_buffer_t         buffer_ = nullptr;
+    size_t               length_ = 0;
+    std::string          layout_;
 
-    explicit HostWeightLease(std::shared_ptr<Entry> entry);
+    explicit HostWeightLease(const std::shared_ptr<Entry> & entry);
     friend class HostWeightCache;
 };
 
@@ -111,6 +119,12 @@ class HostWeightCache {
                                     const HostWeightSource & source);
     HostWeightCacheStats    stats() const;
     void                    clear();
+
+    // Bytes of materialized host weights the cache may keep resident (GGML_HRX_HOST_WEIGHT_LIMIT_MB, default
+    // 2048). A single weight larger than the whole budget is refused rather than made resident.
+    size_t        limit() const;
+    // The same budget without a cache instance, for the placement guard (host-weight-placement.cpp).
+    static size_t residency_limit();
 
   private:
     struct SourceKey {
@@ -140,7 +154,19 @@ class HostWeightCache {
 
     mutable std::mutex                                                                    mutex_;
     std::unordered_map<SourceKey, std::shared_ptr<HostWeightLease::Entry>, SourceKeyHash> entries_;
+    std::unordered_map<SourceKey, uint64_t, SourceKeyHash>                                last_use_;
     HostWeightCacheStats                                                                  stats_;
+    size_t                                                                                limit_          = 0;
+    size_t                                                                                resident_bytes_ = 0;
+    uint64_t                                                                              use_clock_      = 0;
+    bool                                                                                  limit_resolved_ = false;
+    std::mutex                                                                            evict_mutex_;
+
+    void        resolve_limit();
+    // Drop least recently used entries until `needed` more bytes fit. Called with `mutex_` NOT held; it
+    // synchronizes the stream before freeing anything, because a dispatch from an earlier command program may
+    // still be reading the buffer.
+    void        evict_for(hrx_stream_t stream, size_t needed);
 };
 
 struct HostStagingBuffer {

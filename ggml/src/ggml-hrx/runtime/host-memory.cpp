@@ -1,5 +1,6 @@
 #include "host-memory.h"
 
+#include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
@@ -9,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <sstream>
@@ -1384,23 +1386,29 @@ struct HostWeightLease::Entry {
     std::string  layout;
 };
 
-HostWeightLease::HostWeightLease(std::shared_ptr<Entry> entry) : entry_(std::move(entry)) {}
+HostWeightLease::HostWeightLease(const std::shared_ptr<Entry> & entry) : entry_(entry) {
+    if (entry != nullptr) {
+        buffer_ = entry->buffer;
+        length_ = entry->length;
+        layout_ = entry->layout;
+    }
+}
 
 bool HostWeightLease::valid() const {
-    return entry_ != nullptr && entry_->buffer != nullptr;
+    return buffer_ != nullptr && !entry_.expired();
 }
 
 hrx_buffer_t HostWeightLease::buffer() const {
-    return valid() ? entry_->buffer : nullptr;
+    return valid() ? buffer_ : nullptr;
 }
 
 size_t HostWeightLease::length() const {
-    return entry_ != nullptr ? entry_->length : 0;
+    return buffer_ != nullptr ? length_ : 0;
 }
 
 const std::string & HostWeightLease::layout() const {
     static const std::string empty;
-    return entry_ != nullptr ? entry_->layout : empty;
+    return buffer_ != nullptr ? layout_ : empty;
 }
 
 HostWeightCache::~HostWeightCache() {
@@ -1426,6 +1434,96 @@ size_t HostWeightCache::SourceKeyHash::operator()(const SourceKey & key) const {
     mix(static_cast<uint64_t>(key.input_size));
     mix(static_cast<uint64_t>(key.output_size));
     return static_cast<size_t>(hash);
+}
+
+size_t HostWeightCache::limit() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return limit_;
+}
+
+size_t HostWeightCache::residency_limit() {
+    // 2048 MiB is a split's working set, not a model's: the point of the bound is that materializing host weights
+    // may never grow with the size of the model. GGML_HRX_HOST_WEIGHT_LIMIT_MB overrides it; 0 removes the bound.
+    constexpr size_t kDefaultMiB = 2048;
+    static const size_t limit = []() -> size_t {
+        size_t mib = kDefaultMiB;
+        if (const char * env = std::getenv("GGML_HRX_HOST_WEIGHT_LIMIT_MB")) {
+            const long long requested = std::atoll(env);
+            if (requested >= 0) {
+                mib = static_cast<size_t>(requested);
+            }
+        }
+        return mib * 1024ull * 1024ull;
+    }();
+    return limit;
+}
+
+void HostWeightCache::resolve_limit() {
+    // Called with mutex_ held, once per cache.
+    if (limit_resolved_) {
+        return;
+    }
+    limit_resolved_ = true;
+    limit_          = residency_limit();
+}
+
+void HostWeightCache::evict_for(hrx_stream_t stream, size_t needed) {
+    std::lock_guard<std::mutex> evict_lock(evict_mutex_);
+    std::vector<SourceKey>      victims;
+    size_t                      freed = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (resident_bytes_ + needed <= limit_) {
+            return;
+        }
+        // Least recently used first, and only entries nothing is currently bound to: a lease is a borrowed
+        // snapshot, so use_count() == 1 means the cache is the only owner.
+        std::vector<std::pair<uint64_t, const SourceKey *>> order;
+        order.reserve(entries_.size());
+        for (const auto & entry : entries_) {
+            const auto use = last_use_.find(entry.first);
+            order.emplace_back(use == last_use_.end() ? 0 : use->second, &entry.first);
+        }
+        std::sort(order.begin(), order.end(),
+                  [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
+        for (const auto & candidate : order) {
+            if (resident_bytes_ + needed <= limit_ + freed && freed != 0) {
+                break;
+            }
+            const auto found = entries_.find(*candidate.second);
+            if (found == entries_.end() || found->second.use_count() != 1) {
+                continue;
+            }
+            victims.push_back(*candidate.second);
+            freed += found->second->length;
+            if (freed >= needed) {
+                break;
+            }
+        }
+    }
+    if (victims.empty()) {
+        return;
+    }
+    // A command program from an earlier split may still be executing against these buffers; the cache is about to
+    // free them, so this is the one place that has to establish completion first.
+    if (stream != nullptr) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+            GGML_LOG_WARN("%s: synchronize before evicting resident host weights: %s\n", __func__, error->c_str());
+            return;
+        }
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const SourceKey & victim : victims) {
+        const auto found = entries_.find(victim);
+        if (found == entries_.end() || found->second.use_count() != 1) {
+            continue;
+        }
+        stats_.resident_bytes -= found->second->length;
+        resident_bytes_ -= found->second->length;
+        last_use_.erase(victim);
+        entries_.erase(found);
+        ++stats_.evictions;
+    }
 }
 
 HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device,
@@ -1461,13 +1559,25 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
                          source.input_size, source.output_size };
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        resolve_limit();
         const auto                  found = entries_.find(key);
         if (found != entries_.end()) {
             ++stats_.hits;
-            result.lease = HostWeightLease(found->second);
+            last_use_[key] = ++use_clock_;
+            result.lease   = HostWeightLease(found->second);
+            return result;
+        }
+        // A single weight bigger than the whole budget can never be resident; refuse it here instead of letting the
+        // caller fall back to binding a host pointer the device cannot address (engine #669).
+        if (limit_ != 0 && materialized_length > limit_) {
+            result.status.log("host weight %zu MiB exceeds the %zu MiB residency limit (GGML_HRX_HOST_WEIGHT_LIMIT_MB)",
+                              materialized_length / (1024 * 1024), limit_ / (1024 * 1024));
             return result;
         }
     }
+
+    // Make room before materializing, so the peak is the budget plus this one weight rather than budget + weight.
+    evict_for(stream, materialized_length);
 
     HostWeightSource     materialization_source = source;
     std::vector<uint8_t> canonical;
@@ -1518,14 +1628,17 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         const auto                  inserted = entries_.emplace(key, entry);
         if (!inserted.second) {
             ++stats_.hits;
-            result.lease = HostWeightLease(inserted.first->second);
+            last_use_[key] = ++use_clock_;
+            result.lease   = HostWeightLease(inserted.first->second);
             return result;
         }
         ++stats_.misses;
+        last_use_[key]          = ++use_clock_;
         stats_.allocation_count = entries_.size();
         stats_.resident_bytes += materialized_length;
+        resident_bytes_ += materialized_length;
     }
-    result.lease = HostWeightLease(std::move(entry));
+    result.lease = HostWeightLease(entry);
     return result;
 }
 
@@ -1537,7 +1650,9 @@ HostWeightCacheStats HostWeightCache::stats() const {
 void HostWeightCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.clear();
-    stats_ = {};
+    last_use_.clear();
+    resident_bytes_ = 0;
+    stats_          = {};
 }
 
 HostStagingBuffer::~HostStagingBuffer() {
