@@ -33,6 +33,14 @@ struct llama_kv_shared_region {
     ~llama_kv_shared_region();
 };
 
+// the same region, handed out: a POD, so whoever receives the list does not close the owner's fd
+struct llama_kv_shared_region_pod {
+    int      fd     = -1;
+    size_t   offset = 0;
+    size_t   size   = 0;
+    uint64_t layout = 0;
+};
+
 // the pending llama_kv_share_next request; a real (not no_alloc) context takes and clears it
 bool llama_kv_share_take_next(bool no_alloc);
 

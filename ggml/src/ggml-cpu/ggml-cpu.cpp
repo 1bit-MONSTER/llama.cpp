@@ -10,6 +10,10 @@
 #include <string>
 #include <vector>
 
+#if !defined(_WIN32)
+#    include <sys/mman.h>
+#endif
+
 #ifdef GGML_USE_CPU_HBM
 #    include "hbm.h"
 #endif
@@ -420,6 +424,33 @@ static ggml_backend_buffer_t ggml_backend_cpu_device_buffer_from_host_ptr(ggml_b
     GGML_UNUSED(max_tensor_size);
 }
 
+// [1bit] zero-copy KV sharing, importing side (llama-kv-share.cpp): map a region another context exported as a
+// dma-buf and hand it to ggml as a normal host buffer. `ggml_backend_cpu_buffer_from_ptr` does not own the
+// pointer, so the mapping lives as long as the process.
+//
+// It is deliberately NOT munmapped from an atexit handler any more: doing that aborted the server during
+// "cleaning up before exit" with `corrupted size vs. prev_size while consolidating` inside the handler's own
+// std::map teardown (backtrace: malloc_printerr <- _int_free_merge_chunk <-
+// ggml_backend_cpu_dmabuf_unmap_all), while every request in the run had been answered correctly. The kernel
+// reclaims the mapping at exit, so the handler bought nothing and cost a teardown crash (2026-10-31).
+static ggml_backend_buffer_t ggml_backend_cpu_device_buffer_from_dmabuf(ggml_backend_dev_t dev, int fd, size_t offset, size_t size) {
+    const long ps = sysconf(_SC_PAGESIZE);
+    const size_t page = ps > 0 ? (size_t) ps : 4096;
+    if (fd < 0 || size == 0 || offset % page != 0) {
+        GGML_LOG_ERROR("%s: refusing dma-buf fd %d offset %zu (not page aligned) size %zu\n", __func__, fd, offset, size);
+        return nullptr;
+    }
+    void * ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t) offset);
+    if (ptr == MAP_FAILED) {
+        GGML_LOG_ERROR("%s: mmap of dma-buf fd %d (offset %zu, %zu bytes) failed\n", __func__, fd, offset, size);
+        return nullptr;
+    }
+    GGML_LOG_INFO("%s: mapped a shared KV region of %.2f MiB at %p (zero copy)\n", __func__, size / 1024.0 / 1024.0, ptr);
+
+    GGML_UNUSED(dev);
+    return ggml_backend_cpu_buffer_from_ptr(ptr, size);
+}
+
 static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
@@ -646,6 +677,10 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
 }
 
 static void * ggml_backend_cpu_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    // [1bit] zero-copy KV sharing: this backend can map a region another context exported (llama-kv-share.cpp)
+    if (strcmp(name, "ggml_backend_dev_buffer_from_dmabuf") == 0) {
+        return (void *) ggml_backend_cpu_device_buffer_from_dmabuf;
+    }
     if (strcmp(name, "ggml_backend_set_n_threads") == 0) {
         ggml_backend_set_n_threads_t fct = ggml_backend_cpu_set_n_threads;
         return (void *)fct;

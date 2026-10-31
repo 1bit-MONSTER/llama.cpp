@@ -2527,6 +2527,64 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
     }
 }
 
+bool llama_kv_cache::cells_adopt(uint32_t n_tokens, llama_seq_id seq_id) {
+    // [1bit] target 1: an outside prefill provider wrote the prompt's K/V straight into the exported region, so
+    // this cache only has to say that cells 0..n-1 now hold positions 0..n-1 of seq_id. Nothing is copied; the
+    // tensor data is already where the provider put it. Same bookkeeping as the whole-cache branch of
+    // state_read_meta() below, which is the restore this replaces.
+    if (other != nullptr) {
+        LLAMA_LOG_ERROR("%s: a mirrored cache adopts through the cache that owns the region\n", __func__);
+        return false;
+    }
+    if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max || n_tokens == 0) {
+        LLAMA_LOG_ERROR("%s: bad sequence %d or %u tokens\n", __func__, seq_id, n_tokens);
+        return false;
+    }
+    const uint32_t strm = seq_to_stream[seq_id];
+    if (strm >= v_cells.size()) {
+        return false;
+    }
+    auto & cells = v_cells[strm];
+    if (n_tokens > cells.size()) {
+        LLAMA_LOG_ERROR("%s: not enough cells in kv cache\n", __func__);
+        return false;
+    }
+    seq_rm(seq_id, -1, -1);
+    // the provider wrote cells 0..n-1, so anything still held there belongs to another sequence and must not be
+    // silently overwritten
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        if (!cells.is_empty(i)) {
+            LLAMA_LOG_ERROR("%s: cell %u is not free for the shared prompt\n", __func__, i);
+            return false;
+        }
+    }
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        cells.pos_set(i, (llama_pos) i);
+        if (has_cell_ext()) {
+            llama_kv_cell_ext ext;
+            cells.ext_set(i, ext);
+        }
+        cells.seq_add(i, seq_id);
+    }
+    v_heads[strm] = 0;
+    LLAMA_LOG_INFO("%s: adopted %u cells at positions 0..%u of sequence %d (no data moved)\n", __func__, n_tokens,
+            n_tokens - 1, seq_id);
+    return true;
+}
+
+bool llama_kv_cache::share_regions(std::vector<llama_kv_shared_region_pod> & out) const {
+    out.clear();
+    if (shared_.empty()) {
+        return false;
+    }
+    for (const auto & chunks : shared_) {
+        for (const auto & r : chunks) {
+            out.push_back({ r.fd, r.offset, r.size, r.layout });
+        }
+    }
+    return true;
+}
+
 bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, slot_info & sinfo, llama_seq_id dest_seq_id, const slot_info * sinfo_in) {
     auto & cells = v_cells[strm];
     auto & head  = v_heads[strm];

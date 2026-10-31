@@ -27,6 +27,27 @@ LLAMA_API bool llama_kv_share_from(struct llama_context * dst, struct llama_cont
 // [1bit] Copy KV cell metadata (positions, sequences) from src to dst after src ran. Tensor data is shared, not copied.
 LLAMA_API bool llama_kv_cells_copy(struct llama_context * dst, const struct llama_context * src);
 
+// [1bit] A KV region as it travels to a provider in another process: a dma-buf fd plus the owner's byte offset,
+// size and layout hash. Move it with SCM_RIGHTS (/proc/<pid>/fd cannot be reopened for a dma-buf on Linux).
+struct llama_kv_share_region {
+    int      fd;
+    size_t   offset;
+    size_t   size;
+    uint64_t layout;
+};
+
+// [1bit] Target 1: the regions a context created after llama_kv_share_next(true) exported, in buffer order.
+// Returns how many regions exist; fills at most n_out of them.
+LLAMA_API size_t llama_kv_share_regions(struct llama_context * ctx, struct llama_kv_share_region * out, size_t n_out);
+
+// [1bit] Target 1: map those regions in a context of the same model and context params (the prefill provider),
+// so its KV tensors are the owner's memory. Needs a backend that can map a dma-buf (ggml-cpu can; HRX exports).
+LLAMA_API bool llama_kv_share_import(struct llama_context * ctx, const struct llama_kv_share_region * regions, size_t n_regions);
+
+// [1bit] Target 1: the provider has filled the shared region; take cells 0..n-1 as positions 0..n-1 of seq_id.
+// Copies no data: this is the file route's ?action=restore, without the file.
+LLAMA_API bool llama_kv_cells_adopt(struct llama_context * ctx, uint32_t n_tokens, llama_seq_id seq_id);
+
 // Get the default ggml_type for a given ftype.
 LLAMA_API ggml_type llama_ftype_get_default_type(llama_ftype ftype);
 
