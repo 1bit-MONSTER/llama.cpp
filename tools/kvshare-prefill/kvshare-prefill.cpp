@@ -20,7 +20,12 @@
 // maps those regions into its own context's KV tensors -- no copy, no state file -- prefills the prompt into
 // them, and exits. The decoder then takes the cells over with `POST /slots/<id>?action=adopt`.
 //
-//   kvshare-prefill --model <gguf> --tokens <ids file> --layout <header file> --fds 3,4 [--gpu-layers N] [--device NAME]
+//   kvshare-prefill --model <gguf> --tokens <ids file> --layout <header file> --fds 3,4 [--gpu-layers N]
+//   kvshare-prefill --model <gguf> --tokens <ids file> --out <state file>   (the file route)
+//
+// The two modes exist so one provider can serve both transports: `--fds` prefills into the decoder's own
+// KV memory, `--out` prefills into its own and writes the sequence state the decoder restores. Same math,
+// same model, same engine -- which is what makes fd-vs-file a controlled comparison.
 //
 // stdout: one JSON line {"n_tokens": N, "prefill_ms": x, "argmax": id}. exit 0 on success.
 //
@@ -58,6 +63,7 @@ int main(int argc, char ** argv) {
     std::string tokens_path;
     std::string layout_path;
     std::string fds_arg;
+    std::string out_path;
     std::string device;
     int32_t n_gpu_layers = 0;
 
@@ -71,12 +77,18 @@ int main(int argc, char ** argv) {
         else if (arg == "--tokens") { tokens_path  = next("--tokens"); }
         else if (arg == "--layout") { layout_path  = next("--layout"); }
         else if (arg == "--fds")    { fds_arg      = next("--fds"); }
+        else if (arg == "--out")    { out_path      = next("--out"); }
         else if (arg == "--device") { device       = next("--device"); }
         else if (arg == "--gpu-layers") { n_gpu_layers = std::atoi(next("--gpu-layers").c_str()); }
         else if (arg == "-h" || arg == "--help") { usage(argv[0]); return 0; }
         else { std::fprintf(stderr, "%s: unknown argument %s\n", argv[0], arg.c_str()); usage(argv[0]); return 2; }
     }
-    if (model_path.empty() || tokens_path.empty() || layout_path.empty() || fds_arg.empty()) {
+    if (model_path.empty() || tokens_path.empty()) {
+        usage(argv[0]);
+        return 2;
+    }
+    const bool shared = !fds_arg.empty() && !layout_path.empty();
+    if (!shared && out_path.empty()) {
         usage(argv[0]);
         return 2;
     }
@@ -92,8 +104,8 @@ int main(int argc, char ** argv) {
     if (tokens.empty()) { std::fprintf(stderr, "kvshare-prefill: %s has no tokens\n", tokens_path.c_str()); return 1; }
 
     // the header the decoder sent: region descriptors plus the context params its cache was built with
-    json  header;
-    try {
+    json  header = json{{"params", json::object()}, {"regions", json::array()}};
+    if (shared) try {
         std::ifstream  f(layout_path);
         if (!f) throw std::runtime_error("cannot read " + layout_path);
         f >> header;
@@ -113,7 +125,7 @@ int main(int argc, char ** argv) {
         if (comma == std::string::npos) break;
         pos = comma + 1;
     }
-    if (fds.size() != jregions.size()) {
+    if (shared && fds.size() != jregions.size()) {
         std::fprintf(stderr, "kvshare-prefill: %zu fd(s) for %zu region(s)\n", fds.size(), jregions.size());
         return 1;
     }
@@ -134,23 +146,29 @@ int main(int argc, char ** argv) {
     if (model == nullptr) { std::fprintf(stderr, "kvshare-prefill: cannot load %s\n", model_path.c_str()); return 1; }
 
     llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx         = params.at("n_ctx").get<uint32_t>();
-    cparams.n_batch       = params.at("n_batch").get<uint32_t>();
-    cparams.n_ubatch      = params.at("n_ubatch").get<uint32_t>();
-    cparams.n_seq_max     = params.at("n_seq_max").get<uint32_t>();
-    cparams.flash_attn_type = params.at("flash_attn").get<int32_t>() != 0
-            ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
-    cparams.type_k        = (ggml_type) params.at("type_k").get<int32_t>();
-    cparams.type_v        = (ggml_type) params.at("type_v").get<int32_t>();
+    if (shared) {
+        cparams.n_ctx         = params.at("n_ctx").get<uint32_t>();
+        cparams.n_batch       = params.at("n_batch").get<uint32_t>();
+        cparams.n_ubatch      = params.at("n_ubatch").get<uint32_t>();
+        cparams.n_seq_max     = params.at("n_seq_max").get<uint32_t>();
+        cparams.flash_attn_type = params.at("flash_attn").get<int32_t>() != 0
+                ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        cparams.type_k        = (ggml_type) params.at("type_k").get<int32_t>();
+        cparams.type_v        = (ggml_type) params.at("type_v").get<int32_t>();
+    } else {
+        // file route: the state the decoder restores must match its cache, and the decoder runs -fa on
+        cparams.n_ctx           = (uint32_t) std::max<size_t>(tokens.size() + 8, 256);
+        cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    }
     cparams.n_threads     = 8;
     cparams.n_threads_batch = 8;
 
     llama_context * ctx = llama_init_from_model(model, cparams);
     if (ctx == nullptr) { std::fprintf(stderr, "kvshare-prefill: cannot create a context\n"); return 1; }
 
-    // map the decoder's KV memory as this context's KV tensors (zero copy: the tensors ARE that memory)
+    // shared route: map the decoder's KV memory as this context's KV tensors (zero copy: the tensors ARE it)
     const auto t_import0 = std::chrono::steady_clock::now();
-    if (!llama_kv_share_import(ctx, regions.data(), regions.size())) {
+    if (shared && !llama_kv_share_import(ctx, regions.data(), regions.size())) {
         std::fprintf(stderr, "kvshare-prefill: cannot map the shared KV region (layout differs: same model, -fa, "
                              "-c, -b/-ub and KV types as the decoder are required)\n");
         return 1;
@@ -189,6 +207,15 @@ int main(int argc, char ** argv) {
         argmax = 0;
         for (int i = 1; i < n_vocab; ++i) {
             if (logits[i] > best) { best = logits[i]; argmax = i; }
+        }
+    }
+
+    // file route: the same cells, written where the decoder's ?action=restore will read them
+    if (!shared) {
+        const size_t written = llama_state_seq_save_file(ctx, out_path.c_str(), 0, tokens.data(), tokens.size());
+        if (written == 0) {
+            std::fprintf(stderr, "kvshare-prefill: cannot write %s\n", out_path.c_str());
+            return 1;
         }
     }
 
