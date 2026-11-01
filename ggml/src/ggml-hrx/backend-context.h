@@ -51,6 +51,11 @@ struct ggml_backend_hrx_device_context {
     std::atomic<uint64_t>                          synchronous_upload_fallbacks{ 0 };
     std::atomic<uint64_t>                          synchronous_download_fallbacks{ 0 };
     std::mutex                                     buffer_stream_mutex;
+    // engine #696: one reusable host-mapped staging buffer per device for the ordered host copies (buffer_set /
+    // buffer_get). Guarded by buffer_stream_mutex.
+    hrx_buffer_t                                   copy_staging        = nullptr;
+    size_t                                         copy_staging_size   = 0;
+    void *                                         copy_staging_mapped = nullptr;
     hrx_stream_t                                   buffer_stream = nullptr;
 };
 
