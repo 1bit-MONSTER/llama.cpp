@@ -58,7 +58,10 @@ loom-kernel-jit.h and `register_hip_dispatches` in dispatch-common.cpp.
    `integer_parameters` for every launch and workload parameter, and bindings in pointer order.
    `launch_fn(params, geometry)` sets the workgroup count and size. The executable cache key
    holds only the workload parameters, so list the parameters that change the grid there and
-   nothing else.
+   nothing else. Leaving one out does not fall back to the right grid: the first case that
+   compiles the kernel fixes the geometry for every later case with the same key, and the
+   kernel then runs too few workgroups and silently leaves the rest of the output untouched
+   (see "Trap: a workload parameter left out is a stale grid").
 3. **Register**: add one line to `register_hip_dispatches` in `hip-dispatches.cpp` and the
    matcher source to `target_sources(ggml-hrx ...)` in `ggml-hrx-hip.cmake`. (In an add-on,
    the line goes in its `ggml_hrx_hip_addon_register` and the source is picked up by the glob.)
@@ -66,6 +69,21 @@ loom-kernel-jit.h and `register_hip_dispatches` in dispatch-common.cpp.
    `GGML_HRX_LOG_DISPATCH=1` to confirm `hip.<name>` matched. Add a known-answer probe, a model
    KLD or teacher-forced comparison, and repeated identical requests. Keep a HIP kernel only
    if an interleaved A/B shows it at least as fast as the path it replaces.
+
+**Trap: a workload parameter left out is a stale grid, and it is silent.** `launch_fn` runs once
+per executable cache entry, not once per dispatch, so the grid it computes is reused for every
+later dispatch whose key matches. Because the key is the workload-parameter list and nothing
+else (not the geometry), a launch function that reads a parameter the list omits gets the first
+case's grid for every case: no error, no log line, and the kernel simply does not cover the
+space it was asked to. Measured on the DeepSeek-V4.1 indexer (`n_stream` left out, published as
+gpu-kernels #46): `test-backend-ops -o LIGHTNING_INDEXER -b HRX0` gave **4/12**, with every
+`ns=1` case passing and every `ns=4` case wrong by a whole stream plane, because streams 1-3
+were never written: `inf mismatch: HRX0=0.943650 CPU=-inf` where an untouched element met a
+`-inf` mask row, and `ERR = 2.909230024 > 0.000001000` on a case whose untouched elements never
+happened to meet one. The same kernel driven directly
+through `hipModuleLaunchKernel` on the same code object is correct at 4 streams to 3.9e-03, so a
+standalone harness cannot see this: only a suite that runs the op at two different grid sizes
+can. `test-backend-ops` does exactly that for ops with a stream/batch axis; keep those cases.
 
 **Trap: fused registrations always come first.** For a root op the registry tries every
 `DispatchMatchKind::Fused` registration before any `SingleOp` one; `priority` only orders
