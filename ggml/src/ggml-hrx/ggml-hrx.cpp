@@ -15,6 +15,7 @@
 #include "kernel-corpus/kernel-corpus.h"
 #include "loom-jit.h"
 #include "runtime/hrx-sleeping-wait.h"
+#include "runtime/host-memory.h"
 #include "runtime/graph-executor.h"
 #include "runtime/graph-program-cache.h"
 #include "runtime/kernel-executable-cache.h"
@@ -86,6 +87,10 @@ static bool hrx_check(hrx_status_t status, const char * expression, const char *
 
 ggml_backend_hrx_reg_context::~ggml_backend_hrx_reg_context() {
     for (auto & context : device_contexts) {
+        if (context->copy_staging != nullptr) {
+            hrx_buffer_release(context->copy_staging);
+            context->copy_staging = nullptr;
+        }
         if (context->buffer_stream != nullptr) {
             hrx_stream_release(context->buffer_stream);
         }
@@ -227,6 +232,63 @@ static void buffer_memset(ggml_backend_buffer_t buffer,
     }
 }
 
+// engine #696: host copies are ordered with the compute dispatches. libhrx's hrx_synchronous_h2d/d2h submit on
+// device->transfer_queue with an empty wait list, so a copy can overtake the dispatch that produces or consumes
+// those bytes; the hrx_stream_* copies record into a stream command buffer and queue behind the dispatches on the
+// one dispatch queue, and the synchronize that follows completes them before the caller continues. The staging
+// buffer is kept per device (few distinct sizes) instead of being allocated per copy: per-copy allocate/release is
+// what libhrx's per-size pools retain (engine #669).
+static bool ensure_copy_staging(ggml_backend_hrx_device_context * device, size_t size) {
+    if (device->copy_staging_size >= size) {
+        return true;
+    }
+    hrx_buffer_t staging = nullptr;
+    void *       mapped  = nullptr;
+    if (!ggml::hrx::allocate_mapped_host_staging_buffer(device->device, size, staging, mapped).success()) {
+        return false;
+    }
+    if (device->copy_staging != nullptr) {
+        hrx_buffer_release(device->copy_staging);
+    }
+    device->copy_staging        = staging;
+    device->copy_staging_size   = size;
+    device->copy_staging_mapped = mapped;
+    return true;
+}
+
+static bool ordered_upload(ggml_backend_hrx_device_context * device,
+                           const void *                    data,
+                           size_t                          size,
+                           hrx_buffer_t                    destination,
+                           size_t                          offset) {
+    std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
+    if (!ensure_copy_staging(device, size)) {
+        return false;
+    }
+    std::memcpy(device->copy_staging_mapped, data, size);
+    return HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, device->copy_staging, 0, destination, offset,
+                                            size)) &&
+           HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
+}
+
+static bool ordered_download(ggml_backend_hrx_device_context * device,
+                             hrx_buffer_t                    source,
+                             size_t                          offset,
+                             void *                          data,
+                             size_t                          size) {
+    std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
+    if (!ensure_copy_staging(device, size)) {
+        return false;
+    }
+    const bool ok = HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, source, offset, device->copy_staging, 0,
+                                                     size)) &&
+                    HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
+    if (ok) {
+        std::memcpy(data, device->copy_staging_mapped, size);
+    }
+    return ok;
+}
+
 static void buffer_set(ggml_backend_buffer_t buffer,
                        ggml_tensor *         tensor,
                        const void *          data,
@@ -242,7 +304,7 @@ static void buffer_set(ggml_backend_buffer_t buffer,
         std::memcpy(context->base + destination_offset, data, size);
         return;
     }
-    if (!HRX_CHECK(hrx_synchronous_h2d(context->device->device, data, context->buffer, destination_offset, size))) {
+    if (!ordered_upload(context->device, data, size, context->buffer, destination_offset)) {
         GGML_LOG_ERROR("%s: HRX buffer upload failed\n", __func__);
     }
 }
@@ -262,7 +324,7 @@ static void buffer_get(ggml_backend_buffer_t buffer,
         std::memcpy(data, context->base + source_offset, size);
         return;
     }
-    if (!HRX_CHECK(hrx_synchronous_d2h(context->device->device, context->buffer, source_offset, data, size))) {
+    if (!ordered_download(context->device, context->buffer, source_offset, data, size)) {
         GGML_LOG_ERROR("%s: HRX buffer download failed\n", __func__);
     }
 }
