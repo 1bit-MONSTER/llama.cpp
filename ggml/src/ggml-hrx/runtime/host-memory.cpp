@@ -1,5 +1,6 @@
 #include "host-memory.h"
 
+#include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
@@ -9,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <sstream>
@@ -1373,34 +1375,50 @@ void HostTransferManager::clear() {
 }
 
 struct HostWeightLease::Entry {
+    // A bounded cache materializes into the arena (the slot belongs to the buffer, which outlives every entry); the
+    // unbounded default gives each weight its own buffer, exactly as before this branch.
     ~Entry() {
-        if (buffer != nullptr) {
+        if (owns_buffer && buffer != nullptr) {
             hrx_buffer_release(buffer);
         }
     }
+    bool owns_buffer = false;
 
     hrx_buffer_t buffer = nullptr;
+    size_t       offset = 0;
     size_t       length = 0;
+    size_t       slot   = 0;
     std::string  layout;
 };
 
-HostWeightLease::HostWeightLease(std::shared_ptr<Entry> entry) : entry_(std::move(entry)) {}
+HostWeightLease::HostWeightLease(const std::shared_ptr<Entry> & entry) : entry_(entry) {
+    if (entry != nullptr) {
+        buffer_ = entry->buffer;
+        offset_ = entry->offset;
+        length_ = entry->length;
+        layout_ = entry->layout;
+    }
+}
 
 bool HostWeightLease::valid() const {
-    return entry_ != nullptr && entry_->buffer != nullptr;
+    return buffer_ != nullptr && !entry_.expired();
 }
 
 hrx_buffer_t HostWeightLease::buffer() const {
-    return valid() ? entry_->buffer : nullptr;
+    return valid() ? buffer_ : nullptr;
+}
+
+size_t HostWeightLease::offset() const {
+    return buffer_ != nullptr ? offset_ : 0;
 }
 
 size_t HostWeightLease::length() const {
-    return entry_ != nullptr ? entry_->length : 0;
+    return buffer_ != nullptr ? length_ : 0;
 }
 
 const std::string & HostWeightLease::layout() const {
     static const std::string empty;
-    return entry_ != nullptr ? entry_->layout : empty;
+    return buffer_ != nullptr ? layout_ : empty;
 }
 
 HostWeightCache::~HostWeightCache() {
@@ -1426,6 +1444,355 @@ size_t HostWeightCache::SourceKeyHash::operator()(const SourceKey & key) const {
     mix(static_cast<uint64_t>(key.input_size));
     mix(static_cast<uint64_t>(key.output_size));
     return static_cast<size_t>(hash);
+}
+
+size_t HostWeightCache::limit() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return limit_;
+}
+
+size_t HostWeightCache::residency_limit() {
+    // OFF by default (engine #669). The bound is what this branch exists to make possible, but measured it is not a
+    // default win: at -ngl 0 a 4B model materializes ~2030 MiB of weights, so a bound under that thrashes and a
+    // bound over it costs more GTT than the churn it removes (+8473M at 4096 MiB against +4121M unpatched). So the
+    // default is 0: per-weight residency, exactly today's behaviour, with the trace available to diagnose it.
+    // GGML_HRX_HOST_WEIGHT_LIMIT_MB=<MiB> turns the bound (and the arena) on; see the PR body for what it costs.
+    constexpr size_t kDefaultMiB = 0;
+    static const size_t limit = []() -> size_t {
+        size_t mib = kDefaultMiB;
+        if (const char * env = std::getenv("GGML_HRX_HOST_WEIGHT_LIMIT_MB")) {
+            const long long requested = std::atoll(env);
+            if (requested >= 0) {
+                mib = static_cast<size_t>(requested);
+            }
+        }
+        return mib * 1024ull * 1024ull;
+    }();
+    return limit;
+}
+
+void HostWeightCache::resolve_limit() {
+    // Called with mutex_ held, once per cache.
+    if (limit_resolved_) {
+        return;
+    }
+    limit_resolved_ = true;
+    limit_          = residency_limit();
+}
+
+namespace {
+
+constexpr size_t kHostWeightArenaMinimum   = 64u * 1024u * 1024u;
+constexpr size_t kHostWeightArenaAlignment = 256;
+
+size_t arena_align(size_t bytes) {
+    return (bytes + kHostWeightArenaAlignment - 1) / kHostWeightArenaAlignment * kHostWeightArenaAlignment;
+}
+
+}  // namespace
+
+size_t HostWeightCache::arena_budget_locked() const {
+    return arena_capacity_ != 0 ? arena_capacity_ : limit_;
+}
+
+void HostWeightCache::begin_execution() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++executions_;
+}
+
+void HostWeightCache::end_execution() {
+    std::vector<std::pair<size_t, size_t>> parked;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (executions_ == 0) {
+            return;
+        }
+        --executions_;
+        if (executions_ != 0) {
+            return;
+        }
+        parked.swap(arena_deferred_);
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto & slot : parked) {
+        arena_reclaim_locked(slot.first, slot.second);
+    }
+}
+
+void HostWeightCache::arena_reclaim_locked(size_t offset, size_t slot) {
+    if (slot == 0) {
+        return;
+    }
+    if (executions_ != 0) {
+        // Someone may still be binding this slot: it goes back to the free list when the execution ends.
+        arena_deferred_.emplace_back(offset, slot);
+        return;
+    }
+    auto position = arena_free_.begin();
+    while (position != arena_free_.end() && position->first < offset) {
+        ++position;
+    }
+    position = arena_free_.insert(position, { offset, slot });
+    arena_free_bytes_ += slot;
+    // Merging with a neighbour changes the block layout, not the number of free bytes (the neighbour is already in
+    // arena_free_bytes_), so only the inserted slot is added here.
+    const auto next = position + 1;
+    if (next != arena_free_.end() && position->first + position->second == next->first) {
+        position->second += next->second;
+        arena_free_.erase(next);
+    }
+    if (position != arena_free_.begin()) {
+        const auto previous = position - 1;
+        if (previous->first + previous->second == position->first) {
+            previous->second += position->second;
+            arena_free_.erase(position);
+        }
+    }
+}
+
+bool HostWeightCache::arena_make_room(hrx_stream_t stream, size_t aligned) {
+    std::lock_guard<std::mutex> evict_lock(evict_mutex_);
+    std::vector<SourceKey>      victims;
+    size_t                      freed = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<std::pair<uint64_t, const SourceKey *>> order;
+        order.reserve(entries_.size());
+        for (const auto & entry : entries_) {
+            const auto use = last_use_.find(entry.first);
+            order.emplace_back(use == last_use_.end() ? 0 : use->second, &entry.first);
+        }
+        std::sort(order.begin(), order.end(),
+                  [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
+        for (const auto & candidate : order) {
+            const auto found = entries_.find(*candidate.second);
+            if (found == entries_.end() || found->second.use_count() != 1) {
+                continue;
+            }
+            victims.push_back(*candidate.second);
+            freed += found->second->slot;
+            if (freed >= aligned) {
+                break;
+            }
+        }
+    }
+    if (victims.empty()) {
+        return false;
+    }
+    if (stream != nullptr) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+            GGML_LOG_WARN("%s: synchronize before evicting resident host weights: %s\n", __func__, error->c_str());
+            return false;
+        }
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const SourceKey & victim : victims) {
+        const auto found = entries_.find(victim);
+        if (found == entries_.end()) {
+            continue;
+        }
+        stats_.resident_bytes -= found->second->length;
+        resident_bytes_ -= found->second->length;
+        arena_reclaim_locked(found->second->offset, found->second->slot);
+
+        last_use_.erase(victim);
+        entries_.erase(found);
+        ++stats_.evictions;
+    }
+    return true;
+}
+
+bool HostWeightCache::arena_take_locked(size_t aligned, hrx_buffer_t & buffer, size_t & offset, size_t & slot) {
+    for (auto free_block = arena_free_.begin(); free_block != arena_free_.end(); ++free_block) {
+        if (free_block->second < aligned) {
+            continue;
+        }
+        offset = free_block->first;
+        slot   = aligned;
+        buffer = arena_;
+        if (free_block->second == aligned) {
+            arena_free_.erase(free_block);
+        } else {
+            free_block->first += aligned;
+            free_block->second -= aligned;
+        }
+        arena_free_bytes_ -= aligned;
+        return true;
+    }
+    return false;
+}
+
+bool HostWeightCache::arena_reserve(hrx_device_t device,
+                                    hrx_stream_t stream,
+                                    size_t       size,
+                                    hrx_buffer_t & buffer,
+                                    size_t &     offset,
+                                    size_t &     slot) {
+    const size_t aligned = arena_align(size);
+    size_t       budget  = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        resolve_limit();
+        budget = limit_;
+        if (arena_take_locked(aligned, buffer, offset, slot)) {
+            return true;
+        }
+    }
+    // No slot fits. Resident bytes can still be under the budget while no single block is big enough, so this has
+    // to evict by slots rather than by evict_for's budget arithmetic. Each round frees the oldest residents until
+    // their slots add up to the request, and the caller retries the take.
+    if (arena_capacity_ != 0 && resident_bytes_ != 0) {
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            if (!arena_make_room(stream, aligned)) {
+                break;
+            }
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (arena_take_locked(aligned, buffer, offset, slot)) {
+                return true;
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (budget != 0 && arena_capacity_ >= budget) {
+                GGML_LOG_ERROR("%s: host weight arena is full after eviction: %.1f MiB of %.1f MiB resident, "
+                               "%.1f MiB free in %zu blocks, %.1f MiB wanted (GGML_HRX_HOST_WEIGHT_LIMIT_MB)\n",
+                               __func__, resident_bytes_ / (1024.0 * 1024.0), arena_capacity_ / (1024.0 * 1024.0),
+                               arena_free_bytes_ / (1024.0 * 1024.0), arena_free_.size(), aligned / (1024.0 * 1024.0));
+                return false;
+            }
+        }
+    }
+
+    // Grow once, straight to the budget. Doubling was wrong here: every growth releases the previous arena, and a
+    // released HRX block is exactly what libhrx's per-size pools retain (that is the churn this fix exists to
+    // remove), so a 64 -> 2048 MiB ladder would leak the whole ladder. One 64 MiB start keeps a small model small;
+    // the first weight that does not fit jumps to the limit.
+    size_t target = kHostWeightArenaMinimum;
+    while (target < aligned) {
+        target *= 2;
+    }
+    size_t previous_capacity = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        previous_capacity = arena_capacity_;
+    }
+    if (previous_capacity != 0 && budget != 0) {
+        target = budget > aligned ? budget : aligned;
+    }
+    if (budget != 0 && target > budget) {
+        target = budget;
+    }
+    if (target < aligned) {
+        GGML_LOG_ERROR("%s: host weight arena cannot hold a %.1f MiB weight (limit %.1f MiB)\n", __func__,
+                      aligned / (1024.0 * 1024.0), limit_ / (1024.0 * 1024.0));
+        return false;
+    }
+    if (stream != nullptr) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+            GGML_LOG_ERROR("%s: synchronize before growing the host weight arena: %s\n", __func__, error->c_str());
+            return false;
+        }
+    }
+    hrx_buffer_t grown = nullptr;
+    const Status status = allocate_device_buffer(device, target, grown);
+    if (!status.success()) {
+        GGML_LOG_ERROR("%s: growing the host weight arena to %.1f MiB failed (limit %.1f MiB, budget %.1f MiB, "
+                      "weight %.1f MiB)\n",
+                      __func__, target / (1024.0 * 1024.0), limit_ / (1024.0 * 1024.0), budget / (1024.0 * 1024.0),
+                      size / (1024.0 * 1024.0));
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (arena_ != nullptr) {
+            hrx_buffer_release(arena_);
+        }
+        // Every slot in the old arena is gone, so no entry may keep pointing at it.
+        entries_.clear();
+        last_use_.clear();
+        stats_.resident_bytes = 0;
+        resident_bytes_       = 0;
+        arena_                = grown;
+        arena_capacity_       = target;
+        arena_free_.clear();
+        arena_free_bytes_     = target - aligned;
+        if (target > aligned) {
+            arena_free_.push_back({ aligned, target - aligned });
+        }
+        buffer = arena_;
+        offset = 0;
+        slot   = aligned;
+    }
+    if (const char * trace = std::getenv("GGML_HRX_HOST_WEIGHT_TRACE")) {
+        if (std::atoi(trace) != 0) {
+            GGML_LOG_INFO("hrx host weights: arena grown to %.1f MiB for a %.1f MiB weight%s\n",
+                          target / (1024.0 * 1024.0), aligned / (1024.0 * 1024.0),
+                          previous_capacity != 0 ? " (all entries dropped)" : "");
+        }
+    }
+    return true;
+}
+
+void HostWeightCache::evict_for(hrx_stream_t stream, size_t needed) {
+    std::lock_guard<std::mutex> evict_lock(evict_mutex_);
+    std::vector<SourceKey>      victims;
+    size_t                      freed = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const size_t                budget = arena_budget_locked();
+        if (budget == 0 || resident_bytes_ + needed <= budget) {
+            return;
+        }
+        // Least recently used first, and only entries nothing is currently bound to: a lease is a borrowed
+        // snapshot, so use_count() == 1 means the cache is the only owner.
+        std::vector<std::pair<uint64_t, const SourceKey *>> order;
+        order.reserve(entries_.size());
+        for (const auto & entry : entries_) {
+            const auto use = last_use_.find(entry.first);
+            order.emplace_back(use == last_use_.end() ? 0 : use->second, &entry.first);
+        }
+        std::sort(order.begin(), order.end(),
+                  [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
+        for (const auto & candidate : order) {
+            if (resident_bytes_ + needed <= arena_budget_locked() + freed && freed != 0) {
+                break;
+            }
+            const auto found = entries_.find(*candidate.second);
+            if (found == entries_.end() || found->second.use_count() != 1) {
+                continue;
+            }
+            victims.push_back(*candidate.second);
+            freed += found->second->length;
+            if (freed >= needed) {
+                break;
+            }
+        }
+    }
+    if (victims.empty()) {
+        return;
+    }
+    // A command program from an earlier split may still be executing against these buffers; the cache is about to
+    // free them, so this is the one place that has to establish completion first.
+    if (stream != nullptr) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+            GGML_LOG_WARN("%s: synchronize before evicting resident host weights: %s\n", __func__, error->c_str());
+            return;
+        }
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const SourceKey & victim : victims) {
+        const auto found = entries_.find(victim);
+        if (found == entries_.end() || found->second.use_count() != 1) {
+            continue;
+        }
+        stats_.resident_bytes -= found->second->length;
+        resident_bytes_ -= found->second->length;
+        arena_reclaim_locked(found->second->offset, found->second->slot);
+
+        last_use_.erase(victim);
+        entries_.erase(found);
+        ++stats_.evictions;
+    }
 }
 
 HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device,
@@ -1461,12 +1828,26 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
                          source.input_size, source.output_size };
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        resolve_limit();
         const auto                  found = entries_.find(key);
         if (found != entries_.end()) {
             ++stats_.hits;
-            result.lease = HostWeightLease(found->second);
+            last_use_[key] = ++use_clock_;
+            result.lease   = HostWeightLease(found->second);
             return result;
         }
+        // A single weight bigger than the whole budget can never be resident; refuse it here instead of letting the
+        // caller fall back to binding a host pointer the device cannot address (engine #669, bounded path only).
+        if (limit_ != 0 && materialized_length > limit_) {
+            result.status.log("host weight %zu MiB exceeds the %zu MiB residency limit (GGML_HRX_HOST_WEIGHT_LIMIT_MB)",
+                              materialized_length / (1024 * 1024), limit_ / (1024 * 1024));
+            return result;
+        }
+    }
+
+    // Make room before materializing, so the peak is the budget plus this one weight rather than budget + weight.
+    if (limit_ != 0) {
+        evict_for(stream, materialized_length);
     }
 
     HostWeightSource     materialization_source = source;
@@ -1504,12 +1885,34 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     auto entry    = std::make_shared<HostWeightLease::Entry>();
     entry->length = materialized_length;
     entry->layout = source.layout;
-    result.status = allocate_device_buffer(device, materialized_length, entry->buffer);
-    if (!result.status.success()) {
-        return result;
+    // Bounded (GGML_HRX_HOST_WEIGHT_LIMIT_MB > 0): one arena, evicted by slot, never released per weight. Unbounded
+    // (the default): one buffer per weight, which is what this backend always did.
+    if (limit_ != 0) {
+        const bool reserved =
+            arena_reserve(device, stream, materialized_length, entry->buffer, entry->offset, entry->slot);
+        if (!reserved) {
+            result.status.log("resident host weights: no %zu MiB slot (arena %.1f MiB, limit %.1f MiB, free %.1f MiB, "
+                              "resident %.1f MiB, engine #669)",
+                              arena_align(materialized_length) / (1024 * 1024), arena_capacity_ / (1024.0 * 1024.0),
+                              limit_ / (1024.0 * 1024.0), arena_free_bytes_ / (1024.0 * 1024.0),
+                              resident_bytes_ / (1024.0 * 1024.0));
+            return result;
+        }
+    } else {
+        result.status = allocate_device_buffer(device, materialized_length, entry->buffer);
+        if (!result.status.success()) {
+            return result;
+        }
+        entry->owns_buffer = true;
+        entry->offset      = 0;
+        entry->slot        = materialized_length;
     }
-    result.status = transfers.upload_synchronous(stream, upload_data, entry->buffer, 0, upload_size);
+    result.status = transfers.upload_synchronous(stream, upload_data, entry->buffer, entry->offset, upload_size);
     if (!result.status.success()) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!entry->owns_buffer) {
+            arena_reclaim_locked(entry->offset, entry->slot);
+        }
         return result;
     }
 
@@ -1517,15 +1920,21 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         std::lock_guard<std::mutex> lock(mutex_);
         const auto                  inserted = entries_.emplace(key, entry);
         if (!inserted.second) {
+            if (!entry->owns_buffer) {
+                arena_reclaim_locked(entry->offset, entry->slot);
+            }
             ++stats_.hits;
-            result.lease = HostWeightLease(inserted.first->second);
+            last_use_[key] = ++use_clock_;
+            result.lease   = HostWeightLease(inserted.first->second);
             return result;
         }
         ++stats_.misses;
+        last_use_[key]          = ++use_clock_;
         stats_.allocation_count = entries_.size();
         stats_.resident_bytes += materialized_length;
+        resident_bytes_ += materialized_length;
     }
-    result.lease = HostWeightLease(std::move(entry));
+    result.lease = HostWeightLease(entry);
     return result;
 }
 
@@ -1537,7 +1946,17 @@ HostWeightCacheStats HostWeightCache::stats() const {
 void HostWeightCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.clear();
-    stats_ = {};
+    last_use_.clear();
+    resident_bytes_ = 0;
+    stats_          = {};
+    if (arena_ != nullptr) {
+        hrx_buffer_release(arena_);
+        arena_ = nullptr;
+    }
+    arena_capacity_   = 0;
+    arena_free_bytes_ = 0;
+    arena_free_.clear();
+    arena_deferred_.clear();
 }
 
 HostStagingBuffer::~HostStagingBuffer() {

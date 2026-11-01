@@ -6,6 +6,7 @@
 #include "backend-buffer-binding.h"
 #include "backend-context.h"
 #include "fused-context-claim.h"
+#include "host-weight-placement.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "graph/op-params.h"
@@ -1286,6 +1287,12 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     // so anything else keeps its CPU fallback instead of becoming an unsupported HRX node (engine #679).
     if (op->op == GGML_OP_TOP_K) {
         return ggml::hrx::hip_top_k_tensor_supported(op);
+    }
+    // A model weight in a host buffer has to be materialized into device memory before this backend can bind it, and
+    // that residency is bounded (HostWeightCache::limit). A weight that cannot fit is declined here so the CPU serves
+    // it, instead of failing the graph or staging a model-sized tensor per execution (engine #669).
+    if (ggml::hrx::host_weight_exceeds_residency(op)) {
+        return false;
     }
     if (zero_output_elision_supported(op)) {
         return true;

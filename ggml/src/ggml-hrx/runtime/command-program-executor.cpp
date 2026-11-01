@@ -620,11 +620,11 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             CommandProgramBinding device_binding = binding;
             device_binding.buffer                = resident.lease.buffer();
             device_binding.host_data             = nullptr;
-            device_binding.offset                = 0;
+            device_binding.offset                = resident.lease.offset();
             device_binding.length                = resident.lease.length();
             device_binding.capacity              = resident.lease.length();
             materialized.push_back(device_binding);
-            prepared.resident_host_weights.push_back(std::move(resident.lease));
+            prepared.resident_host_weights.push_back({ binding.value, source, resident.lease });
             continue;
         }
 
@@ -873,6 +873,63 @@ static Status rebind_prepared_host_staging(const CommandProgramExecutionContext 
         staging.source_host_buffer = HostBufferRef{};
         if (staging.upload && context.host_buffers != nullptr) {
             staging.source_host_buffer = context.host_buffers->find(staging.host_data, staging.length);
+        }
+    }
+    return status;
+}
+
+static Status rebind_prepared_host_weights(const CommandProgramExecutionContext & context,
+                                           PreparedCommandProgram &               prepared) {
+    Status status;
+    if (prepared.resident_host_weights.empty()) {
+        return status;
+    }
+    if (context.host_weights == nullptr || context.host_transfers == nullptr) {
+        status.log("missing HRX host weight residency for a program that materialized weights");
+        return status;
+    }
+    size_t refilled = 0;
+    for (HostWeightBinding & resident : prepared.resident_host_weights) {
+        if (resident.lease.valid()) {
+            continue;
+        }
+        // Evicted since this program was prepared (the cache is bounded, see HostWeightCache::limit): put it back and
+        // point the prepared bindings at the new buffer. The old one is gone, so nothing else may still reference it.
+        HostWeightAcquireResult materialized =
+            context.host_weights->acquire(context.device, context.stream, *context.host_transfers, resident.source);
+        if (!materialized.valid()) {
+            status.append(materialized.status);
+            status.log("re-materialize resident host weight value %d failed", resident.value.value);
+            continue;
+        }
+        resident.lease          = std::move(materialized.lease);
+        ++refilled;
+        const hrx_buffer_t buffer = resident.lease.buffer();
+        const size_t       offset = resident.lease.offset();
+        const size_t       length = resident.lease.length();
+        for (std::vector<PreparedCommand> * list : { &prepared.initialization_commands, &prepared.commands }) {
+            for (PreparedCommand & command : *list) {
+                for (PreparedCommandBinding & binding : command.kernel.bindings) {
+                    if (binding.binding.value == resident.value) {
+                        binding.ref.buffer = buffer;
+                        binding.ref.offset = offset;
+                        binding.ref.length = length;
+                    }
+                }
+            }
+        }
+    }
+    // engine #669 instrumentation: residency per execution. A miss here is a re-materialization, so (misses -
+    // distinct weights) is churn, and resident_bytes vs the limit says whether the bound is holding.
+    if (const char * trace = std::getenv("GGML_HRX_HOST_WEIGHT_TRACE")) {
+        if (std::atoi(trace) != 0) {
+            const HostWeightCacheStats stats = context.host_weights->stats();
+            GGML_LOG_INFO("hrx host weights: refilled=%zu of %zu | hit=%llu miss=%llu evict=%llu resident=%.1f MiB "
+                          "allocs=%zu limit=%.1f MiB\n",
+                          refilled, prepared.resident_host_weights.size(), (unsigned long long) stats.hits,
+                          (unsigned long long) stats.misses, (unsigned long long) stats.evictions,
+                          stats.resident_bytes / (1024.0 * 1024.0), stats.allocation_count,
+                          HostWeightCache::residency_limit() / (1024.0 * 1024.0));
         }
     }
     return status;
@@ -1687,12 +1744,19 @@ bool bind_and_execute_prepared_command_program(const CommandProgramExecutionCont
     if (!prepared.valid()) {
         return execute_prepared_command_program(context, prepared);
     }
+    // engine #669: the arena may not reuse a slot for the length of this execution (see begin_execution).
+    HostWeightExecutionScope residency_scope(context.host_weights);
     const DebugSerialExecutionTrace debug(context, commands);
     debug.log_program_begin();
     HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-rebind-pre");
     Status rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
     if (!rebind_status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(rebind_status));
+        return false;
+    }
+    Status weight_rebind_status = rebind_prepared_host_weights(context, prepared);
+    if (!weight_rebind_status.success()) {
+        GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(weight_rebind_status));
         return false;
     }
     HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-rebind-post");
@@ -1766,6 +1830,8 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
     PreparedCommandProgram &               prepared,
     RecordedCommandGraph &                 recorded) {
     const HostGapScope                  function_scope("replay.total");
+    // engine #669: the arena may not reuse a slot for the length of this execution (see begin_execution).
+    HostWeightExecutionScope            residency_scope(context.host_weights);
     RecordedCommandGraphExecutionResult result;
     result.event = HrxGraphReplayEvent::Ineligible;
 
@@ -1789,6 +1855,16 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
     }
     if (!rebind_status.success()) {
         result.status.append(rebind_status);
+        result.event = HrxGraphReplayEvent::BuildFailed;
+        return result;
+    }
+    Status weight_rebind_status;
+    {
+        const HostGapScope scope("replay.rebind-weights");
+        weight_rebind_status = rebind_prepared_host_weights(context, prepared);
+    }
+    if (!weight_rebind_status.success()) {
+        result.status.append(weight_rebind_status);
         result.event = HrxGraphReplayEvent::BuildFailed;
         return result;
     }
