@@ -124,3 +124,34 @@ FlashAttention through `set_hip_attention_sink_hook`. A matcher for an op that g
 set for every op outside its built-in list, so the node reaches the dispatcher instead of another
 backend. Without the option nothing changes: only the kernels and matchers in this directory are
 built, and the declared-op set stays empty.
+
+## Worked example 2: `GGML_OP_TOP_K` (engine #679)
+
+`dispatch-hip-top-k.cpp` + `kernels/hip_top_k_f32.hip` are the first non-example use of this recipe, and the
+shortest path to the same thing again:
+
+1. The kernel takes `(src, dst, column_count, top_k)` — two bindings, then the by-value arguments in order.
+   `row_count` is a *workload* parameter only, because it sizes the grid (`workgroup_count = { rows, 1, 1 }`)
+   and is not passed to the kernel. A launch parameter that the kernel does not declare fails at load with
+   `compiled ABI does not match manifest`.
+2. The matcher is a `SingleOp` registration at priority 10. It does not opt in behind an env var: this is a
+   real dispatch, so `register_hip_top_k_dispatch` also calls `hip_declare_eager_op(GGML_OP_TOP_K)` to get the
+   node out of the CPU backend in the first place.
+3. Because the op is now *claimed*, every TOP_K node in every model reaches the dispatcher, and a node the
+   matcher declines would become `unsupported HRX node` and fail the graph. The claim is therefore bounded per
+   node in `ggml-hrx.cpp`'s `device_supports_op` through `hip_top_k_tensor_supported`, which checks exactly what
+   the matcher checks (`f32` contiguous source, `i32` output, `1 <= k <= n`, `n <= 262144`); anything outside
+   that keeps the CPU fallback. Mirroring a matcher's predicate in that function is the pattern to copy.
+
+Why it exists: Qwen3.8-Flash-Next's QSA layers call `ggml_top_k` with `n = n_kv` (up to 262144) and
+`k = indexer_top_k + r - 1 = 2051`, once per full-attention layer per decode step. On the CPU that was a
+`std::partial_sort` per row with an indirect comparator plus a graph split around the node: measured +9.7 ms per
+decode step when `n_kv` crossed 2051 and another ~3.8 us per KV token after that (9.70 tok/s at 18,782 tokens
+against 31.15 for a GPU TOP_K).
+
+Check it:
+
+```
+build/bin/test-backend-ops -o TOP_K -b HRX0            # set semantics, ties variant; run it more than once
+GGML_HRX_LOG_DISPATCH=1 ...                           # must print hip.top_k_f32
+```

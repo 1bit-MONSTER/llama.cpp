@@ -33,4 +33,9 @@ void hip_declare_eager_op(enum ggml_op op);
 // exist before the scheduler probes supports_op.
 bool hip_eager_op_declared(enum ggml_op op);
 
+// True when hip/dispatch-hip-top-k.cpp executes this GGML_OP_TOP_K node. device_supports_op asks this before
+// claiming the op (declared above), so a TOP_K shape the matcher declines still goes to the CPU backend instead
+// of failing the graph (engine #679).
+bool hip_top_k_tensor_supported(const struct ggml_tensor * op);
+
 }  // namespace ggml::hrx
