@@ -48,6 +48,20 @@ LLAMA_API bool llama_kv_share_import(struct llama_context * ctx, const struct ll
 // Copies no data: this is the file route's ?action=restore, without the file.
 LLAMA_API bool llama_kv_cells_adopt(struct llama_context * ctx, uint32_t n_tokens, llama_seq_id seq_id);
 
+// [1bit] Target 1: the context params a provider has to reproduce for its cache to lay out like the owner's
+// (the layout hash only says yes or no; this says what to build).
+struct llama_kv_share_cparams {
+    uint32_t n_ctx;
+    uint32_t n_batch;
+    uint32_t n_ubatch;
+    uint32_t n_seq_max;
+    int32_t  flash_attn; // llama_flash_attn_type
+    int32_t  type_k;     // ggml_type
+    int32_t  type_v;
+};
+
+LLAMA_API bool llama_kv_share_params(const struct llama_context * ctx, struct llama_kv_share_cparams * out);
+
 // Get the default ggml_type for a given ftype.
 LLAMA_API ggml_type llama_ftype_get_default_type(llama_ftype ftype);
 

@@ -25,6 +25,8 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_SAVE,
     SERVER_TASK_TYPE_SLOT_RESTORE,
     SERVER_TASK_TYPE_SLOT_ERASE,
+    SERVER_TASK_TYPE_SLOT_SHARE, // [1bit] target 1: export the KV region to a prefill provider (no copy)
+    SERVER_TASK_TYPE_SLOT_ADOPT, // [1bit] target 1: take the provider's cells into this slot (no copy)
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
 };
@@ -161,11 +163,15 @@ struct server_task {
 
     server_task_type type;
 
-    // used by SERVER_TASK_TYPE_SLOT_SAVE, SERVER_TASK_TYPE_SLOT_RESTORE, SERVER_TASK_TYPE_SLOT_ERASE
+    // used by SERVER_TASK_TYPE_SLOT_SAVE, SERVER_TASK_TYPE_SLOT_RESTORE, SERVER_TASK_TYPE_SLOT_ERASE,
+    // SERVER_TASK_TYPE_SLOT_SHARE, SERVER_TASK_TYPE_SLOT_ADOPT
     struct slot_action {
         int id_slot;
         std::string filename;
         std::string filepath;
+        std::string socket;             // SHARE: where the provider listens for the regions
+        std::vector<int32_t> tokens;    // ADOPT: the prompt tokens the provider prefilled into the region
+        uint64_t    share_id = 0;       // SHARE out / ADOPT in: which export these cells belong to
     };
     slot_action slot_action;
 
@@ -552,6 +558,44 @@ struct server_task_result_slot_save_load : server_task_result {
 
 struct server_task_result_slot_erase : server_task_result {
     size_t n_erased;
+
+    virtual json to_json() override;
+};
+
+// [1bit] target 1: the KV region a slot's decoder exported, plus the context params a provider has to reproduce
+// for its own cache to lay out the same way. The fds are deliberately not in to_json(): they only ever travel to
+// the provider process over the unix socket, as SCM_RIGHTS.
+struct server_task_result_slot_share : server_task_result {
+    struct region {
+        int      fd     = -1;
+        size_t   offset = 0;
+        size_t   size   = 0;
+        uint64_t layout = 0;
+    };
+
+    int      id_slot  = 0;
+    uint64_t share_id = 0;   // adopt must quote this back: cells nobody exported are not adopted
+    std::vector<region> regions;
+
+    uint32_t n_ctx     = 0;
+    uint32_t n_batch   = 0;
+    uint32_t n_ubatch  = 0;
+    uint32_t n_seq_max = 0;
+    int32_t  flash_attn = 0;
+    int32_t  type_k     = 0;
+    int32_t  type_v     = 0;
+
+    double t_ms = 0;
+
+    virtual json to_json() override;
+};
+
+// [1bit] target 1: the provider's cells are this slot's cache now; this is a restore with no file and no copy
+struct server_task_result_slot_adopt : server_task_result {
+    int    id_slot  = 0;
+    uint64_t share_id = 0;
+    size_t n_tokens = 0;
+    double t_ms     = 0;
 
     virtual json to_json() override;
 };

@@ -30,6 +30,15 @@
 #include <utility>
 #include <fstream>
 
+#include <cerrno>
+#include <cstring>
+
+#ifndef _WIN32
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
+
 // fix problem with std::min and std::max
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -975,6 +984,12 @@ private:
 
     // slots / clients
     std::vector<server_slot> slots;
+
+    // [1bit] target 1: the last KV-region share issued per slot. An adopt has to quote it back, so cells that
+    // nobody exported (stale, forgotten, or a client inventing ids) are refused instead of silently becoming a
+    // prompt's cache. Single use: adopting erases it.
+    std::map<int, uint64_t> kv_share_issued;
+    uint64_t kv_share_seq = 0;
 
     int trace = 0;
     int slots_debug = 0;
@@ -2677,6 +2692,108 @@ private:
                     res->n_tokens = token_count;
                     res->n_bytes  = nread;
                     res->t_ms     = t_restore_ms;
+                    queue_results.send(std::move(res));
+                } break;
+            case SERVER_TASK_TYPE_SLOT_SHARE:
+                {
+                    // [1bit] target 1: hand the KV region itself to a prefill provider outside this process, as
+                    // dma-buf fds. Nothing is copied here: the region already exists and the provider maps it.
+                    const int id_slot = task.slot_action.id_slot;
+                    server_slot * slot = get_slot_by_id(id_slot);
+                    if (slot == nullptr) {
+                        send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    if (slot->is_processing()) {
+                        SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
+                        queue_tasks.defer(std::move(task));
+                        break;
+                    }
+
+                    const int64_t t_start = ggml_time_us();
+
+                    // the count first (n_out = 0 fills nothing), then the regions
+                    const size_t n_regions = llama_kv_share_regions(ctx_tgt, nullptr, 0);
+                    if (n_regions == 0) {
+                        send_error(task, "This server's KV cache has no shareable region: either it was not created with "
+                                         "ONEBIT_KV_SHARE=1, or the model is hybrid and its recurrent state is not "
+                                         "shareable (target 1 shares llama_kv_cache only)",
+                                         ERROR_TYPE_NOT_SUPPORTED);
+                        break;
+                    }
+                    std::vector<llama_kv_share_region> regions(n_regions);
+                    llama_kv_share_cparams share_params{};
+                    if (llama_kv_share_regions(ctx_tgt, regions.data(), regions.size()) != n_regions ||
+                            !llama_kv_share_params(ctx_tgt, &share_params)) {
+                        send_error(task, "Cannot describe this server's KV region", ERROR_TYPE_SERVER);
+                        break;
+                    }
+
+                    auto res = std::make_unique<server_task_result_slot_share>();
+                    for (const auto & r : regions) {
+                        res->regions.push_back({ r.fd, r.offset, r.size, r.layout });
+                    }
+                    res->id         = task.id;
+                    res->id_slot    = id_slot;
+                    res->share_id   = ++kv_share_seq;
+                    kv_share_issued[id_slot] = res->share_id;
+                    res->n_ctx      = share_params.n_ctx;
+                    res->n_batch    = share_params.n_batch;
+                    res->n_ubatch   = share_params.n_ubatch;
+                    res->n_seq_max  = share_params.n_seq_max;
+                    res->flash_attn = share_params.flash_attn;
+                    res->type_k     = share_params.type_k;
+                    res->type_v     = share_params.type_v;
+                    res->t_ms       = (ggml_time_us() - t_start) / 1000.0;
+                    queue_results.send(std::move(res));
+                } break;
+            case SERVER_TASK_TYPE_SLOT_ADOPT:
+                {
+                    // [1bit] target 1: the provider has filled the shared region; this slot's cache already holds
+                    // those bytes, so only the cell metadata is written (llama_kv_cells_adopt).
+                    const int id_slot = task.slot_action.id_slot;
+                    server_slot * slot = get_slot_by_id(id_slot);
+                    if (slot == nullptr) {
+                        send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    if (slot->is_processing()) {
+                        SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
+                        queue_tasks.defer(std::move(task));
+                        break;
+                    }
+
+                    const llama_tokens & tokens = task.slot_action.tokens;
+                    if (tokens.empty()) {
+                        send_error(task, "adopt needs the prompt tokens the provider prefilled", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    // the cells are only meaningful for the export they were written into
+                    const auto issued = kv_share_issued.find(id_slot);
+                    if (task.slot_action.share_id == 0 || issued == kv_share_issued.end() ||
+                            issued->second != task.slot_action.share_id) {
+                        send_error(task, "adopt must quote the share_id of the export these cells came from "
+                                         "(POST /slots/<id>?action=share first)", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    const int64_t t_start = ggml_time_us();
+
+                    if (!llama_kv_cells_adopt(ctx_tgt, (uint32_t) tokens.size(), slot->id)) {
+                        slot->prompt.clear(); // the cache did not take these cells (another sequence holds them)
+                        send_error(task, "Cannot adopt the shared cells: this slot's cache does not hold the provider's prompt", ERROR_TYPE_SERVER);
+                        break;
+                    }
+                    slot->prompt.clear();
+                    slot->prompt.tokens.insert(tokens);
+                    kv_share_issued.erase(issued);   // single use
+
+                    auto res = std::make_unique<server_task_result_slot_adopt>();
+                    res->id       = task.id;
+                    res->id_slot  = id_slot;
+                    res->share_id = task.slot_action.share_id;
+                    res->n_tokens = tokens.size();
+                    res->t_ms     = (ggml_time_us() - t_start) / 1000.0;
                     queue_results.send(std::move(res));
                 } break;
             case SERVER_TASK_TYPE_SLOT_ERASE:
@@ -4618,6 +4735,12 @@ void server_routes::init_routes() {
         if (action == "erase") {
             return handle_slots_erase(req, id_slot);
         }
+        if (action == "share") {
+            return handle_slots_share(req, id_slot);
+        }
+        if (action == "adopt") {
+            return handle_slots_adopt(req, id_slot);
+        }
 
         res->error(format_error_response("Invalid action", ERROR_TYPE_INVALID_REQUEST));
         return res;
@@ -5295,6 +5418,184 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
     }
 
     GGML_ASSERT(dynamic_cast<server_task_result_slot_erase*>(result.get()) != nullptr);
+    res->ok(result->to_json());
+    return res;
+}
+
+#ifndef _WIN32
+
+// [1bit] target 1: one message to the provider: [uint32 length][JSON header], the region fds in the same sendmsg
+// as SCM_RIGHTS. Linux has no way to reopen a dma-buf from /proc/<pid>/fd (measured), so this is the only path.
+static bool kv_share_send(const std::string & socket_path, const server_task_result_slot_share & r, std::string * why) {
+    nlohmann::json header = {
+        { "n_regions", r.regions.size() },
+        { "params", {
+            { "n_ctx",      r.n_ctx      },
+            { "n_batch",    r.n_batch    },
+            { "n_ubatch",   r.n_ubatch   },
+            { "n_seq_max",  r.n_seq_max  },
+            { "flash_attn", r.flash_attn },
+            { "type_k",     r.type_k     },
+            { "type_v",     r.type_v     },
+        }},
+    };
+    nlohmann::json regions = nlohmann::json::array();
+    for (const auto & reg : r.regions) {
+        regions.push_back({ { "offset", reg.offset }, { "size", reg.size }, { "layout", reg.layout } });
+    }
+    header["regions"] = regions;
+    const std::string body = header.dump();
+
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) { *why = std::string("socket: ") + std::strerror(errno); return false; }
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    if (socket_path.size() >= sizeof(addr.sun_path)) {
+        ::close(fd);
+        *why = "socket path too long";
+        return false;
+    }
+    std::memcpy(addr.sun_path, socket_path.c_str(), socket_path.size() + 1);
+    if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+        *why = "connect " + socket_path + ": " + std::strerror(errno);
+        ::close(fd);
+        return false;
+    }
+
+    const uint32_t len = (uint32_t) body.size();
+    std::vector<char> buf(4 + body.size());
+    std::memcpy(buf.data(), &len, 4);
+    std::memcpy(buf.data() + 4, body.data(), body.size());
+
+    std::vector<char> control(CMSG_SPACE(r.regions.size() * sizeof(int)));
+    msghdr msg{};
+    iovec iov{ buf.data(), buf.size() };
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.data();
+    msg.msg_controllen = control.size();
+    cmsghdr * cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(r.regions.size() * sizeof(int));
+    for (size_t i = 0; i < r.regions.size(); ++i) {
+        std::memcpy(CMSG_DATA(cmsg) + i * sizeof(int), &r.regions[i].fd, sizeof(int));
+    }
+
+    bool ok = true;
+    size_t sent = 0;
+    while (sent < iov.iov_len) {
+        const ssize_t n = ::sendmsg(fd, &msg, MSG_NOSIGNAL);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            *why = std::string("sendmsg: ") + std::strerror(errno);
+            ok = false;
+            break;
+        }
+        sent += (size_t) n;
+        // a partial send cannot carry the control message a second time
+        if (sent < iov.iov_len) {
+            *why = "partial send to the provider";
+            ok = false;
+            break;
+        }
+    }
+    ::close(fd);
+    return ok;
+}
+
+#else
+
+static bool kv_share_send(const std::string &, const server_task_result_slot_share &, std::string * why) {
+    *why = "shared KV regions need unix sockets (POSIX only)";
+    return false;
+}
+
+#endif
+
+std::unique_ptr<server_res_generator> server_routes::handle_slots_share(const server_http_req & req, int id_slot) {
+    auto res = create_response();
+    std::string socket_path;
+    try {
+        socket_path = json::parse(req.body).at("socket").get<std::string>();
+    } catch (const std::exception &) {
+        res->error(format_error_response("share needs {\"socket\": \"<path the provider listens on>\"}", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    auto & rd = res->rd;
+    {
+        server_task task(SERVER_TASK_TYPE_SLOT_SHARE);
+        task.id = rd.get_new_id();
+        task.slot_action.id_slot = id_slot;
+        task.slot_action.socket  = socket_path;
+        rd.post_task(std::move(task));
+    }
+
+    auto result = rd.next(req.should_stop);
+    if (!result) {
+        GGML_ASSERT(req.should_stop());
+        return res;
+    }
+    if (result->is_error()) {
+        res->error(result->to_json());
+        return res;
+    }
+    auto * shared = dynamic_cast<server_task_result_slot_share *>(result.get());
+    GGML_ASSERT(shared != nullptr);
+
+    std::string why;
+    if (!kv_share_send(socket_path, *shared, &why)) {
+        res->error(format_error_response("cannot hand the KV region to the provider: " + why, ERROR_TYPE_SERVER));
+        return res;
+    }
+    SRV_INF("shared KV region: %zu fd(s) handed to the provider on %s (%.3f ms)\n",
+            shared->regions.size(), socket_path.c_str(), shared->t_ms);
+    res->ok(shared->to_json());
+    return res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_slots_adopt(const server_http_req & req, int id_slot) {
+    auto res = create_response();
+    json body;
+    try {
+        body = json::parse(req.body);
+    } catch (const std::exception &) {
+        res->error(format_error_response("adopt needs {\"tokens\": [...]} (the ids the provider prefilled)", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    if (!body.contains("tokens") || !body.at("tokens").is_array()) {
+        res->error(format_error_response("adopt needs {\"tokens\": [...], \"share_id\": N} (the ids the provider prefilled, "
+                                         "and the export they were written into)", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    if (!body.contains("share_id") || !body.at("share_id").is_number_unsigned()) {
+        res->error(format_error_response("adopt needs the \"share_id\" that ?action=share returned", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    auto & rd = res->rd;
+    {
+        server_task task(SERVER_TASK_TYPE_SLOT_ADOPT);
+        task.id = rd.get_new_id();
+        task.slot_action.id_slot = id_slot;
+        task.slot_action.tokens  = body.at("tokens").get<llama_tokens>();
+        task.slot_action.share_id = body.at("share_id").get<uint64_t>();
+        rd.post_task(std::move(task));
+    }
+
+    auto result = rd.next(req.should_stop);
+    if (!result) {
+        GGML_ASSERT(req.should_stop());
+        return res;
+    }
+    if (result->is_error()) {
+        res->error(result->to_json());
+        return res;
+    }
+    GGML_ASSERT(dynamic_cast<server_task_result_slot_adopt *>(result.get()) != nullptr);
     res->ok(result->to_json());
     return res;
 }
