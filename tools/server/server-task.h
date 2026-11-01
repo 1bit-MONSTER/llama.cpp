@@ -171,6 +171,7 @@ struct server_task {
         std::string filepath;
         std::string socket;             // SHARE: where the provider listens for the regions
         std::vector<int32_t> tokens;    // ADOPT: the prompt tokens the provider prefilled into the region
+        uint64_t    share_id = 0;       // SHARE out / ADOPT in: which export these cells belong to
     };
     slot_action slot_action;
 
@@ -572,7 +573,8 @@ struct server_task_result_slot_share : server_task_result {
         uint64_t layout = 0;
     };
 
-    int id_slot = 0;
+    int      id_slot  = 0;
+    uint64_t share_id = 0;   // adopt must quote this back: cells nobody exported are not adopted
     std::vector<region> regions;
 
     uint32_t n_ctx     = 0;
@@ -591,6 +593,7 @@ struct server_task_result_slot_share : server_task_result {
 // [1bit] target 1: the provider's cells are this slot's cache now; this is a restore with no file and no copy
 struct server_task_result_slot_adopt : server_task_result {
     int    id_slot  = 0;
+    uint64_t share_id = 0;
     size_t n_tokens = 0;
     double t_ms     = 0;
 

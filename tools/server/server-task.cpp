@@ -1616,6 +1616,7 @@ json server_task_result_slot_share::to_json() {
     }
     return json {
         { "id_slot",   id_slot },
+        { "share_id",  share_id },
         { "n_regions", regions.size() },
         { "regions",   out_regions },
         { "params", {
@@ -1639,6 +1640,7 @@ json server_task_result_slot_share::to_json() {
 json server_task_result_slot_adopt::to_json() {
     return json {
         { "id_slot",   id_slot  },
+        { "share_id",  share_id },
         { "n_adopted", n_tokens },
         { "n_read",    0        },
         { "timings", {

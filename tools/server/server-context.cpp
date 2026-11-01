@@ -985,6 +985,12 @@ private:
     // slots / clients
     std::vector<server_slot> slots;
 
+    // [1bit] target 1: the last KV-region share issued per slot. An adopt has to quote it back, so cells that
+    // nobody exported (stale, forgotten, or a client inventing ids) are refused instead of silently becoming a
+    // prompt's cache. Single use: adopting erases it.
+    std::map<int, uint64_t> kv_share_issued;
+    uint64_t kv_share_seq = 0;
+
     int trace = 0;
     int slots_debug = 0;
     int n_empty_consecutive = 0;
@@ -2726,6 +2732,8 @@ private:
                     }
                     res->id         = task.id;
                     res->id_slot    = id_slot;
+                    res->share_id   = ++kv_share_seq;
+                    kv_share_issued[id_slot] = res->share_id;
                     res->n_ctx      = share_params.n_ctx;
                     res->n_batch    = share_params.n_batch;
                     res->n_ubatch   = share_params.n_ubatch;
@@ -2757,6 +2765,14 @@ private:
                         send_error(task, "adopt needs the prompt tokens the provider prefilled", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
+                    // the cells are only meaningful for the export they were written into
+                    const auto issued = kv_share_issued.find(id_slot);
+                    if (task.slot_action.share_id == 0 || issued == kv_share_issued.end() ||
+                            issued->second != task.slot_action.share_id) {
+                        send_error(task, "adopt must quote the share_id of the export these cells came from "
+                                         "(POST /slots/<id>?action=share first)", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
 
                     const int64_t t_start = ggml_time_us();
 
@@ -2767,10 +2783,12 @@ private:
                     }
                     slot->prompt.clear();
                     slot->prompt.tokens.insert(tokens);
+                    kv_share_issued.erase(issued);   // single use
 
                     auto res = std::make_unique<server_task_result_slot_adopt>();
                     res->id       = task.id;
                     res->id_slot  = id_slot;
+                    res->share_id = task.slot_action.share_id;
                     res->n_tokens = tokens.size();
                     res->t_ms     = (ggml_time_us() - t_start) / 1000.0;
                     queue_results.send(std::move(res));
@@ -5546,7 +5564,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_adopt(const se
         return res;
     }
     if (!body.contains("tokens") || !body.at("tokens").is_array()) {
-        res->error(format_error_response("adopt needs {\"tokens\": [...]} (the ids the provider prefilled)", ERROR_TYPE_INVALID_REQUEST));
+        res->error(format_error_response("adopt needs {\"tokens\": [...], \"share_id\": N} (the ids the provider prefilled, "
+                                         "and the export they were written into)", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    if (!body.contains("share_id") || !body.at("share_id").is_number_unsigned()) {
+        res->error(format_error_response("adopt needs the \"share_id\" that ?action=share returned", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
 
@@ -5556,6 +5579,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_adopt(const se
         task.id = rd.get_new_id();
         task.slot_action.id_slot = id_slot;
         task.slot_action.tokens  = body.at("tokens").get<llama_tokens>();
+        task.slot_action.share_id = body.at("share_id").get<uint64_t>();
         rd.post_task(std::move(task));
     }
 
