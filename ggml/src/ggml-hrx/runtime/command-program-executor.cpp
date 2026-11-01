@@ -620,7 +620,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             CommandProgramBinding device_binding = binding;
             device_binding.buffer                = resident.lease.buffer();
             device_binding.host_data             = nullptr;
-            device_binding.offset                = 0;
+            device_binding.offset                = resident.lease.offset();
             device_binding.length                = resident.lease.length();
             device_binding.capacity              = resident.lease.length();
             materialized.push_back(device_binding);
@@ -655,6 +655,23 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         device_binding.capacity              = binding.length;
         materialized.push_back(device_binding);
         prepared.host_staging.push_back(std::move(staging));
+    }
+    // engine #674: what the staging round trip actually carries. A graph whose weight ops all run on the CPU turns
+    // every weight into a staging buffer, so the set's shape and byte totals are the thing to look at.
+    if (const char * trace = std::getenv("GGML_HRX_HOST_STAGING_TRACE")) {
+        if (std::atoi(trace) != 0 && !prepared.host_staging.empty()) {
+            size_t upload_bytes = 0;
+            size_t download_bytes = 0;
+            for (const HostStagingBuffer & staging : prepared.host_staging) {
+                GGML_LOG_INFO("hrx host staging: value %d %zu B upload=%d download=%d mapped=%d\n", staging.value,
+                              staging.length, staging.upload ? 1 : 0, staging.download ? 1 : 0,
+                              staging.source_host_buffer.valid() ? 1 : 0);
+                upload_bytes += staging.upload ? staging.length : 0;
+                download_bytes += staging.download ? staging.length : 0;
+            }
+            GGML_LOG_INFO("hrx host staging: %zu buffers, %zu B staged, %zu B uploaded, %zu B downloaded\n",
+                          prepared.host_staging.size(), upload_bytes + download_bytes, upload_bytes, download_bytes);
+        }
     }
     return CommandProgramBindings::from_bindings(std::move(materialized), status);
 }
@@ -885,13 +902,14 @@ static Status rebind_prepared_host_weights(const CommandProgramExecutionContext 
         resident.lease          = std::move(materialized.lease);
         ++refilled;
         const hrx_buffer_t buffer = resident.lease.buffer();
+        const size_t       offset = resident.lease.offset();
         const size_t       length = resident.lease.length();
         for (std::vector<PreparedCommand> * list : { &prepared.initialization_commands, &prepared.commands }) {
             for (PreparedCommand & command : *list) {
                 for (PreparedCommandBinding & binding : command.kernel.bindings) {
                     if (binding.binding.value == resident.value) {
                         binding.ref.buffer = buffer;
-                        binding.ref.offset = 0;
+                        binding.ref.offset = offset;
                         binding.ref.length = length;
                     }
                 }

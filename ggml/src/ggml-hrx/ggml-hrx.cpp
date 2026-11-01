@@ -16,6 +16,7 @@
 #include "kernel-corpus/kernel-corpus.h"
 #include "loom-jit.h"
 #include "runtime/hrx-sleeping-wait.h"
+#include "runtime/host-memory.h"
 #include "runtime/graph-executor.h"
 #include "runtime/graph-program-cache.h"
 #include "runtime/kernel-executable-cache.h"
@@ -87,6 +88,10 @@ static bool hrx_check(hrx_status_t status, const char * expression, const char *
 
 ggml_backend_hrx_reg_context::~ggml_backend_hrx_reg_context() {
     for (auto & context : device_contexts) {
+        if (context->copy_staging != nullptr) {
+            hrx_buffer_release(context->copy_staging);
+            context->copy_staging = nullptr;
+        }
         if (context->buffer_stream != nullptr) {
             hrx_stream_release(context->buffer_stream);
         }
@@ -228,6 +233,63 @@ static void buffer_memset(ggml_backend_buffer_t buffer,
     }
 }
 
+// engine #696: host copies are ordered with the compute dispatches. libhrx's hrx_synchronous_h2d/d2h submit on
+// device->transfer_queue with an empty wait list, so a copy can overtake the dispatch that produces or consumes
+// those bytes; the hrx_stream_* copies record into a stream command buffer and queue behind the dispatches on the
+// one dispatch queue, and the synchronize that follows completes them before the caller continues. The staging
+// buffer is kept per device (few distinct sizes) instead of being allocated per copy: per-copy allocate/release is
+// what libhrx's per-size pools retain (engine #669).
+static bool ensure_copy_staging(ggml_backend_hrx_device_context * device, size_t size) {
+    if (device->copy_staging_size >= size) {
+        return true;
+    }
+    hrx_buffer_t staging = nullptr;
+    void *       mapped  = nullptr;
+    if (!ggml::hrx::allocate_mapped_host_staging_buffer(device->device, size, staging, mapped).success()) {
+        return false;
+    }
+    if (device->copy_staging != nullptr) {
+        hrx_buffer_release(device->copy_staging);
+    }
+    device->copy_staging        = staging;
+    device->copy_staging_size   = size;
+    device->copy_staging_mapped = mapped;
+    return true;
+}
+
+static bool ordered_upload(ggml_backend_hrx_device_context * device,
+                           const void *                    data,
+                           size_t                          size,
+                           hrx_buffer_t                    destination,
+                           size_t                          offset) {
+    std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
+    if (!ensure_copy_staging(device, size)) {
+        return false;
+    }
+    std::memcpy(device->copy_staging_mapped, data, size);
+    return HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, device->copy_staging, 0, destination, offset,
+                                            size)) &&
+           HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
+}
+
+static bool ordered_download(ggml_backend_hrx_device_context * device,
+                             hrx_buffer_t                    source,
+                             size_t                          offset,
+                             void *                          data,
+                             size_t                          size) {
+    std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
+    if (!ensure_copy_staging(device, size)) {
+        return false;
+    }
+    const bool ok = HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, source, offset, device->copy_staging, 0,
+                                                     size)) &&
+                    HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
+    if (ok) {
+        std::memcpy(data, device->copy_staging_mapped, size);
+    }
+    return ok;
+}
+
 static void buffer_set(ggml_backend_buffer_t buffer,
                        ggml_tensor *         tensor,
                        const void *          data,
@@ -243,7 +305,7 @@ static void buffer_set(ggml_backend_buffer_t buffer,
         std::memcpy(context->base + destination_offset, data, size);
         return;
     }
-    if (!HRX_CHECK(hrx_synchronous_h2d(context->device->device, data, context->buffer, destination_offset, size))) {
+    if (!ordered_upload(context->device, data, size, context->buffer, destination_offset)) {
         GGML_LOG_ERROR("%s: HRX buffer upload failed\n", __func__);
     }
 }
@@ -263,7 +325,7 @@ static void buffer_get(ggml_backend_buffer_t buffer,
         std::memcpy(data, context->base + source_offset, size);
         return;
     }
-    if (!HRX_CHECK(hrx_synchronous_d2h(context->device->device, context->buffer, source_offset, data, size))) {
+    if (!ordered_download(context->device, context->buffer, source_offset, data, size)) {
         GGML_LOG_ERROR("%s: HRX buffer download failed\n", __func__);
     }
 }
@@ -337,9 +399,8 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         0,
     };
     // one call into our safety layer: charge the pool, and say no when it would not fit
-    if (size > 0 && !ggml::hrx::onebit::pool_reserve(
-                        ggml::hrx::onebit::pool_budget(type_context->device->memory_total), size,
-                        host_visible ? "a host buffer" : "a device buffer")) {
+    if (size > 0 && !ggml::hrx::onebit::pool_reserve(type_context->device->memory_budget, size,
+                                                    host_visible ? "a host buffer" : "a device buffer")) {
         return nullptr;
     }
     hrx_buffer_t allocation = nullptr;
@@ -381,8 +442,8 @@ static size_t buffer_alignment(ggml_backend_buffer_type_t buft) {
 }
 
 static size_t buffer_max_size(ggml_backend_buffer_type_t buft) {
+    const size_t budget = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->device->memory_budget;
     const size_t total  = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->device->memory_total;
-    const size_t budget = ggml::hrx::onebit::pool_budget(total);
     return budget == 0 ? total : ggml::hrx::onebit::pool_remaining(budget);
 }
 
@@ -685,9 +746,41 @@ static const char * device_description(ggml_backend_dev_t device) {
     return device_context(device)->description.c_str();
 }
 
+// GTT free and total as the driver sees them. hrx_device_memory_info is the proper source but the AMDGPU HAL does
+// not report availability (libhrx: "did not provide available memory in its observation"), so the driver's own
+// counters are the fallback - and they are the only cross-process view, which is what the #680 ceiling needs.
+static void device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes) {
+    size_t hal_free  = 0;
+    size_t hal_total = 0;
+    if (hrx_status_is_ok(hrx_device_memory_info(device_ctx->device, &hal_free, &hal_total)) && hal_total != 0) {
+        free_bytes  = hal_free;
+        total_bytes = hal_total;
+        return;
+    }
+    size_t gtt_total = 0;
+    size_t gtt_used  = 0;
+    if (ggml::hrx::onebit::gtt_counters(gtt_total, gtt_used) && gtt_total != 0) {
+        total_bytes = gtt_total;
+        free_bytes  = gtt_total > gtt_used ? gtt_total - gtt_used : 0;
+        return;
+    }
+    free_bytes  = device_ctx->memory_total;
+    total_bytes = device_ctx->memory_total;
+}
+
 static void device_memory(ggml_backend_dev_t device, size_t * free, size_t * total) {
-    *free  = device_context(device)->memory_total;
-    *total = device_context(device)->memory_total;
+    auto * device_ctx  = device_context(device);
+    size_t free_bytes  = device_ctx->memory_total;
+    size_t total_bytes = device_ctx->memory_total;
+    // Report what the device really has free, not memory_total: a scheduler that is told the whole 120 GiB is
+    // available cannot refuse or degrade a launch that does not fit (engine #680).
+    device_free_total(device_ctx, free_bytes, total_bytes);
+    if (device_ctx->memory_budget != 0) {
+        const size_t remaining = ggml::hrx::onebit::pool_remaining(device_ctx->memory_budget);
+        free_bytes             = free_bytes < remaining ? free_bytes : remaining;
+    }
+    *free  = free_bytes;
+    *total = total_bytes != 0 ? total_bytes : device_ctx->memory_total;
 }
 
 static enum ggml_backend_dev_type device_type(ggml_backend_dev_t device) {
@@ -1354,6 +1447,34 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             continue;
         }
         device_ctx->memory_total      = static_cast<size_t>(memory);
+        size_t device_free            = device_ctx->memory_total;
+        size_t device_total           = device_ctx->memory_total;
+        device_free_total(device_ctx.get(), device_free, device_total);
+        device_ctx->memory_budget = ggml::hrx::onebit::pool_budget(device_ctx->memory_total, device_free);
+        if (device_ctx->memory_budget == 0 && device_ctx->memory_total != 0) {
+            // Nothing fits under the ceiling: refuse the device here, loudly, instead of planning a launch that can
+            // reach the fault line (#680). Report only, do not try to be clever about it.
+            const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
+            GGML_LOG_ERROR("ggml_hrx: %s: refusing to use the device: GTT total %.1f GiB with %.1f GiB free leaves "
+                           "nothing under the %.1f GiB ceiling (reserve GGML_HRX_GTT_RESERVE_MB, override "
+                           "GGML_HRX_POOL_LIMIT_MB); free GTT or lower the reserve (engine #680)\n",
+                           device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
+                           device_free / (1024.0 * 1024.0 * 1024.0),
+                           (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0));
+            hrx_device_release(hrx_device);
+            continue;
+        }
+        if (device_ctx->memory_budget != 0) {
+            const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
+            GGML_LOG_WARN("ggml_hrx: %s guardrail: GTT total %.1f GiB, in use %.1f GiB, ceiling %.1f GiB "
+                          "(reserve %.1f GiB), pool budget %.1f GiB - a launch that needs more is refused here "
+                          "rather than faulting the device (engine #680)\n",
+                          device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
+                          (device_total > device_free ? device_total - device_free : 0) / (1024.0 * 1024.0 * 1024.0),
+                          (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0),
+                          reserve / (1024.0 * 1024.0 * 1024.0),
+                          device_ctx->memory_budget / (1024.0 * 1024.0 * 1024.0));
+        }
         device_ctx->description       = *name + " (" + *architecture + ")";
         device_ctx->architecture      = *architecture;
         device_ctx->buft_context      = { device_ctx.get(), device_ctx->name, false };

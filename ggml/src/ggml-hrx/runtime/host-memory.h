@@ -11,6 +11,8 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 typedef struct hrx_buffer_s * hrx_buffer_t;
 typedef struct hrx_device_s * hrx_device_t;
@@ -80,6 +82,8 @@ class HostWeightLease {
 
     bool                valid() const;
     hrx_buffer_t        buffer() const;
+    // Every resident weight lives in one arena buffer (engine #669), so the binding is (buffer, offset, length).
+    size_t              offset() const;
     size_t              length() const;
     const std::string & layout() const;
 
@@ -91,6 +95,7 @@ class HostWeightLease {
     // makes the residency bounded: a prepared program no longer keeps a materialized weight alive by holding it.
     std::weak_ptr<Entry> entry_;
     hrx_buffer_t         buffer_ = nullptr;
+    size_t               offset_ = 0;
     size_t               length_ = 0;
     std::string          layout_;
 
@@ -161,6 +166,30 @@ class HostWeightCache {
     uint64_t                                                                              use_clock_      = 0;
     bool                                                                                  limit_resolved_ = false;
     std::mutex                                                                            evict_mutex_;
+
+    // One device buffer holds every resident weight (engine #669). Materializing each weight with its own
+    // allocate/release made libhrx's per-size allocator pools retain the churn (~6700 releases returned nothing:
+    // GTT sat at 7393 MiB with 61 MiB resident). One arena is one size class, and eviction frees a slot, not a
+    // buffer. The arena grows by doubling up to the residency limit, and a growth drops every entry (the stream
+    // is synchronized first), so the peak stays at the working set rather than at the knob.
+    hrx_buffer_t                           arena_          = nullptr;
+    size_t                                 arena_capacity_ = 0;
+    size_t                                 arena_free_bytes_ = 0;
+    std::vector<std::pair<size_t, size_t>> arena_free_;
+
+    bool        arena_reserve(hrx_device_t device,
+                              hrx_stream_t stream,
+                              size_t       size,
+                              hrx_buffer_t & buffer,
+                              size_t &     offset,
+                              size_t &     slot);
+    void        arena_reclaim_locked(size_t offset, size_t slot);
+    bool        arena_take_locked(size_t aligned, hrx_buffer_t & buffer, size_t & offset, size_t & slot);
+    // Free the oldest residents until their slots add up to `aligned`; the caller then retries the take.
+    bool        arena_make_room(hrx_stream_t stream, size_t aligned);
+    // The bytes the arena may hand out: its own capacity, so eviction reacts to the buffer that exists rather
+    // than to the knob. Called with `mutex_` held.
+    size_t      arena_budget_locked() const;
 
     void        resolve_limit();
     // Drop least recently used entries until `needed` more bytes fit. Called with `mutex_` NOT held; it

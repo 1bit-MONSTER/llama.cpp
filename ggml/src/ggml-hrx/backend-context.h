@@ -42,6 +42,9 @@ struct ggml_backend_hrx_device_context {
     std::string                                    description;
     std::string                                    architecture;
     size_t                                         memory_total = 0;
+    // What this process may plan to put on the device: the GTT ceiling less what other processes already hold at
+    // registration (engine #680). Every HRX buffer is charged against it.
+    size_t                                         memory_budget = 0;
     bool                                           use_direct_host_bindings = false;
     ggml_backend_buffer_type                       buft               = {};
     ggml_backend_hrx_buffer_type_context           buft_context       = {};
@@ -51,6 +54,11 @@ struct ggml_backend_hrx_device_context {
     std::atomic<uint64_t>                          synchronous_upload_fallbacks{ 0 };
     std::atomic<uint64_t>                          synchronous_download_fallbacks{ 0 };
     std::mutex                                     buffer_stream_mutex;
+    // engine #696: one reusable host-mapped staging buffer per device for the ordered host copies (buffer_set /
+    // buffer_get). Guarded by buffer_stream_mutex.
+    hrx_buffer_t                                   copy_staging        = nullptr;
+    size_t                                         copy_staging_size   = 0;
+    void *                                         copy_staging_mapped = nullptr;
     hrx_stream_t                                   buffer_stream = nullptr;
 };
 
