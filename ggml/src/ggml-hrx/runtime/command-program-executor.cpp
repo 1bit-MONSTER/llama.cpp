@@ -644,7 +644,11 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         staging.value                        = binding.value.value;
         staging.host_data                    = static_cast<uint8_t *>(binding.host_data) + binding.offset;
         staging.upload                       = access.read;
-        staging.download                     = access.write && !binding.graph_input;
+        // engine #674 EXPERIMENT: always write the result back. The old rule dropped the writeback for any value
+        // carrying GGML_TENSOR_FLAG_INPUT, which is right for ggml's throwaway input scratch and wrong for a host
+        // tensor that HRX actually produces into staging (declined-weight graphs stage 5 x 512 KiB values that are
+        // written and never downloaded).
+        staging.download                     = access.write;
         if (staging.upload && context.host_buffers != nullptr) {
             staging.source_host_buffer = context.host_buffers->find(staging.host_data, staging.length);
         }
