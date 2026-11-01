@@ -1492,7 +1492,10 @@ size_t arena_align(size_t bytes) {
 }  // namespace
 
 size_t HostWeightCache::arena_budget_locked() const {
-    return arena_capacity_ != 0 ? arena_capacity_ : limit_;
+    // The budget is what the operator allowed (GGML_HRX_HOST_WEIGHT_LIMIT_MB), NOT how big the arena happens to be
+    // right now. Reporting the current capacity here made every caller treat a freshly grown arena as "full": on a
+    // 0.6B at a 4096 MiB limit the arena stopped at 128 MiB and evicted 316 times with 536 MiB resident (engine #788).
+    return limit_;
 }
 
 void HostWeightCache::begin_execution() {
@@ -1564,6 +1567,41 @@ bool HostWeightCache::arena_make_room(hrx_stream_t stream, size_t aligned) {
         }
         std::sort(order.begin(), order.end(),
                   [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
+        // Count freed *contiguous space*, not freed bytes: variable-size slots mean 366 MiB free in 3 blocks cannot
+        // serve a 304 MiB request, which is what "arena is full after eviction" was reporting (engine #788). Merge
+        // each victim's slot into a model of the free list and stop as soon as one block is big enough; if nothing
+        // ever is, evict every evictable entry so the whole arena becomes one block.
+        std::vector<std::pair<size_t, size_t>> blocks;
+        blocks.reserve(arena_free_.size() + order.size());
+        for (const auto & block : arena_free_) {
+            blocks.emplace_back(block.first, block.second);
+        }
+        const auto insert_block = [&blocks](size_t offset, size_t size) {
+            auto position = blocks.begin();
+            while (position != blocks.end() && position->first < offset) {
+                ++position;
+            }
+            position = blocks.insert(position, { offset, size });
+            if (position + 1 != blocks.end() && position->first + position->second == (position + 1)->first) {
+                position->second += (position + 1)->second;
+                blocks.erase(position + 1);
+            }
+            if (position != blocks.begin()) {
+                const auto previous = position - 1;
+                if (previous->first + previous->second == position->first) {
+                    previous->second += position->second;
+                    blocks.erase(position);
+                }
+            }
+        };
+        const auto fits = [&blocks, aligned]() {
+            for (const auto & block : blocks) {
+                if (block.second >= aligned) {
+                    return true;
+                }
+            }
+            return false;
+        };
         for (const auto & candidate : order) {
             const auto found = entries_.find(*candidate.second);
             if (found == entries_.end() || found->second.use_count() != 1) {
@@ -1571,7 +1609,8 @@ bool HostWeightCache::arena_make_room(hrx_stream_t stream, size_t aligned) {
             }
             victims.push_back(*candidate.second);
             freed += found->second->slot;
-            if (freed >= aligned) {
+            insert_block(found->second->offset, found->second->slot);
+            if (fits()) {
                 break;
             }
         }
@@ -1638,10 +1677,10 @@ bool HostWeightCache::arena_reserve(hrx_device_t device,
             return true;
         }
     }
-    // No slot fits. Resident bytes can still be under the budget while no single block is big enough, so this has
-    // to evict by slots rather than by evict_for's budget arithmetic. Each round frees the oldest residents until
-    // their slots add up to the request, and the caller retries the take.
-    if (arena_capacity_ != 0 && resident_bytes_ != 0) {
+    // No slot fits. Grow first, evict only once the arena is already at the configured budget: an arena smaller than
+    // the budget is not full, it is just small, and evicting there throws away residency the operator paid for
+    // (engine #788: 316 evictions against a 4096 MiB limit, with 536 MiB resident).
+    if (arena_capacity_ != 0 && resident_bytes_ != 0 && (budget == 0 || arena_capacity_ >= budget)) {
         for (int attempt = 0; attempt < 4; ++attempt) {
             if (!arena_make_room(stream, aligned)) {
                 break;
