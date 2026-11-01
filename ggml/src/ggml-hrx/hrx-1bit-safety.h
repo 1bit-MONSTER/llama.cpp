@@ -24,9 +24,19 @@
 
 namespace ggml::hrx::onebit {
 
-// The budget every HRX buffer is charged against: GGML_HRX_POOL_LIMIT_MB when set, otherwise the device's
-// memory_total.
-size_t pool_budget(size_t memory_total);
+// The budget every HRX buffer is charged against (engine #680). GGML_HRX_POOL_LIMIT_MB wins when set, otherwise the
+// budget is the GTT ceiling (memory_total minus GGML_HRX_GTT_RESERVE_MB, default 16384) less what other processes
+// already hold (memory_total - memory_free). A GTT plan past this budget is refused at allocation instead of
+// faulting the device: #680 is a gfxhub page fault plus a MODE2 reset at GTT 106.5 of 120 GiB.
+size_t pool_budget(size_t memory_total, size_t memory_free);
+
+// The reserve the ceiling keeps for the driver and for kernel/transient spikes, in bytes.
+size_t pool_reserve_bytes();
+
+// GTT total and currently used bytes, from the driver's own counters (/sys/class/drm/card*/device/mem_info_gtt_*).
+// The AMDGPU HAL does not report available memory through hrx_device_memory_info (libhrx returns UNAVAILABLE), and
+// these counters are the only cross-process view: the #680 ceiling has to account for what other agents hold too.
+bool gtt_counters(size_t & total, size_t & used);
 
 // Charge `size` against `budget`; false (with one log line naming the sizes) when it does not fit.
 bool pool_reserve(size_t budget, size_t size, const char * what);

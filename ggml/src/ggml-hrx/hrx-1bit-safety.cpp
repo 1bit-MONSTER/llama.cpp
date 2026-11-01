@@ -33,9 +33,53 @@ std::atomic<uint32_t> g_fault_kind{ 0 };
 
 constexpr size_t kMiB = 1024 * 1024;
 
+bool read_counter(const char * path, unsigned long long & value) {
+    FILE * file = std::fopen(path, "r");
+    if (file == nullptr) {
+        return false;
+    }
+    const bool ok = std::fscanf(file, "%llu", &value) == 1;
+    std::fclose(file);
+    return ok;
+}
+
 }  // namespace
 
-size_t pool_budget(size_t memory_total) {
+size_t pool_reserve_bytes() {
+    // The reserve is what the ceiling keeps free for the driver and for kernel/transient spikes. #680 measured a
+    // gfxhub page fault and a MODE2 reset at GTT 106.5 GiB of 120, i.e. 13.5 GiB of headroom was not enough once
+    // the runtime's own allocations landed; 16 GiB leaves 104 GiB as the ceiling, 2.5 GiB under the fault point.
+    constexpr size_t kDefaultReserveMiB = 16384;
+    const char *     env                = std::getenv("GGML_HRX_GTT_RESERVE_MB");
+    if (env != nullptr) {
+        const long long mb = std::atoll(env);
+        if (mb >= 0) {
+            return static_cast<size_t>(mb) * kMiB;
+        }
+    }
+    return kDefaultReserveMiB * kMiB;
+}
+
+bool gtt_counters(size_t & total, size_t & used) {
+    // Two reads of the driver's own counters. Cards are probed in order because the render node is not fixed across
+    // installs; the first card that answers wins, and a box with no amdgpu simply has no guardrail input.
+    for (int card = 0; card < 8; ++card) {
+        char total_path[128];
+        char used_path[128];
+        std::snprintf(total_path, sizeof(total_path), "/sys/class/drm/card%d/device/mem_info_gtt_total", card);
+        std::snprintf(used_path, sizeof(used_path), "/sys/class/drm/card%d/device/mem_info_gtt_used", card);
+        unsigned long long total_bytes = 0;
+        unsigned long long used_bytes  = 0;
+        if (read_counter(total_path, total_bytes) && read_counter(used_path, used_bytes)) {
+            total = static_cast<size_t>(total_bytes);
+            used  = static_cast<size_t>(used_bytes);
+            return true;
+        }
+    }
+    return false;
+}
+
+size_t pool_budget(size_t memory_total, size_t memory_free) {
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     if (env != nullptr) {
         const long long mb = std::atoll(env);
@@ -43,7 +87,13 @@ size_t pool_budget(size_t memory_total) {
             return static_cast<size_t>(mb) * kMiB;
         }
     }
-    return memory_total;
+    if (memory_total == 0) {
+        return 0;  // unknown device size: keep the unfettered behaviour
+    }
+    const size_t reserve = pool_reserve_bytes();
+    const size_t ceiling = memory_total > reserve ? memory_total - reserve : 0;
+    const size_t in_use  = memory_total > memory_free ? memory_total - memory_free : 0;
+    return ceiling > in_use ? ceiling - in_use : 0;
 }
 
 bool pool_reserve(size_t budget, size_t size, const char * what) {

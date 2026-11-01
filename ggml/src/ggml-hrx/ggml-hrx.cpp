@@ -336,9 +336,8 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         0,
     };
     // one call into our safety layer: charge the pool, and say no when it would not fit
-    if (size > 0 && !ggml::hrx::onebit::pool_reserve(
-                        ggml::hrx::onebit::pool_budget(type_context->device->memory_total), size,
-                        host_visible ? "a host buffer" : "a device buffer")) {
+    if (size > 0 && !ggml::hrx::onebit::pool_reserve(type_context->device->memory_budget, size,
+                                                    host_visible ? "a host buffer" : "a device buffer")) {
         return nullptr;
     }
     hrx_buffer_t allocation = nullptr;
@@ -380,8 +379,8 @@ static size_t buffer_alignment(ggml_backend_buffer_type_t buft) {
 }
 
 static size_t buffer_max_size(ggml_backend_buffer_type_t buft) {
+    const size_t budget = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->device->memory_budget;
     const size_t total  = static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->device->memory_total;
-    const size_t budget = ggml::hrx::onebit::pool_budget(total);
     return budget == 0 ? total : ggml::hrx::onebit::pool_remaining(budget);
 }
 
@@ -684,9 +683,41 @@ static const char * device_description(ggml_backend_dev_t device) {
     return device_context(device)->description.c_str();
 }
 
+// GTT free and total as the driver sees them. hrx_device_memory_info is the proper source but the AMDGPU HAL does
+// not report availability (libhrx: "did not provide available memory in its observation"), so the driver's own
+// counters are the fallback - and they are the only cross-process view, which is what the #680 ceiling needs.
+static void device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes) {
+    size_t hal_free  = 0;
+    size_t hal_total = 0;
+    if (hrx_status_is_ok(hrx_device_memory_info(device_ctx->device, &hal_free, &hal_total)) && hal_total != 0) {
+        free_bytes  = hal_free;
+        total_bytes = hal_total;
+        return;
+    }
+    size_t gtt_total = 0;
+    size_t gtt_used  = 0;
+    if (ggml::hrx::onebit::gtt_counters(gtt_total, gtt_used) && gtt_total != 0) {
+        total_bytes = gtt_total;
+        free_bytes  = gtt_total > gtt_used ? gtt_total - gtt_used : 0;
+        return;
+    }
+    free_bytes  = device_ctx->memory_total;
+    total_bytes = device_ctx->memory_total;
+}
+
 static void device_memory(ggml_backend_dev_t device, size_t * free, size_t * total) {
-    *free  = device_context(device)->memory_total;
-    *total = device_context(device)->memory_total;
+    auto * device_ctx  = device_context(device);
+    size_t free_bytes  = device_ctx->memory_total;
+    size_t total_bytes = device_ctx->memory_total;
+    // Report what the device really has free, not memory_total: a scheduler that is told the whole 120 GiB is
+    // available cannot refuse or degrade a launch that does not fit (engine #680).
+    device_free_total(device_ctx, free_bytes, total_bytes);
+    if (device_ctx->memory_budget != 0) {
+        const size_t remaining = ggml::hrx::onebit::pool_remaining(device_ctx->memory_budget);
+        free_bytes             = free_bytes < remaining ? free_bytes : remaining;
+    }
+    *free  = free_bytes;
+    *total = total_bytes != 0 ? total_bytes : device_ctx->memory_total;
 }
 
 static enum ggml_backend_dev_type device_type(ggml_backend_dev_t device) {
@@ -1347,6 +1378,34 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             continue;
         }
         device_ctx->memory_total      = static_cast<size_t>(memory);
+        size_t device_free            = device_ctx->memory_total;
+        size_t device_total           = device_ctx->memory_total;
+        device_free_total(device_ctx.get(), device_free, device_total);
+        device_ctx->memory_budget = ggml::hrx::onebit::pool_budget(device_ctx->memory_total, device_free);
+        if (device_ctx->memory_budget == 0 && device_ctx->memory_total != 0) {
+            // Nothing fits under the ceiling: refuse the device here, loudly, instead of planning a launch that can
+            // reach the fault line (#680). Report only, do not try to be clever about it.
+            const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
+            GGML_LOG_ERROR("ggml_hrx: %s: refusing to use the device: GTT total %.1f GiB with %.1f GiB free leaves "
+                           "nothing under the %.1f GiB ceiling (reserve GGML_HRX_GTT_RESERVE_MB, override "
+                           "GGML_HRX_POOL_LIMIT_MB); free GTT or lower the reserve (engine #680)\n",
+                           device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
+                           device_free / (1024.0 * 1024.0 * 1024.0),
+                           (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0));
+            hrx_device_release(hrx_device);
+            continue;
+        }
+        if (device_ctx->memory_budget != 0) {
+            const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
+            GGML_LOG_WARN("ggml_hrx: %s guardrail: GTT total %.1f GiB, in use %.1f GiB, ceiling %.1f GiB "
+                          "(reserve %.1f GiB), pool budget %.1f GiB - a launch that needs more is refused here "
+                          "rather than faulting the device (engine #680)\n",
+                          device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
+                          (device_total > device_free ? device_total - device_free : 0) / (1024.0 * 1024.0 * 1024.0),
+                          (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0),
+                          reserve / (1024.0 * 1024.0 * 1024.0),
+                          device_ctx->memory_budget / (1024.0 * 1024.0 * 1024.0));
+        }
         device_ctx->description       = *name + " (" + *architecture + ")";
         device_ctx->architecture      = *architecture;
         device_ctx->buft_context      = { device_ctx.get(), device_ctx->name, false };

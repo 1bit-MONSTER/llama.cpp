@@ -42,6 +42,9 @@ struct ggml_backend_hrx_device_context {
     std::string                                    description;
     std::string                                    architecture;
     size_t                                         memory_total = 0;
+    // What this process may plan to put on the device: the GTT ceiling less what other processes already hold at
+    // registration (engine #680). Every HRX buffer is charged against it.
+    size_t                                         memory_budget = 0;
     bool                                           use_direct_host_bindings = false;
     ggml_backend_buffer_type                       buft               = {};
     ggml_backend_hrx_buffer_type_context           buft_context       = {};
