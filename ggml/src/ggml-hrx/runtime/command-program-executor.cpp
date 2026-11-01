@@ -656,6 +656,26 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         materialized.push_back(device_binding);
         prepared.host_staging.push_back(std::move(staging));
     }
+    // engine #674: what the staging round trip actually carries. A graph whose weight ops all run on the CPU turns
+    // every weight into a staging buffer, so the set's shape and byte totals are the thing to look at.
+    if (const char * trace = std::getenv("GGML_HRX_HOST_STAGING_TRACE")) {
+        if (std::atoi(trace) != 0) {
+            // stderr, not GGML_LOG_INFO: the CLI's log sink drops INFO and WARN, and a trace nobody can read is
+            // not a trace. Only with the switch on.
+            size_t upload_bytes   = 0;
+            size_t download_bytes = 0;
+            for (const HostStagingBuffer & staging : prepared.host_staging) {
+                std::fprintf(stderr, "hrx host staging: value %d %zu B upload=%d download=%d mapped=%d\n",
+                             staging.value, staging.length, staging.upload ? 1 : 0, staging.download ? 1 : 0,
+                             staging.source_host_buffer.valid() ? 1 : 0);
+                upload_bytes += staging.upload ? staging.length : 0;
+                download_bytes += staging.download ? staging.length : 0;
+            }
+            std::fprintf(stderr, "hrx host staging: %zu buffers, %zu B staged, %zu B uploaded, %zu B downloaded\n",
+                         prepared.host_staging.size(), upload_bytes + download_bytes, upload_bytes, download_bytes);
+            std::fflush(stderr);
+        }
+    }
     return CommandProgramBindings::from_bindings(std::move(materialized), status);
 }
 
