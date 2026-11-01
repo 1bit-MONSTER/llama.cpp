@@ -1076,6 +1076,20 @@ ggml_backend_buffer_type_t llama_model_loader::lazy_read::buft() {
     return ggml_backend_dev_buffer_type(cpu_dev);
 }
 
+bool llama_model_loader::tensor_buft_overridden_to_device(const std::string & name) const {
+    if (tensor_buft_overrides == nullptr) {
+        return false;
+    }
+    // first match wins, exactly as buft_for_tensor() resolves it; an override *to the CPU* keeps the lazy read, because a
+    // lazy tensor is host-only anyway - only an override to another device has to displace it
+    for (const auto * overrides = tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
+        if (std::regex_search(name, std::regex(overrides->pattern))) {
+            return overrides->buft != ggml_backend_cpu_buffer_type();
+        }
+    }
+    return false;
+}
+
 bool llama_model_loader::lazy_read::add(const std::string & name, const ggml_tensor * t, const llama_tensor_weight * w) {
     if (mode == LLAMA_LAZY_MODE_OFF) {
         return false;
@@ -1326,8 +1340,16 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     }
 
     if (flags & TENSOR_READ_LAZY) {
-        // the decision must not depend on the load mode, or the memory-fit pass (no_alloc, no mmap)
-        is_lazy = lazy.add(tn.str(), cur, no_alloc ? nullptr : &require_weight(tn.str().c_str()));
+        // an explicit -ot for this tensor wins over the arch's lazy hint: the user is saying where the tensor lives, and
+        // a lazy tensor is host-only by construction (lazy_read::buft() is the CPU type), so honouring both is impossible.
+        // Deciding here and not in buft_for_tensor() keeps the lazy ranges consistent: a tensor that will not be read
+        // lazily must not be excluded from the mmap prefetch either.
+        if (tensor_buft_overridden_to_device(tn.str())) {
+            LLAMA_LOG_INFO("%s: tensor %s keeps its -ot placement, lazy read not used for it\n", __func__, tn.str().c_str());
+        } else {
+            // the decision must not depend on the load mode, or the memory-fit pass (no_alloc, no mmap)
+            is_lazy = lazy.add(tn.str(), cur, no_alloc ? nullptr : &require_weight(tn.str().c_str()));
+        }
     }
 
     ggml_tensor t_meta = *cur;

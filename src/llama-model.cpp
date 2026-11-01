@@ -27,6 +27,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <functional>
@@ -1362,13 +1363,26 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     };
 
     // assign the input layer
-    // there is very little benefit to offloading the input layer, so always keep it on the CPU
+    // there is very little benefit to offloading the input layer, so keep it on the CPU by default. The exception is a
+    // model whose input tensors are large and gathered per token (PLE/engram tables: deepseek41, gemma4, qwen4exp),
+    // where the gather is a row per token and runs on the CPU out of a host mapping unless it is told otherwise:
+    // LLAMA_INPUT_LAYER_ON_DEV=1 makes the input layer follow the first repeating layer's device.
     pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
 
     // assign the repeating layers to the devices according to the splits
     pimpl->dev_layer.resize(n_layer_all);
     for (int il = 0; il < n_layer_all; ++il) {
         pimpl->dev_layer[il] = get_layer_buft_list(il);
+    }
+
+    static const bool input_layer_on_dev = [] {
+        const char * env = std::getenv("LLAMA_INPUT_LAYER_ON_DEV");
+        return env != nullptr && std::atoi(env) != 0;
+    }();
+    if (input_layer_on_dev && !pimpl->dev_layer.empty() && pimpl->dev_layer.front().dev != cpu_dev) {
+        pimpl->dev_input = pimpl->dev_layer.front();
+        LLAMA_LOG_INFO("%s: input layer follows layer 0 on %s (LLAMA_INPUT_LAYER_ON_DEV=1)\n", __func__,
+                ggml_backend_dev_name(pimpl->dev_input.dev));
     }
 
     // assign the output layer

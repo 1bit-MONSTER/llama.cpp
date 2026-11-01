@@ -238,6 +238,10 @@ struct llama_model_loader {
         const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
         const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
 
+    // does an -ot pattern that wins for this tensor target a device (not the CPU)? decided before the lazy-read hint,
+    // see create_tensor()
+    bool tensor_buft_overridden_to_device(const std::string & name) const;
+
     void done_getting_tensors(bool partial = false) const;
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
