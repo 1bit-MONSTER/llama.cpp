@@ -322,6 +322,13 @@ static void buffer_get(ggml_backend_buffer_t buffer,
     const size_t source_offset = tensor_offset(context, tensor) + offset;
     GGML_ASSERT(source_offset <= buffer->size && size <= buffer->size - source_offset);
     if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
+        // engine #674 EXPERIMENT: a host-mapped read is a plain memcpy, which is not ordered against a dispatch that
+        // may still be writing this memory. Quiesce the compute stream first.
+        if (context->device->compute_stream != nullptr) {
+            if (!HRX_CHECK(hrx_stream_synchronize(context->device->compute_stream))) {
+                GGML_LOG_ERROR("%s: HRX host-mapped download could not order the compute stream\n", __func__);
+            }
+        }
         std::memcpy(data, context->base + source_offset, size);
         return;
     }
@@ -808,6 +815,7 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
     if (context != nullptr) {
         context->device = device_ctx;
         context->stream = stream;
+        device_ctx->compute_stream = stream;
         context->name   = device_ctx->name;
     }
     auto * backend = context != nullptr ? new (std::nothrow)

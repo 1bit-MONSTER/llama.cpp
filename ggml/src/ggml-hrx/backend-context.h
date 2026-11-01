@@ -60,6 +60,9 @@ struct ggml_backend_hrx_device_context {
     size_t                                         copy_staging_size   = 0;
     void *                                         copy_staging_mapped = nullptr;
     hrx_stream_t                                   buffer_stream = nullptr;
+    // engine #674 EXPERIMENT: the backend's compute stream, so a host-mapped host read can be ordered against
+    // in-flight dispatches. Set at device_init; the buffer interface has no other way to reach it.
+    hrx_stream_t                                   compute_stream = nullptr;
 };
 
 struct ggml_backend_hrx_context {
