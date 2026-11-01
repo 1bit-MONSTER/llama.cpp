@@ -902,19 +902,29 @@ static Status rebind_prepared_host_weights(const CommandProgramExecutionContext 
             status.log("re-materialize resident host weight value %d failed", resident.value.value);
             continue;
         }
-        resident.lease          = std::move(materialized.lease);
+        // A prepared ref is [weight base + the command's own sub-offset] (command-program-resolver.cpp,
+        // resolve_command_binding), so re-materialising has to *shift* the ref by the change in the weight's position,
+        // not overwrite it with the new base. Overwriting pointed every sub-range binding at the start of the weight:
+        // that is engine #788 - fine while nothing is evicted, garbage/NaN/segfault as soon as the budget makes the
+        // cache evict and re-materialise (V4.1: 22.5 GiB working set against a 16384 MiB budget).
+        const size_t previous_offset = resident.lease.offset();
+        resident.lease              = std::move(materialized.lease);
         ++refilled;
         const hrx_buffer_t buffer = resident.lease.buffer();
         const size_t       offset = resident.lease.offset();
-        const size_t       length = resident.lease.length();
         for (std::vector<PreparedCommand> * list : { &prepared.initialization_commands, &prepared.commands }) {
             for (PreparedCommand & command : *list) {
                 for (PreparedCommandBinding & binding : command.kernel.bindings) {
-                    if (binding.binding.value == resident.value) {
-                        binding.ref.buffer = buffer;
-                        binding.ref.offset = offset;
-                        binding.ref.length = length;
+                    if (binding.binding.value != resident.value) {
+                        continue;
                     }
+                    if (binding.ref.offset >= previous_offset) {
+                        binding.ref.offset = binding.ref.offset - previous_offset + offset;
+                    } else {
+                        // Not a ref this lease produced; leave it alone rather than inventing an offset.
+                        status.log("resident host weight value %d has a ref below its own base", resident.value.value);
+                    }
+                    binding.ref.buffer = buffer;
                 }
             }
         }
