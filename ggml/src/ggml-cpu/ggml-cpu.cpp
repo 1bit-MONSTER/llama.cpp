@@ -7,6 +7,7 @@
 #include "amx/amx.h"
 
 #include <cctype>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -440,7 +441,38 @@ static ggml_backend_buffer_t ggml_backend_cpu_device_buffer_from_dmabuf(ggml_bac
         GGML_LOG_ERROR("%s: refusing dma-buf fd %d offset %zu (not page aligned) size %zu\n", __func__, fd, offset, size);
         return nullptr;
     }
-    void * ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t) offset);
+    // [1bit] TZEROCOPY: a shared KV region's chunks land exactly adjacent in the importing process (measured
+    // 2026-11-01: chunk starts 0x7fcc35aac000 / 0x7fcc44aac000 / 0x7fcc832ac000 with 240/1000/1000 MiB, each end ==
+    // the next start), so a write past one chunk's end corrupts a *different* chunk of the same cache with no
+    // fault and no log. ONEBIT_KVSHARE_GUARD=1 reserves one page beyond the region and leaves it PROT_NONE, so
+    // such a write stops at the exact byte instead of silently rewriting another chunk's KV. Default off:
+    // shipped behaviour and the region's size are unchanged, this only adds a trap for a bounds bug.
+    //
+    // The reserve-then-fill order matters: placing a guard *after* a plain mmap fails, because the kernel packs
+    // these chunks back to back and the page past a chunk is (measured) already mapped. Reserving size+page
+    // PROT_NONE first, then mapping the region over the front with MAP_FIXED, makes the tail a guard by
+    // construction.
+    const char * guard_env = getenv("ONEBIT_KVSHARE_GUARD");
+    const bool   guard      = guard_env != nullptr && atoi(guard_env) != 0;
+
+    void * ptr = MAP_FAILED;
+    if (guard) {
+        void * res = mmap(nullptr, size + page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (res == MAP_FAILED) {
+            GGML_LOG_ERROR("%s: cannot reserve %zu bytes for a guarded region\n", __func__, size + page);
+            return nullptr;
+        }
+        ptr = mmap(res, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, (off_t) offset);
+        if (ptr != res) {
+            GGML_LOG_ERROR("%s: cannot map the dma-buf into the reserved range at %p\n", __func__, res);
+            munmap(res, size + page);
+            return nullptr;
+        }
+        GGML_LOG_INFO("%s: guard page armed at %p (%zu bytes of region, then PROT_NONE)\n",
+                      __func__, (char *) ptr + size, size);
+    } else {
+        ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t) offset);
+    }
     if (ptr == MAP_FAILED) {
         GGML_LOG_ERROR("%s: mmap of dma-buf fd %d (offset %zu, %zu bytes) failed\n", __func__, fd, offset, size);
         return nullptr;
