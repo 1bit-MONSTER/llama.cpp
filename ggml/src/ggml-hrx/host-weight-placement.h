@@ -28,6 +28,16 @@ namespace ggml::hrx {
 // resident, and the staging fallback would copy it per execution - for a 103 GiB embedding table that is the same
 // wall in a different shape. So an op whose weight input cannot fit the residency budget is declined here and stays
 // on the CPU. Weights the scheduler placed on HRX live in HRX's own buffers and are unaffected.
+//
+// The invariant this file keeps testable (engine #674, 2026-11-02): a placement change must not reintroduce the
+// weightless-op / weight-op split - a weight-consuming node declined to the CPU while the weightless node that
+// consumes its output stays on HRX. Measured at pin d8bd0ff6052: the bisected corrupting pair {MUL_MAT, MUL} needs the
+// norm MUL declined, and this predicate is the only weight-dependent decline in device_supports_op, so a budget would
+// have to fall below a norm scale (512 B - 10 KiB) while the knob's floor is 1 MiB - the pair is not expressible.
+// Empirically, every budget that declines a node (32/128/256/300/304 MiB -> token_embd's MUL_MAT and GET_ROWS) also
+// refuses to run (#173), and 305 MiB declines nothing and still refuses, so no declined placement ever executes. The
+// decline is logged in the .cpp so that if either half changes, the graph change is visible in the log and not only in
+// the GGML_HRX_REPORT census.
 bool host_weight_exceeds_residency(const ggml_tensor * op);
 
 }  // namespace ggml::hrx
