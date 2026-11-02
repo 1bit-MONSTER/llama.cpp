@@ -1927,9 +1927,45 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     // Bounded (GGML_HRX_HOST_WEIGHT_LIMIT_MB > 0): one arena, evicted by slot, never released per weight. Unbounded
     // (the default): one buffer per weight, which is what this backend always did.
     if (limit_ != 0) {
+        {
+            // A latched refusal means this run already failed to fit a weight at this budget. Fail every further
+            // acquire straight away rather than evicting and re-materialising the model once per token (engine #788).
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (budget_refusal_) {
+                result.status.log("GGML_HRX_HOST_WEIGHT_LIMIT_MB=%zu MiB is below this model's working set: a %zu MiB "
+                                  "weight did not fit with %zu MiB resident and %zu MiB parked for the running "
+                                  "execution. Raise the budget to at least %zu MiB or unset it (engine #788).",
+                                  limit_ / (1024 * 1024), refusal_need_ / (1024 * 1024),
+                                  refusal_resident_ / (1024 * 1024), refusal_parked_ / (1024 * 1024),
+                                  (refusal_need_ + refusal_resident_ + refusal_parked_ + (1024 * 1024 - 1)) /
+                                      (1024 * 1024));
+                return result;
+            }
+        }
         const bool reserved =
             arena_reserve(device, stream, materialized_length, entry->buffer, entry->offset, entry->slot);
         if (!reserved) {
+            size_t parked   = 0;
+            size_t resident = 0;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                for (const auto & slot : arena_deferred_) {
+                    parked += slot.second;
+                }
+                resident = resident_bytes_;
+                budget_refusal_   = true;
+                refusal_need_     = arena_align(materialized_length);
+                refusal_parked_   = parked;
+                refusal_resident_ = resident;
+            }
+            // The refusal has to be visible even if a caller drops the status, because today one does: the run
+            // continues with stale bindings and produces NaN/garbage instead of stopping (engine #788).
+            GGML_LOG_ERROR("hrx: refusing to run: GGML_HRX_HOST_WEIGHT_LIMIT_MB=%zu MiB cannot hold this model's "
+                           "per-execution working set - a %zu MiB weight does not fit with %zu MiB resident and %zu MiB "
+                           "parked for the running execution. Raise it to at least %zu MiB or unset it (engine #788).\n",
+                           limit_ / (1024 * 1024), refusal_need_ / (1024 * 1024), resident / (1024 * 1024),
+                           parked / (1024 * 1024),
+                           (refusal_need_ + resident + parked + (1024 * 1024 - 1)) / (1024 * 1024));
             result.status.log("resident host weights: no %zu MiB slot (arena %.1f MiB, limit %.1f MiB, free %.1f MiB, "
                               "resident %.1f MiB, engine #669)",
                               arena_align(materialized_length) / (1024 * 1024), arena_capacity_ / (1024.0 * 1024.0),

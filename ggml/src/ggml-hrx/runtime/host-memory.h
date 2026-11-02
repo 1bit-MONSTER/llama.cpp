@@ -196,6 +196,13 @@ class HostWeightCache {
     bool        arena_make_room(hrx_stream_t stream, size_t aligned);
     size_t                                    executions_    = 0;
     std::vector<std::pair<size_t, size_t>>    arena_deferred_;
+    // engine #788: latched once a weight cannot be served at the configured budget even after evicting everything
+    // evictable. From then on every acquire refuses immediately, so a budget below the model's per-execution working
+    // set stops at the first ubatch with the numbers instead of churning for minutes and emitting wrong logits.
+    bool                                      budget_refusal_       = false;
+    size_t                                    refusal_need_         = 0;
+    size_t                                    refusal_parked_       = 0;
+    size_t                                    refusal_resident_     = 0;
     // The bytes the arena may hand out: its own capacity, so eviction reacts to the buffer that exists rather
     // than to the knob. Called with `mutex_` held.
     size_t      arena_budget_locked() const;
