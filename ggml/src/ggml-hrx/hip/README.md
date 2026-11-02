@@ -155,3 +155,42 @@ Check it:
 build/bin/test-backend-ops -o TOP_K -b HRX0            # set semantics, ties variant; run it more than once
 GGML_HRX_LOG_DISPATCH=1 ...                           # must print hip.top_k_f32
 ```
+
+## Worked example 3: `GGML_OP_SET_ROWS` (engine #679, the QSA mask rebuild)
+
+`dispatch-hip-set-rows.cpp` + `kernels/hip_set_rows.hip` are the third variation of the recipe, and the one to
+copy when the op already has matchers that are *narrower* than the shape you need:
+
+1. **Do not declare the op.** `GGML_OP_SET_ROWS` is already in `eager_capability_declared`, so
+   `hip_declare_eager_op` (example 2, step 2) is unnecessary: the node already reaches the dispatcher and the
+   existing kernels take the shapes they cover.
+2. **Do not add a bound in `device_supports_op` either.** The claim for an op that is in the capability list is
+   decided by `can_execute_standalone_op_as_graph`, which runs the matcher on a one-node graph: once a matcher takes
+   the shape, `device_supports_op` returns true for it, and a shape the matcher declines keeps the CPU fallback
+   exactly as before (engine #389's trap). Example 2 needed `hip_top_k_tensor_supported` only because TOP_K had no
+   matcher at all and the op had to be lifted into the list first.
+3. **Register below the matchers you are extending.** `common.set_rows_scatter` (priority 200) and
+   `common.set_rows` (100) own the f16 element-wise scatter and the vectorised 2-D writer; fused registrations are
+   tried before every single-op one. `hip.set_rows` sits at 50, so it only ever sees a node the Loom kernels
+   declined -- in practice, `i32` indices into an `f32` cache, which is what `build_attn_qsa` produces
+   (`fill(-inf)` over `[1, n_kv]`, then 2051 selected cells scattered, then the causal mask added).
+
+Why it exists: that node was the only one in the QSA decode path with nowhere to run on the device, so every
+full-attention layer's graph was split around it (`unsupported HRX node 44: SET_ROWS output=f32[1,18816]` in
+`~/wt/hrx-probe/qsa_layer.cpp`, while the indexer, `hip.top_k_f32` and the FA decode split all took theirs).
+
+The shape contract is deliberately the packed one: `rows` and `cache` must have `nb[1] == ne[0] * type_size`,
+`hidden >= 1` (the mask case is `hidden == 1`), `tokens <= 2^20`, `cache_rows <= 2^27`. Dims 2 and 3 are **sliced**
+rather than kernel-handled -- `ggml_set_rows` batches over them with the indices broadcast as `dst_dim % indices_dim`
+(`ggml-cpu/ops.cpp`), so the matcher emits one dispatch per slice with its own binding offsets, which is how the
+3-6-slice `test-backend-ops` cases get covered while the model runs a single slice. A quantized cache stays with the
+add-on's `set_hip_set_rows_hook`.
+
+Check it (the host reference is `~/wt/hrx-probe/set_rows_check.cpp`: it transcribes this kernel's own mapping and
+diffs it against a serial transcription of the CPU `SET_ROWS`, 301 cases including the QSA shape):
+
+```
+build/bin/test-backend-ops -o SET_ROWS -b HRX0         # i32/i64, f32/f16, and the hidden==1 cases
+GGML_HRX_LOG_DISPATCH=1 build/bin/test-backend-ops -o SET_ROWS -b HRX0    # must print hip.set_rows
+GGML_HRX_DISABLE_DISPATCH=hip.set_rows ...             # must fall back to the CPU backend, no node failure
+```

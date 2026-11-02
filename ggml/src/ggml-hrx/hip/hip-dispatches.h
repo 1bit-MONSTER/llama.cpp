@@ -28,6 +28,7 @@ void register_hip_dispatches(DispatchRegistryBuilder & registry);
 
 // Matchers built from this directory (one line each in hip-dispatches.cpp).
 void register_hip_scale_dispatch(DispatchRegistryBuilder & registry);
+void register_hip_set_rows_dispatch(DispatchRegistryBuilder & registry);
 void register_hip_top_k_dispatch(DispatchRegistryBuilder & registry);
 
 // Defined by the add-on when GGML_HRX_HIP_ADDON_DIR is set (the build then defines GGML_HRX_HIP_ADDON);
