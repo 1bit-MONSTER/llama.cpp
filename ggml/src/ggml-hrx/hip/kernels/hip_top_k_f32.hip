@@ -40,6 +40,41 @@ constexpr uint32_t kTopKBuckets    = 2048u;
 constexpr uint32_t kTopKLanes      = 256u;
 constexpr uint32_t kTopKBucketBits = 11u;  // per level; the last level uses 10 and masks with `bits`
 
+// r3_d0, vectorised visits. The measured limit at rows=1 is memory-level parallelism, not passes: one pass over a
+// 200,000-element row is 781 iterations per lane and costs ~143 ns each, i.e. ~300 cycles -- one un-hidden DRAM
+// latency per iteration, because a lane has a single outstanding load and the workgroup is only 4 waves. Reading four
+// floats per iteration puts 4x the bytes in flight for the same number of latency round trips, and every pass (the
+// three histograms and the emit) gets it, since they all walk the row through the same helper.
+__device__ __forceinline__ bool topk_vec4_ok(const float * base, uint32_t n) {
+    // every row starts at src + row * column_count, so 16-byte alignment needs both the base pointer and the row pitch
+    return n >= 4u && ((reinterpret_cast<uintptr_t>(base) & 15u) == 0u);
+}
+
+// Calls f(index, value) for every element of the row, four at a time when the row is 16-byte aligned, with a scalar
+// tail. Index order is ascending either way, so slot numbering and the ties rule are unchanged.
+template <typename F>
+__device__ __forceinline__ void topk_visit(const float * __restrict__ base, uint32_t n, uint32_t lane, F && f) {
+    if (topk_vec4_ok(base, n)) {
+        const float4 * b4 = reinterpret_cast<const float4 *>(base);
+        const uint32_t n4 = n >> 2;
+        for (uint32_t i = lane; i < n4; i += kTopKLanes) {
+            const float4 v = b4[i];
+            const uint32_t e = i << 2;
+            f(e + 0u, v.x);
+            f(e + 1u, v.y);
+            f(e + 2u, v.z);
+            f(e + 3u, v.w);
+        }
+        for (uint32_t i = (n4 << 2) + lane; i < n; i += kTopKLanes) {
+            f(i, base[i]);
+        }
+    } else {
+        for (uint32_t i = lane; i < n; i += kTopKLanes) {
+            f(i, base[i]);
+        }
+    }
+}
+
 __device__ __forceinline__ uint32_t topk_key(float value) {
     const uint32_t bits = __builtin_bit_cast(uint32_t, value);
     // sign set -> invert every bit (negatives sort below, more negative lower); sign clear -> set the top bit.
@@ -81,12 +116,13 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
         }
         __syncthreads();
 
-        for (uint32_t i = lane; i < column_count; i += kTopKLanes) {
-            const uint32_t key = topk_key(base[i]);
+        topk_visit(base, column_count, lane, [&](uint32_t i, float value) {
+            const uint32_t key = topk_key(value);
+            (void) i;
             if (prefix_len == 0u || (key >> (32u - prefix_len)) == prefix) {
                 atomicAdd(&hist[(key >> shift) & mask], 1u);
             }
-        }
+        });
         __syncthreads();
 
         // Descending scan, cooperatively (r1_d0). The serial form was 2,048 dependent LDS reads in lane 0 per
@@ -156,8 +192,8 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
     // group into [above_slots, top_k). Order is not part of the contract (ggml's TOP_K contract is the index set), and
     // the per-group slot guard is what keeps the result duplicate-free, which is the `ties` variant's requirement.
     const uint32_t above_slots = top_k - remaining;
-    for (uint32_t i = lane; i < column_count; i += kTopKLanes) {
-        const uint32_t key = topk_key(base[i]);
+    topk_visit(base, column_count, lane, [&](uint32_t i, float value) {
+        const uint32_t key = topk_key(value);
         if (key > threshold_key) {
             const uint32_t slot = atomicAdd(&emitted, 1u);
             if (slot < above_slots) {
@@ -169,5 +205,5 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
                 out[above_slots + slot] = (int32_t) i;
             }
         }
-    }
+    });
 }
