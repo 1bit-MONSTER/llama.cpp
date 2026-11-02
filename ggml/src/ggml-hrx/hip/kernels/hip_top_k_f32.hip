@@ -50,7 +50,11 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
                                                                int32_t * __restrict__ dst, uint32_t column_count,
                                                                uint32_t top_k) {
     __shared__ uint32_t hist[kTopKBuckets];
+    __shared__ uint32_t lane_sum[kTopKLanes];
+    __shared__ uint32_t bucket_found;
+    __shared__ uint32_t take_found;
     __shared__ uint32_t emitted;
+    __shared__ uint32_t emitted_eq;
     __shared__ uint32_t threshold_key;
     __shared__ uint32_t next_remaining;
 
@@ -85,24 +89,55 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
         }
         __syncthreads();
 
-        // Descending scan: the bucket where the running total first reaches `remaining`.
-        if (lane == 0u) {
-            uint32_t cumulative = 0u;
-            uint32_t bucket     = 0u;
-            uint32_t take       = remaining;
-            for (uint32_t b = kTopKBuckets; b-- > 0u;) {
-                const uint32_t count = hist[b];
+        // Descending scan, cooperatively (r1_d0). The serial form was 2,048 dependent LDS reads in lane 0 per
+        // level -- the measured ~100 us fixed cost. Here each lane owns kPerLane = 8 consecutive buckets, a reverse
+        // (suffix) inclusive scan over the 256 per-lane chunk sums is done as an LDS Hillis-Steele tree (8 steps,
+        // 2 syncs each), and only the crossing lane walks its own 8 buckets. Same bucket and same residue as the
+        // serial scan, ties included: the selected bucket is "the highest b whose inclusive suffix count >=
+        // remaining", which is exactly what the serial descending loop finds.
+        //
+        // Deliberately NOT a warp-shuffle scan: the first version used __shfl_down_sync and returned wrong index sets
+        // (ERR 4.0, then 0.667 after a range guard) because shfl's out-of-range behaviour and the wave width are not
+        // something this kernel should depend on. The LDS tree is wave-agnostic and costs a few hundred nanoseconds.
+        constexpr uint32_t kPerLane = kTopKBuckets / kTopKLanes;   // 8
+        const uint32_t b0 = lane * kPerLane;
+
+        uint32_t chunk = 0u;
+        #pragma unroll
+        for (uint32_t i = 0u; i < kPerLane; ++i) {
+            chunk += hist[b0 + i];
+        }
+        // reverse inclusive scan over lane chunk sums: lane_sum[l] = sum of chunks for lanes [l .. kTopKLanes)
+        lane_sum[lane] = chunk;
+        __syncthreads();
+        for (uint32_t off = 1u; off < kTopKLanes; off <<= 1u) {
+            const uint32_t v = (lane + off < kTopKLanes) ? lane_sum[lane + off] : 0u;
+            __syncthreads();
+            lane_sum[lane] += v;
+            __syncthreads();
+        }
+        const uint32_t suffix_incl = lane_sum[lane];
+        const uint32_t suffix_excl = suffix_incl - chunk;
+        if (suffix_incl >= remaining && suffix_excl < remaining) {
+            uint32_t cumulative = suffix_excl;
+            uint32_t bucket     = b0;
+            uint32_t take       = remaining - cumulative;
+            #pragma unroll
+            for (uint32_t i = kPerLane; i-- > 0u;) {
+                const uint32_t count = hist[b0 + i];
                 if (cumulative + count >= remaining) {
-                    bucket = b;
+                    bucket = b0 + i;
                     take   = remaining - cumulative;
                     break;
                 }
                 cumulative += count;
             }
-            threshold_key  = (prefix << bits) | bucket;
-            next_remaining = take;
+            bucket_found = bucket;
+            take_found   = take;
         }
         __syncthreads();
+        threshold_key  = (prefix << bits) | bucket_found;
+        next_remaining = take_found;
 
         prefix      = threshold_key;          // already includes the bits of this level
         prefix_len += bits;
@@ -110,26 +145,28 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
     }
 
     if (lane == 0u) {
-        emitted = 0u;
+        emitted    = 0u;
+        emitted_eq = 0u;
     }
     __syncthreads();
 
-    // Everything strictly above the rank-k key, then enough of the equal group to reach k. Order is not part of
-    // the contract, and the second loop stops as soon as k slots are taken.
+    // Emit in ONE pass over the row instead of two (r1_d3). The split is known before the pass: the rank-k key was
+    // chosen so that exactly `top_k - remaining` elements are strictly above it, and `remaining` of them are equal to
+    // it, so the two groups get disjoint slot ranges without a second scan -- ">" into [0, above_slots) and the equal
+    // group into [above_slots, top_k). Order is not part of the contract (ggml's TOP_K contract is the index set), and
+    // the per-group slot guard is what keeps the result duplicate-free, which is the `ties` variant's requirement.
+    const uint32_t above_slots = top_k - remaining;
     for (uint32_t i = lane; i < column_count; i += kTopKLanes) {
-        if (topk_key(base[i]) > threshold_key) {
+        const uint32_t key = topk_key(base[i]);
+        if (key > threshold_key) {
             const uint32_t slot = atomicAdd(&emitted, 1u);
-            if (slot < top_k) {
+            if (slot < above_slots) {
                 out[slot] = (int32_t) i;
             }
-        }
-    }
-    __syncthreads();
-    for (uint32_t i = lane; i < column_count; i += kTopKLanes) {
-        if (topk_key(base[i]) == threshold_key) {
-            const uint32_t slot = atomicAdd(&emitted, 1u);
-            if (slot < top_k) {
-                out[slot] = (int32_t) i;
+        } else if (key == threshold_key) {
+            const uint32_t slot = atomicAdd(&emitted_eq, 1u);
+            if (slot < remaining) {
+                out[above_slots + slot] = (int32_t) i;
             }
         }
     }
