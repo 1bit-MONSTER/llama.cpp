@@ -46,7 +46,8 @@ constexpr uint32_t kTopKBucketBits = 11u;  // per level; the last level uses 10 
 // floats per iteration puts 4x the bytes in flight for the same number of latency round trips, and every pass (the
 // three histograms and the emit) gets it, since they all walk the row through the same helper.
 __device__ __forceinline__ bool topk_vec4_ok(const float * base, uint32_t n) {
-    // every row starts at src + row * column_count, so 16-byte alignment needs both the base pointer and the row pitch
+    // The row base already includes the pitch (src + row * column_count), so testing this pointer is enough: a pitch
+    // that is not a multiple of 4 leaves the following rows unaligned and they simply take the scalar path.
     return n >= 4u && ((reinterpret_cast<uintptr_t>(base) & 15u) == 0u);
 }
 
@@ -113,6 +114,14 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
 
         for (uint32_t b = lane; b < kTopKBuckets; b += kTopKLanes) {
             hist[b] = 0u;
+        }
+        if (lane == 0u) {
+            // Exactly one lane satisfies suffix_incl >= remaining > suffix_excl, because the histogram of matching
+            // elements sums to >= remaining, so these are always written. Reset anyway: if that invariant ever failed,
+            // a stale `take_found` could make `remaining` exceed `top_k`, and `above_slots = top_k - remaining` would
+            // wrap the emit's slot guard into an out-of-bounds write. Two stores per level buy that bound.
+            bucket_found = 0u;
+            take_found   = remaining;   // remaining <= top_k always, so above_slots cannot wrap
         }
         __syncthreads();
 
@@ -186,12 +195,15 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
     }
     __syncthreads();
 
+    // above_slots is `top_k - remaining` with remaining <= top_k by construction, so this cannot wrap; the guard below
+    // is kept as a cheap second line of defence rather than a load-bearing condition.
+    const uint32_t above_slots = top_k - remaining;
+
     // Emit in ONE pass over the row instead of two (r1_d3). The split is known before the pass: the rank-k key was
     // chosen so that exactly `top_k - remaining` elements are strictly above it, and `remaining` of them are equal to
     // it, so the two groups get disjoint slot ranges without a second scan -- ">" into [0, above_slots) and the equal
     // group into [above_slots, top_k). Order is not part of the contract (ggml's TOP_K contract is the index set), and
     // the per-group slot guard is what keeps the result duplicate-free, which is the `ties` variant's requirement.
-    const uint32_t above_slots = top_k - remaining;
     topk_visit(base, column_count, lane, [&](uint32_t i, float value) {
         const uint32_t key = topk_key(value);
         if (key > threshold_key) {
