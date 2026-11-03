@@ -48,6 +48,13 @@ void GraphProgramBudget::touch(uint64_t uid) {
     }
 }
 
+void GraphProgramBudget::resize(uint64_t uid, size_t bytes) {
+    const auto found = entries_.find(uid);
+    if (found != entries_.end()) {
+        found->second.bytes = bytes;
+    }
+}
+
 void GraphProgramBudget::forget(uint64_t uid) {
     entries_.erase(uid);
 }

@@ -8,6 +8,7 @@
 #include "status.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -59,8 +60,8 @@ class GraphProgram {
 
     uint64_t command_shape_hash() const { return command_shape_hash_; }
 
-    // What this program keeps alive while it stays cached: its transient arena, about 1 GiB for a
-    // large prefill shape (graph-program-budget.h).
+    // What this program keeps alive while it stays cached: its transient arena plus its own prepared command
+    // program's staging set, about 1 GiB for a large prefill shape together (graph-program-budget.h).
     size_t retained_bytes() const;
 
     const Graph & graph() const { return *graph_; }
@@ -143,11 +144,16 @@ class GraphProgramCache {
     GraphProgramCacheStats stats() const;
 
     size_t size() const;
-    // bytes held by the cached programs' transient arenas (graph-program-budget.h)
+    // bytes held by the cached programs (arena + prepared command programs; graph-program-budget.h)
     size_t bytes() const;
     // the programs to drop so that at most budget_bytes and max_programs remain, least recently used
     // first, never `keep`; empty when nothing has to go
     std::vector<uint64_t> plan_evictions(size_t budget_bytes, size_t max_programs, const GraphProgram * keep) const;
+    // Re-derive what each cached program retains, before the byte budget is consulted (engine #841): the transient
+    // arena is not the whole story, and the rest (~1 GiB per prefill shape in the prepared command programs) is
+    // exactly what the knob was there to bound. `extra_bytes` supplies the bytes attributed to a uid outside the
+    // program itself; the LRU order is left alone.
+    void retally_retained_bytes(const std::function<size_t(uint64_t)> & extra_bytes);
     // drop these programs, freeing their arenas; the caller has already waited for the stream
     void evict(const std::vector<uint64_t> & uids);
     // drop every cached program except `keep` (graph-program-cache-limit.h)

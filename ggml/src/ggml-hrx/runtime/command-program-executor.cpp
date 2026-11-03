@@ -65,6 +65,17 @@ PreparedProgramConstantBuffer::~PreparedProgramConstantBuffer() {
     }
 }
 
+size_t PreparedCommandProgram::retained_bytes() const {
+    size_t bytes = 0;
+    for (const HostStagingBuffer & staging : host_staging) {
+        bytes += staging.length;
+    }
+    for (const PreparedProgramConstantBuffer & constant : program_constants) {
+        bytes += constant.size;
+    }
+    return bytes;
+}
+
 PreparedProgramConstantBuffer::PreparedProgramConstantBuffer(PreparedProgramConstantBuffer && other) noexcept :
     value(other.value),
     name(std::move(other.name)),
