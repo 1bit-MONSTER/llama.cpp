@@ -58,7 +58,17 @@ bool host_resident_weight(const ggml_tensor * tensor) {
 // cap spends the whole budget on the same two decisions - at a 128 MiB budget that is 8 lines for 2 nodes, and at an
 // 8 MiB budget (109 declined tensors) the reader would never see the GEMMs move at all. One line per distinct
 // (weight, op) pair, eight pairs, then one line saying the rest are suppressed.
+//
+// When it can fire, measured (Qwen3-4B-Q4_K_M, -dev HRX0 -fit off -ngl 0, budget 128 MiB): only if the scheduler's
+// reserve runs before the host-weight arena's first unservable acquire. At the cli's default verbosity the arena
+// refuses the model during load (1.2 s in) and this predicate is never asked, so the log is silent; the same binary
+// run with -v or -lv 2 reserves at 0.17 s, logs the two lines, and reaches #173's refusal later at the first
+// execution (8.99 s) - 3/3 runs each way, both ending in "Compute error.". So silence here is not evidence that no
+// node was declined: it can mean the run never got as far as splitting the graph (engine #674, PR #174 review).
 constexpr size_t kDeclineLogLines = 8;
+
+// Static on purpose (one process, one model) - the key is a weight pointer, so a second model or session in the same
+// process logs nothing. Fine for a diagnostic; it would need to be per-context if it ever becomes more than that.
 
 void log_declined_placement(const ggml_tensor * op, const ggml_tensor * weight, size_t limit) {
     static std::mutex mutex;
