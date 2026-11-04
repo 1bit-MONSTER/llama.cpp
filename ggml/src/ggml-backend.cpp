@@ -1248,16 +1248,13 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         if (storage_buft == NULL || ggml_backend_buft_is_host(storage_buft)) {
             continue; // host memory is addressable from any backend
         }
+        if (storage_backend_id == node_backend_id) {
+            continue; // one and the same device backend, the write stays in its own memory
+        }
         if (allocated) {
-            if (storage_backend_id == node_backend_id) {
-                continue; // one and the same device backend, the write stays in its own memory
-            }
             GGML_ABORT("%s: %s writes in place into %s, whose buffer is %s, but the node is placed on %s\n",
                        __func__, ggml_op_name(node->op), storage->name, ggml_backend_buft_name(storage_buft),
                        ggml_backend_name(sched->backends[node_backend_id]));
-        }
-        if (storage_backend_id == node_backend_id) {
-            continue;
         }
         if (!ggml_backend_supports_op(sched->backends[node_backend_id], storage)) {
             GGML_ABORT("%s: %s writes in place into %s, which lives on %s, and %s cannot produce it\n", __func__,
