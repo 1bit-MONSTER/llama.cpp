@@ -164,6 +164,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_jamba(params);
         case LLM_ARCH_ZAMBA2:
             return new llama_model_zamba2(params);
+        case LLM_ARCH_ZAMBA:
+            return new llama_model_zamba(params);
         case LLM_ARCH_XVERSE:
             return new llama_model_xverse(params);
         case LLM_ARCH_COMMAND_R:
@@ -2213,8 +2215,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         // every ZAYA layer runs CCA attention (KV cache) and carries a
                         // recurrent conv / previous-hidden-state row
                         filter_attn = [&](uint32_t) { return true; };
-                    } else if (arch == LLM_ARCH_ZAMBA2) {
-                        // Zamba2: attention only on hybrid layers, recurrent state on ALL layers
+                        filter_recr = [&](uint32_t) { return true; };
+                    } else if (arch == LLM_ARCH_ZAMBA2 || arch == LLM_ARCH_ZAMBA) {
+                        // Zamba2/Zamba: attention only on hybrid layers, recurrent state on ALL layers
                         filter_attn = [&](uint32_t il) { return hparams.n_head_kv(il) > 0; };
                         filter_recr = [&](uint32_t) { return true; };
                     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
@@ -2574,6 +2577,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_BLOOM:
         case LLM_ARCH_MAMBA:
         case LLM_ARCH_MAMBA2:
+        case LLM_ARCH_ZAMBA:
         case LLM_ARCH_JAMBA:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_T5:
