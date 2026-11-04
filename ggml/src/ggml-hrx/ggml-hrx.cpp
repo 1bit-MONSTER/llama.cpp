@@ -476,12 +476,43 @@ static int placement_report_level() {
     return sched_debug != nullptr && std::atoi(sched_debug) >= 1 ? 1 : 0;
 }
 
+// GGML_HRX_REPORT=0 silences the load-time fallback line. Unset does not: a model that loses nodes to the CPU says so once,
+// whether or not anyone asked for the placement report (engine #991). A value that is not a number counts as unset, so a typo
+// cannot silently hide the line the way atoi() would (=x -> 0 -> quiet).
+static bool placement_fallback_quiet() {
+    const char * value = std::getenv("GGML_HRX_REPORT");
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+    char *       end    = nullptr;
+    const long   parsed = std::strtol(value, &end, 10);
+    return end != value && *end == '\0' && parsed <= 0;
+}
+
 static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, void * user_data) {
     const bool strict = environment_flag_enabled("GGML_HRX_STRICT");
     const int  level  = placement_report_level();
     static std::atomic<bool> reported{ false };
-    if (!strict && (level <= 0 || (level < 2 && reported.load()))) {
-        return;
+    // the load-time fallback line is said once per process, on the first graph that loses a node
+    static std::atomic<bool> fallback_reported{ false };
+    // Only the first few graphs are inspected for it: the prefill graph and the first decode steps are built immediately, and
+    // the default configuration must not pay a per-node lookup on every graph compute for the rest of the run.
+    // GGML_HRX_STRICT=1 and GGML_HRX_REPORT>=2 stay the exhaustive probes.
+    static std::atomic<int>  fallback_graphs_seen{ 0 };
+    constexpr int            kFallbackScanGraphs = 16;
+    // The old guard returned whenever no report was asked for, which also silenced the load-time fallback line
+    // (engine #991). Keep the cheap exit, but only once that line is either said, deliberately silenced, or out of scan budget.
+    if (!strict) {
+        if (level >= 2) {
+            // report every graph
+        } else if (level == 1) {
+            if (reported.load()) {
+                return;
+            }
+        } else if (fallback_reported.load() || placement_fallback_quiet() ||
+                   fallback_graphs_seen.fetch_add(1) >= kFallbackScanGraphs) {
+            return;
+        }
     }
 
     ggml_backend_t hrx                = static_cast<ggml_backend_t>(user_data);
@@ -498,6 +529,8 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
 
     std::vector<int64_t> off_by_op(GGML_OP_COUNT, 0);
     int64_t              off_nodes = 0;
+    int64_t              off_unaligned_matmuls = 0;
+    int64_t              unaligned_input_size  = 0;
     ggml_tensor *        first_off = nullptr;
     for (int i = 0; i < graph->n_nodes; i++) {
         ggml_tensor * node = graph->nodes[i];
@@ -507,6 +540,13 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
         }
         off_nodes++;
         off_by_op[node->op]++;
+        if ((node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) && node->src[0] != nullptr &&
+            node->src[0]->ne[0] % 256 != 0) {
+            off_unaligned_matmuls++;
+            if (unaligned_input_size == 0) {
+                unaligned_input_size = node->src[0]->ne[0];
+            }
+        }
         if (first_off == nullptr) {
             first_off = node;
         }
@@ -538,6 +578,20 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
         reported.store(true);
         GGML_LOG_INFO("%s: placement: %d nodes, %" PRId64 " off HRX (%s), %d graph splits\n", __func__, graph->n_nodes,
                       off_nodes, off_detail.c_str(), ggml_backend_sched_get_n_splits(sched));
+    } else if (off_nodes > 0 && !placement_fallback_quiet() && !fallback_reported.exchange(true)) {
+        // engine #991: a model whose hidden size is not a multiple of 256 loses its dense matmuls to the CPU by design, and
+        // until this line existed the only way to know was GGML_HRX_STRICT=1. Say it once, at load, with the reason.
+        // WARN, not INFO: losing nodes to the CPU is a degraded placement state, the same class as the residency guardrail,
+        // so it should survive a front-end that keeps warnings and drops info. Note that llama-bench without -v nulls the log
+        // callback entirely (llama_log_set -> ggml_log_set), so no ggml line of any severity reaches the terminal there;
+        // llama-server/llama-cli print it as usual, and llama-bench prints it with -v.
+        std::string reason;
+        if (off_unaligned_matmuls > 0) {
+            reason = " - " + std::to_string(unaligned_input_size) + " is not a multiple of 256, so " +
+                     std::to_string(off_unaligned_matmuls) + " matmuls have no HRX dense schedule (input_size % 256 != 0)";
+        }
+        GGML_LOG_WARN("%s: placement: %" PRId64 " of %d nodes on the CPU (%s)%s\n", __func__, off_nodes, graph->n_nodes,
+                      off_detail.c_str(), reason.c_str());
     }
 }
 
