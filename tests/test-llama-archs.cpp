@@ -179,7 +179,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     } else if (arch == LLM_ARCH_MINIMAX_M3) {
         // partial rotary: n_rot must not exceed the indexer key length (64)
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
-    } else if (arch == LLM_ARCH_ZAMBA2) {
+    } else if (arch == LLM_ARCH_ZAMBA || arch == LLM_ARCH_ZAMBA2) {
         // the shared attention block runs on concat(hidden, embeddings): 2 * n_embd wide
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   2 * n_embd_head);
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, 2 * n_embd_head);
