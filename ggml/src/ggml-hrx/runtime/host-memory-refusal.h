@@ -40,6 +40,15 @@ inline constexpr const char * kFragmentedAdvice =
     "the free space is fragmented, not short: no single block can serve the slot, so raising "
     "GGML_HRX_HOST_WEIGHT_LIMIT_MB only helps if it re-creates the arena contiguously (engine #900)";
 
+// engine #900: `resident + parked` is bounded by the arena, which is bounded by the limit, so the snapshot of a capacity
+// miss can never add up to more than `limit + one weight`. Printing it as advice is the measured "raise it by 6 MiB"
+// climb (2304 -> 2310 -> 2316 ...) and, when it lands below the budget in force, the measured 38 <-> 44 MiB cycle: both
+// are numbers the operator cannot reach. The limit is the arena's own size, so the honest advice is to stop tuning it.
+inline constexpr const char * kCapacityAdvice =
+    "the arena is full at the limit you set, so this snapshot cannot name the budget this run needs (it is never more "
+    "than the limit plus one weight): unset GGML_HRX_HOST_WEIGHT_LIMIT_MB or raise it well above the current limit "
+    "(engine #900)";
+
 inline bool fragmented(const ArenaMiss & miss) {
     return miss.free_bytes >= miss.need && miss.largest_block < miss.need;
 }
@@ -56,16 +65,25 @@ inline std::string describe(const ArenaMiss & miss) {
                       miss.need / kMiB, miss.free_bytes / kMiB, miss.free_blocks, miss.largest_block / kMiB,
                       miss.capacity / kMiB, miss.limit / kMiB, miss.resident / kMiB, miss.parked / kMiB,
                       kFragmentedAdvice);
+    } else if (miss.limit == 0) {
+        // Unbounded is the default and the arena is not used there, so this is defensive: no limit to raise, and the
+        // message must not divide by one or invent advice.
+        std::snprintf(text, sizeof(text),
+                      "host weight arena cannot hold this model's per-execution working set: a %.1f MiB slot does not fit "
+                      "with %.1f MiB resident and %.1f MiB parked (arena %.1f MiB, free %.1f MiB in %zu blocks, largest "
+                      "%.1f MiB), and GGML_HRX_HOST_WEIGHT_LIMIT_MB is unset - see the growth/allocation line above "
+                      "(engine #669).",
+                      miss.need / kMiB, miss.resident / kMiB, miss.parked / kMiB, miss.capacity / kMiB,
+                      miss.free_bytes / kMiB, miss.free_blocks, miss.largest_block / kMiB);
     } else {
         // largest_block >= need here would mean the take failed for another reason (a failed growth logs its own
         // line), so the capacity wording is kept rather than claiming fragmentation that the numbers deny.
-        const size_t raise = (miss.need + miss.resident + miss.parked + (1024 * 1024 - 1)) / (1024 * 1024);
         std::snprintf(text, sizeof(text),
                       "host weight arena cannot hold this model's per-execution working set: a %.1f MiB slot does not fit "
                       "with %.1f MiB resident and %.1f MiB parked (arena %.1f MiB, limit %.1f MiB, free %.1f MiB in %zu "
-                      "blocks, largest %.1f MiB). Raise it to at least %zu MiB or unset it (engine #788).",
+                      "blocks, largest %.1f MiB) - %s",
                       miss.need / kMiB, miss.resident / kMiB, miss.parked / kMiB, miss.capacity / kMiB, miss.limit / kMiB,
-                      miss.free_bytes / kMiB, miss.free_blocks, miss.largest_block / kMiB, raise);
+                      miss.free_bytes / kMiB, miss.free_blocks, miss.largest_block / kMiB, kCapacityAdvice);
     }
     return text;
 }
