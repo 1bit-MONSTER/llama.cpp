@@ -181,6 +181,13 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     }
     entry->program     = std::move(prepared);
     entry->has_program = true;
+    {
+        // The graph-program byte budget has to see these bytes or it can never bite (engine #841). mutex_ is taken
+        // here without ever being held across an entry lock acquisition, so the two locks cannot invert.
+        const size_t                bytes = entry->program.retained_bytes();
+        std::lock_guard<std::mutex> lock(mutex_);
+        retained_by_graph_[graph_uid] += bytes;
+    }
     record_build();
 
     if (debug_serial_command_execution_enabled()) {
@@ -219,9 +226,16 @@ PreparedCommandProgramCacheStats PreparedCommandProgramCache::stats() const {
     return stats_;
 }
 
+size_t PreparedCommandProgramCache::retained_bytes(uint64_t graph_uid) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto                  found = retained_by_graph_.find(graph_uid);
+    return found == retained_by_graph_.end() ? 0 : found->second;
+}
+
 void PreparedCommandProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     programs_.clear();
+    retained_by_graph_.clear();
 }
 
 void PreparedCommandProgramCache::record_build() {

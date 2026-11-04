@@ -44,9 +44,13 @@ bool trim_graph_programs(ggml_backend_hrx_context & context, GraphProgram * curr
     if (current == nullptr || context.graph_programs.stats().builds == builds_before) {
         return true;
     }
-    // A program's transient arena stays alive while it is cached, about 1 GiB for a large prefill
-    // shape, so the count alone does not bound the GTT: evict least recently used programs until both
-    // the count and the byte budget hold, never the program being executed.
+    // A program's transient arena stays alive while it is cached and the prepared command programs keyed to it keep
+    // their host staging set, together about 1 GiB for a large prefill shape - so the count alone does not bound the
+    // GTT. Re-derive what each program retains (the arena never saw the staging set, engine #841) and evict least
+    // recently used programs until both the count and the byte budget hold, never the program being executed.
+    context.graph_programs.retally_retained_bytes([&context](uint64_t uid) {
+        return context.prepared_programs.retained_bytes(uid);
+    });
     const std::vector<uint64_t> victims = context.graph_programs.plan_evictions(budget, max_programs, current);
     if (victims.empty()) {
         return true;
@@ -66,7 +70,7 @@ bool trim_graph_programs(ggml_backend_hrx_context & context, GraphProgram * curr
     // one line per trim: it should come when a new shape pushes the cache over, not during steady
     // decode that reuses the programs already there
     static std::atomic<uint64_t> trims{ 0 };
-    GGML_LOG_WARN("%s: HRX graph program cache trimmed (%zu of %zu programs, %zu -> %zu MiB of arenas, budget "
+    GGML_LOG_WARN("%s: HRX graph program cache trimmed (%zu of %zu programs, %zu -> %zu MiB retained, budget "
                   "%zu MiB, %zu max): kept the current one, trim %llu\n",
                   __func__, victims.size(), held_before, bytes_before >> 20, context.graph_programs.bytes() >> 20,
                   budget >> 20, max_programs, static_cast<unsigned long long>(++trims));

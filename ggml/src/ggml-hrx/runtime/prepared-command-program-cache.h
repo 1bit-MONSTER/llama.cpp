@@ -55,6 +55,11 @@ class PreparedCommandProgramCache {
 
     PreparedCommandProgramCacheStats stats() const;
 
+    // Device bytes held by the prepared programs cached for one graph program (engine #841). These are alive
+    // exactly as long as the entry stays cached and trim_graph_programs drops every entry, so the graph-program
+    // byte budget has to see them or it can never bite: it only ever saw transients.arena_size.
+    size_t retained_bytes(uint64_t graph_uid) const;
+
     void clear();
 
   private:
@@ -91,6 +96,9 @@ class PreparedCommandProgramCache {
 
     mutable std::mutex                                       mutex_;
     std::unordered_map<Key, std::shared_ptr<Entry>, KeyHash> programs_;
+    // Bytes retained per graph program, maintained at build time so that retained_bytes() never has to reach into
+    // an Entry under its own mutex while another thread is preparing a program in it.
+    std::unordered_map<uint64_t, size_t>                     retained_by_graph_;
     PreparedCommandProgramCacheStats                         stats_;
 };
 

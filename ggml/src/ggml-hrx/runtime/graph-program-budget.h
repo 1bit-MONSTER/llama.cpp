@@ -16,11 +16,11 @@
 #pragma once
 
 // A byte budget for the HRX graph program cache (graph-program-cache.h). A cached program keeps its
-// transient arena alive, about 1 GiB for a large prefill shape, and the cache used to hold every
-// shape it ever built: a long-lived server answering prompts of varying length grew its GTT without
-// a bound (112 GiB was seen on 2026-10-01). The count limit in graph-program-cache-limit.h bounds the
-// number of programs but not their size, and drops everything but the current program when it trips.
-// This bounds the bytes and drops least-recently-used programs only.
+// transient arena alive and the prepared programs keyed to it keep their host staging set, together about
+// 1 GiB for a large prefill shape, and the cache used to hold every shape it ever built: a long-lived server
+// answering prompts of varying length grew its GTT without a bound (112 GiB was seen on 2026-10-01). The count
+// limit in graph-program-cache-limit.h bounds the number of programs but not their size, and drops everything but
+// the current program when it trips. This bounds the bytes and drops least-recently-used programs only.
 //
 // GGML_HRX_GRAPH_PROGRAM_CACHE_MB: budget in MiB (default 8192: a 27B model's hot shapes plus another
 // model's fit; 0 keeps every program, the old behaviour).
@@ -44,6 +44,9 @@ class GraphProgramBudget {
     void note(uint64_t uid, size_t bytes);
     // A lookup reused it: now the most recently used.
     void touch(uint64_t uid);
+    // Its byte count changed without changing how recently it was used (engine #841: what a cached program
+    // retains is re-derived before planning evictions, and that must not reorder the LRU).
+    void resize(uint64_t uid, size_t bytes);
     // It left the cache by another path.
     void forget(uint64_t uid);
 

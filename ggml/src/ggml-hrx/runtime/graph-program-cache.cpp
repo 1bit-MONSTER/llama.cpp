@@ -796,7 +796,17 @@ GraphProgramLookup GraphProgramCache::get_or_build_impl(const ggml_cgraph &  gra
 }
 
 size_t GraphProgram::retained_bytes() const {
-    return commands_ != nullptr ? commands_->transients.arena_size : 0;
+    // The arena plus this program's own prepared command program (engine #841). The prepared programs the executor
+    // caches for this uid live in PreparedCommandProgramCache and are added at trim time, which is where the
+    // budget is actually consulted.
+    size_t bytes = commands_ != nullptr ? commands_->transients.arena_size : 0;
+    // prepared_/has_prepared_ are guarded by prepared_mutex_; no caller holds it across a graph-cache lock, so this
+    // order (graph cache -> prepared) is the only one that exists.
+    std::lock_guard<std::mutex> lock(prepared_mutex_);
+    if (has_prepared_) {
+        bytes += prepared_.retained_bytes();
+    }
+    return bytes;
 }
 
 GraphProgramCacheStats GraphProgramCache::stats() const {
@@ -825,6 +835,13 @@ std::vector<uint64_t> GraphProgramCache::plan_evictions(size_t               bud
                                                         const GraphProgram * keep) const {
     std::lock_guard<std::mutex> lock(mutex_);
     return budget_.plan_evictions(budget_bytes, max_programs, keep != nullptr ? keep->uid() : 0, keep != nullptr);
+}
+
+void GraphProgramCache::retally_retained_bytes(const std::function<size_t(uint64_t)> & extra_bytes) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto & entry : programs_) {
+        budget_.resize(entry.first, entry.second->retained_bytes() + extra_bytes(entry.first));
+    }
 }
 
 void GraphProgramCache::evict(const std::vector<uint64_t> & uids) {

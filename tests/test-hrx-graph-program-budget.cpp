@@ -131,6 +131,27 @@ int main() {
         REQUIRE(plan(budget, 2 * MiB, 0, 0, false).empty());
     }
     {
+        // resize() changes the byte count without changing the LRU (engine #841: what a cached program retains is
+        // re-derived before planning evictions, and doing that must not make every program look freshly used)
+        GraphProgramBudget budget;
+        budget.note(1, 1 * MiB);  // oldest
+        budget.note(2, 1 * MiB);
+        budget.note(3, 1 * MiB);
+        // re-derived in reverse, so a resize() that reordered the LRU would leave 3 as the oldest and be caught here
+        for (uint64_t uid = 3; uid >= 1; --uid) {
+            budget.resize(uid, 8 * MiB);
+        }
+        REQUIRE(budget.size() == 3);
+        REQUIRE(budget.total_bytes() == 24 * MiB);
+        const auto victims = plan(budget, 16 * MiB, 0, 0, false);
+        REQUIRE(victims.size() == 1);
+        REQUIRE(victims[0] == 1);  // still the oldest, so resize() left the order alone
+        // and it is a no-op on a uid that is not cached, not a new entry
+        budget.resize(42, 64 * MiB);
+        REQUIRE(budget.size() == 3);
+        REQUIRE(budget.total_bytes() == 24 * MiB);
+    }
+    {
         // the env parser: MiB in, bytes out, and the documented default for anything unusable
         REQUIRE(ggml::hrx::parse_graph_program_cache_budget_bytes(nullptr) == 8192 * MiB);
         REQUIRE(ggml::hrx::parse_graph_program_cache_budget_bytes("") == 8192 * MiB);

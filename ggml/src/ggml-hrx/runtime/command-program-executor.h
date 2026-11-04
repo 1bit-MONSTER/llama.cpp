@@ -112,6 +112,11 @@ struct PreparedProgramConstantBuffer {
 };
 
 struct PreparedCommandProgram {
+    // The device memory this prepared program keeps alive for as long as it stays cached: the host staging
+    // buffers it allocated for values that are not directly bindable, plus its per-program constant buffers
+    // (engine #841). The transient arena belongs to the command program and is accounted separately.
+    size_t retained_bytes() const;
+
     std::vector<PreparedCommand>               initialization_commands;
     std::vector<PreparedCommand>               commands;
     std::vector<HostStagingBuffer>             host_staging;
