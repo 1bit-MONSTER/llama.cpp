@@ -125,8 +125,9 @@ class HostWeightCache {
     HostWeightCacheStats    stats() const;
     void                    clear();
 
-    // Bytes of materialized host weights the cache may keep resident (GGML_HRX_HOST_WEIGHT_LIMIT_MB, default
-    // 2048). A single weight larger than the whole budget is refused rather than made resident.
+    // Bytes of materialized host weights the cache may keep resident (GGML_HRX_HOST_WEIGHT_LIMIT_MB, default 0 =
+    // off: per-weight residency, and no bounded-path refusal can fire). A single weight larger than a non-zero
+    // budget is refused rather than made resident.
     // engine #669: one command-program execution at a time. While one is in flight the slots the cache frees are
     // parked and only returned to the free list when it ends: a lease is a weak snapshot, so "evicted" is not
     // "unbound", and handing a slot to another weight while the running program still binds its old offset is
