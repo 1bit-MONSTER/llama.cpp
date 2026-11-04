@@ -78,6 +78,16 @@ if (NOT GGML_HRX_HIP_FLAGS MATCHES "--rocm-(device-lib-)?path")
     endif()
 endif()
 
+# A kernel includes headers from its own directory (the add-on's kernels/*.h, the metadata header), and
+# amdclang++ writes no depfile with --cuda-device-only: its -MD/-MF are reported "unused during
+# compilation", so the DEPFILE below stays empty. Without these the code objects depend on the .hip alone,
+# and a header-only change (hrx_build_metadata.h's fingerprint included) leaves every .hsaco stale while the
+# build still succeeds. Coarse on purpose: a header recompiles the kernels that live beside it.
+set(_ggml_hrx_hip_shared_headers)
+file(GLOB _ggml_hrx_hip_shared_headers CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels/*.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels/*.inc" "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels/*.cuh")
+
 set(_ggml_hrx_hip_dir "${CMAKE_CURRENT_BINARY_DIR}/hip-code-objects")
 file(MAKE_DIRECTORY "${_ggml_hrx_hip_dir}")
 
@@ -86,6 +96,10 @@ set(_ggml_hrx_hip_entries)
 foreach(_source ${GGML_HRX_HIP_KERNEL_SOURCES})
     get_filename_component(_stem "${_source}" NAME_WE)
     get_filename_component(_source_dir "${_source}" DIRECTORY)
+    # the headers beside this kernel, plus the backend's own if the kernel is an add-on
+    file(GLOB _source_headers CONFIGURE_DEPENDS
+        "${_source_dir}/*.h" "${_source_dir}/*.hpp" "${_source_dir}/*.inc" "${_source_dir}/*.cuh")
+    set(_ggml_hrx_hip_kernel_headers ${_source_headers} ${_ggml_hrx_hip_shared_headers})
     foreach(_target ${GGML_HRX_HIP_TARGETS})
         set(_object "${_ggml_hrx_hip_dir}/${_stem}.${_target}.hsaco")
         add_custom_command(
@@ -94,7 +108,7 @@ foreach(_source ${GGML_HRX_HIP_KERNEL_SOURCES})
                     --no-gpu-bundle-output ${_ggml_hrx_hip_flags}
                     -I "${_source_dir}" -I "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels"
                     -MD -MF "${_object}.d" -o "${_object}" "${_source}"
-            DEPENDS "${_source}"
+            DEPENDS "${_source}" ${_ggml_hrx_hip_kernel_headers}
             DEPFILE "${_object}.d"
             COMMENT "HIP code object ${_stem} (${_target})"
             VERBATIM)
