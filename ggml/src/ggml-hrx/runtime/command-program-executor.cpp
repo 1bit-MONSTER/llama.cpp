@@ -587,10 +587,15 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         // depending on that one flag (engine #969 measurement: usage ANY -> 1400/2560 nonfinite, usage WEIGHTS -> 9.7e-3,
         // byte-identical from a host or a device source). Refuse the program instead: a failed graph can be seen, a
         // wrong number cannot.
-        if (!materialize_weight && access.transformed_read && !access.layout_conflict) {
+        // This also has to fire when the program asks for two layouts of the value (`layout_conflict`): the conflict
+        // branch below is only reached for a *flagged* weight binding, so `ANY` + conflict used to fall through to the
+        // raw binding and run anyway (same Q6_K tile, one gated q8_1 consumer + one get_rows of the SAME weight: the
+        // get_rows consumer matches and the packed one returns 1400/2560 nonfinite, rc=0).
+        if (!materialize_weight && access.transformed_read) {
             status.log("value %d is read in the packed weight layout '%s' but its buffer is not flagged as weights "
-                       "(GGML_BACKEND_BUFFER_USAGE_WEIGHTS); refusing to run that kernel over unpacked weight bytes",
-                       binding.value.value, access.layout.c_str());
+                       "(GGML_BACKEND_BUFFER_USAGE_WEIGHTS)%s; refusing to run that kernel over unpacked weight bytes",
+                       binding.value.value, access.layout.c_str(),
+                       access.layout_conflict ? " and the program also asks for a second, incompatible layout of it" : "");
             return CommandProgramBindings::from_bindings({}, status);
         }
         if (binding.length == 0 || (!binding.requires_materialization() && !materialize_weight)) {
