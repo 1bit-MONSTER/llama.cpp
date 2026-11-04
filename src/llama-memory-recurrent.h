@@ -2,6 +2,7 @@
 
 #include "llama-batch.h"
 #include "llama-graph.h"
+#include "llama-kv-share.h"
 #include "llama-memory.h"
 
 #include <map>
@@ -55,6 +56,20 @@ public:
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
 
     bool prepare(const std::vector<llama_ubatch> & ubatches);
+
+    // [1bit] target 1: the shared-region handoff the KV cache has (llama-kv-share.cpp), for the recurrent half of a
+    // hybrid memory. qwen35's GDN layers keep 151 MB of state per request, which the file route writes once and
+    // reads once on every handoff whatever the prompt length is; as a shared region it stays where it is.
+    bool share_from(const llama_memory_recurrent & src);
+    bool share_import(const std::vector<llama_kv_shared_region_pod> & regions, size_t & next);
+    bool cells_copy_from(const llama_memory_recurrent & src);
+
+    // [1bit] target 1: an outside provider prefilled into the exported region, so its last cell holds the state
+    // after n_tokens of seq_id. Adopt that cell as the sequence's tail without touching the tensor data.
+    bool cells_adopt(uint32_t n_tokens, llama_seq_id seq_id);
+
+    // [1bit] the exported regions of this memory, owner side: flattened [buffer][chunk], appended
+    bool share_regions(std::vector<llama_kv_shared_region_pod> & out) const;
 
     // find a contiguous slot of memory cells and emplace the ubatch there
     bool find_slot(const llama_ubatch & ubatch);
@@ -122,6 +137,9 @@ private:
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+
+    // [1bit] exported regions of this memory's buffers, owner side (llama-kv-share.cpp)
+    std::vector<std::vector<llama_kv_shared_region>> shared_; // per buffer: its chunks
 
     size_t total_size() const;
 

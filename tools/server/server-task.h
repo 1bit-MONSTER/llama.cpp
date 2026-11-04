@@ -584,6 +584,7 @@ struct server_task_result_slot_share : server_task_result {
     int32_t  flash_attn = 0;
     int32_t  type_k     = 0;
     int32_t  type_v     = 0;
+    uint32_t n_rs_seq   = 0;
 
     double t_ms = 0;
 

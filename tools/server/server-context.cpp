@@ -2715,9 +2715,8 @@ private:
                     // the count first (n_out = 0 fills nothing), then the regions
                     const size_t n_regions = llama_kv_share_regions(ctx_tgt, nullptr, 0);
                     if (n_regions == 0) {
-                        send_error(task, "This server's KV cache has no shareable region: either it was not created with "
-                                         "ONEBIT_KV_SHARE=1, or the model is hybrid and its recurrent state is not "
-                                         "shareable (target 1 shares llama_kv_cache only)",
+                        send_error(task, "This server's memory has no shareable region: it was not created with "
+                                         "ONEBIT_KV_SHARE=1",
                                          ERROR_TYPE_NOT_SUPPORTED);
                         break;
                     }
@@ -2744,6 +2743,7 @@ private:
                     res->flash_attn = share_params.flash_attn;
                     res->type_k     = share_params.type_k;
                     res->type_v     = share_params.type_v;
+                    res->n_rs_seq   = share_params.n_rs_seq;
                     res->t_ms       = (ggml_time_us() - t_start) / 1000.0;
                     queue_results.send(std::move(res));
                 } break;
@@ -5437,6 +5437,7 @@ static bool kv_share_send(const std::string & socket_path, const server_task_res
             { "flash_attn", r.flash_attn },
             { "type_k",     r.type_k     },
             { "type_v",     r.type_v     },
+            { "n_rs_seq",   r.n_rs_seq   },
         }},
     };
     nlohmann::json regions = nlohmann::json::array();

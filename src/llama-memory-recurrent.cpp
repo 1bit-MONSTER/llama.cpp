@@ -4,6 +4,7 @@
 #include "llama-impl.h"
 #include "llama-io.h"
 #include "llama-batch.h"
+#include "llama-kv-share.h"
 #include "llama-model.h"
 
 #include <algorithm>
@@ -116,9 +117,16 @@ llama_memory_recurrent::llama_memory_recurrent(
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
     for (auto & [buft, ctx] : ctx_map) {
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
-        if (!buf) {
-            throw std::runtime_error("failed to allocate buffer for rs cache");
+        ggml_backend_buffer_t buf;
+        if (llama_kv_share_enabled() && !hparams.no_alloc) {
+            std::vector<llama_kv_shared_region> chunks;
+            buf = llama_share_alloc(ctx.get(), buft, chunks); // [1bit] exportable region (llama-kv-share.cpp)
+            shared_.push_back(std::move(chunks));
+        } else {
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
+            if (!buf) {
+                throw std::runtime_error("failed to allocate buffer for rs cache");
+            }
         }
         ggml_backend_buffer_clear(buf, 0);
         LLAMA_LOG_INFO("%s: %10s RS buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
@@ -405,6 +413,101 @@ void llama_memory_recurrent::set_rs_idx(llama_seq_id seq_id, uint32_t idx) {
         return;
     }
     rs_idx[seq_id] = (idx > n_rs_seq) ? n_rs_seq : idx;
+}
+
+// [1bit] target 1: the recurrent half of a shared memory. Same contract as the KV cache's
+// (llama_kv_share.cpp): the owner exports its buffers as dma-bufs, the provider maps them and prefills into them, so
+// a hybrid model's handoff moves its cells and not its bytes.
+
+bool llama_memory_recurrent::share_regions(std::vector<llama_kv_shared_region_pod> & out) const {
+    if (shared_.empty()) {
+        return false;
+    }
+    for (const auto & chunks : shared_) {
+        for (const auto & r : chunks) {
+            out.push_back({ r.fd, r.offset, r.size, r.layout });
+        }
+    }
+    return true;
+}
+
+bool llama_memory_recurrent::share_from(const llama_memory_recurrent & src) {
+    if (src.shared_.empty()) {
+        LLAMA_LOG_ERROR("%s: the source recurrent memory has %zu shared buffers\n", __func__, src.shared_.size());
+        return false;
+    }
+    std::vector<llama_kv_shared_region_pod> regions;
+    for (const auto & chunks : src.shared_) {
+        for (const auto & r : chunks) {
+            regions.push_back({ r.fd, r.offset, r.size, r.layout });
+        }
+    }
+    size_t next = 0;
+    return share_import(regions, next) && next == regions.size();
+}
+
+bool llama_memory_recurrent::share_import(const std::vector<llama_kv_shared_region_pod> & regions, size_t & next) {
+    if (regions.empty()) {
+        LLAMA_LOG_ERROR("%s: no shared regions to import\n", __func__);
+        return false;
+    }
+    for (size_t i = 0; i < ctxs_bufs.size(); ++i) {
+        ggml_context * ctx = ctxs_bufs[i].first.get();
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(ctxs_bufs[i].second.get());
+        ggml_backend_buffer_t buf = llama_share_import(ctx, buft, regions, next);
+        if (buf == nullptr) {
+            return false;
+        }
+        ctxs_bufs[i].second.reset(buf); // frees the buffer this memory had
+    }
+    return true;
+}
+
+bool llama_memory_recurrent::cells_copy_from(const llama_memory_recurrent & src) {
+    // metadata only: both memories are the same buffer, so the source's cells describe this one's state
+    if (size != src.size || n_seq_max != src.n_seq_max || rs_idx.size() != src.rs_idx.size()) {
+        LLAMA_LOG_ERROR("%s: %u/%u cells and %u/%u sequences do not match the source\n", __func__,
+                        size, src.size, n_seq_max, src.n_seq_max);
+        return false;
+    }
+    cells  = src.cells;
+    rs_idx = src.rs_idx;
+    used   = src.used;
+    head   = src.head;
+    rs_z   = src.rs_z;
+    n      = src.n;
+    return true;
+}
+
+bool llama_memory_recurrent::cells_adopt(uint32_t n_tokens, llama_seq_id seq_id) {
+    if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max || n_tokens == 0) {
+        LLAMA_LOG_ERROR("%s: bad sequence %d or %u tokens\n", __func__, seq_id, n_tokens);
+        return false;
+    }
+    if (size == 0) {
+        LLAMA_LOG_ERROR("%s: the recurrent memory has no cells\n", __func__);
+        return false;
+    }
+    seq_rm(seq_id, -1, -1);
+    // a provider that starts from this region's empty state keeps its sequence's state in cell 0, so anything still
+    // held there belongs to another sequence and must not be overwritten silently
+    if (!cells[0].is_empty()) {
+        LLAMA_LOG_ERROR("%s: cell 0 is not free for the shared prompt (held by sequence %d)\n", __func__,
+                        cells[0].seq_id.empty() ? -1 : (int) *cells[0].seq_id.begin());
+        return false;
+    }
+    cells[0].pos = (llama_pos) n_tokens - 1;
+    cells[0].src = -1;
+    cells[0].seq_id.clear();
+    cells[0].seq_id.insert(seq_id);
+    cells[seq_id].tail = 0;
+    used += 1;
+    head  = 0;
+    rs_z  = 0;
+    set_rs_idx(seq_id, 0);
+    LLAMA_LOG_INFO("%s: adopted the state after %u tokens as cell 0 of sequence %d (no data moved)\n", __func__,
+                   n_tokens, seq_id);
+    return true;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_memory_recurrent::memory_breakdown() const {

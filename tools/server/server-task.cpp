@@ -1627,6 +1627,7 @@ json server_task_result_slot_share::to_json() {
             { "flash_attn", flash_attn },
             { "type_k",     type_k     },
             { "type_v",     type_v     },
+            { "n_rs_seq",   n_rs_seq   },
         }},
         { "timings", {
             { "share_ms", t_ms }
