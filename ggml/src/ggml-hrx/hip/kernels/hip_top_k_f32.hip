@@ -40,6 +40,42 @@ constexpr uint32_t kTopKBuckets    = 2048u;
 constexpr uint32_t kTopKLanes      = 256u;
 constexpr uint32_t kTopKBucketBits = 11u;  // per level; the last level uses 10 and masks with `bits`
 
+// r3_d0, vectorised visits. The measured limit at rows=1 is memory-level parallelism, not passes: one pass over a
+// 200,000-element row is 781 iterations per lane and costs ~143 ns each, i.e. ~300 cycles -- one un-hidden DRAM
+// latency per iteration, because a lane has a single outstanding load and the workgroup is only 4 waves. Reading four
+// floats per iteration puts 4x the bytes in flight for the same number of latency round trips, and every pass (the
+// three histograms and the emit) gets it, since they all walk the row through the same helper.
+__device__ __forceinline__ bool topk_vec4_ok(const float * base, uint32_t n) {
+    // The row base already includes the pitch (src + row * column_count), so testing this pointer is enough: a pitch
+    // that is not a multiple of 4 leaves the following rows unaligned and they simply take the scalar path.
+    return n >= 4u && ((reinterpret_cast<uintptr_t>(base) & 15u) == 0u);
+}
+
+// Calls f(index, value) for every element of the row, four at a time when the row is 16-byte aligned, with a scalar
+// tail. Index order is ascending either way, so slot numbering and the ties rule are unchanged.
+template <typename F>
+__device__ __forceinline__ void topk_visit(const float * __restrict__ base, uint32_t n, uint32_t lane, F && f) {
+    if (topk_vec4_ok(base, n)) {
+        const float4 * b4 = reinterpret_cast<const float4 *>(base);
+        const uint32_t n4 = n >> 2;
+        for (uint32_t i = lane; i < n4; i += kTopKLanes) {
+            const float4 v = b4[i];
+            const uint32_t e = i << 2;
+            f(e + 0u, v.x);
+            f(e + 1u, v.y);
+            f(e + 2u, v.z);
+            f(e + 3u, v.w);
+        }
+        for (uint32_t i = (n4 << 2) + lane; i < n; i += kTopKLanes) {
+            f(i, base[i]);
+        }
+    } else {
+        for (uint32_t i = lane; i < n; i += kTopKLanes) {
+            f(i, base[i]);
+        }
+    }
+}
+
 __device__ __forceinline__ uint32_t topk_key(float value) {
     const uint32_t bits = __builtin_bit_cast(uint32_t, value);
     // sign set -> invert every bit (negatives sort below, more negative lower); sign clear -> set the top bit.
@@ -50,7 +86,11 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
                                                                int32_t * __restrict__ dst, uint32_t column_count,
                                                                uint32_t top_k) {
     __shared__ uint32_t hist[kTopKBuckets];
+    __shared__ uint32_t lane_sum[kTopKLanes];
+    __shared__ uint32_t bucket_found;
+    __shared__ uint32_t take_found;
     __shared__ uint32_t emitted;
+    __shared__ uint32_t emitted_eq;
     __shared__ uint32_t threshold_key;
     __shared__ uint32_t next_remaining;
 
@@ -75,34 +115,74 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
         for (uint32_t b = lane; b < kTopKBuckets; b += kTopKLanes) {
             hist[b] = 0u;
         }
-        __syncthreads();
-
-        for (uint32_t i = lane; i < column_count; i += kTopKLanes) {
-            const uint32_t key = topk_key(base[i]);
-            if (prefix_len == 0u || (key >> (32u - prefix_len)) == prefix) {
-                atomicAdd(&hist[(key >> shift) & mask], 1u);
-            }
+        if (lane == 0u) {
+            // Exactly one lane satisfies suffix_incl >= remaining > suffix_excl, because the histogram of matching
+            // elements sums to >= remaining, so these are always written. Reset anyway: if that invariant ever failed,
+            // a stale `take_found` could make `remaining` exceed `top_k`, and `above_slots = top_k - remaining` would
+            // wrap the emit's slot guard into an out-of-bounds write. Two stores per level buy that bound.
+            bucket_found = 0u;
+            take_found   = remaining;   // remaining <= top_k always, so above_slots cannot wrap
         }
         __syncthreads();
 
-        // Descending scan: the bucket where the running total first reaches `remaining`.
-        if (lane == 0u) {
-            uint32_t cumulative = 0u;
-            uint32_t bucket     = 0u;
-            uint32_t take       = remaining;
-            for (uint32_t b = kTopKBuckets; b-- > 0u;) {
-                const uint32_t count = hist[b];
+        topk_visit(base, column_count, lane, [&](uint32_t i, float value) {
+            const uint32_t key = topk_key(value);
+            (void) i;
+            if (prefix_len == 0u || (key >> (32u - prefix_len)) == prefix) {
+                atomicAdd(&hist[(key >> shift) & mask], 1u);
+            }
+        });
+        __syncthreads();
+
+        // Descending scan, cooperatively (r1_d0). The serial form was 2,048 dependent LDS reads in lane 0 per
+        // level -- the measured ~100 us fixed cost. Here each lane owns kPerLane = 8 consecutive buckets, a reverse
+        // (suffix) inclusive scan over the 256 per-lane chunk sums is done as an LDS Hillis-Steele tree (8 steps,
+        // 2 syncs each), and only the crossing lane walks its own 8 buckets. Same bucket and same residue as the
+        // serial scan, ties included: the selected bucket is "the highest b whose inclusive suffix count >=
+        // remaining", which is exactly what the serial descending loop finds.
+        //
+        // Deliberately NOT a warp-shuffle scan: the first version used __shfl_down_sync and returned wrong index sets
+        // (ERR 4.0, then 0.667 after a range guard) because shfl's out-of-range behaviour and the wave width are not
+        // something this kernel should depend on. The LDS tree is wave-agnostic and costs a few hundred nanoseconds.
+        constexpr uint32_t kPerLane = kTopKBuckets / kTopKLanes;   // 8
+        const uint32_t b0 = lane * kPerLane;
+
+        uint32_t chunk = 0u;
+        #pragma unroll
+        for (uint32_t i = 0u; i < kPerLane; ++i) {
+            chunk += hist[b0 + i];
+        }
+        // reverse inclusive scan over lane chunk sums: lane_sum[l] = sum of chunks for lanes [l .. kTopKLanes)
+        lane_sum[lane] = chunk;
+        __syncthreads();
+        for (uint32_t off = 1u; off < kTopKLanes; off <<= 1u) {
+            const uint32_t v = (lane + off < kTopKLanes) ? lane_sum[lane + off] : 0u;
+            __syncthreads();
+            lane_sum[lane] += v;
+            __syncthreads();
+        }
+        const uint32_t suffix_incl = lane_sum[lane];
+        const uint32_t suffix_excl = suffix_incl - chunk;
+        if (suffix_incl >= remaining && suffix_excl < remaining) {
+            uint32_t cumulative = suffix_excl;
+            uint32_t bucket     = b0;
+            uint32_t take       = remaining - cumulative;
+            #pragma unroll
+            for (uint32_t i = kPerLane; i-- > 0u;) {
+                const uint32_t count = hist[b0 + i];
                 if (cumulative + count >= remaining) {
-                    bucket = b;
+                    bucket = b0 + i;
                     take   = remaining - cumulative;
                     break;
                 }
                 cumulative += count;
             }
-            threshold_key  = (prefix << bits) | bucket;
-            next_remaining = take;
+            bucket_found = bucket;
+            take_found   = take;
         }
         __syncthreads();
+        threshold_key  = (prefix << bits) | bucket_found;
+        next_remaining = take_found;
 
         prefix      = threshold_key;          // already includes the bits of this level
         prefix_len += bits;
@@ -110,27 +190,32 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
     }
 
     if (lane == 0u) {
-        emitted = 0u;
+        emitted    = 0u;
+        emitted_eq = 0u;
     }
     __syncthreads();
 
-    // Everything strictly above the rank-k key, then enough of the equal group to reach k. Order is not part of
-    // the contract, and the second loop stops as soon as k slots are taken.
-    for (uint32_t i = lane; i < column_count; i += kTopKLanes) {
-        if (topk_key(base[i]) > threshold_key) {
+    // above_slots is `top_k - remaining` with remaining <= top_k by construction, so this cannot wrap; the guard below
+    // is kept as a cheap second line of defence rather than a load-bearing condition.
+    const uint32_t above_slots = top_k - remaining;
+
+    // Emit in ONE pass over the row instead of two (r1_d3). The split is known before the pass: the rank-k key was
+    // chosen so that exactly `top_k - remaining` elements are strictly above it, and `remaining` of them are equal to
+    // it, so the two groups get disjoint slot ranges without a second scan -- ">" into [0, above_slots) and the equal
+    // group into [above_slots, top_k). Order is not part of the contract (ggml's TOP_K contract is the index set), and
+    // the per-group slot guard is what keeps the result duplicate-free, which is the `ties` variant's requirement.
+    topk_visit(base, column_count, lane, [&](uint32_t i, float value) {
+        const uint32_t key = topk_key(value);
+        if (key > threshold_key) {
             const uint32_t slot = atomicAdd(&emitted, 1u);
-            if (slot < top_k) {
+            if (slot < above_slots) {
                 out[slot] = (int32_t) i;
             }
-        }
-    }
-    __syncthreads();
-    for (uint32_t i = lane; i < column_count; i += kTopKLanes) {
-        if (topk_key(base[i]) == threshold_key) {
-            const uint32_t slot = atomicAdd(&emitted, 1u);
-            if (slot < top_k) {
-                out[slot] = (int32_t) i;
+        } else if (key == threshold_key) {
+            const uint32_t slot = atomicAdd(&emitted_eq, 1u);
+            if (slot < remaining) {
+                out[above_slots + slot] = (int32_t) i;
             }
         }
-    }
+    });
 }
