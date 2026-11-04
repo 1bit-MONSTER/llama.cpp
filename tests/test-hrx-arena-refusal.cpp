@@ -89,7 +89,9 @@ int main() {
         expect_contains(text, "limit 4096.0 MiB", "budget-4096");
     }
 
-    // A genuine capacity miss keeps the engine #788 wording, and its number is still the arithmetic it claims.
+    // A genuine capacity miss must not print the snapshot as advice: `resident + parked` is bounded by the limit, so the
+    // number is always "limit + one weight" (engine #900 measured 2304 -> "raise to at least 2310" on a run that needs
+    // 2560, i.e. a 6 MiB-at-a-time climb, and a snapshot below the budget in force on the same ladder).
     {
         ArenaMiss miss;
         miss.need          = 500 * MiB;
@@ -103,7 +105,31 @@ int main() {
         const std::string text = describe(miss);
         expect(!fragmented(miss), "capacity", "free < need is a capacity miss");
         expect_contains(text, "cannot hold this model's per-execution working set", "capacity");
-        expect_contains(text, "Raise it to at least 4032 MiB", "capacity");  // 500 + 1983 + 1549
+        expect_contains(text, "limit 4096.0 MiB", "capacity");
+        expect_absent(text, "Raise it to at least", "capacity");
+        expect_absent(text, "4032 MiB", "capacity");  // 500 + 1983 + 1549 must not be offered as the answer
+        expect_contains(text, "unset GGML_HRX_HOST_WEIGHT_LIMIT_MB", "capacity");
+        expect_contains(text, "well above the current limit", "capacity");
+        expect(text.back() != '\n', "capacity", "one sentence, no trailing newline");
+    }
+
+    // The issue's own capacity measurement (Qwen3-4B, budget 2304 MiB, refuse; 2560 MiB, runs): the snapshot asks for
+    // 2310 MiB, which is 2.2 % of the real gap, so the message must not name it as the budget to set.
+    {
+        ArenaMiss miss;
+        miss.need          = (size_t) (12.6 * MiB);
+        miss.free_bytes    = (size_t) (7.1 * MiB);
+        miss.free_blocks   = 1;
+        miss.largest_block = (size_t) (7.1 * MiB);
+        miss.resident      = (size_t) (2231.7 * MiB);
+        miss.parked        = (size_t) (65.2 * MiB);
+        miss.capacity      = 2304 * MiB;
+        miss.limit         = 2304 * MiB;
+        const std::string text = describe(miss);
+        expect(!fragmented(miss), "budget-2304", "free < need is a capacity miss");
+        expect_absent(text, "Raise it to at least", "budget-2304");
+        expect_absent(text, "2310", "budget-2304");
+        expect_contains(text, "unset GGML_HRX_HOST_WEIGHT_LIMIT_MB", "budget-2304");
     }
 
     // Unbounded (the default) has no limit to raise, and must not divide by it or invent one.
@@ -117,7 +143,9 @@ int main() {
         miss.limit         = 0;
         const std::string text = describe(miss);
         expect(!fragmented(miss), "unbounded", "not fragmented");
-        expect_contains(text, "limit 0.0 MiB", "unbounded");
+        expect_contains(text, "GGML_HRX_HOST_WEIGHT_LIMIT_MB is unset", "unbounded");
+        expect_absent(text, "Raise it to at least", "unbounded");
+        expect_absent(text, "limit 0.0 MiB", "unbounded");
     }
 
     // The corner the predicate must not over-claim on: a block large enough exists, so the take failed for another
@@ -139,6 +167,6 @@ int main() {
         std::printf("test-hrx-arena-refusal: %d failure(s)\n", failures);
         return 1;
     }
-    std::printf("test-hrx-arena-refusal: all cases ok (5 arms)\n");
+    std::printf("test-hrx-arena-refusal: all cases ok (6 arms)\n");
     return 0;
 }
