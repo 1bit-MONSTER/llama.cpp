@@ -785,6 +785,17 @@ class ModelBase:
         del experts, merged
 
     def prepare_tensors(self):
+        # A directory that has a config, an index and a tokenizer but no weight files - what a disk purge leaves
+        # behind - would otherwise convert "successfully" into a metadata-only GGUF: index_tensors() picks the
+        # index filename from whether shards were found, so it reads no index, finds no parts, and skips its own
+        # missing-tensor check (that check's name set comes from the index). Refuse instead. This sits here and not
+        # in index_tensors() because index_tensors() also runs for --vocab-only, which has no weights by design.
+        if self.remote_hf_model_id is None:
+            prefix = "model" if not self.is_mistral_format else "consolidated"
+            if (not ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
+                    and not ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")):
+                raise ValueError(f"no model weight files in {self.dir_model} (expected {prefix}*.safetensors or pytorch_model*.bin)")
+
         # detect NVFP4 quantization (ModelOpt and Compressed-tensors formats)
         quantization_config = self.hparams.get("quantization_config") or {}
         quant_algo = quantization_config.get("quant_algo")
