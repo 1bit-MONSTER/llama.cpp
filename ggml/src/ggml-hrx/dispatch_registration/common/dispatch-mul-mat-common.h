@@ -141,6 +141,10 @@ inline bool common_is_supported_dense_input_size(CommonMulMatWeightFormat format
     return common_mul_mat_supported_dense_input_size(format, input_size);
 }
 
+inline bool common_is_supported_plain_dense_input_size(CommonMulMatWeightFormat format, int64_t input_size) {
+    return common_mul_mat_supported_plain_dense_input_size(format, input_size);
+}
+
 inline bool common_is_supported_dense_output_size(int64_t output_size) {
     return output_size >= 1 && output_size <= 262144;
 }
@@ -449,7 +453,8 @@ inline bool common_fused_binary_kind_from_params(const OpParams & params, Binary
 inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph,
                                                          const GraphNode * node,
                                                          KernelCatalogRef  kernel,
-                                                         bool              decode) {
+                                                         bool              decode,
+                                                         bool              elementwise_k_tail = false) {
     CommonMulMatMatch match;
     if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
         return match;
@@ -475,7 +480,9 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
     const bool    token_count_supported = decode ? common_is_supported_decode_token_count(token_count) :
                                                    common_is_supported_prefill_token_count(token_count);
     if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
-        !token_count_supported || !common_is_supported_dense_input_size(format, input_size) ||
+        !token_count_supported ||
+        !(elementwise_k_tail ? common_is_supported_plain_dense_input_size(format, input_size) :
+                               common_is_supported_dense_input_size(format, input_size)) ||
         !(decode ? common_is_supported_dense_decode_output_size(format, input_size, output_size) :
                    common_is_supported_dense_output_size(output_size))) {
         return {};

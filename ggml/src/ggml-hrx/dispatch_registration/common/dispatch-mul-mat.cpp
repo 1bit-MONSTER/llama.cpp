@@ -1312,7 +1312,7 @@ static void build_decode_mul_mat_dispatch(const CommonMulMatMatch & match,
 
 static bool match_mul_mat_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     CommonMulMatMatch match =
-        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel, false);
+        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel, false, true);
     if (!match.matched()) {
         return false;
     }
@@ -1322,7 +1322,7 @@ static bool match_mul_mat_dispatch(const DispatchMatchContext & context, Dispatc
 
 static bool match_mul_mat_unary_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     CommonMulMatMatch match =
-        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel, false);
+        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel, false, true);
     if (!match.matched() || !try_match_fused_unary(context, match)) {
         return false;
     }
@@ -1331,7 +1331,7 @@ static bool match_mul_mat_unary_dispatch(const DispatchMatchContext & context, D
 
 static bool match_decode_mul_mat_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     CommonMulMatMatch match =
-        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32DecodeWave64Kernel, true);
+        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32DecodeWave64Kernel, true, true);
     if (!match.matched()) {
         return false;
     }
