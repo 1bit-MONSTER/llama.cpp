@@ -363,6 +363,12 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-host-memory-available PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-host-memory-available COMMAND test-hrx-host-memory-available)
 
+    # the one number a bounded run is judged on: the materialized bytes the model's host weights need (engine #669/#900)
+    add_executable(test-hrx-host-weight-working-set test-hrx-host-weight-working-set.cpp
+        ../ggml/src/ggml-hrx/runtime/host-weight-working-set.cpp)
+    target_include_directories(test-hrx-host-weight-working-set PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-host-weight-working-set COMMAND test-hrx-host-weight-working-set)
+
     add_executable(test-hrx-buffer test-hrx-buffer.cpp)
     target_link_libraries(test-hrx-buffer PRIVATE ggml-hrx ggml hrx::hrx)
     target_include_directories(test-hrx-buffer PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)

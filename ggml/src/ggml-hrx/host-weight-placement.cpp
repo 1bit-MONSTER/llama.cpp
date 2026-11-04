@@ -19,6 +19,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml.h"
 #include "runtime/host-memory.h"
+#include "runtime/host-weight-working-set.h"
 
 namespace ggml::hrx {
 
@@ -52,6 +53,17 @@ bool host_weight_exceeds_residency(const ggml_tensor * op) {
     const size_t limit = HostWeightCache::residency_limit();
     if (limit == 0) {
         return false;
+    }
+    // engine #669/#900: once the model's host-weight set is known it is what the budget bounds, so the answer is one
+    // number for every host weight instead of a per-weight test against a size that is not the resident size. Before
+    // the first execution has been measured there is nothing to compare, so the per-weight file-size test below stays
+    // as the first-graph estimate.
+    // Only the direction the set can prove: if the model's host weights alone already exceed the budget, no ordering
+    // of them fits, so decline every host-weight op and let the CPU serve it. The other direction is NOT implied - the
+    // arena also has to hold the slots parked while programs are in flight (measured: 167.3 MiB resident + 343.2 MiB
+    // parked for a 304 MiB set at a 512 MiB budget), so a set that fits is not a run that fits.
+    if (host_weight_working_set_exceeds(limit)) {
+        return true;
     }
     for (int i = 0; i < GGML_MAX_SRC; ++i) {
         const ggml_tensor * weight = op->src[i];

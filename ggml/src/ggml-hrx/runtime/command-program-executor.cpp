@@ -6,6 +6,7 @@
 #include "hrx-interop-utils.h"
 #include "runtime/graph-record-order.h"
 #include "runtime/host-gap-profile.h"
+#include "runtime/host-weight-working-set.h"
 #include "runtime/hrx-sleeping-wait.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/transient-arena.h"
@@ -577,6 +578,40 @@ static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(
     return access_by_value;
 }
 
+// Materialized bytes this binding is about to ask HostWeightCache::acquire() for, or 0 when it never gets there.
+// Mirrors the request site in materialize_host_bindings() below (including the #914 skip and the #192 refusal), so the
+// number the budget is judged on cannot drift from the number that is charged.
+static size_t resident_request_bytes(const CommandProgramBinding & binding, const GraphValueAccess * access) {
+    if (access == nullptr) {
+        return 0;
+    }
+    const bool materialize_weight = binding.weight && access->read && !access->write &&
+                                    (binding.requires_materialization() || access->transformed_read);
+    if (!materialize_weight || access->layout_conflict || binding.length == 0) {
+        return 0;
+    }
+    const size_t source_length = access->transformed_read ? access->source_length : binding.length;
+    if (source_length > binding.length) {
+        return 0;
+    }
+    return access->transformed_read ? access->materialized_length : binding.length;
+}
+
+// engine #669/#900: record what this program needs resident, before it asks for any of it. One entry per distinct
+// weight, so the total is the model's host-weight set rather than the same weight counted once per program.
+static size_t observe_host_weight_working_set(const CommandProgramBindings &                        bindings,
+                                              const std::unordered_map<int32_t, GraphValueAccess> & access_by_value) {
+    size_t total = 0;
+    for (const CommandProgramBinding & binding : bindings.bindings()) {
+        const auto   found = access_by_value.find(binding.value.value);
+        const auto * access = found != access_by_value.end() ? &found->second : nullptr;
+        const size_t bytes  = resident_request_bytes(binding, access);
+        host_weight_working_set_observe(binding.identity, binding.generation, bytes);
+        total += bytes;
+    }
+    return total;
+}
+
 static CommandProgramBindings materialize_host_bindings(const CommandProgramExecutionContext & context,
                                                         const CommandProgram &                 commands,
                                                         const CommandProgramBindings &         bindings,
@@ -585,6 +620,35 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
     Status                             status;
     materialized.reserve(bindings.bindings().size());
     const std::unordered_map<int32_t, GraphValueAccess> access_by_value = collect_graph_value_access(commands);
+    // engine #669/#900: judge the budget against the set of host weights the model needs, not against one weight at a
+    // time. The per-weight basis is not knowable before the carrier is chosen (acquire() charges the materialized
+    // length: 132 B per row-block for the shared4 carrier against 136 B in the file for IQ4_XS, or 144 B for row64),
+    // and the arena's advice (need + resident + parked) is a snapshot that moves with the budget - following it cycles,
+    // measured 38 <-> 44 MiB on Qwen3-4B-IQ4_XS. Reported, not refused: a budget below the set means these weights run
+    // on the CPU, which placement now decides with the same number.
+    const size_t program_bytes = observe_host_weight_working_set(bindings, access_by_value);
+    const size_t working_set   = host_weight_working_set_bytes();
+    if (const char * trace = std::getenv("GGML_HRX_HOST_WEIGHT_TRACE")) {
+        if (std::atoi(trace) != 0) {
+            GGML_LOG_INFO("hrx host weight working set: %.1f MiB accumulated, %.1f MiB in this program\n",
+                          working_set / (1024.0 * 1024.0), program_bytes / (1024.0 * 1024.0));
+        }
+    }
+    const size_t residency_limit = HostWeightCache::residency_limit();
+    if (residency_limit != 0 && working_set > residency_limit) {
+        static bool working_set_reported = false;
+        if (!working_set_reported) {
+            working_set_reported = true;
+            // GGML_LOG_ERROR, not GGML_LOG_WARN: the CLI's log sink drops WARN (the staging trace in this file notes
+            // the same thing), and a budget message nobody can read is not a budget message. Advisory only.
+            GGML_LOG_ERROR("hrx: the host weights this model needs come to %.1f MiB (%.1f MiB in this program), more "
+                           "than GGML_HRX_HOST_WEIGHT_LIMIT_MB=%zu MiB, so they run on the CPU. That figure is a lower "
+                           "bound: the arena also has to hold the slots parked while programs are in flight "
+                           "(engine #900).\n",
+                           working_set / (1024.0 * 1024.0), program_bytes / (1024.0 * 1024.0),
+                           residency_limit / (1024 * 1024));
+        }
+    }
     for (const CommandProgramBinding & binding : bindings.bindings()) {
         const auto             found_access = access_by_value.find(binding.value.value);
         const GraphValueAccess access =
@@ -633,7 +697,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             source.capacity   = binding.capacity;
             source.offset     = binding.offset;
             source.length              = access.transformed_read ? access.source_length : binding.length;
-            source.materialized_length = access.transformed_read ? access.materialized_length : binding.length;
+            source.materialized_length = resident_request_bytes(binding, &access);
             source.layout              = access.layout;
             source.source_type         = access.source_type;
             source.input_size          = access.input_size;

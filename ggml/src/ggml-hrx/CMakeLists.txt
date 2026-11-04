@@ -328,6 +328,8 @@ ggml_add_backend_library(ggml-hrx
     runtime/host-memory-available.h
     runtime/host-memory-ternary.cpp
     runtime/host-memory-ternary.h
+    runtime/host-weight-working-set.cpp
+    runtime/host-weight-working-set.h
     dispatch/ternary-q4-0.h
     runtime/kernel-executable-cache.cpp
     runtime/kernel-executable-cache.h
