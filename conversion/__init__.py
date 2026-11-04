@@ -264,6 +264,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "XverseForCausalLM": "xverse",
     "YoutuForCausalLM": "deepseek",
     "YoutuVLForConditionalGeneration": "deepseek",
+    "Zamba2ForCausalLM": "zamba2",
     "ZayaForCausalLM": "zaya",
     "Zaya1VLForConditionalGeneration": "zaya",
     "modeling_grove_moe.GroveMoeForCausalLM": "grovemoe",
