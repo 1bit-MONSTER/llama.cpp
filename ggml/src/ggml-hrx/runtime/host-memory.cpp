@@ -1754,6 +1754,11 @@ bool HostWeightCache::arena_reserve(hrx_device_t device,
         // Every slot in the old arena is gone, so no entry may keep pointing at it.
         entries_.clear();
         last_use_.clear();
+        // Slots parked for the running execution (arena_deferred_) are old-arena extents too: reclaiming them at
+        // end_execution would insert them into the new free list at offsets that overlap live allocations, so the
+        // cache would hand the same bytes to two weights. That was the whole of engine #900's fragmented refusal, and
+        // why it could report more parked than the arena's limit (205 MiB parked in a 200 MiB arena).
+        arena_deferred_.clear();
         stats_.resident_bytes = 0;
         resident_bytes_       = 0;
         arena_                = grown;
