@@ -1220,6 +1220,54 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         }
     }
 
+    // pass 3.5: an in-place node (SET_ROWS, *_INPLACE, ...) writes into the buffer of its view object,
+    // so it can only run where that storage lives. the passes above place it from its src[] instead, and
+    // pass 4 below adopts the view parent's backend only for a node that is still unassigned, so a node
+    // placed on the CPU can be given a device destination: the write then goes to a pointer the CPU cannot
+    // map (HRX device buffers are allocated at a fake base, engine #920). while the storage is still
+    // unallocated, move it to the node's backend; once it exists there is no other correct answer.
+    for (int i = 0; i < graph->n_nodes; i++) {
+        struct ggml_tensor * node = graph->nodes[i];
+        if (node->view_src == NULL || ggml_is_view_op(node->op)) {
+            continue;
+        }
+        const int node_backend_id = tensor_backend_id(node);
+        if (node_backend_id == -1) {
+            continue; // pass 4 gives it the view parent's backend
+        }
+        struct ggml_tensor * storage = node->view_src;
+        while (storage->view_src != NULL) {
+            storage = storage->view_src;
+        }
+        int storage_backend_id = tensor_backend_id(storage);
+        // an allocated buffer's type is a fact, an unallocated tensor's assignment is a guess: test the fact
+        const bool allocated = storage->buffer != NULL;
+        ggml_backend_buffer_type_t storage_buft = allocated
+            ? ggml_backend_buffer_get_type(storage->buffer)
+            : (storage_backend_id == -1 ? NULL : sched->bufts[storage_backend_id]);
+        if (storage_buft == NULL || ggml_backend_buft_is_host(storage_buft)) {
+            continue; // host memory is addressable from any backend
+        }
+        if (allocated) {
+            if (storage_backend_id == node_backend_id) {
+                continue; // one and the same device backend, the write stays in its own memory
+            }
+            GGML_ABORT("%s: %s writes in place into %s, whose buffer is %s, but the node is placed on %s\n",
+                       __func__, ggml_op_name(node->op), storage->name, ggml_backend_buft_name(storage_buft),
+                       ggml_backend_name(sched->backends[node_backend_id]));
+        }
+        if (storage_backend_id == node_backend_id) {
+            continue;
+        }
+        if (!ggml_backend_supports_op(sched->backends[node_backend_id], storage)) {
+            GGML_ABORT("%s: %s writes in place into %s, which lives on %s, and %s cannot produce it\n", __func__,
+                       ggml_op_name(node->op), storage->name, ggml_backend_name(sched->backends[storage_backend_id]),
+                       ggml_backend_name(sched->backends[node_backend_id]));
+        }
+        tensor_backend_id(storage) = node_backend_id;
+        SET_CAUSE(storage, "3.inpl");
+    }
+
     // pass 4: assign backends to remaining src from dst and view_src
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
