@@ -172,6 +172,9 @@ struct server_task {
         std::string socket;             // SHARE: where the provider listens for the regions
         std::vector<int32_t> tokens;    // ADOPT: the prompt tokens the provider prefilled into the region
         uint64_t    share_id = 0;       // SHARE out / ADOPT in: which export these cells belong to
+        // RESTORE / ADOPT: the client leaves the prompt's last token for this context to evaluate, so the
+        // handoff's cells are a strict prefix of what the next request carries (engine#941)
+        bool        leave_one_token = false;
     };
     slot_action slot_action;
 
