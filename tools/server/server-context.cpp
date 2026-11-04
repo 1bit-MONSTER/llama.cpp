@@ -2440,6 +2440,36 @@ private:
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
 
+    // [1bit] engine#941: a handoff (file or shared region) writes its cells into this slot's memory directly, so
+    // there is no state buffer to snapshot - what the prompt-cache search needs is the bookkeeping, and a
+    // checkpoint with no data is an existing shape (common_prompt_checkpoint::load_tgt returns at once when
+    // data_tgt is empty). Without it the search finds nothing, resets n_past to 0 and the decoder re-processes
+    // the whole prompt, which is the cost #941 measures. n_tokens must be exactly the number of cells the handoff
+    // put in place: the search then lands n_past on it and the request's last token is the one evaluated.
+    void create_inplace_checkpoint(server_slot & slot, const int64_t n_tokens) {
+        if (n_tokens <= 0 || slot.ctx_tgt == nullptr || params_base.n_ctx_checkpoints <= 0) {
+            return;
+        }
+        // a sliding-window cache holds a window, not the whole prefix, so [0, n_tokens-1] would be a lie and the
+        // checkpoint has no data to put the window back with; the model keeps today's re-process instead
+        if (llama_model_n_swa(llama_get_model(slot.ctx_tgt)) > 0) {
+            SLT_WRN(slot, "%s\n", "no in-place checkpoint for a sliding-window model: the handoff's cells are not the whole prefix");
+            return;
+        }
+
+        while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
+            slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
+        }
+
+        auto & cur = slot.prompt.checkpoints.emplace_back();
+
+        cur.id_task = slot.task == nullptr ? -1 : slot.task->id;
+        cur.update_pos(n_tokens, 0, n_tokens - 1);
+
+        SLT_TRC(slot, "created in-place checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", no data)\n",
+                cur.pos_min, cur.pos_max, cur.n_tokens);
+    }
+
     void process_single_task(server_task && task) {
         switch (task.type) {
             case SERVER_TASK_TYPE_COMPLETION:
@@ -2680,6 +2710,9 @@ private:
                     tokens.resize(token_count);
                     slot->prompt.clear();
                     slot->prompt.tokens.insert(tokens);
+                    if (task.slot_action.leave_one_token) {
+                        create_inplace_checkpoint(*slot, (int64_t) token_count);
+                    }
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
@@ -2787,6 +2820,9 @@ private:
                     slot->prompt.clear();
                     slot->prompt.tokens.insert(tokens);
                     kv_share_issued.erase(issued);   // single use
+                    if (task.slot_action.leave_one_token) {
+                        create_inplace_checkpoint(*slot, (int64_t) tokens.size());
+                    }
 
                     auto res = std::make_unique<server_task_result_slot_adopt>();
                     res->id       = task.id;
@@ -5375,6 +5411,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const 
         task.slot_action.id_slot  = id_slot;
         task.slot_action.filename = filename;
         task.slot_action.filepath = filepath;
+        // [1bit] engine#941: the caller promises the next request carries at least one token beyond this state,
+        // which is what makes an in-place checkpoint (a one-token decode instead of a re-process) correct
+        task.slot_action.leave_one_token = request_data.value("leave_one_token", false);
         rd.post_task(std::move(task));
     }
 
@@ -5584,6 +5623,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_adopt(const se
         task.slot_action.id_slot = id_slot;
         task.slot_action.tokens  = body.at("tokens").get<llama_tokens>();
         task.slot_action.share_id = body.at("share_id").get<uint64_t>();
+        // [1bit] engine#941: as for restore - the caller leaves the prompt's last token to this context
+        task.slot_action.leave_one_token = body.value("leave_one_token", false);
         rd.post_task(std::move(task));
     }
 
