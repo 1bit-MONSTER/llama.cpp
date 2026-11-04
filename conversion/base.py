@@ -219,6 +219,12 @@ class ModelBase:
         if not is_safetensors:
             part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
 
+        if not part_names:
+            # Without this, a directory that has a config/index/tokenizer but no shards converts "successfully"
+            # into a metadata-only GGUF: the index lookup below is keyed off is_safetensors (false here, so the
+            # wrong index name), and the name check after the loop is skipped when the index was never read.
+            raise ValueError(f"no model weight files in {self.dir_model} (expected {prefix}*.safetensors or pytorch_model*.bin)")
+
         tensor_names_from_index: set[str] = set()
         tensor_names_from_parts: set[str] = set()
 
