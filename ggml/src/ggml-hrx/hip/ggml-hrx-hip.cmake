@@ -64,6 +64,20 @@ foreach(_source ${GGML_HRX_HIP_KERNEL_SOURCES})
 endforeach()
 
 separate_arguments(_ggml_hrx_hip_flags UNIX_COMMAND "${GGML_HRX_HIP_FLAGS}")
+
+# amdclang++ locates the device-library bitcode at <resource-dir>/../../../amdgcn/bitcode. In a pip
+# (TheRock-style) SDK that is not where the driver looks, so every changed .hip fails with "cannot find
+# ROCm device library" while the already-built .hsaco hide it. Point at it unless the caller did.
+if (NOT GGML_HRX_HIP_FLAGS MATCHES "--rocm-(device-lib-)?path")
+    execute_process(COMMAND "${GGML_HRX_HIP_COMPILER}" --print-resource-dir
+        OUTPUT_VARIABLE _ggml_hrx_hip_resource_dir OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    get_filename_component(_ggml_hrx_hip_device_lib
+        "${_ggml_hrx_hip_resource_dir}/../../../amdgcn/bitcode" ABSOLUTE)
+    if (IS_DIRECTORY "${_ggml_hrx_hip_device_lib}")
+        list(APPEND _ggml_hrx_hip_flags "--rocm-device-lib-path=${_ggml_hrx_hip_device_lib}")
+    endif()
+endif()
+
 set(_ggml_hrx_hip_dir "${CMAKE_CURRENT_BINARY_DIR}/hip-code-objects")
 file(MAKE_DIRECTORY "${_ggml_hrx_hip_dir}")
 
