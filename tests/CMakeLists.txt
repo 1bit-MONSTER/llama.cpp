@@ -352,6 +352,11 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-graph-program-budget PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-graph-program-budget COMMAND test-hrx-graph-program-budget)
 
+    # the host-weight arena refusal's wording: pure helper, no device and no HRX link (engine #900)
+    add_executable(test-hrx-arena-refusal test-hrx-arena-refusal.cpp)
+    target_include_directories(test-hrx-arena-refusal PRIVATE ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-arena-refusal COMMAND test-hrx-arena-refusal)
+
     add_executable(test-hrx-buffer test-hrx-buffer.cpp)
     target_link_libraries(test-hrx-buffer PRIVATE ggml-hrx ggml hrx::hrx)
     target_include_directories(test-hrx-buffer PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
