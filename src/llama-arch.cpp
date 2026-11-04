@@ -68,6 +68,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MAMBA2,           "mamba2"           },
     { LLM_ARCH_JAMBA,            "jamba"            },
     { LLM_ARCH_FALCON_H1,        "falcon-h1"        },
+    { LLM_ARCH_BLACKMAMBA,       "blackmamba"       },
     { LLM_ARCH_ZAMBA2,           "zamba2"           },
     { LLM_ARCH_XVERSE,           "xverse"           },
     { LLM_ARCH_COMMAND_R,        "command-r"        },
@@ -1104,6 +1105,7 @@ bool llm_arch_is_recurrent(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_MAMBA:
         case LLM_ARCH_MAMBA2:
+        case LLM_ARCH_BLACKMAMBA:
         case LLM_ARCH_RWKV6:
         case LLM_ARCH_RWKV6QWEN2:
         case LLM_ARCH_RWKV7:
