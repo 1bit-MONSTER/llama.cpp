@@ -1649,7 +1649,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.yarn_orig_ctx     = params.yarn_orig_ctx;
     cparams.pooling_type      = params.pooling_type;
     cparams.attention_type    = params.attention_type;
-    cparams.flash_attn_type   = params.flash_attn_type;
+    cparams.flash_attn_type    = params.flash_attn_type;
+    cparams.fused_cross_device = params.fused_cross_device;
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.offload_kqv       = !params.no_kv_offload;

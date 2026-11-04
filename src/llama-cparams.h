@@ -47,6 +47,7 @@ struct llama_cparams {
     bool fused_dsv4_hc_comb;
     bool fused_dsv4_hc_post;
     bool auto_fhc;
+    bool fused_cross_device;  // keep a fused op enabled when its nodes are not all on the layer's device
     bool no_perf;
     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;

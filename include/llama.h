@@ -407,6 +407,10 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        bool fused_cross_device; // keep a fused op (Flash Attention, Lightning Indexer, DSV4 hyper-connection) enabled
+                          // when its nodes are not all on their layer's device, instead of disabling it for every
+                          // layer (llama_context::resolve_fused_ops). Costs one copy per execution; measured on a
+                          // 0.6B at 20/29 layers offloaded: pp 1102 -> 1811 t/s, tg 30.7 -> 63.2 t/s
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
