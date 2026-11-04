@@ -4,6 +4,7 @@
 #include "ggml-quants.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
+#include "runtime/host-memory-available.h"
 #include "runtime/host-memory-ternary.h"
 
 #include <algorithm>
@@ -2013,6 +2014,21 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         stats_.allocation_count = entries_.size();
         stats_.resident_bytes += materialized_length;
         resident_bytes_ += materialized_length;
+        // engine #669: the limit is off by default, so nothing stops the residents growing to the size of the model and
+        // the box dies with no line saying why. One warning, naming the size and the flag, once they pass what the box
+        // had available when the first weight was materialized. Never a refusal: the default stays unbounded.
+        if (limit_ == 0 && !oversize_warned_) {
+            if (available_at_first_weight_ == 0) {
+                available_at_first_weight_ = host_memory_available_bytes();
+            }
+            if (available_at_first_weight_ != 0 && resident_bytes_ > available_at_first_weight_) {
+                oversize_warned_ = true;
+                GGML_LOG_WARN("hrx: %.1f MiB of host weights are resident, more than the %.1f MiB this box had "
+                              "available when the first one was materialised: GGML_HRX_HOST_WEIGHT_LIMIT_MB is unset "
+                              "(the default), so residency is unbounded and grows with the model (engine #669)\n",
+                              resident_bytes_ / (1024.0 * 1024.0), available_at_first_weight_ / (1024.0 * 1024.0));
+            }
+        }
     }
     result.lease = HostWeightLease(entry);
     return result;
@@ -2028,6 +2044,8 @@ void HostWeightCache::clear() {
     entries_.clear();
     last_use_.clear();
     resident_bytes_ = 0;
+    available_at_first_weight_ = 0;
+    oversize_warned_           = false;
     stats_          = {};
     if (arena_ != nullptr) {
         hrx_buffer_release(arena_);
