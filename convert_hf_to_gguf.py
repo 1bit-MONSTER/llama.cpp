@@ -152,6 +152,10 @@ def parse_args() -> argparse.Namespace:
         "--fp8-as-q8", action="store_true",
         help="Store tensors dequantized from FP8 as Q8_0 instead of BF16/F16.",
     )
+    parser.add_argument(
+        "--dspark", action="store_true",
+        help="Export only the DeepSeek-V4 DSpark draft tensors as a separate GGUF.",
+    )
 
     parser.add_argument(
         "--target-model-dir", type=str, default=None,
