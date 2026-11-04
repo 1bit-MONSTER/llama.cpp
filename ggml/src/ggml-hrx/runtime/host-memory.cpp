@@ -1693,10 +1693,15 @@ bool HostWeightCache::arena_reserve(hrx_device_t device,
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (budget != 0 && arena_capacity_ >= budget) {
-                GGML_LOG_ERROR("%s: host weight arena is full after eviction: %.1f MiB of %.1f MiB resident, "
-                               "%.1f MiB free in %zu blocks, %.1f MiB wanted (GGML_HRX_HOST_WEIGHT_LIMIT_MB)\n",
-                               __func__, resident_bytes_ / (1024.0 * 1024.0), arena_capacity_ / (1024.0 * 1024.0),
-                               arena_free_bytes_ / (1024.0 * 1024.0), arena_free_.size(), aligned / (1024.0 * 1024.0));
+                size_t largest = 0;
+                for (const auto & block : arena_free_) {
+                    largest = std::max(largest, block.second);
+                }
+                GGML_LOG_ERROR("%s: host weight arena cannot place a %.1f MiB slot after eviction: %.1f MiB of %.1f MiB "
+                               "resident, %.1f MiB free in %zu blocks, largest %.1f MiB (GGML_HRX_HOST_WEIGHT_LIMIT_MB)\n",
+                               __func__, aligned / (1024.0 * 1024.0), resident_bytes_ / (1024.0 * 1024.0),
+                               arena_capacity_ / (1024.0 * 1024.0), arena_free_bytes_ / (1024.0 * 1024.0),
+                               arena_free_.size(), largest / (1024.0 * 1024.0));
                 return false;
             }
         }
@@ -1932,13 +1937,8 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
             // acquire straight away rather than evicting and re-materialising the model once per token (engine #788).
             std::lock_guard<std::mutex> lock(mutex_);
             if (budget_refusal_) {
-                result.status.log("GGML_HRX_HOST_WEIGHT_LIMIT_MB=%zu MiB is below this model's working set: a %zu MiB "
-                                  "weight did not fit with %zu MiB resident and %zu MiB parked for the running "
-                                  "execution. Raise the budget to at least %zu MiB or unset it (engine #788).",
-                                  limit_ / (1024 * 1024), refusal_need_ / (1024 * 1024),
-                                  refusal_resident_ / (1024 * 1024), refusal_parked_ / (1024 * 1024),
-                                  (refusal_need_ + refusal_resident_ + refusal_parked_ + (1024 * 1024 - 1)) /
-                                      (1024 * 1024));
+                result.status.log("GGML_HRX_HOST_WEIGHT_LIMIT_MB=%zu MiB already refused this run: %s",
+                                  limit_ / (1024 * 1024), describe(refusal_).c_str());
                 return result;
             }
         }
@@ -1953,24 +1953,24 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
                     parked += slot.second;
                 }
                 resident = resident_bytes_;
-                budget_refusal_   = true;
-                refusal_need_     = arena_align(materialized_length);
-                refusal_parked_   = parked;
-                refusal_resident_ = resident;
+                budget_refusal_      = true;
+                refusal_             = ArenaMiss{};
+                refusal_.need        = arena_align(materialized_length);
+                refusal_.free_bytes  = arena_free_bytes_;
+                refusal_.free_blocks = arena_free_.size();
+                refusal_.resident    = resident;
+                refusal_.parked      = parked;
+                refusal_.capacity    = arena_capacity_;
+                refusal_.limit       = limit_;
+                for (const auto & block : arena_free_) {
+                    refusal_.largest_block = std::max(refusal_.largest_block, block.second);
+                }
             }
             // The refusal has to be visible even if a caller drops the status, because today one does: the run
             // continues with stale bindings and produces NaN/garbage instead of stopping (engine #788).
-            GGML_LOG_ERROR("hrx: refusing to run: GGML_HRX_HOST_WEIGHT_LIMIT_MB=%zu MiB cannot hold this model's "
-                           "per-execution working set - a %zu MiB weight does not fit with %zu MiB resident and %zu MiB "
-                           "parked for the running execution. Raise it to at least %zu MiB or unset it (engine #788).\n",
-                           limit_ / (1024 * 1024), refusal_need_ / (1024 * 1024), resident / (1024 * 1024),
-                           parked / (1024 * 1024),
-                           (refusal_need_ + resident + parked + (1024 * 1024 - 1)) / (1024 * 1024));
-            result.status.log("resident host weights: no %zu MiB slot (arena %.1f MiB, limit %.1f MiB, free %.1f MiB, "
-                              "resident %.1f MiB, engine #669)",
-                              arena_align(materialized_length) / (1024 * 1024), arena_capacity_ / (1024.0 * 1024.0),
-                              limit_ / (1024.0 * 1024.0), arena_free_bytes_ / (1024.0 * 1024.0),
-                              resident_bytes_ / (1024.0 * 1024.0));
+            GGML_LOG_ERROR("hrx: refusing to run: GGML_HRX_HOST_WEIGHT_LIMIT_MB=%zu MiB: %s\n", limit_ / (1024 * 1024),
+                           describe(refusal_).c_str());
+            result.status.log("%s", describe(refusal_).c_str());
             return result;
         }
     } else {
