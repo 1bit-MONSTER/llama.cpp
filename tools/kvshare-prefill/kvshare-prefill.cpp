@@ -155,6 +155,9 @@ int main(int argc, char ** argv) {
                 ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
         cparams.type_k        = (ggml_type) params.at("type_k").get<int32_t>();
         cparams.type_v        = (ggml_type) params.at("type_v").get<int32_t>();
+        // [1bit] target 1: a hybrid decoder's recurrent state is (1 + n_rs_seq) rows per cell, so the provider must
+        // build the same width or its region layout check fails (older decoders send no such key: 0)
+        cparams.n_rs_seq      = params.contains("n_rs_seq") ? params.at("n_rs_seq").get<uint32_t>() : 0;
     } else {
         // file route: the state the decoder restores must match its cache, and the decoder runs -fa on
         cparams.n_ctx           = (uint32_t) std::max<size_t>(tokens.size() + 8, 256);

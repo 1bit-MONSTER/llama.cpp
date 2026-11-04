@@ -58,6 +58,7 @@ struct llama_kv_share_cparams {
     int32_t  flash_attn; // llama_flash_attn_type
     int32_t  type_k;     // ggml_type
     int32_t  type_v;
+    uint32_t n_rs_seq;   // widens the recurrent state's rows (hybrid models): the provider must build the same
 };
 
 LLAMA_API bool llama_kv_share_params(const struct llama_context * ctx, struct llama_kv_share_cparams * out);

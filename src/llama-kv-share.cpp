@@ -20,6 +20,9 @@
 #include "llama-impl.h"
 #include "llama-kv-cache-iswa.h"
 #include "llama-kv-cache.h"
+#include "llama-memory-hybrid-iswa.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-recurrent.h"
 
 #include "ggml-backend.h"
 
@@ -121,19 +124,109 @@ void * share_proc(ggml_backend_buffer_type_t buft, const char * name) {
 }
 
 template <typename F>
-bool share_each(llama_context * dst, const llama_context * src, F && f) {
-    if (auto * d = dynamic_cast<llama_kv_cache *>(llama_get_memory(dst))) {
-        auto * s = dynamic_cast<const llama_kv_cache *>(llama_get_memory(src));
+bool share_rec(llama_memory_i & dst, const llama_memory_i & src, F && f) {
+    // [1bit] target 1: every memory class this tree can hand over, including the hybrid wrappers, whose shared
+    // memory is the attention cache plus the recurrent state (a model like qwen35 keeps most of its state there)
+    if (auto * d = dynamic_cast<llama_kv_cache *>(&dst)) {
+        auto * s = dynamic_cast<const llama_kv_cache *>(&src);
         return s != nullptr && f(*d, *s);
     }
-    if (auto * d = dynamic_cast<llama_kv_cache_iswa *>(llama_get_memory(dst))) {
-        auto * s = dynamic_cast<const llama_kv_cache_iswa *>(llama_get_memory(src));
-        return s != nullptr && f(*d->get_base(), *s->get_base()) && f(*d->get_swa(), *s->get_swa());
+    if (auto * d = dynamic_cast<llama_kv_cache_iswa *>(&dst)) {
+        auto * s = dynamic_cast<const llama_kv_cache_iswa *>(&src);
+        return s != nullptr && share_rec(*d->get_base(), *s->get_base(), f) && share_rec(*d->get_swa(), *s->get_swa(), f);
+    }
+    if (auto * d = dynamic_cast<llama_memory_hybrid *>(&dst)) { // covers llama_memory_hybrid_idx
+        auto * s = dynamic_cast<const llama_memory_hybrid *>(&src);
+        return s != nullptr && share_rec(*d->get_mem_attn(), *s->get_mem_attn(), f) &&
+                                share_rec(*d->get_mem_recr(), *s->get_mem_recr(), f);
+    }
+    if (auto * d = dynamic_cast<llama_memory_hybrid_iswa *>(&dst)) {
+        auto * s = dynamic_cast<const llama_memory_hybrid_iswa *>(&src);
+        return s != nullptr && share_rec(*d->get_mem_attn(), *s->get_mem_attn(), f) &&
+                                share_rec(*d->get_mem_recr(), *s->get_mem_recr(), f);
+    }
+    if (auto * d = dynamic_cast<llama_memory_recurrent *>(&dst)) {
+        auto * s = dynamic_cast<const llama_memory_recurrent *>(&src);
+        return s != nullptr && f(*d, *s);
     }
     return false;
 }
 
+template <typename F>
+bool share_each(llama_context * dst, const llama_context * src, F && f) {
+    llama_memory_i * d = llama_get_memory(dst);
+    const llama_memory_i * s = llama_get_memory(src);
+    return d != nullptr && s != nullptr && share_rec(*d, *s, f);
+}
+
 } // namespace
+
+ggml_backend_buffer_t llama_share_alloc(ggml_context * ctx, ggml_backend_buffer_type_t buft,
+        std::vector<llama_kv_shared_region> & out) {
+    using export_fn = bool (*)(ggml_backend_buffer_t, int *, size_t *);
+    auto export_dmabuf = (export_fn) share_proc(buft, "ggml_backend_buffer_export_dmabuf");
+    if (export_dmabuf == nullptr) {
+        throw std::runtime_error(format("shared memory: %s cannot export its memory", ggml_backend_buft_name(buft)));
+    }
+    const std::vector<share_chunk> chunks = share_layout(ctx, buft);
+    std::vector<ggml_backend_buffer_t> bufs;
+    out.clear();
+    out.resize(chunks.size());
+    for (size_t c = 0; c < chunks.size(); ++c) {
+        ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(buft, chunks[c].size);
+        if (buf == nullptr || !export_dmabuf(buf, &out[c].fd, &out[c].offset)) {
+            if (buf != nullptr) {
+                ggml_backend_buffer_free(buf);
+            }
+            for (auto * b : bufs) {
+                ggml_backend_buffer_free(b);
+            }
+            throw std::runtime_error(format("shared memory: %s allocation or dma-buf export failed", ggml_backend_buft_name(buft)));
+        }
+        out[c].size   = chunks[c].size;
+        out[c].layout = chunks[c].layout;
+        bufs.push_back(buf);
+    }
+    share_place(ctx, chunks, bufs);
+    return share_wrap(bufs);
+}
+
+ggml_backend_buffer_t llama_share_import(ggml_context * ctx, ggml_backend_buffer_type_t buft,
+        const std::vector<llama_kv_shared_region_pod> & regions, size_t & next) {
+    const std::vector<share_chunk> chunks = share_layout(ctx, buft);
+    if (next + chunks.size() > regions.size()) {
+        LLAMA_LOG_ERROR("%s: %zu region(s) left, this buffer needs %zu\n", __func__, regions.size() - next, chunks.size());
+        return nullptr;
+    }
+    for (size_t c = 0; c < chunks.size(); ++c) {
+        if (chunks[c].size != regions[next + c].size || chunks[c].layout != regions[next + c].layout) {
+            LLAMA_LOG_ERROR("%s: KV layout differs from the source (K/V types, shapes or flash attention)\n", __func__);
+            return nullptr;
+        }
+    }
+    using import_fn = ggml_backend_buffer_t (*)(ggml_backend_dev_t, int, size_t, size_t);
+    auto import_dmabuf = (import_fn) share_proc(buft, "ggml_backend_dev_buffer_from_dmabuf");
+    std::vector<ggml_backend_buffer_t> bufs;
+    size_t total = 0;
+    for (size_t c = 0; c < chunks.size(); ++c) {
+        const auto & region = regions[next + c];
+        ggml_backend_buffer_t buf = import_dmabuf ? import_dmabuf(ggml_backend_buft_get_device(buft), region.fd, region.offset, region.size) : nullptr;
+        if (buf == nullptr) {
+            for (auto * b : bufs) {
+                ggml_backend_buffer_free(b);
+            }
+            LLAMA_LOG_ERROR("%s: %s cannot import the shared region\n", __func__, ggml_backend_buft_name(buft));
+            return nullptr;
+        }
+        bufs.push_back(buf);
+        total += region.size;
+    }
+    next += chunks.size();
+    share_place(ctx, chunks, bufs);
+    LLAMA_LOG_INFO("%s: %10s buffer now maps the shared region (%.2f MiB in %zu chunks, zero copy)\n", __func__,
+                   ggml_backend_buft_name(buft), total / 1024.0 / 1024.0, chunks.size());
+    return share_wrap(bufs);
+}
 
 llama_kv_shared_region::~llama_kv_shared_region() {
 #ifndef _WIN32
@@ -156,32 +249,10 @@ void llama_kv_share_end() { g_share = false; }
 bool llama_kv_share_enabled() { return g_share; }
 
 ggml_backend_buffer_t llama_kv_cache::share_alloc(ggml_context * ctx, ggml_backend_buffer_type_t buft) {
-    using export_fn = bool (*)(ggml_backend_buffer_t, int *, size_t *);
-    auto export_dmabuf = (export_fn) share_proc(buft, "ggml_backend_buffer_export_dmabuf");
-    if (export_dmabuf == nullptr) {
-        throw std::runtime_error(format("shared KV: %s cannot export its memory", ggml_backend_buft_name(buft)));
-    }
-    const std::vector<share_chunk> chunks = share_layout(ctx, buft);
-    std::vector<ggml_backend_buffer_t> bufs;
-    std::vector<llama_kv_shared_region> regions(chunks.size());
-    for (size_t c = 0; c < chunks.size(); ++c) {
-        ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(buft, chunks[c].size);
-        if (buf == nullptr || !export_dmabuf(buf, &regions[c].fd, &regions[c].offset)) {
-            if (buf != nullptr) {
-                ggml_backend_buffer_free(buf);
-            }
-            for (auto * b : bufs) {
-                ggml_backend_buffer_free(b);
-            }
-            throw std::runtime_error(format("shared KV: %s allocation or dma-buf export failed", ggml_backend_buft_name(buft)));
-        }
-        regions[c].size   = chunks[c].size;
-        regions[c].layout = chunks[c].layout;
-        bufs.push_back(buf);
-    }
-    share_place(ctx, chunks, bufs);
+    std::vector<llama_kv_shared_region> regions;
+    ggml_backend_buffer_t buf = llama_share_alloc(ctx, buft, regions); // [1bit] exportable region
     shared_.push_back(std::move(regions));
-    return share_wrap(bufs);
+    return buf;
 }
 
 bool llama_kv_cache::share_from(const llama_kv_cache & src) {
@@ -195,60 +266,29 @@ bool llama_kv_cache::share_from(const llama_kv_cache & src) {
             regions.push_back({ r.fd, r.offset, r.size, r.layout });
         }
     }
-    return share_import(regions);
+    size_t next = 0;
+    return share_import(regions, next) && next == regions.size();
 }
 
 // [1bit] target 1: the same mapping as share_from(), driven by descriptors instead of by the owner context, so a
 // provider in another process (which only ever sees fds that came over a unix socket) can map the decoder's KV.
 // The chunk boundaries of this cache are recomputed, not transmitted: share_layout() is a pure function of the
 // cache's tensors, which is why the layout hash can be checked against the owner's.
-bool llama_kv_cache::share_import(const std::vector<llama_kv_shared_region_pod> & regions) {
+bool llama_kv_cache::share_import(const std::vector<llama_kv_shared_region_pod> & regions, size_t & next) {
     if (other || regions.empty()) {
         LLAMA_LOG_ERROR("%s: no shared regions to import\n", __func__);
         return false;
     }
-    using import_fn = ggml_backend_buffer_t (*)(ggml_backend_dev_t, int, size_t, size_t);
-    size_t next = 0;
     for (size_t i = 0; i < ctxs_bufs.size(); ++i) {
         ggml_context * ctx = ctxs_bufs[i].first.get();
         ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(ctxs_bufs[i].second.get());
-        const std::vector<share_chunk> chunks = share_layout(ctx, buft);
-        if (next + chunks.size() > regions.size()) {
-            LLAMA_LOG_ERROR("%s: %zu regions left, this cache's buffer %zu needs %zu\n", __func__,
-                    regions.size() - next, i, chunks.size());
+        ggml_backend_buffer_t buf = llama_share_import(ctx, buft, regions, next);
+        if (buf == nullptr) {
             return false;
         }
-        bool same = true;
-        for (size_t c = 0; same && c < chunks.size(); ++c) {
-            same = chunks[c].size == regions[next + c].size && chunks[c].layout == regions[next + c].layout;
-        }
-        if (!same) {
-            LLAMA_LOG_ERROR("%s: KV layout differs from the source (K/V types, shapes or flash attention)\n", __func__);
-            return false;
-        }
-        auto import_dmabuf = (import_fn) share_proc(buft, "ggml_backend_dev_buffer_from_dmabuf");
-        std::vector<ggml_backend_buffer_t> bufs;
-        size_t total = 0;
-        for (size_t c = 0; c < chunks.size(); ++c) {
-            const auto & region = regions[next + c];
-            ggml_backend_buffer_t buf = import_dmabuf ? import_dmabuf(ggml_backend_buft_get_device(buft), region.fd, region.offset, region.size) : nullptr;
-            if (buf == nullptr) {
-                for (auto * b : bufs) {
-                    ggml_backend_buffer_free(b);
-                }
-                LLAMA_LOG_ERROR("%s: %s cannot import the shared KV region\n", __func__, ggml_backend_buft_name(buft));
-                return false;
-            }
-            bufs.push_back(buf);
-            total += region.size;
-        }
-        next += chunks.size();
-        share_place(ctx, chunks, bufs);
-        ctxs_bufs[i].second.reset(share_wrap(bufs)); // frees the buffer this cache had
-        LLAMA_LOG_INFO("%s: %10s KV buffer now maps the shared region (%.2f MiB in %zu chunks, zero copy)\n", __func__,
-                       ggml_backend_buft_name(buft), total / 1024.0 / 1024.0, chunks.size());
+        ctxs_bufs[i].second.reset(buf); // frees the buffer this cache had
     }
-    return next == regions.size();
+    return true;
 }
 
 bool llama_kv_cache::cells_copy_from(const llama_kv_cache & src) {
@@ -276,20 +316,21 @@ void llama_kv_share_next(bool enabled) {
 }
 
 bool llama_kv_share_from(llama_context * dst, llama_context * src) {
-    if (!share_each(dst, src, [](llama_kv_cache & d, const llama_kv_cache & s) { return d.share_from(s); })) {
+    if (!share_each(dst, src, [](auto & d, const auto & s) { return d.share_from(s); })) {
         return false;
-    }    dst->kv_memory_rebound();
+    }
+    dst->kv_memory_rebound();
     return true;
 }
 
 bool llama_kv_cells_copy(llama_context * dst, const llama_context * src) {
-    return share_each(dst, src, [](llama_kv_cache & d, const llama_kv_cache & s) { return d.cells_copy_from(s); });
+    return share_each(dst, src, [](auto & d, const auto & s) { return d.cells_copy_from(s); });
 }
 
 // [1bit] target 1, both ends of a handoff whose provider lives in another process.
 size_t llama_kv_share_regions(llama_context * ctx, llama_kv_share_region * out, size_t n_out) {
     std::vector<llama_kv_shared_region_pod> regions;
-    if (!share_each(ctx, ctx, [&](llama_kv_cache & d, const llama_kv_cache &) {
+    if (!share_each(ctx, ctx, [&](auto & d, const auto &) {
             return d.share_regions(regions);
         })) {
         return 0;
@@ -310,7 +351,8 @@ bool llama_kv_share_import(llama_context * ctx, const llama_kv_share_region * re
     for (size_t i = 0; i < n_regions; ++i) {
         in.push_back({ regions[i].fd, regions[i].offset, regions[i].size, regions[i].layout });
     }
-    if (!share_each(ctx, ctx, [&](llama_kv_cache & d, const llama_kv_cache &) { return d.share_import(in); })) {
+    size_t next = 0;
+    if (!share_each(ctx, ctx, [&](auto & d, const auto &) { return d.share_import(in, next); }) || next != in.size()) {
         return false;
     }
     ctx->kv_memory_rebound();
@@ -318,7 +360,7 @@ bool llama_kv_share_import(llama_context * ctx, const llama_kv_share_region * re
 }
 
 bool llama_kv_cells_adopt(llama_context * ctx, uint32_t n_tokens, llama_seq_id seq_id) {
-    return share_each(ctx, ctx, [&](llama_kv_cache & d, const llama_kv_cache &) {
+    return share_each(ctx, ctx, [&](auto & d, const auto &) {
         return d.cells_adopt(n_tokens, seq_id);
     });
 }
@@ -336,5 +378,6 @@ bool llama_kv_share_params(const llama_context * ctx, struct llama_kv_share_cpar
     out->flash_attn   = cp.flash_attn ? 1 : 0;
     out->type_k       = (int32_t) cp.type_k;
     out->type_v       = (int32_t) cp.type_v;
+    out->n_rs_seq     = cp.n_rs_seq; // [1bit] widens the recurrent state's rows: a provider must build the same
     return true;
 }

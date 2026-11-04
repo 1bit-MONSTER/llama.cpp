@@ -2573,7 +2573,7 @@ bool llama_kv_cache::cells_adopt(uint32_t n_tokens, llama_seq_id seq_id) {
 }
 
 bool llama_kv_cache::share_regions(std::vector<llama_kv_shared_region_pod> & out) const {
-    out.clear();
+    // appended, not cleared: a hybrid memory collects the attention cache's regions before the recurrent ones
     if (shared_.empty()) {
         return false;
     }

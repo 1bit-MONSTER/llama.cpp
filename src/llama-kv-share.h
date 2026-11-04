@@ -15,8 +15,11 @@
 
 #pragma once
 
+#include "ggml-backend.h"
+
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 // Zero-copy KV sharing between two contexts of one model on two devices of the same GPU (API in llama-ext.h).
 // The owner context allocates each KV buffer as one exportable region with a fixed layout; the other maps it.
@@ -43,6 +46,18 @@ struct llama_kv_shared_region_pod {
 
 // the pending llama_kv_share_next request; a real (not no_alloc) context takes and clears it
 bool llama_kv_share_take_next(bool no_alloc);
+
+// [1bit] target 1, the two halves of a shared region, generic over the memory class: llama_kv_cache and
+// llama_memory_recurrent both allocate their tensors through these, so a model whose memory is hybrid (qwen35 and
+// the like) can hand off its whole memory and not only the attention half. The recurrent state of the 27B is
+// 151 MB per request that the file route writes and reads on every handoff, and it never has to leave the box.
+//   llama_share_alloc: allocate ctx's tensors as exportable chunks (throws, like share_alloc did)
+ggml_backend_buffer_t llama_share_alloc(ggml_context * ctx, ggml_backend_buffer_type_t buft,
+        std::vector<llama_kv_shared_region> & out);
+//   llama_share_import: map the owner's chunks over ctx's tensors, consuming regions[next...]; nullptr unless the
+//   layout matches this context's (types, shapes, flash attention)
+ggml_backend_buffer_t llama_share_import(ggml_context * ctx, ggml_backend_buffer_type_t buft,
+        const std::vector<llama_kv_shared_region_pod> & regions, size_t & next);
 
 // set by llama_context around memory creation, read by llama_kv_cache while it allocates
 void llama_kv_share_begin(bool enabled);
