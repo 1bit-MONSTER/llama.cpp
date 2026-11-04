@@ -244,6 +244,19 @@ inline bool common_mul_mat_supported_dense_input_size(CommonMulMatWeightFormat f
     }
 }
 
+// Element-wise weight formats decode value by value and the wmma core rounds the contraction up to whole
+// 256-blocks: `padded_input_size = input_size + 255` and `quant_block_count = padded / 256` are what the
+// *weight* decode walks, with `valid_k` gating every value it contributes, while the activation side is a
+// masked `vector.load` (`valid_input`). A K tail therefore contributes zeros on both sides and can never read
+// past the last weight block. The only real alignment these formats need is the 32-value packet its
+// ggml.mul_mat.input_size constraint declares. Block formats keep the granularity their block layout requires.
+inline bool common_mul_mat_supported_plain_dense_input_size(CommonMulMatWeightFormat format, int64_t input_size) {
+    if (common_mul_mat_dense_float_format(format)) {
+        return input_size >= 256 && input_size <= 32768 && input_size % 32 == 0;
+    }
+    return common_mul_mat_supported_dense_input_size(format, input_size);
+}
+
 inline bool common_mul_mat_alternate_format_for_type(ggml_type type, CommonMulMatWeightFormat & format) {
     switch (type) {
         case GGML_TYPE_Q8_1:
