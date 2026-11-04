@@ -589,6 +589,12 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         const auto             found_access = access_by_value.find(binding.value.value);
         const GraphValueAccess access =
             found_access != access_by_value.end() ? found_access->second : GraphValueAccess{};
+        // A value that no command in this program references needs no device copy: staging it allocates a buffer that
+        // is neither uploaded nor downloaded, one per shape (engine #914).
+        if (found_access == access_by_value.end()) {
+            materialized.push_back(binding);
+            continue;
+        }
         const bool materialize_weight = binding.weight && access.read && !access.write &&
                                         (binding.requires_materialization() || access.transformed_read);
         if (binding.length == 0 || (!binding.requires_materialization() && !materialize_weight)) {
