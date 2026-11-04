@@ -259,6 +259,8 @@ llama_context::llama_context(
     cparams.fused_dsv4_hc_post = true;
     cparams.auto_fhc           = true;
 
+    cparams.fused_cross_device = params.fused_cross_device;
+
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
 
@@ -546,9 +548,14 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
             }
         }
 
-        if (device_mismatch) {
+        if (device_mismatch && !cparams.fused_cross_device) {
             enabled = false;
             LLAMA_LOG_WARN("%s: %s not supported, set to disabled\n", func, probe.name);
+        } else if (device_mismatch) {
+            // fused_cross_device: keep it. The op runs on the backend that claimed it and pays one copy per execution,
+            // which measured cheaper than the unfused graph built for every layer of the model.
+            enabled = true;
+            LLAMA_LOG_INFO("%s: %s kept enabled across devices (fused_cross_device)\n", func, probe.name);
         } else {
             enabled = true;
             LLAMA_LOG_INFO("%s: %s enabled\n", func, probe.name);
@@ -3538,6 +3545,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.fused_cross_device          =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,

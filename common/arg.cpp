@@ -1679,6 +1679,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
+        {"-fcd", "--fused-cross-device"},
+        {"-no-fcd", "--no-fused-cross-device"},
+        string_format("keep a fused op (Flash Attention, Lightning Indexer, DSV4 hyper-connection) enabled when its\n"
+                      "nodes are not all on their layer's device, instead of disabling it for every layer\n"
+                      "(default: %s)", params.fused_cross_device ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.fused_cross_device = value;
+        }
+    ).set_env("LLAMA_ARG_FUSED_CROSS_DEVICE").set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
         [](common_params & params, const std::string & value) {
