@@ -4,6 +4,8 @@
 #include "llama.h"
 #include "llama-arch.h"
 
+#include <string>
+#include <unordered_set>
 #include <vector>
 
 // FIXME temporary function for better error messages
@@ -35,6 +37,10 @@ struct llama_model_saver {
     void add_kv(enum llm_kv key, const std::vector<std::string> & value);
 
     void add_tensor(const struct ggml_tensor * tensor);
+
+    // tensors already written, so a shared submodule reached from several layers (Zamba v1's shared
+    // transformer block) is written once instead of tripping the duplicate-name check
+    std::unordered_set<const struct ggml_tensor *> added_tensors;
 
     void add_kv_from_model();
 
