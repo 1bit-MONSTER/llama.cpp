@@ -357,6 +357,12 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-arena-refusal PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-arena-refusal COMMAND test-hrx-arena-refusal)
 
+    # MemAvailable parsing for the unbounded-residency warning: pure, no device and no /proc (engine #669)
+    add_executable(test-hrx-host-memory-available test-hrx-host-memory-available.cpp
+        ../ggml/src/ggml-hrx/runtime/host-memory-available.cpp)
+    target_include_directories(test-hrx-host-memory-available PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-host-memory-available COMMAND test-hrx-host-memory-available)
+
     add_executable(test-hrx-buffer test-hrx-buffer.cpp)
     target_link_libraries(test-hrx-buffer PRIVATE ggml-hrx ggml hrx::hrx)
     target_include_directories(test-hrx-buffer PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)

@@ -174,6 +174,11 @@ class HostWeightCache {
     size_t                                                                                resident_bytes_ = 0;
     uint64_t                                                                              use_clock_      = 0;
     bool                                                                                  limit_resolved_ = false;
+    // engine #669: with the limit unset (the default) nothing bounds host-weight residency, so an OOM reads like an
+    // ordinary allocation failure. The first materialization records what the box had available at that moment, and
+    // once the residents pass it the cache says so - once, with the number and the flag.
+    size_t                                                                                available_at_first_weight_ = 0;
+    bool                                                                                  oversize_warned_           = false;
     std::mutex                                                                            evict_mutex_;
 
     // One device buffer holds every resident weight (engine #669). Materializing each weight with its own
