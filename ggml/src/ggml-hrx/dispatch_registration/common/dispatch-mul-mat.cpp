@@ -1,5 +1,7 @@
 #include "dispatch-mul-mat.h"
 
+#include "dispatch-copy.h"
+
 #include <cstdlib>
 
 #include "dispatch-mul-mat-common.h"
@@ -1055,13 +1057,29 @@ static bool build_mul_mat_dispatch(const DispatchMatchContext & context,
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_accumulation", "0");
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_unary_op",
                                                std::to_string(unary_kind_config_value(match.output_unary_op)));
+    // Packing reads the activation through its own conversion, so it must not be combined with the row-padded densify
+    // below: that path binds the packed transient as the activation and packing would overwrite it with a pass over the
+    // strided source. Element-wise weights never pack, so this only rules out an untested combination.
     const bool pack_rows = match.token_count <= 5 && match.output_size % 64 == 0 &&
-                           match.weight->alias_source.value < 0;
+                           match.weight->alias_source.value < 0 && !match.strided_activation;
     const bool can_pack_q4 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q4K;
     const bool can_pack_q6 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q6K;
     bool       pack_q4     = false;
     bool       pack_q6     = false;
     DispatchBinding activation = { match.input->id, 0, match.input->byte_count };
+    if (match.strided_activation) {
+        // The producer handed us a row-padded view (each row dense, the rows gapped). The kernels bind a packed 2-D tile,
+        // so copy it once into a transient rather than leaving the node -- and every node that consumes it -- on the CPU.
+        const size_t packed_bytes = static_cast<size_t>(match.input->element_count) * sizeof(float);
+        const ValueId packed_activation = context.next_plan_value;
+        Dispatch      densify;
+        if (!append_f32_densify_dispatch(*match.input, packed_activation, packed_bytes, densify)) {
+            return false;
+        }
+        dispatch_match.transients.push_back({ packed_activation, "common.mul_mat.activation_packed", packed_bytes, 256 });
+        dispatch_match.dispatches.push_back(std::move(densify));
+        activation = { packed_activation, 0, packed_bytes };
+    }
     if (can_pack_q4 || can_pack_q6) {
         if (common_prepare_q8_1_x4_input(context, *match.input, match.input_size, match.token_count,
                                          dispatch_match, activation, q8_policy)) {
@@ -1377,8 +1395,8 @@ static bool match_batched_decode_mul_mat_dispatch(const DispatchMatchContext & c
 }
 
 static bool match_mul_mat_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    CommonMulMatMatch match =
-        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel, false, true);
+    CommonMulMatMatch match = common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel,
+                                                             false, true, false, true);
     if (!match.matched()) {
         return false;
     }
@@ -1387,8 +1405,8 @@ static bool match_mul_mat_dispatch(const DispatchMatchContext & context, Dispatc
 }
 
 static bool match_mul_mat_unary_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    CommonMulMatMatch match =
-        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel, false, true);
+    CommonMulMatMatch match = common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel,
+                                                             false, true, false, true);
     if (!match.matched() || !try_match_fused_unary(context, match)) {
         return false;
     }

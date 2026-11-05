@@ -4402,6 +4402,35 @@ struct test_mul_mat : public test_case {
     }
 };
 
+// GGML_OP_MUL_MAT with a row-padded activation: the activation rows are dense but gapped, i.e. a column slice of a wider
+// tensor, which is exactly what the SSM ports hand dt_proj (x_proj is 264 wide, dt_proj contracts the first 92). The weight
+// stays dense. Before the dispatcher learned to densify this once per node, the whole layer fell back to the CPU.
+struct test_mul_mat_row_padded_activation : public test_mul_mat {
+    const int64_t row_stride;  // elements between activation rows; > k leaves the gap
+
+    test_mul_mat_row_padded_activation(ggml_type type_a, ggml_type type_b, int64_t m, int64_t n, int64_t k, int64_t row_stride)
+        : test_mul_mat(type_a, type_b, m, n, k, {1, 1}, {1, 1}), row_stride(row_stride) {
+        GGML_ASSERT(row_stride > k);
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR5(type_a, type_b, m, n, k) + ",row_stride=" + std::to_string(row_stride);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a       = ggml_new_tensor_2d(ctx, type_a, k, m);
+        ggml_tensor * backing = ggml_new_tensor_2d(ctx, type_b, row_stride, n);
+        ggml_tensor * b       = ggml_view_2d(ctx, backing, k, n, row_stride * ggml_element_size(backing), 0);
+        ggml_set_param(a);
+        ggml_set_param(backing);
+        ggml_set_name(a, "a");
+        ggml_set_name(b, "b");
+        ggml_tensor * out = ggml_mul_mat(ctx, a, b);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -9128,6 +9157,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // element-wise expert below or off that contract must stay refused rather than reach a kernel that rejects it.
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8, 1472));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8,   92));
+    // Row-padded activation against a dense weight: the model's dt_proj at the prefill token count, and the same contraction
+    // at a small token count so a regression at either end is visible.
+    test_cases.emplace_back(new test_mul_mat_row_padded_activation(GGML_TYPE_BF16, GGML_TYPE_F32, 2944, 512,  92, 264));
+    test_cases.emplace_back(new test_mul_mat_row_padded_activation(GGML_TYPE_BF16, GGML_TYPE_F32, 2944,   8,  92, 264));
+    test_cases.emplace_back(new test_mul_mat_row_padded_activation(GGML_TYPE_BF16, GGML_TYPE_F32, 3712, 512, 232, 264));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8, 1480));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));

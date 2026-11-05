@@ -96,6 +96,48 @@ static bool make_copy_f32_dispatch(const Value & source, const Value & output, D
     return true;
 }
 
+}  // namespace
+
+// Exported for matchers that need a packed activation: everything a copy needs is in the anonymous namespace above, so this
+// definition has to sit outside it -- an internal-linkage definition neither satisfies the declaration in dispatch-copy.h nor
+// survives (it is dead in this file, and the linker then keeps an undefined reference to the extern name).
+bool append_f32_densify_dispatch(const Value & source, ValueId destination, size_t destination_bytes, Dispatch & dispatch) {
+    const int64_t element_count = source.element_count;
+    if (source.type != GGML_TYPE_F32 || !f32_element_strides(source) || element_count <= 0 ||
+        static_cast<uint64_t>(element_count) > kMaximumCopyElements ||
+        destination_bytes != static_cast<size_t>(element_count) * sizeof(float)) {
+        return false;
+    }
+
+    size_t source_span = source.byte_count;
+    if (packed_f32_layout(source)) {
+        dispatch.kernel = make_kernel_specialization(kCopyF32Kernel);
+    } else {
+        if (!strided_f32_storage_span_bytes(source, source_span)) {
+            return false;
+        }
+        const size_t source_span_elements = source_span / sizeof(float);
+        if (source_span_elements > kMaximumCopyElements) {
+            return false;
+        }
+        dispatch.kernel = make_kernel_specialization(kCopyStridedSourceF32Kernel);
+        dispatch.kernel.integer_parameters.emplace("source_span", source_span_elements);
+        dispatch.kernel.compile_parameters.emplace("ggml.copy_strided_source_f32.ne0", std::to_string(source.ne[0]));
+        dispatch.kernel.compile_parameters.emplace("ggml.copy_strided_source_f32.ne1", std::to_string(source.ne[1]));
+        dispatch.kernel.compile_parameters.emplace("ggml.copy_strided_source_f32.ne2", std::to_string(source.ne[2]));
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            dispatch.kernel.compile_parameters.emplace("ggml.copy_strided_source_f32.stride" + std::to_string(i),
+                                                       std::to_string(source.nb[i] / sizeof(float)));
+        }
+    }
+    dispatch.kernel.integer_parameters.emplace("element_count", element_count);
+    dispatch.bindings.push_back({ source.storage_root, source.storage_offset, source_span });
+    dispatch.bindings.push_back({ destination, 0, destination_bytes });
+    return true;
+}
+
+namespace {
+
 static bool match_copy_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
     const GraphNode * node = context.root_node;
     if (node == nullptr || node->op != GGML_OP_CPY || node->inputs.size() != 2) {
