@@ -1310,6 +1310,72 @@ static void build_decode_mul_mat_dispatch(const CommonMulMatMatch & match,
     dispatch_match.dispatches.push_back(std::move(dispatch));
 }
 
+static bool build_batched_mul_mat_dispatch(const DispatchMatchContext & context,
+                                           const CommonMulMatMatch &    match,
+                                           DispatchMatch &              dispatch_match,
+                                           bool                         decode) {
+    // A batched matmul is one 2-D contraction per plane, so the same kernel is bound once for each plane with the
+    // activation, weight and output offset to that plane. The weight is either shared or has one matrix per plane.
+    const char * token_capacity_key = decode ? "ggml.mul_mat_f32_f32_decode.token_capacity" :
+                                               "ggml.workload.token_capacity";
+    const char * weight_format_key  = decode ? "ggml.mul_mat_f32_f32_decode.weight_format" :
+                                               "ggml.mul_mat.weight_format";
+    const int64_t weight_format = common_mul_mat_format_config_value(match.weight_format);
+
+    for (int64_t plane = 0; plane < match.plane_count; ++plane) {
+        Dispatch dispatch;
+        dispatch.kernel = make_kernel_specialization(match.kernel);
+        dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
+        dispatch.kernel.integer_parameters.emplace("input_size", match.input_size);
+        dispatch.kernel.integer_parameters.emplace("output_size", match.output_size);
+        dispatch.kernel.compile_parameters.emplace(token_capacity_key, common_to_config_value(match.token_count));
+        dispatch.kernel.compile_parameters.emplace(weight_format_key, common_to_config_value(weight_format));
+        if (decode) {
+            dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_f32_f32_decode.output_capacity",
+                                                       common_to_config_value(match.output_size));
+        } else {
+            dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.input_size",
+                                                       common_to_config_value(match.input_size));
+            dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_size",
+                                                       common_to_config_value(match.output_size));
+            dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_accumulation", "0");
+            dispatch.kernel.compile_parameters.emplace(
+                "ggml.mul_mat.output_unary_op",
+                std::to_string(unary_kind_config_value(match.output_unary_op)));
+        }
+        const size_t input_offset  = common_plane_offset(*match.input, plane);
+        const size_t output_offset = common_plane_offset(*match.output, plane);
+        // ggml pairs the planes when the weight carries them too (a per-plane matrix), otherwise one matrix is shared.
+        const size_t weight_offset = match.batched_weight ? common_plane_offset(*match.weight, plane) : 0;
+        dispatch.bindings.push_back({ match.input->id, input_offset, match.input->byte_count - input_offset });
+        dispatch.bindings.push_back({ match.weight->id, weight_offset, match.weight->byte_count - weight_offset });
+        dispatch.bindings.push_back({ match.output->id, output_offset, match.output->byte_count - output_offset });
+        dispatch_match.dispatches.push_back(std::move(dispatch));
+    }
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    return true;
+}
+
+static bool match_batched_mul_mat_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    CommonMulMatMatch match =
+        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel, false, true, true);
+    if (!match.matched()) {
+        return false;
+    }
+    return build_batched_mul_mat_dispatch(context, match, dispatch_match, false);
+}
+
+static bool match_batched_decode_mul_mat_dispatch(const DispatchMatchContext & context,
+                                                  DispatchMatch &              dispatch_match) {
+    CommonMulMatMatch match = common_match_mul_mat_any_format(context.graph, context.root_node,
+                                                              kMulMatF32F32DecodeWave64Kernel, true, true, true);
+    if (!match.matched()) {
+        return false;
+    }
+    return build_batched_mul_mat_dispatch(context, match, dispatch_match, true);
+}
+
 static bool match_mul_mat_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     CommonMulMatMatch match =
         common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel, false, true);
@@ -1452,6 +1518,22 @@ void register_mul_mat_dispatches(DispatchRegistryBuilder & registry) {
         180,
         DispatchSource::Common,
         match_mul_mat_postops_dispatch,
+    });
+    registry.add({
+        "common.mul_mat.f32_f32_wmma_batched",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        82,
+        DispatchSource::Common,
+        match_batched_mul_mat_dispatch,
+    });
+    registry.add({
+        "common.mul_mat.f32_f32_decode_batched",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        62,
+        DispatchSource::Common,
+        match_batched_decode_mul_mat_dispatch,
     });
     registry.add({
         "common.mul_mat.f32_f32_wmma",
