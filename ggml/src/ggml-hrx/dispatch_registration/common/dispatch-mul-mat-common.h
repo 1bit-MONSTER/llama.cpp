@@ -30,6 +30,9 @@ struct CommonMulMatMatch {
     int64_t                  input_size       = 0;
     int64_t                  output_size      = 0;
     int64_t                  token_count      = 0;
+    // >1 only when the activation carries batch planes and the dispatch is emitted once per plane.
+    int64_t                  plane_count      = 1;
+    bool                     batched_weight   = false;
     CommonMulMatWeightFormat weight_format    = CommonMulMatWeightFormat::Q4K;
     UnaryKind                output_unary_op  = UnaryKind::Identity;
     size_t                   unary_node_index = 0;
@@ -282,6 +285,13 @@ inline bool common_is_2d(const Value & value) {
     return value.ne[0] > 0 && value.ne[1] > 0 && value.ne[2] == 1 && value.ne[3] == 1;
 }
 
+// Byte offset of one batch plane inside a contiguous value whose planes follow each other.
+inline size_t common_plane_offset(const Value & value, int64_t plane) {
+    const int64_t plane_stride = value.ne[2] > 0 ? value.ne[2] : 1;
+    return static_cast<size_t>(plane % plane_stride) * value.nb[2] +
+           static_cast<size_t>(plane / plane_stride) * value.nb[3];
+}
+
 inline std::string common_to_config_value(int64_t value) {
     return std::to_string(value);
 }
@@ -454,7 +464,8 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
                                                          const GraphNode * node,
                                                          KernelCatalogRef  kernel,
                                                          bool              decode,
-                                                         bool              elementwise_k_tail = false) {
+                                                         bool              elementwise_k_tail = false,
+                                                         bool              allow_batched = false) {
     CommonMulMatMatch match;
     if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
         return match;
@@ -463,9 +474,26 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
     const Value * weight = common_graph_value(graph, node->inputs[0]);
     const Value * input  = common_graph_value(graph, node->inputs[1]);
     const Value * output = common_graph_value(graph, node->output);
-    if (weight == nullptr || input == nullptr || output == nullptr || !common_is_2d(*weight) || !common_is_2d(*input) ||
-        !common_is_2d(*output) || !weight->contiguous || !input->contiguous || !output->contiguous ||
-        input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32) {
+    if (weight == nullptr || input == nullptr || output == nullptr || weight->ne[0] <= 0 || weight->ne[1] <= 0 ||
+        !weight->contiguous || !input->contiguous || !output->contiguous || input->type != GGML_TYPE_F32 ||
+        output->type != GGML_TYPE_F32) {
+        return {};
+    }
+
+    // A batched matmul is the same 2-D contraction repeated per plane, so it is accepted here only when the caller
+    // binds one dispatch per plane. ggml pairs the operands' planes when both carry them and broadcasts when only the
+    // activation does, so the weight may either be a single matrix (shared by every plane) or one matrix per plane.
+    const int64_t plane_count        = input->ne[2] * input->ne[3];
+    const int64_t weight_plane_count = weight->ne[2] * weight->ne[3];
+    // Pairing follows ggml's (dim 2, dim 3) index order, so the factorisation has to match, not just the product.
+    const bool paired_weight = weight->ne[2] == input->ne[2] && weight->ne[3] == input->ne[3] &&
+                               weight_plane_count == plane_count;
+    const bool    shaped             = allow_batched ?
+                                           (plane_count > 1 &&
+                                            (weight_plane_count == 1 || paired_weight) &&
+                                            output->ne[2] == input->ne[2] && output->ne[3] == input->ne[3]) :
+                                           (common_is_2d(*weight) && common_is_2d(*input) && common_is_2d(*output));
+    if (!shaped) {
         return {};
     }
 
@@ -496,6 +524,8 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
     match.output_size   = output_size;
     match.token_count   = token_count;
     match.weight_format = format;
+    match.plane_count    = allow_batched ? plane_count : 1;
+    match.batched_weight = allow_batched && paired_weight;
     return match;
 }
 
