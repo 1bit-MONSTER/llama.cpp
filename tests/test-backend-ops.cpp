@@ -9154,6 +9154,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
 
+    // Element-wise expert weights whose contraction is a multiple of 32 but not of 256. The MUL_MAT_ID wmma
+    // core pads the contraction and gates the tail, so these are legal at the kernel; the dispatcher used to
+    // refuse them by inheriting the dense table's % 256 default (engine #991).
+    //   BlackMamba-2.8B: ffn_gate_exps / ffn_up_exps are [1472, 3872, 8], ffn_down_exps is [3872, 1472, 8]
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 8, 2, false, 3872, 512, 1472));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 8, 2, false, 1472, 512, 3872));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 3872, 512, 1472));
+
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 2, false, 64, 16, 3*ggml_blck_size(type_a)));
     }
