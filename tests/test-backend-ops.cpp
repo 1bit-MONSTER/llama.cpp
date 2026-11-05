@@ -9107,6 +9107,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32,  264, 1, 3712, {2, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 3712, 2,  232, {2, 1}, {1, 1}));
 
+    // Contractions that are not a multiple of 32 (engine #991, the padded tile): the element-wise reader takes a
+    // 4-value packet and the activation load is masked to [k, input_size), so % 4 is the real requirement. The first
+    // two are the Zyphra ports' own dt_proj shapes; k=260 is 4-and-not-32; k=90 is not a multiple of 4 and must stay
+    // refused, because its last packet would read three values past the weight row.
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 2944, 8,  92, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 2944, 1,  92, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 3712, 8, 232, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 3712, 1, 232, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32,  512, 8, 260, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32,  512, 8,  90, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,  GGML_TYPE_F32,  512, 8, 260, {1, 1}, {1, 1}));
+    // (the f32 90 case is deliberately absent: an existing non-predicate path admits it, so it proves nothing here)
+
+    // MoE expert boundary (engine #991): the MUL_MAT_ID kernels declare the 32-value packet and a 256 floor, so an
+    // element-wise expert below or off that contract must stay refused rather than reach a kernel that rejects it.
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8, 1472));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8,   92));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8, 1480));
+
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
     for (ggml_type type_a : all_types) {

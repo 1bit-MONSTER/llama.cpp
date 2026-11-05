@@ -59,7 +59,15 @@ inline bool common_mul_mat_id_supported_dense_input_size(CommonMulMatWeightForma
     // inherited from the dense table -- BlackMamba's experts contract over 1472 and 3872, both legal at the
     // kernel and refused here. Only F16/BF16/F32 verdicts change: the quantized formats the table already
     // lists (IQ4_NL, MXFP4, Q8_0, Q4_0, ...) keep their % 32, and block formats keep their block granularity.
-    return common_mul_mat_supported_plain_dense_input_size(format, input_size);
+    if (common_mul_mat_dense_float_format(format)) {
+        // The five MUL_MAT_ID kernels declare `range(256, 32768), multiple_of(32)` on ggml.mul_mat_id.input_size, so
+        // this path keeps exactly that. It deliberately does not inherit the plain dense path's 4-value packing: the
+        // `% 4` relaxation is a property of the dense packet reader motifs (their caller gates each packet with
+        // `k < input_size`), and none of those motifs is bound here. Sharing the looser predicate would let an
+        // element-wise expert reach a kernel whose own config rejects it, which is a JIT failure, not a fallback.
+        return input_size >= 256 && input_size <= 32768 && input_size % 32 == 0;
+    }
+    return common_mul_mat_supported_dense_input_size(format, input_size);
 }
 
 inline bool common_mul_mat_id_supported_dense_output_size(int64_t output_size) {
