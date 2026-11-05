@@ -32,6 +32,8 @@ struct CommonMulMatMatch {
     int64_t                  token_count      = 0;
     // >1 only when the activation carries batch planes and the dispatch is emitted once per plane.
     int64_t                  plane_count      = 1;
+    // Set when the activation is a row-padded view that the dispatch has to densify before binding.
+    bool                     strided_activation = false;
     bool                     batched_weight   = false;
     CommonMulMatWeightFormat weight_format    = CommonMulMatWeightFormat::Q4K;
     UnaryKind                output_unary_op  = UnaryKind::Identity;
@@ -285,6 +287,13 @@ inline bool common_is_2d(const Value & value) {
     return value.ne[0] > 0 && value.ne[1] > 0 && value.ne[2] == 1 && value.ne[3] == 1;
 }
 
+// A row-padded F32 view: the elements of one row are adjacent, the rows are not. The matmul kernels bind a 2-D tile of a
+// packed activation, so such a value has to be copied once before it can be used -- but refusing the node outright (as the
+// contiguous guard does) leaves the whole layer on the CPU.
+inline bool common_is_row_padded_f32(const Value & value) {
+    return value.type == GGML_TYPE_F32 && value.ne[0] > 0 && value.ne[1] > 0 && value.nb[0] == sizeof(float);
+}
+
 // Byte offset of one batch plane inside a contiguous value whose planes follow each other.
 inline size_t common_plane_offset(const Value & value, int64_t plane) {
     const int64_t plane_stride = value.ne[2] > 0 ? value.ne[2] : 1;
@@ -465,7 +474,8 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
                                                          KernelCatalogRef  kernel,
                                                          bool              decode,
                                                          bool              elementwise_k_tail = false,
-                                                         bool              allow_batched = false) {
+                                                         bool              allow_batched = false,
+                                                         bool              allow_row_padded_activation = false) {
     CommonMulMatMatch match;
     if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
         return match;
@@ -475,8 +485,9 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
     const Value * input  = common_graph_value(graph, node->inputs[1]);
     const Value * output = common_graph_value(graph, node->output);
     if (weight == nullptr || input == nullptr || output == nullptr || weight->ne[0] <= 0 || weight->ne[1] <= 0 ||
-        !weight->contiguous || !input->contiguous || !output->contiguous || input->type != GGML_TYPE_F32 ||
-        output->type != GGML_TYPE_F32) {
+        !weight->contiguous ||
+        !(input->contiguous || (allow_row_padded_activation && common_is_row_padded_f32(*input))) ||
+        !output->contiguous || input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32) {
         return {};
     }
 
@@ -524,8 +535,9 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
     match.output_size   = output_size;
     match.token_count   = token_count;
     match.weight_format = format;
-    match.plane_count    = allow_batched ? plane_count : 1;
-    match.batched_weight = allow_batched && paired_weight;
+    match.plane_count       = allow_batched ? plane_count : 1;
+    match.batched_weight    = allow_batched && paired_weight;
+    match.strided_activation = allow_row_padded_activation && !input->contiguous;
     return match;
 }
 
