@@ -59,6 +59,11 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
 
+    // The hybrid layers in visit order, and the ones that carry the shared block weights. A
+    // block is stored once, at the first hybrid layers that use it; the rest are aliased below.
+    std::vector<int> shared_use;
+    std::vector<int> shared_src;
+
     for (int i = 0; i < n_layer; ++i) {
         const int64_t n_head_kv_i = hparams.n_head_kv(i);
         auto & layer = layers[i];
@@ -80,21 +85,57 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
             // Hybrid layer: attention + FFN + linear mixing
             const int64_t attn_hidden = 2 * n_embd;
 
+            // Everything belonging to the shared block is optional per layer: a layer that carries
+            // no copy is aliased to its block's source after this loop, and a file with no copy at
+            // all is refused there rather than once per tensor. ffn_up is not shared -- the
+            // per-layer MLP adapter is baked into it at conversion time.
+            const int shared = TENSOR_NOT_REQUIRED;
+
             // Pre-attention norm (4096-dim, operates on concat)
-            layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {attn_hidden}, 0);
+            layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {attn_hidden}, shared);
 
             // Attention weights (input is 4096-dim concat)
-            create_tensor_qkv(layer, i, attn_hidden, attn_hidden, attn_hidden, attn_hidden, 0);
-            layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT,  "weight", i), {attn_hidden, n_embd}, 0);
+            create_tensor_qkv(layer, i, attn_hidden, attn_hidden, attn_hidden, attn_hidden, shared);
+            layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT,  "weight", i), {attn_hidden, n_embd}, shared);
 
             // FFN (fused gate+up, split internally by GEGLU)
-            layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+            layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, shared);
             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, 2*n_ff}, 0);
-            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, shared);
 
             // Linear mixing (transformer output -> mamba input adjustment)
             layer.ssm_mix = create_tensor(tn(LLM_TENSOR_SSM_MIX, "weight", i), {n_embd, n_embd}, 0);
+
+            if (layer.wq != nullptr) {
+                shared_src.push_back(i);
+            }
+            shared_use.push_back(i);
         }
+    }
+
+    // Hybrid visit N runs block N % num_mem_blocks, which the converter stores at the first
+    // num_mem_blocks hybrid layers; so those are the sources and every other hybrid layer points
+    // at sources[N % num_mem_blocks]. A file written before the block was shared has a copy in
+    // every layer, making every layer a source, so each alias below is the identity.
+    GGML_ASSERT(!shared_use.empty() && "zamba2: this GGUF declares no hybrid layer");
+    GGML_ASSERT(!shared_src.empty() && "zamba2: this GGUF stores no shared attention/FFN block");
+    for (size_t k = 0; k < shared_src.size(); ++k) {
+        GGML_ASSERT(shared_src[k] == shared_use[k] &&
+                "zamba2: the shared block must be stored at the first hybrid layers of the file");
+    }
+    for (size_t v = 0; v < shared_use.size(); ++v) {
+        auto & layer = layers[shared_use[v]];
+        if (layer.wq != nullptr) {
+            continue;
+        }
+        const auto & src = layers[shared_src[v % shared_src.size()]];
+        layer.attn_post_norm = src.attn_post_norm;
+        layer.wq              = src.wq;
+        layer.wk              = src.wk;
+        layer.wv              = src.wv;
+        layer.wo              = src.wo;
+        layer.ffn_norm        = src.ffn_norm;
+        layer.ffn_down        = src.ffn_down;
     }
 }
 
