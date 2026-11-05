@@ -9115,6 +9115,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 2944, 1,  92, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 3712, 8, 232, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 3712, 1, 232, {1, 1}, {1, 1}));
+    // The token count the model's prefill ubatch actually uses. `n=8` was not enough: at 512 tokens the same contraction
+    // takes a different dispatch path, and BlackMamba's `dt_proj` stays on the CPU there (found by GGML_HRX_STRICT=1).
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 2944, 512,  92, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 3712, 512, 232, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32,  512, 8, 260, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32,  512, 8,  90, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,  GGML_TYPE_F32,  512, 8, 260, {1, 1}, {1, 1}));
