@@ -116,6 +116,20 @@ void llama_zha_dump_hook(ggml_tensor * t, const char * name, int il) {
     }
     // keep it alive until we read it back after graph_compute
     ggml_set_output(t);
+    // ...and say so in the name, because the output flag alone is not a request to *materialise* the value:
+    // llama.cpp marks several tensors as graph outputs for API reasons (result_norm is t_embd), and ggml-hrx
+    // would then decline a fusion for every one of them. The prefix is the explicit "someone will read this
+    // back" marker that ggml-hrx looks for; nothing else in a run carries it, so a run without the dump is
+    // planned exactly as before.
+    {
+        constexpr const char * k_readback_prefix = "zha-readback.";
+        constexpr size_t       k_prefix_len      = sizeof("zha-readback.") - 1;
+        if (strncmp(t->name, k_readback_prefix, k_prefix_len) != 0) {
+            char renamed[GGML_MAX_NAME];
+            snprintf(renamed, sizeof(renamed), "%s%s", k_readback_prefix, t->name);
+            ggml_set_name(t, renamed);
+        }
+    }
     g_pending.push_back({ t, short_name(name), il });
 }
 
