@@ -52,7 +52,14 @@ inline bool common_mul_mat_id_same_shape(const Value & lhs, const Value & rhs) {
 }
 
 inline bool common_mul_mat_id_supported_dense_input_size(CommonMulMatWeightFormat format, int64_t input_size) {
-    return common_mul_mat_supported_dense_input_size(format, input_size);
+    // The MUL_MAT_ID wmma core pads the contraction to whole 256-blocks and gates every weight value it
+    // contributes with `valid_k`, exactly as the prefill dense core does, and its op file declares only the
+    // 32-value packet (`ggml.mul_mat_id.input_size`, multiple_of 32) -- the same contract shape the plain
+    // dense path uses (engine #991). An element-wise expert weight therefore needs % 32, not the % 256 this
+    // inherited from the dense table -- BlackMamba's experts contract over 1472 and 3872, both legal at the
+    // kernel and refused here. Only F16/BF16/F32 verdicts change: the quantized formats the table already
+    // lists (IQ4_NL, MXFP4, Q8_0, Q4_0, ...) keep their % 32, and block formats keep their block granularity.
+    return common_mul_mat_supported_plain_dense_input_size(format, input_size);
 }
 
 inline bool common_mul_mat_id_supported_dense_output_size(int64_t output_size) {
