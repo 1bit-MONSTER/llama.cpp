@@ -1,4 +1,5 @@
 #include "llama-graph.h"
+#include "llama-zha-dump.h"
 
 #include "llama-impl.h"
 #include "llama-model.h"
@@ -1382,6 +1383,7 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {
         cb_func(ubatch, cur, name, il);
     }
+    llama_zha_dump_hook(cur, name, il); // no-op unless LLAMA_ZHA_DUMP_DIR is set
 }
 
 

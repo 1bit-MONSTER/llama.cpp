@@ -16,6 +16,7 @@ add_library(llama
             llama-batch.cpp
             llama-chat.cpp
             llama-context.cpp
+            llama-zha-dump.cpp
             llama-cparams.cpp
             llama-grammar.cpp
             llama-graph.cpp

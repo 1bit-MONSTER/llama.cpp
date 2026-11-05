@@ -1,4 +1,5 @@
 #include "llama-context.h"
+#include "llama-zha-dump.h"
 
 #include "ggml.h"
 #include "llama-arch.h"
@@ -1399,6 +1400,8 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         ret = status;
         return nullptr;
     }
+
+    llama_zha_dump_flush(ubatch); // zha q/k dump: no-op unless LLAMA_ZHA_DUMP_DIR is set
 
     ret = GGML_STATUS_SUCCESS;
 
