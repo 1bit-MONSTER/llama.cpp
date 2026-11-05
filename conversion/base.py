@@ -2654,7 +2654,10 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
     # For text conversion we route to a dedicated text-only class.
     # TODO: refactor this later to avoid adding exception here
-    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration"):
+    # Zamba2-VL: its text_config says `Zamba2ForCausalLM`, but the text half is not a plain Zamba2
+    # (tensors under `language_model.`, the vocab padded to the embedding, and the multimodal chat
+    # template), so the top-level architecture wins for the text pass too.
+    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "Zamba2_VLForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead
