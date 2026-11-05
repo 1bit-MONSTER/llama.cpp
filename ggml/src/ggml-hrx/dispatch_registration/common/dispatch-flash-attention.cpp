@@ -59,6 +59,15 @@ static constexpr int64_t kDecodeSplitMaxKeyValueTokenCapacity = 32768;
 static constexpr int64_t kCopyTransposeF16MaxExtent = 32768;
 static constexpr int64_t kPrefillQkHeadSizeBlock    = 16;
 static constexpr int64_t kPrefillValueHeadSizeBlock = 64;
+// The decode-split kernel publishes V through 128-wide output tiles whose channel stores are clamped to
+// `value_head_size` (`lane_output_channel < value_head_size`, 4-wide vectors), so its real requirement is a
+// 16-value WMMA fragment rather than the prefill op's whole 64-wide tile. Zamba-7B-v1's 464 (29 x 16) is
+// exactly the shape that needs this; the prefill op keeps the 64 block because it divides by it.
+// The upper bound is the corpus' own value range (both flash-attention ops declare
+// `range(value_head_size, 64, 512)`), not the wider Q/K cap: a contraction the JIT would reject must never be
+// claimed, because a rejected claim is a hard failure where a decline is a CPU fallback.
+static constexpr int64_t kDecodeValueHeadSizeBlock   = 16;
+static constexpr int64_t kDecodeMaxValueHeadSize     = 512;
 static constexpr int64_t kPrefillMinQkHeadSize      = kPrefillQkHeadSizeBlock;
 static constexpr int64_t kPrefillMinValueHeadSize   = kPrefillValueHeadSizeBlock;
 // Current cap keeps full-head Q/K staging within the kernel's fixed LDS budget
@@ -105,6 +114,11 @@ static bool is_supported_qk_head_size(int64_t head_size) {
 static bool is_supported_value_head_size(int64_t head_size) {
     return head_size >= kPrefillMinValueHeadSize && head_size <= kPrefillMaxHeadSize &&
            head_size % kPrefillValueHeadSizeBlock == 0;
+}
+
+static bool is_supported_decode_value_head_size(int64_t head_size) {
+    return head_size >= kPrefillMinValueHeadSize && head_size <= kDecodeMaxValueHeadSize &&
+           head_size % kDecodeValueHeadSizeBlock == 0;
 }
 
 static bool has_query_layout(const Value & value, int64_t query_head_count, int64_t head_size) {
@@ -335,7 +349,7 @@ static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16
 
     const int64_t qk_head_size    = query->ne[0];
     const int64_t value_head_size = value->ne[0];
-    if (!is_supported_qk_head_size(qk_head_size) || !is_supported_value_head_size(value_head_size) ||
+    if (!is_supported_qk_head_size(qk_head_size) || !is_supported_decode_value_head_size(value_head_size) ||
         !has_flash_attention_params(*node)) {
         return {};
     }
