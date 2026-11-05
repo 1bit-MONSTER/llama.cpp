@@ -4,6 +4,7 @@
 #include "dispatch/dispatch-scheduler.h"
 #include "ggml-impl.h"
 #include "ggml.h"
+#include "runtime/host-gap-profile.h"
 
 #include <cstddef>
 #include <cstdlib>
@@ -484,6 +485,8 @@ PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
 
     std::lock_guard<std::mutex> lock(prepared_mutex_);
     if (!has_prepared_) {
+        // engine #572: preparing a graph shape's command program is host-side work that used to be invisible.
+        const HostGapScope scope("prep.prepare");
         prepared_ = prepare_command_program(context, *commands_, bindings);
         if (!prepared_.valid()) {
             result.status.append(prepared_.status);
