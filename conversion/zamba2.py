@@ -82,6 +82,15 @@ class Zamba2Model(Mamba2Model):
                     key = f"{layer_idx}.{adapter_type}.{visit_idx}.{seq_idx}"
                     self._adapter_cache[key] = self.model_tensors[tname]()
 
+        # Tails of a shared block that this checkpoint stores no per-layer adapter for are
+        # byte-identical in every layer using the block, so they are written once, at the
+        # block's source layer, and the loader aliases the other layers to it
+        # (llama_model_zamba2).  A tail with an adapter is per layer after merging and stays
+        # per layer -- that one cannot be shared without changing the graph.
+        adapted = {tail for tail, atype in self._ADAPTER_MAP.items()
+                   if any(atype in t for t in self.model_tensors)}
+        self._shared_tails = self._SHARED_TAILS - adapted
+
     def _get_adapter_contribution(self, src_layer: int, adapter_type: str, visit_idx: int) -> Tensor | None:
         """Compute up @ down for a given adapter, returning the additive correction."""
         down_key = f"{src_layer}.{adapter_type}.{visit_idx}.0"
@@ -153,6 +162,18 @@ class Zamba2Model(Mamba2Model):
 
         self.gguf_writer.add_file_type(self.ftype)
 
+    # Block tails that carry no per-layer adapter in a Zamba2 checkpoint, i.e. the ones the
+    # converter writes once per block instead of once per layer.
+    _SHARED_TAILS: frozenset[str] = frozenset({
+        "input_layernorm.weight",
+        "pre_ff_layernorm.weight",
+        "self_attn.q_proj.weight",
+        "self_attn.k_proj.weight",
+        "self_attn.v_proj.weight",
+        "self_attn.o_proj.weight",
+        "feed_forward.down_proj.weight",
+    })
+
     # Map from shared weight tail names to their adapter type names
     _ADAPTER_MAP: dict[str, str] = {
         "self_attn.q_proj.weight": "linear_q_adapter_list",
@@ -166,8 +187,9 @@ class Zamba2Model(Mamba2Model):
         if "adapter" in name.lower():
             return
 
-        # Shared transformer tensors: duplicate to all hybrid layers using this block,
-        # merging per-layer adapter corrections where applicable.
+        # Shared transformer tensors: written at the block's source layer if the whole block is
+        # shared, otherwise duplicated to every hybrid layer using the block, merging per-layer
+        # adapter corrections where applicable.
         if "shared_transformer" in name:
             if bid is None or bid not in self._shared_block_src:
                 return
@@ -176,6 +198,10 @@ class Zamba2Model(Mamba2Model):
 
             # Strip the shared_transformer prefix so names match the standard HF layout
             tail = name.partition("shared_transformer.")[2]
+
+            # Shared across every layer of the block: one copy, at the source layer.
+            if tail in self._shared_tails:
+                target_layers = [bid]
 
             # input_layernorm sits before the attention-on-concat block, so it maps
             # to ATTN_POST_NORM rather than the default ATTN_NORM.  Handle explicitly.
