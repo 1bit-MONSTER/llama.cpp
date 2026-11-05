@@ -2527,6 +2527,17 @@ llm_graph_cb llama_context::graph_get_cb() const {
         // - force the last op of the layer on the specified backend to avoid running it on the backend of the next layer due to scheduling
         // FIXME: fix in ggml_backend_sched
         const bool full_offload = model.n_gpu_layers() > model.hparams.n_layer_all;
+        // the fused attention belongs on the layer's own device. Without this, a backend that claims host
+        // buffer types (HRX does) takes it in the scheduler's pass-3 tie-break even with -ngl 0, and
+        // resolve_fused_ops disables flash attention for the whole context on that mismatch (engine #1078)
+        if (il != -1 && strcmp(name, "fattn") == 0) {
+            const auto & dev_layer = model.dev_layer(il);
+            for (const auto & backend : backends) {
+                if (ggml_backend_get_device(backend.get()) == dev_layer && ggml_backend_supports_op(backend.get(), cur)) {
+                    ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend.get());
+                }
+            }
+        }
         if (ubatch.n_tokens < 32 || full_offload) {
             if (il != -1 && (strcmp(name, "norm") == 0 || strcmp(name, "l_last") == 0)) {
                 const auto & dev_layer = model.dev_layer(il);
