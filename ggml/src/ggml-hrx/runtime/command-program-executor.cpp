@@ -1858,20 +1858,28 @@ bool bind_and_execute_prepared_command_program(const CommandProgramExecutionCont
     const DebugSerialExecutionTrace debug(context, commands);
     debug.log_program_begin();
     HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-rebind-pre");
-    Status rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
-    if (!rebind_status.success()) {
-        GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(rebind_status));
-        return false;
-    }
-    Status weight_rebind_status = rebind_prepared_host_weights(context, prepared);
-    if (!weight_rebind_status.success()) {
-        GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(weight_rebind_status));
-        return false;
+    {
+        // engine #572: the prepared path is where the server's time goes, and it had no phases at all.
+        const HostGapScope scope("prep.rebind");
+        Status             rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
+        if (!rebind_status.success()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(rebind_status));
+            return false;
+        }
+        Status weight_rebind_status = rebind_prepared_host_weights(context, prepared);
+        if (!weight_rebind_status.success()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(weight_rebind_status));
+            return false;
+        }
     }
     HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-rebind-post");
     if (commands.transients.arena_size == 0) {
         HRX_DEBUG_SERIAL_SYNC(debug, "constant-initialization-pre");
-        Status status = initialize_command_program_constants(context, commands, {}, prepared);
+        Status status;
+        {
+            const HostGapScope scope("prep.const");
+            status = initialize_command_program_constants(context, commands, {}, prepared);
+        }
         if (!status.success()) {
             GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(status));
             return false;
@@ -1902,7 +1910,10 @@ bool bind_and_execute_prepared_command_program(const CommandProgramExecutionCont
 
     HRX_DEBUG_SERIAL_SYNC(debug, "transient-arena-acquire-pre");
     TransientArena::AllocationLease lease = context.transient_arena->acquire_allocation_lease();
-    status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size);
+    {
+        const HostGapScope scope("prep.transient");
+        status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size);
+    }
     if (!status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(status));
         return false;
@@ -1914,7 +1925,10 @@ bool bind_and_execute_prepared_command_program(const CommandProgramExecutionCont
     }
     HRX_DEBUG_SERIAL_SYNC(debug, "transient-bind-post");
     HRX_DEBUG_SERIAL_SYNC(debug, "constant-initialization-pre");
-    status = initialize_command_program_constants(context, commands, lease.current_allocation(), prepared);
+    {
+        const HostGapScope scope("prep.const");
+        status = initialize_command_program_constants(context, commands, lease.current_allocation(), prepared);
+    }
     if (!status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(status));
         return false;
@@ -2185,18 +2199,36 @@ bool execute_prepared_command_program(const CommandProgramExecutionContext & con
     }
     const DebugSerialExecutionTrace debug(context, commands);
     HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-upload-pre");
-    Status upload_status = upload_prepared_host_staging(context, commands);
+    Status upload_status;
+    {
+        const HostGapScope scope("prep.upload");
+        upload_status = upload_prepared_host_staging(context, commands);
+    }
     if (!upload_status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(upload_status));
         return false;
     }
     HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-upload-post");
-    if (!execute_prepared_command_list_serial(context, commands.initialization_commands, "init", commands.commands.size()) ||
-        !execute_prepared_command_list_serial(context, commands.commands, "main", commands.commands.size())) {
+    bool init_ok = false;
+    {
+        const HostGapScope scope("prep.init");
+        init_ok = execute_prepared_command_list_serial(context, commands.initialization_commands, "init",
+                                                       commands.commands.size());
+    }
+    bool main_ok = false;
+    if (init_ok) {
+        const HostGapScope scope("prep.main");
+        main_ok = execute_prepared_command_list_serial(context, commands.commands, "main", commands.commands.size());
+    }
+    if (!init_ok || !main_ok) {
         return false;
     }
     HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-download-pre");
-    Status download_status = download_prepared_host_staging(context, commands);
+    Status download_status;
+    {
+        const HostGapScope scope("prep.download");
+        download_status = download_prepared_host_staging(context, commands);
+    }
     if (!download_status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(download_status));
         return false;
@@ -2213,6 +2245,7 @@ bool execute_prepared_command_program(const CommandProgramExecutionContext & con
     }
     if (reads_registered_host_memory) {
         static thread_local WaitHistory registered_upload_wait_history;
+        const HostGapScope                 scope("prep.sync");  // the device wait the replay path takes in replay.wait
         if (ErrorResult error =
                 take_status(stream_synchronize_sleeping(context.stream, registered_upload_wait_history))) {
             GGML_LOG_ERROR("%s: wait for HRX command program reading host memory: %s\n", __func__, error->c_str());
@@ -2226,7 +2259,12 @@ bool execute_prepared_command_program(const CommandProgramExecutionContext & con
 bool execute_command_program(const CommandProgramExecutionContext & context,
                              const CommandProgram &                 commands,
                              const CommandProgramBindings &         bindings) {
-    PreparedCommandProgram prepared = prepare_command_program(context, commands, bindings);
+    // engine #572: the direct (uncached) entry, the fourth prepare_command_program call site. Without this scope the
+    // uncached path pays the same per-shape preparation as the cache-miss paths and reports it as graph.execute.
+    PreparedCommandProgram prepared = [&] {
+        const HostGapScope scope("prep.prepare");
+        return prepare_command_program(context, commands, bindings);
+    }();
     return bind_and_execute_prepared_command_program(context, commands, bindings, prepared);
 }
 

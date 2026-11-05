@@ -100,7 +100,10 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     if (graph_uid == 0 || !commands.valid() || !bindings.valid()) {
         result.graph_replay_event             = HrxGraphReplayEvent::Ineligible;
         result.graph_replay_ineligible_reason = "uncached_graph";
-        PreparedCommandProgram prepared       = prepare_command_program(context, commands, bindings);
+        PreparedCommandProgram prepared = [&] {
+            const HostGapScope scope("prep.prepare");
+            return prepare_command_program(context, commands, bindings);
+        }();
         if (!prepared.valid()) {
             result.status.append(prepared.status);
             return result;
@@ -167,7 +170,10 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         return result;
     }
 
-    PreparedCommandProgram prepared = prepare_command_program(context, commands, bindings);
+    PreparedCommandProgram prepared = [&] {
+        const HostGapScope scope("prep.prepare");
+        return prepare_command_program(context, commands, bindings);
+    }();
     if (!prepared.valid()) {
         if (created_entry) {
             std::lock_guard<std::mutex> lock(mutex_);
