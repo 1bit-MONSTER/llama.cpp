@@ -1440,9 +1440,22 @@ static bool ggml_backend_hrx_buffer_export_dmabuf(ggml_backend_buffer_t buffer, 
            ggml::hrx::export_dmabuf(device_ptr, buffer->size, fd, offset);
 }
 
+// engine #856: HRX serves a dense MUL_MAT weight from a repacked resident copy, so the loader's GGUF-layout model
+// buffer is a second copy. GGML_HRX_WEIGHT_HOST_PLACEMENT=0 restores the old placement (A/B control).
+static bool hrx_weight_host_placement(ggml_op op) {
+    static const bool enabled = [] {
+        const char * env = std::getenv("GGML_HRX_WEIGHT_HOST_PLACEMENT");
+        return env == nullptr || *env == '\0' || std::atoi(env) != 0;
+    }();
+    return enabled && op == GGML_OP_MUL_MAT;
+}
+
 static void * registry_proc(ggml_backend_reg_t registry, const char * name) {
     if (std::strcmp(name, "ggml_backend_buffer_export_dmabuf") == 0) {
         return (void *) ggml_backend_hrx_buffer_export_dmabuf;
+    }
+    if (std::strcmp(name, "ggml_backend_hrx_weight_host_placement") == 0) {
+        return (void *) hrx_weight_host_placement;
     }
     GGML_UNUSED(registry);
     GGML_UNUSED(name);
