@@ -412,6 +412,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_XIELU_ALPHA_P,         "xielu.alpha_p"         },
     { LLM_KV_XIELU_BETA,            "xielu.beta"            },
     { LLM_KV_XIELU_EPS,             "xielu.eps"             },
+    { LLM_KV_ZAMBA2_FFN_GATE_UP_ADAPTER_RANK, "zamba2.ffn_gate_up_adapter_rank" },
 
     // deprecated
     { LLM_KV_TOKENIZER_PREFIX_ID, "tokenizer.ggml.prefix_token_id" },
@@ -481,6 +482,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_SSM_NORM,                               "blk.%d.ssm_norm" },
     { LLM_TENSOR_SSM_OUT,                                "blk.%d.ssm_out" },
     { LLM_TENSOR_SSM_MIX,                                "blk.%d.ssm_mix" },
+    { LLM_TENSOR_FFN_GATE_UP_ADAPTER_A,                  "blk.%d.ffn_gate_up_adapter_a" },
+    { LLM_TENSOR_FFN_GATE_UP_ADAPTER_B,                  "blk.%d.ffn_gate_up_adapter_b" },
     { LLM_TENSOR_ROPE_FACTORS_LONG,                      "rope_factors_long" },
     { LLM_TENSOR_ROPE_FACTORS_SHORT,                     "rope_factors_short" },
     { LLM_TENSOR_SSM_X,                                  "blk.%d.ssm_x" },
@@ -828,6 +831,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_SSM_DT,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_OUT,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_MIX,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_FFN_GATE_UP_ADAPTER_A,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_FFN_GATE_UP_ADAPTER_B,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_ALPHA,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_BETA_ALPHA,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_TIME_MIX_W1,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},

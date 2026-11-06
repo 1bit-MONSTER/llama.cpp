@@ -680,6 +680,12 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
     return new_type;
 }
 
+// zamba2's per-layer MLP adapter pair (engine #1036 cause 2). Matched by name because the pair is an arch-level
+// tensor a quantize rule needs to see before the type is chosen, and it has no category of its own.
+static bool is_zamba2_mlp_adapter(const char * name) {
+    return std::strstr(name, "ffn_gate_up_adapter_") != nullptr;
+}
+
 // outer wrapper: determine the ggml_type that this tensor should be quantized to
 static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm) {
     if (!tensor_allows_quantization(params, qs.model.arch, tensor)) {
@@ -728,8 +734,19 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
         }
 
         // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
-        if (!manual && !params->pure) {
-            new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
+        if (!manual) {
+            if (!params->pure && is_zamba2_mlp_adapter(tensor->name)) {
+                // zamba2's per-layer MLP adapter is a rank-128 pair applied at run time (base + B*(A*x)). Quantizing
+                // it saves little and costs the whole pair its place on the device: the B contraction has
+                // input_size = rank = 128, which is below the block formats' `input_size >= 256` minimum (their
+                // own block layout) while the float path accepts `>= 4 && % 4 == 0`. Measured on a 2.7B Q5_K_M,
+                // quantizing the pair puts 9 of 3051 nodes on the CPU (one per hybrid layer) and takes prefill from
+                // 589.5 to 463.7 tok/s; keeping it at F16 costs 31.8 MiB of 1804.9. --pure still forces the
+                // requested type on every tensor, and an explicit --tensor-type wins over this default.
+                new_type = GGML_TYPE_F16;
+            } else if (!params->pure) {
+                new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
+            }
         }
 
         // incompatible tensor shapes are handled here - fallback to a compatible type

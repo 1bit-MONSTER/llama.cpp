@@ -401,6 +401,11 @@ void llama_model_saver::add_kv_from_model() {
     } else {
         add_kv(LLM_KV_SSM_GROUP_COUNT,               hparams.ssm_n_group);
     }
+    if (hparams.zamba2_ffn_gate_up_adapter_rank > 0) {
+        // only written when the tensors it describes are present, so the saver cannot claim the adapter form
+        // for a file that has the adapter baked into ffn_up
+        add_kv(LLM_KV_ZAMBA2_FFN_GATE_UP_ADAPTER_RANK, hparams.zamba2_ffn_gate_up_adapter_rank);
+    }
     add_kv(LLM_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
 
     add_kv(LLM_KV_KDA_HEAD_DIM,                      hparams.n_embd_head_kda);

@@ -273,6 +273,10 @@ class Keys:
     class KDA:
         HEAD_DIM = "{arch}.kda.head_dim"
 
+    class Zamba2:
+        # names the arch explicitly: 0 or absent = the per-layer MLP adapter is baked into ffn_up
+        FFN_GATE_UP_ADAPTER_RANK = "zamba2.ffn_gate_up_adapter_rank"
+
     class WKV:
         HEAD_SIZE = "{arch}.wkv.head_size"
 
@@ -742,6 +746,8 @@ class MODEL_TENSOR(IntEnum):
     ZAYA_VLORA_DOWN_EXPS_A = auto() # Zaya1-VL
     ZAYA_VLORA_DOWN_EXPS_B = auto() # Zaya1-VL
     SSM_MIX              = auto() # zamba2
+    FFN_GATE_UP_ADAPTER_A = auto() # zamba2: per-layer low-rank MLP adapter, hidden -> rank
+    FFN_GATE_UP_ADAPTER_B = auto() # zamba2: per-layer low-rank MLP adapter, rank -> 2*ff
     TIME_MIX_W0          = auto()
     TIME_MIX_W1          = auto()
     TIME_MIX_W2          = auto()
@@ -1396,6 +1402,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_NORM:                  "blk.{bid}.ssm_norm",
     MODEL_TENSOR.SSM_OUT:                   "blk.{bid}.ssm_out",
     MODEL_TENSOR.SSM_MIX:                   "blk.{bid}.ssm_mix",
+    MODEL_TENSOR.FFN_GATE_UP_ADAPTER_A:     "blk.{bid}.ffn_gate_up_adapter_a",
+    MODEL_TENSOR.FFN_GATE_UP_ADAPTER_B:     "blk.{bid}.ffn_gate_up_adapter_b",
     MODEL_TENSOR.SSM_ALPHA:                 "blk.{bid}.ssm_alpha",            # qwen3.5
     MODEL_TENSOR.SSM_BETA_ALPHA:            "blk.{bid}.ssm_ba",
     MODEL_TENSOR.SSM_CONV1D_Q:              "blk.{bid}.ssm_conv1d_q",         # Kimi Linear
@@ -3316,6 +3324,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_UP_ADAPTER_A,
+        MODEL_TENSOR.FFN_GATE_UP_ADAPTER_B,
     ],
     MODEL_ARCH.ZAMBA: [
         MODEL_TENSOR.TOKEN_EMBD,

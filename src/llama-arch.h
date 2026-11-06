@@ -412,6 +412,10 @@ enum llm_kv {
     LLM_KV_XIELU_BETA,
     LLM_KV_XIELU_EPS,
 
+    // zamba2: 0 or absent = the per-layer MLP adapters are baked into ffn_up (files written before this key
+    // existed); > 0 = ffn_up is the shared base and each hybrid layer carries a low-rank adapter pair of this rank
+    LLM_KV_ZAMBA2_FFN_GATE_UP_ADAPTER_RANK,
+
     // deprecated:
     LLM_KV_TOKENIZER_PREFIX_ID,
     LLM_KV_TOKENIZER_SUFFIX_ID,
@@ -513,6 +517,8 @@ enum llm_tensor {
     LLM_TENSOR_SSM_NORM,
     LLM_TENSOR_SSM_OUT,
     LLM_TENSOR_SSM_MIX,  // zamba2: linear mixing between transformer and mamba
+    LLM_TENSOR_FFN_GATE_UP_ADAPTER_A, // zamba2: per-layer low-rank MLP adapter, hidden -> adapter_rank
+    LLM_TENSOR_FFN_GATE_UP_ADAPTER_B, // zamba2: per-layer low-rank MLP adapter, adapter_rank -> 2*n_ff
     LLM_TENSOR_SSM_BETA_ALPHA,      // qwen3next
     LLM_TENSOR_SSM_ALPHA,           // qwen3.5
     // Kimi Linear KDA (using SSM_ prefix for consistency)

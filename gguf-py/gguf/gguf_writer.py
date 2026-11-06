@@ -1143,6 +1143,9 @@ class GGUFWriter:
     def add_ssm_group_count(self, value: int) -> None:
         self.add_uint32(Keys.SSM.GROUP_COUNT.format(arch=self.arch), value)
 
+    def add_zamba2_ffn_gate_up_adapter_rank(self, value: int) -> None:
+        self.add_uint32(Keys.Zamba2.FFN_GATE_UP_ADAPTER_RANK, value)
+
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
 
