@@ -3929,19 +3929,7 @@ struct test_dsv4_hc_post : public test_dsv4_hc {
         return "DSV4_HC_POST";
     }
 
-    bool waive_node(const char * backend, ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        if (identity || std::strncmp(backend, "HRX", 3) != 0) {
-            return false;
-        }
-        static bool said = false;
-        if (!said) {
-            said = true;
-            printf("WAIVER [%s] DSV4_HC_POST identity=0: hip.hc_post is a private HIP add-on dispatch and its "
-                            "non-identity path is wrong there; identity=1 passes. Tracked in engine #1259\n", backend);
-        }
-        return true;
-    }
+    std::string vars() override {
 
     std::string vars() override {
         return VARS_TO_STR3(n_embd, n_tokens, identity);
