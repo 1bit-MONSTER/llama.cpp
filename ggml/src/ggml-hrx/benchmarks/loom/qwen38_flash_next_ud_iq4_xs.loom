@@ -1,0 +1,126 @@
+// Hand-written fixture for the Flash-Next routed gate/up swiglu kernel (engine #572, item 4).
+// Shape is the shipped prefill cell: 2048 tokens x 10 routes over 512 experts, input 2560, expert ffn 640.
+//
+// Why this file exists rather than a generated one: generate-model-benchmarks.py fills every buffer with a
+// constant, and this kernel reads its partition count out of the partition table (the .loom body's
+// `partition_count_view`), so a zero fill benchmarks an empty grid-stride loop - the launch, not the work.
+// Here `@flashnext_routed_tables` writes the table through an authored `check.generate` call: 640 partitions of
+// 32 rows spread over 512 experts (1.25 partitions/expert, the ratio the real routing produces at this shape)
+// with assignments that sweep all 2048 input rows.
+// The two cases differ only in the weight format: IQ3_XXS (28 of the model's 48 blocks) and IQ4_XS (17), which
+// the 19:14 dispatch profile shows at 58.1 ms vs 23.6 ms for identical geometry.
+
+target.decl @ggml_mul_mat_id_swiglu_gfx11_wave64
+
+kernel.decl target(@ggml_mul_mat_id_swiglu_gfx11_wave64) @ggml_mul_mat_id_swiglu_f32_f32_wmma(%token_count: index) launch(%token_count: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
+kernel.decl target(@ggml_mul_mat_id_swiglu_gfx11_wave64) @ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table(%token_count: index) launch(%token_count: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
+
+// Writes the two tables the kernel reads: partition_table = [count, descriptor...] and the assignment table at
+// byte offset expert_count*4 of expert_table, indexed [expert][ordinal].
+// descriptor = expert | (route_tile<<9) | (31<<15); route_tile = (p*7) % 64 so the 32-row tiles sweep all 2048
+// assignments, expert = p % 512 so every expert is streamed as often as real routing makes it.
+func.def @flashnext_routed_tables(%token_count: index, %route_count: index, %expert_count: index, %partition_table: buffer, %expert_table: buffer) {
+  %origin = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : offset
+  %c7 = index.constant 7 : index
+  %c13 = index.constant 13 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c512 = index.constant 512 : index
+  %row_bits = index.constant 1015808 : index
+  %partition_capacity = index.constant 1152 : index
+  %partition_storage = buffer.assume.memory_space<global> %partition_table : buffer
+  %expert_storage = buffer.assume.memory_space<global> %expert_table : buffer
+  %count_view = buffer.view %partition_storage[%origin] : buffer -> view<1xi32>
+  %descriptor_view = buffer.view %partition_storage[%c4] : buffer -> view<[%partition_capacity]xi32>
+  %assignment_byte_base = index.scale %expert_count, %c4 : index, offset -> offset
+  %assignment_count = index.mul %token_count, %route_count : index
+  %assignment_total = index.mul %expert_count, %token_count : index
+  %assignment_view = buffer.view %expert_storage[%assignment_byte_base] : buffer -> view<[%assignment_total]xi32>
+  %rounded = index.add %assignment_count, %c31 : index
+  %partition_count = index.div %rounded, %c32 : index
+  %count_i32 = index.cast %partition_count : index to i32
+  view.store %count_i32, %count_view[%c0] : i32, view<1xi32>
+  scf.for %partition = [%c0 to %partition_count step %c1] {
+    %expert = index.rem %partition, %expert_count : index
+    %scaled = index.mul %partition, %c7 : index
+    %route_tile = index.rem %scaled, %c64 : index
+    %route_bits = index.mul %route_tile, %c512 : index
+    %packed0 = index.add %expert, %route_bits : index
+    %packed = index.add %packed0, %row_bits : index
+    %descriptor_i32 = index.cast %packed : index to i32
+    // the store's view bound must be provable at the memory op; give the compiler the relation it needs
+    %partition_bounded, %descriptor_capacity = index.assume %partition, %partition_capacity [lt(%partition, %partition_capacity)] : index, index
+    view.store %descriptor_i32, %descriptor_view[%partition_bounded] : i32, view<[%partition_capacity]xi32>
+  }
+  scf.for %flat = [%c0 to %assignment_total step %c1] {
+    %scaled_flat = index.mul %flat, %c13 : index
+    %assignment = index.rem %scaled_flat, %assignment_count : index
+    %assignment_i32 = index.cast %assignment : index to i32
+    %flat_bounded, %assignment_capacity = index.assume %flat, %assignment_total [lt(%flat, %assignment_total)] : index, index
+    view.store %assignment_i32, %assignment_view[%flat_bounded] : i32, view<[%assignment_total]xi32>
+  }
+  func.return
+}
+
+check.scenario public @qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_case {
+  check.trial[1](%trial: index, %entropy: check.entropy) {
+    %token_count = check.literal value(2048) : index
+    %route_count = check.literal value(10) : index
+    %expert_count = check.literal value(512) : index
+    %input = check.generate.fill value(0) : tensor<20971520xi8>
+    %expert_table = check.generate.fill value(0) : tensor<4196352xi8>
+    %partition_table = check.generate.fill value(0) : tensor<4612xi8>
+    %gate_weight = check.generate.fill value(0) : tensor<321126400xi8>
+    %up_weight = check.generate.fill value(0) : tensor<321126400xi8>
+    %output = check.generate.fill value(0) : tensor<52428800xi8>
+    check.generate<@flashnext_routed_tables>(%token_count, %route_count, %expert_count, %partition_table, %expert_table) : (index, index, index, tensor<4612xi8>, tensor<4196352xi8>) -> ()
+    check.invoke<@ggml_mul_mat_id_swiglu_f32_f32_wmma>[%token_count](%token_count, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output) : (index, tensor<20971520xi8>, tensor<4196352xi8>, tensor<4612xi8>, tensor<321126400xi8>, tensor<321126400xi8>, tensor<52428800xi8>) -> ()
+  }
+  check.return
+}
+
+check.benchmark<@qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_case> @qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs
+
+check.scenario public @qwen38_flash_next_pp2048_gate_up_swiglu_iq4_xs_case {
+  check.trial[1](%trial: index, %entropy: check.entropy) {
+    %token_count = check.literal value(2048) : index
+    %route_count = check.literal value(10) : index
+    %expert_count = check.literal value(512) : index
+    %input = check.generate.fill value(0) : tensor<20971520xi8>
+    %expert_table = check.generate.fill value(0) : tensor<4196352xi8>
+    %partition_table = check.generate.fill value(0) : tensor<4612xi8>
+    %gate_weight = check.generate.fill value(0) : tensor<445644800xi8>
+    %up_weight = check.generate.fill value(0) : tensor<445644800xi8>
+    %output = check.generate.fill value(0) : tensor<52428800xi8>
+    check.generate<@flashnext_routed_tables>(%token_count, %route_count, %expert_count, %partition_table, %expert_table) : (index, index, index, tensor<4612xi8>, tensor<4196352xi8>) -> ()
+    check.invoke<@ggml_mul_mat_id_swiglu_f32_f32_wmma>[%token_count](%token_count, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output) : (index, tensor<20971520xi8>, tensor<4196352xi8>, tensor<4612xi8>, tensor<445644800xi8>, tensor<445644800xi8>, tensor<52428800xi8>) -> ()
+  }
+  check.return
+}
+
+check.benchmark<@qwen38_flash_next_pp2048_gate_up_swiglu_iq4_xs_case> @qwen38_flash_next_pp2048_gate_up_swiglu_iq4_xs
+
+// Same tables, same geometry, same partition count as the IQ3_XXS case above; only the kernel symbol differs:
+// this is the LDS-table variant of the IQ3_XXS grid decode (engine 572, item 4).
+check.scenario public @qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_tbl_case {
+  check.trial[1](%trial: index, %entropy: check.entropy) {
+    %token_count = check.literal value(2048) : index
+    %route_count = check.literal value(10) : index
+    %expert_count = check.literal value(512) : index
+    %input = check.generate.fill value(0) : tensor<20971520xi8>
+    %expert_table = check.generate.fill value(0) : tensor<4196352xi8>
+    %partition_table = check.generate.fill value(0) : tensor<4612xi8>
+    %gate_weight = check.generate.fill value(0) : tensor<321126400xi8>
+    %up_weight = check.generate.fill value(0) : tensor<321126400xi8>
+    %output = check.generate.fill value(0) : tensor<52428800xi8>
+    check.generate<@flashnext_routed_tables>(%token_count, %route_count, %expert_count, %partition_table, %expert_table) : (index, index, index, tensor<4612xi8>, tensor<4196352xi8>) -> ()
+    check.invoke<@ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table>[%token_count](%token_count, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output) : (index, tensor<20971520xi8>, tensor<4196352xi8>, tensor<4612xi8>, tensor<321126400xi8>, tensor<321126400xi8>, tensor<52428800xi8>) -> ()
+  }
+  check.return
+}
+
+check.benchmark<@qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_tbl_case> @qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_tbl

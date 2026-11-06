@@ -1,7 +1,7 @@
 // Routed GGML gate/up MUL_MAT_ID fused with SwiGLU for compact expert tables.
 template.decl @ggml.mul_mat_id_swiglu.apply_vector4(%gate: vector<4xf32>, %up: vector<4xf32>) -> (vector<4xf32>)
 
-template.decl @ggml.mul_mat_id_swiglu.body(%gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %channel_tile: index, %partition_ordinal: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
+template.decl @ggml.mul_mat_id_swiglu.body(%gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %channel_tile: index, %partition_ordinal: index, %iq3s_table_mode: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_id_swiglu_gfx11_wave64 {subgroup_size = 64}
 
@@ -26,6 +26,11 @@ func.decl @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_size: in
 func.decl @ggml_iq4nl_table_i8() -> (vector<16xi8>)
 
 func.decl @ggml_iq3s_grid_f32_halves() -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
+
+// engine #572 item 4: IQ3_XXS grid code from a 256-entry workgroup table filled once per workgroup,
+// instead of a 256-constant select chain inlined into every packet. Selected by %iq3s_table_mode.
+func.decl @ggml_iq3xxs_grid_code_i32(%grid_index: i32) -> (i32)
+func.decl @ggml_iq3xxs_f16_vector4_table(%weight: buffer, %row_byte_base: offset, %iq3_block: index, %iq3_group: index, %packet: index, %table: view<256xi32>) -> (vector<4xf16>)
 
 func.decl @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf16>)
 
@@ -65,7 +70,7 @@ template.def<@ggml.mul_mat_id_swiglu.apply_vector4> device @ggml_mul_mat_id_swig
   template.return %result : vector<4xf32>
 }
 
-template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f32_wmma_body(%gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %channel_tile: index, %partition_ordinal: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) {
+template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f32_wmma_body(%gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %channel_tile: index, %partition_ordinal: index, %iq3s_table_mode: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 32)] : index
   %bounded_route_count = index.assume %route_count [range(%route_count, 1, 32)] : index
@@ -137,6 +142,12 @@ template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f3
   %activation_fragment_layout = encoding.layout.strided [1, %c40] : encoding<layout>
   %activation_fragment_view = buffer.view %activation_stage[%c0_offset] : buffer -> view<32x32xf16, %activation_fragment_layout>
   %route_stage_view = buffer.view %route_stage[%c0_offset] : buffer -> view<32xi32>
+  // engine #572 item 4: 256 iq3s grid codes, filled once per workgroup when %iq3s_table_mode is 1.
+  // The fill assumes this kernel's 128-workitem workgroup (kernel.launch.config workgroup_size below): workitem t
+  // writes t and t+128. If the group size ever changes, this must become a strided loop over %c256.
+  %iq3s_table_bytes = index.constant 1024 : offset
+  %iq3s_table_stage = buffer.alloca<workgroup> align(16) %iq3s_table_bytes : buffer
+  %iq3s_table_view = buffer.view %iq3s_table_stage[%c0_offset] : buffer -> view<256xi32>
   %wave_result_stage_offset = index.scale %subgroup, %wave_result_stage_bytes : index, offset -> offset
   %result_fragment_layout = encoding.layout.strided [1, %c16] : encoding<layout>
   %gate_result_fragment_view = buffer.view %gate_result_stage[%wave_result_stage_offset] : buffer -> view<16x16xf32, %result_fragment_layout>
@@ -155,6 +166,29 @@ template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f3
   %partition_count_i32 = kernel.subgroup.broadcast.first %partition_count_reduced : i32
   %partition_count0 = index.cast %partition_count_i32 : i32 to index
   %partition_count, %partition_capacity = index.assume %partition_count0, %maximum_partition_count [le(%partition_count0, %maximum_partition_count)] : index, index
+  // The table is only meaningful for IQ3_XXS (weight format 28); all comparisons are on compile-time values, so
+  // the folded branch leaves exactly one of the two decode paths in the kernel.
+  %c28_i32 = scalar.constant 28 : i32
+  %gate_fmt_i32 = index.cast %gate_weight_format : index to i32
+  %up_fmt_i32 = index.cast %up_weight_format : index to i32
+  %gate_is_iq3s = scalar.cmpi eq, %gate_fmt_i32, %c28_i32 : i32
+  %up_is_iq3s = scalar.cmpi eq, %up_fmt_i32, %c28_i32 : i32
+  %mode_is_table = index.cmp eq, %iq3s_table_mode, %c1 : index
+  %gate_table = scalar.andi %mode_is_table, %gate_is_iq3s : i1
+  %up_table = scalar.andi %mode_is_table, %up_is_iq3s : i1
+  %fills_table = scalar.ori %gate_table, %up_table : i1
+  scf.if %fills_table {
+    %c128i = index.constant 128 : index
+    %fill_lo = index.assume %workitem [range(%workitem, 0, 127)] : index
+    %fill_hi = index.add %fill_lo, %c128i : index
+    %fill_lo_i32 = index.cast %fill_lo : index to i32
+    %fill_hi_i32 = index.cast %fill_hi : index to i32
+    %code_lo = func.call @ggml_iq3xxs_grid_code_i32(%fill_lo_i32) : (i32) -> (i32)
+    %code_hi = func.call @ggml_iq3xxs_grid_code_i32(%fill_hi_i32) : (i32) -> (i32)
+    view.store %code_lo, %iq3s_table_view[%fill_lo] : i32, view<256xi32>
+    view.store %code_hi, %iq3s_table_view[%fill_hi] : i32, view<256xi32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   scf.for %active_partition = [%partition_ordinal to %partition_count step %launch_partition_count] {
     %descriptor_ordinal, %descriptor_count = index.assume %active_partition, %partition_count [lt(%active_partition, %partition_count)] : index, index
     %table_descriptor_ordinal, %table_descriptor_capacity = index.assume %descriptor_ordinal, %maximum_partition_count [lt(%descriptor_ordinal, %maximum_partition_count)] : index, index
@@ -213,7 +247,13 @@ template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f3
           %gate_weight_values = scf.if %valid_weight -> (vector<4xf16>) {
             %channel_byte_add = index.scale %channel, %gate_weight_row_bytes : index, offset -> offset
             %row_byte_base = index.add %gate_expert_byte_base, %channel_byte_add : offset
-            %decoded = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %gate_weight_format, %gate_weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+            %decoded_sel = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %gate_weight_format, %gate_weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+            %decoded = scf.if %gate_table -> (vector<4xf16>) {
+              %decoded_tbl = func.call @ggml_iq3xxs_f16_vector4_table(%gate_weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet, %iq3s_table_view) : (buffer, offset, index, index, index, view<256xi32>) -> (vector<4xf16>)
+              scf.yield %decoded_tbl : vector<4xf16>
+            } else {
+              scf.yield %decoded_sel : vector<4xf16>
+            }
             scf.yield %decoded : vector<4xf16>
           } else {
             scf.yield %c0_f16x4 : vector<4xf16>
@@ -221,7 +261,13 @@ template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f3
           %up_weight_values = scf.if %valid_weight -> (vector<4xf16>) {
             %channel_byte_add = index.scale %channel, %up_weight_row_bytes : index, offset -> offset
             %row_byte_base = index.add %up_expert_byte_base, %channel_byte_add : offset
-            %decoded = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %up_weight_format, %up_weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+            %decoded_sel = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %up_weight_format, %up_weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+            %decoded = scf.if %up_table -> (vector<4xf16>) {
+              %decoded_tbl = func.call @ggml_iq3xxs_f16_vector4_table(%up_weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet, %iq3s_table_view) : (buffer, offset, index, index, index, view<256xi32>) -> (vector<4xf16>)
+              scf.yield %decoded_tbl : vector<4xf16>
+            } else {
+              scf.yield %decoded_sel : vector<4xf16>
+            }
             scf.yield %decoded : vector<4xf16>
           } else {
             scf.yield %c0_f16x4 : vector<4xf16>
@@ -390,8 +436,47 @@ kernel.def target(@ggml_mul_mat_id_swiglu_gfx11_wave64) @ggml_mul_mat_id_swiglu_
   %up_weight_format = config.get @ggml.mul_mat_id_swiglu.up_weight_format : index
   %token_capacity = config.get @ggml.workload.token_capacity : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %iq3s_table_mode = index.constant 0 : index
   %channel_tile = kernel.workgroup.id<x> : index
   %partition_ordinal = kernel.workgroup.id<y> : index
-  template.apply<@ggml.mul_mat_id_swiglu.body>(%gate_weight_format, %up_weight_format, %bounded_token_count, %input_size, %output_size, %route_count, %input_route_count, %expert_count, %channel_tile, %partition_ordinal, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output) : (index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@ggml.mul_mat_id_swiglu.body>(%gate_weight_format, %up_weight_format, %bounded_token_count, %input_size, %output_size, %route_count, %input_route_count, %expert_count, %channel_tile, %partition_ordinal, %iq3s_table_mode, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output) : (index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Same kernel, one lever: %iq3s_table_mode = 1 reads the IQ3_XXS grid code out of a 256-entry workgroup table
+// (filled once per workgroup) instead of the 256-constant select chain inlined per packet. Engine #572 item 4;
+// the baseline symbol above is unchanged with mode 0, so the two can be interleaved in one benchmark run.
+kernel.def target(@ggml_mul_mat_id_swiglu_gfx11_wave64) @ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table(%token_count: index) {
+  %expert_count = config.get @ggml.mul_mat_id_swiglu.expert_count : index
+  %route_count = config.get @ggml.mul_mat_id_swiglu.route_count : index
+  %output_size = config.get @ggml.mul_mat_id_swiglu.output_size : index
+  %c1 = index.constant 1 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded_output_size = index.add %output_size, %c63 : index
+  %output_tiles = index.div %padded_output_size, %c64 : index
+  %assignment_count = index.mul %token_count, %route_count : index
+  %rounded_assignment_count = index.add %assignment_count, %c31 : index
+  %assignment_partition_count = index.div %rounded_assignment_count, %c32 : index
+  %has_more_assignment_partitions = index.cmp ugt, %assignment_partition_count, %expert_count : index
+  %launch_partition_count = scf.select %has_more_assignment_partitions, %assignment_partition_count, %expert_count : index
+  kernel.launch.config workgroups(%output_tiles, %launch_partition_count, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %input_size = config.get @ggml.mul_mat_id_swiglu.input_size : index
+  %route_count = config.get @ggml.mul_mat_id_swiglu.route_count : index
+  %input_route_count = config.get @ggml.mul_mat_id_swiglu.input_route_count : index
+  %expert_count = config.get @ggml.mul_mat_id_swiglu.expert_count : index
+  %output_size = config.get @ggml.mul_mat_id_swiglu.output_size : index
+  %gate_weight_format = config.get @ggml.mul_mat_id_swiglu.gate_weight_format : index
+  %up_weight_format = config.get @ggml.mul_mat_id_swiglu.up_weight_format : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %iq3s_table_mode = index.constant 1 : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %partition_ordinal = kernel.workgroup.id<y> : index
+  template.apply<@ggml.mul_mat_id_swiglu.body>(%gate_weight_format, %up_weight_format, %bounded_token_count, %input_size, %output_size, %route_count, %input_route_count, %expert_count, %channel_tile, %partition_ordinal, %iq3s_table_mode, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output) : (index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }

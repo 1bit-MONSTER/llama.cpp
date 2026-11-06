@@ -6,6 +6,8 @@
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -14,6 +16,21 @@ namespace {
 
 static constexpr KernelCatalogRef kMulMatIdSwiGLUF32F32WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_swiglu_f32_f32_wmma");
+
+// Engine #572 item 4: the IQ3_XXS decode selects its 12-bit grid code out of 256 inlined scalar constants with a
+// ~30-deep chain, re-emitted per 4-value packet (4.04x the vector ALU of the IQ4_XS path, compile-report measured).
+// This variant fills a 256-entry workgroup table once per workgroup and indexes it (-55% vector ALU, VGPR 153->100,
+// IQ4_XS instruction mix bit-identical). Opt-in so the shipping path is unchanged until it is measured end to end.
+static constexpr KernelCatalogRef kMulMatIdSwiGLUF32F32WmmaIq3sTableKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table");
+
+static bool iq3s_table_decode_enabled() {
+    static const bool enabled = []() {
+        const char * env = std::getenv("GGML_HRX_IQ3S_TABLE_DECODE");
+        return env != nullptr && *env != '\0' && std::strcmp(env, "0") != 0;
+    }();
+    return enabled;
+}
 
 struct MulMatIdSwiGLUMatch {
     const Value *               input       = nullptr;
@@ -162,7 +179,9 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kMulMatIdSwiGLUF32F32WmmaKernel);
+    dispatch.kernel = make_kernel_specialization(iq3s_table_decode_enabled()
+                                                     ? kMulMatIdSwiGLUF32F32WmmaIq3sTableKernel
+                                                     : kMulMatIdSwiGLUF32F32WmmaKernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
                                                common_mul_mat_id_to_config_value(match.token_count));
