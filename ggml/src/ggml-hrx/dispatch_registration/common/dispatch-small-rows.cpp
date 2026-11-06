@@ -39,6 +39,7 @@ static constexpr KernelCatalogRef kClampInplaceKernel  = GGML_HRX_KERNEL_REF("lo
 static constexpr KernelCatalogRef kCopyF32F16Kernel    = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_strided_f32_f16");
 static constexpr KernelCatalogRef kAttentionStridedKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_attention_strided_f32_f16");
 static constexpr KernelCatalogRef kAttentionRowsKernel    = GGML_HRX_KERNEL_REF("loom_libs", "ggml_attention_rows_f32_f16");
+static constexpr KernelCatalogRef kAttentionRowsBlockedKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_attention_rows_blocked_f32_f16");
 static constexpr KernelCatalogRef kRopeRotateHalfKernel   = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_rotate_half_f32");
 static constexpr KernelCatalogRef kGegluStridedKernel     = GGML_HRX_KERNEL_REF("loom_libs", "ggml_geglu_strided_f32");
 static constexpr KernelCatalogRef kMulMatSmallF16Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_f16_f32");
@@ -472,9 +473,20 @@ static bool match_attention_strided(const DispatchMatchContext & context, Dispat
         return false;
     }
     Dispatch dispatch;
-    // scores once per (query, head) in workgroup memory when they fit (ONEBIT_HRX_ATTN_PER_LANE=1: the old way)
-    const bool rows = nkv <= 2048 && d <= 256 && dv <= 256 && std::getenv("ONEBIT_HRX_ATTN_PER_LANE") == nullptr;
-    dispatch.kernel = make_kernel_specialization(rows ? kAttentionRowsKernel : kAttentionStridedKernel);
+    // The rows kernel scores each key once with the whole score row in workgroup memory, which is what limits it to
+    // 2048 keys. "strided" has one lane per value dim and each lane recomputes the whole q.k dot product for every
+    // key, i.e. nkv*dv*d instead of nkv*(d + dv) - 80x the arithmetic at d = dv = 160. That was the only kernel left
+    // past 2048 keys, so a long prompt fell off a cliff exactly at the 2048-key switch (measured on Zamba2-2.7B:
+    // pp2048/pp512 = 0.68, pp2560 = 0.18, pp4096 = 0.065, and forcing this kernel at 512 tokens cost 78% of
+    // throughput). The blocked rows kernel walks the keys in blocks of 2048 with the online softmax, so it keeps the
+    // rows arithmetic at any length and "strided" stays for the head sizes it alone admits.
+    // (ONEBIT_HRX_ATTN_PER_LANE=1 forces the old per-lane kernel at every length: the A/B that established the above.)
+    const bool per_lane = std::getenv("ONEBIT_HRX_ATTN_PER_LANE") != nullptr;
+    if (per_lane || d > 256 || dv > 256) {
+        dispatch.kernel = make_kernel_specialization(kAttentionStridedKernel);
+    } else {
+        dispatch.kernel = make_kernel_specialization(nkv <= 2048 ? kAttentionRowsKernel : kAttentionRowsBlockedKernel);
+    }
     auto & ip = dispatch.kernel.integer_parameters;
     ip.emplace("qk_size", d);
     ip.emplace("v_size", dv);

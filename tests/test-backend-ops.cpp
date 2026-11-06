@@ -9773,6 +9773,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Cases past one workgroup score row (kv > 2048), the first time the suite reaches the blocked rows
+    // attention kernel; hsv a multiple of 32 is what lets common.attention_strided_f32_f16 take them at all.
+    for (int kv : { 2560, 4096, }) {
+        for (int hs : { 64, 160, 256, }) {
+            test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 8, {4, 1}, kv, 32, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+    }
+
     for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 320, 512, 576 }) {
         for (int hsv : { 40, 64, 72, 80, 96, 128, 192, 256, 512 }) {
             if (hsk != 192 && hsk != 320 && hsk != 576 && hsk != hsv) continue;
