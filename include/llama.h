@@ -709,6 +709,55 @@ extern "C" {
     LLAMA_API uint64_t            llama_adapter_get_alora_n_invocation_tokens(const struct llama_adapter_lora * adapter);
     LLAMA_API const llama_token * llama_adapter_get_alora_invocation_tokens  (const struct llama_adapter_lora * adapter);
 
+    // Write new factor values into an already loaded adapter, in place.
+    // The adapter's tensors are not allocated again and the adapter file is not read.
+    // The type and shape of a factor cannot change in place: a different rank or alpha
+    // needs a new adapter from llama_adapter_lora_init.
+    //   name: base-model tensor name, e.g. "blk.3.attn_q.weight"
+    //   a_data/b_data: new factor values, same type and shape as the loaded factor
+    //   a_size/b_size: byte sizes of a_data/b_data; a mismatch is refused
+    //   a_data or b_data may be NULL to keep that side
+    // Returns 0 on success, or a negative code:
+    //   -1 invalid argument (NULL adapter or name, both sides NULL)
+    //   -2 unknown tensor name
+    //   -3 size does not match the loaded factor
+    // On failure no value is written.
+    LLAMA_API int32_t llama_adapter_lora_set_factors(
+            struct llama_adapter_lora * adapter,
+            const char * name,
+            const void * a_data, size_t a_size,
+            const void * b_data, size_t b_size);
+
+    // One factor update for llama_adapter_lora_set_factors_multi
+    // a_data or b_data may be NULL to keep that side
+    struct llama_adapter_lora_factor {
+        const char * name;
+        const void * a_data;
+        size_t       a_size;
+        const void * b_data;
+        size_t       b_size;
+    };
+
+    // Write several factor updates in one call
+    // The whole batch is checked before any value is written: on failure the adapter keeps all old values
+    // To rewrite every factor of the adapter, enumerate the names with llama_adapter_lora_n_factors
+    // and llama_adapter_lora_factor_name_by_index
+    LLAMA_API int32_t llama_adapter_lora_set_factors_multi(
+            struct llama_adapter_lora * adapter,
+            const struct llama_adapter_lora_factor * factors,
+            size_t n_factors);
+
+    // Number of base-model weights covered by the adapter (one a/b pair each)
+    LLAMA_API size_t llama_adapter_lora_n_factors(const struct llama_adapter_lora * adapter);
+
+    // Name of the i-th covered base-model weight; returns the length, or -1 on failure
+    // The order is stable for the lifetime of the adapter
+    LLAMA_API int32_t llama_adapter_lora_factor_name_by_index(
+            const struct llama_adapter_lora * adapter,
+            size_t i,
+            char * buf,
+            size_t buf_size);
+
     // The following functions operate on a llama_context, hence the naming: llama_verb_...
 
     // Set LoRa adapters on the context. Will only modify if the adapters currently in context are different.
