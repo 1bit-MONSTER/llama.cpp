@@ -1,0 +1,177 @@
+{
+  "command_count": 0,
+  "dispatch_count": 2,
+  "dispatches": [
+    {
+      "benchmark": "@qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs",
+      "compile_parameters": {
+        "ggml.mul_mat_id_swiglu.expert_count": "512",
+        "ggml.mul_mat_id_swiglu.gate_weight_format": "28",
+        "ggml.mul_mat_id_swiglu.input_route_count": "1",
+        "ggml.mul_mat_id_swiglu.input_size": "2560",
+        "ggml.mul_mat_id_swiglu.output_size": "640",
+        "ggml.mul_mat_id_swiglu.route_count": "10",
+        "ggml.mul_mat_id_swiglu.up_weight_format": "28",
+        "ggml.workload.token_capacity": "2048"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 28,
+      "integer_parameters": {
+        "token_count": 2048
+      },
+      "kernel": "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/f32_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q4_k_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/mul_mat_id_swiglu_f32_f32_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_id_swiglu_f32_f32_wmma.loom",
+        "motifs/dequant.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/f32_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q4_k_f16.loom"
+      ],
+      "symbol": "ggml_mul_mat_id_swiglu_f32_f32_wmma",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_tbl",
+      "compile_parameters": {
+        "ggml.mul_mat_id_swiglu.expert_count": "512",
+        "ggml.mul_mat_id_swiglu.gate_weight_format": "28",
+        "ggml.mul_mat_id_swiglu.input_route_count": "1",
+        "ggml.mul_mat_id_swiglu.input_size": "2560",
+        "ggml.mul_mat_id_swiglu.output_size": "640",
+        "ggml.mul_mat_id_swiglu.route_count": "10",
+        "ggml.mul_mat_id_swiglu.up_weight_format": "28",
+        "ggml.workload.token_capacity": "2048"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 28,
+      "integer_parameters": {
+        "token_count": 2048
+      },
+      "kernel": "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/f32_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q4_k_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/mul_mat_id_swiglu_f32_f32_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_id_swiglu_f32_f32_wmma.loom",
+        "motifs/dequant.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/f32_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q4_k_f16.loom"
+      ],
+      "symbol": "ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    },
+    {
+      "benchmark": "@qwen38_flash_next_pp2048_gate_up_swiglu_iq4_xs",
+      "compile_parameters": {
+        "ggml.mul_mat_id_swiglu.expert_count": "512",
+        "ggml.mul_mat_id_swiglu.gate_weight_format": "23",
+        "ggml.mul_mat_id_swiglu.input_route_count": "1",
+        "ggml.mul_mat_id_swiglu.input_size": "2560",
+        "ggml.mul_mat_id_swiglu.output_size": "640",
+        "ggml.mul_mat_id_swiglu.route_count": "10",
+        "ggml.mul_mat_id_swiglu.up_weight_format": "23",
+        "ggml.workload.token_capacity": "2048"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 17,
+      "integer_parameters": {
+        "token_count": 2048
+      },
+      "kernel": "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma",
+      "library_sources": [
+        "motifs/dequant.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/f32_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q4_k_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/mul_mat_id_swiglu_f32_f32_wmma.loom"
+      ],
+      "sources": [
+        "ops/mul_mat_id_swiglu_f32_f32_wmma.loom",
+        "motifs/dequant.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/f32_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q4_k_f16.loom"
+      ],
+      "symbol": "ggml_mul_mat_id_swiglu_f32_f32_wmma",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    }
+  ],
+  "generated_count": 3,
+  "kernel_counts": {
+    "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma": 45,
+    "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table": 28
+  },
+  "loom_source": "benchmarks/loom/qwen38_flash_next_ud_iq4_xs.loom",
+  "model": "qwen38_flash_next_ud_iq4_xs",
+  "scenario": "pp2048",
+  "schema": "ggml-hrx-model-loom-benchmarks-v2"
+}

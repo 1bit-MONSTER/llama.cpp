@@ -9506,6 +9506,65 @@ func.def inline @ggml_iq3xxs_f16_vector4(%weight: buffer, %row_byte_base: offset
   func.return %values : vector<4xf16>
 }
 
+// Same decode as @ggml_iq3xxs_f32_vector4, except the 12-bit grid code comes from a 256-entry workgroup
+// table instead of @ggml_iq3xxs_grid_code_i32's 256 inlined scalar constants selected by a ~30-deep chain.
+// Engine #572 item 4: the table is filled once per workgroup, so the split chain leaves the per-packet path
+// and its 1024 live f32 values leave the vector register budget. Caller fills the table; see the op kernel.
+func.def inline @ggml_iq3xxs_f16_vector4_table(%weight: buffer, %row_byte_base: offset, %iq3_block: index, %iq3_group: index, %packet: index, %table: view<256xi32>) -> (vector<4xf16>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c33 = index.constant 33 : index
+  %c7_i32 = scalar.constant 7 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c28_i32 = scalar.constant 28 : i32
+  %c127_i32 = scalar.constant 127 : i32
+  %c05_f32 = scalar.constant 0.5 : f32
+  %block_bytes = index.constant 98 : offset
+  %block_byte_add = index.scale %iq3_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %hv = buffer.view %weight[%block_byte_base] : buffer -> view<49xf16>
+  %wv = buffer.view %weight[%block_byte_base] : buffer -> view<49xi16>
+  %bv = buffer.view %weight[%block_byte_base] : buffer -> view<98xi8>
+  %g = index.assume %iq3_group [range(%iq3_group, 0, 7)] : index
+  %p = index.assume %packet [range(%packet, 0, 7)] : index
+  %slot = index.div %p, %c2 : index
+  %half = index.rem %p, %c2 : index
+  %g8 = index.mul %g, %c8 : index
+  %idx0 = index.add %g8, %c2 : index
+  %idx_at = index.add %idx0, %p : index
+  %g2 = index.add %g, %g : index
+  %aux_w0 = index.add %c33, %g2 : index
+  %aux_w1 = index.add %aux_w0, %c1 : index
+  %d_f16 = view.load %hv[%c0] : view<49xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %gi_i8 = view.load %bv[%idx_at] : view<98xi8> -> i8
+  %gi = scalar.extui %gi_i8 : i8 to i32
+  %w0_i16 = view.load %wv[%aux_w0] : view<49xi16> -> i16
+  %w1_i16 = view.load %wv[%aux_w1] : view<49xi16> -> i16
+  %w0 = scalar.extui %w0_i16 : i16 to i32
+  %w1 = scalar.extui %w1_i16 : i16 to i32
+  %w1s = scalar.shli %w1, %c16_i32 : i32
+  %aux = scalar.ori %w0, %w1s : i32
+  %sc4 = scalar.shrui %aux, %c28_i32 : i32
+  %sc_f = scalar.uitofp %sc4 : i32 to f32
+  %sc_plus = scalar.addf %sc_f, %c05_f32 : f32
+  %ds = scalar.mulf %d, %sc_plus : f32
+  %scale = scalar.mulf %ds, %c05_f32 : f32
+  %slot_i32 = index.cast %slot : index to i32
+  %sshift = scalar.muli %slot_i32, %c7_i32 : i32
+  %sgrp = scalar.shrui %aux, %sshift : i32
+  %signs7 = scalar.andi %sgrp, %c127_i32 : i32
+  %signs8 = func.call @ggml_iq2_signs8(%signs7) : (i32) -> (i32)
+  %gi_index = index.cast %gi : i32 to index
+  %code = view.load %table[%gi_index] : view<256xi32> -> i32
+  %half_i32 = index.cast %half : index to i32
+  %result_f32 = func.call @ggml_iq3xxs_code_vector4(%code, %half_i32, %signs8, %scale) : (i32, i32, i32, f32) -> (vector<4xf32>)
+  %result = vector.fptrunc %result_f32 : vector<4xf32> to vector<4xf16>
+  func.return %result : vector<4xf16>
+}
+
 func.def inline @ggml_iq3s_grid_f32_halves() -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>) {
   %grid_low0 = scalar.constant 257.0 : f32
   %grid_high0 = scalar.constant 257.0 : f32
