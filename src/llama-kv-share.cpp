@@ -27,6 +27,7 @@
 #include "ggml-backend.h"
 
 #include <algorithm>
+#include <cstring>
 #include <stdexcept>
 #ifndef _WIN32
 #include <unistd.h>
@@ -114,7 +115,14 @@ void * share_proc(ggml_backend_buffer_type_t buft, const char * name) {
     }
     // [1bit] a buffer type with no device: ggml-cpu's static CPU buft is one (ggml-backend.cpp marks it NULL), so
     // without this the CPU could never be the importing side of a shared KV region. Ask every registered backend
-    // and take the first that provides the proc.
+    // and take the first that provides the proc -- but only for the IMPORT proc, whose caller passes the buft's own
+    // device (null for the CPU, which ggml-cpu's importer accepts). The export proc must never be resolved this way:
+    // no CPU backend exports, so the lookup would hand this backend's buffer whatever other backend happens to
+    // implement it (ggml-hrx) and call it on a foreign buffer. Measured 2026-11-05, a CPU decoder with
+    // ONEBIT_KV_SHARE=1: "shared KV: CPU allocation or dma-buf export failed" at load, which killed the backend.
+    if (std::strcmp(name, "ggml_backend_dev_buffer_from_dmabuf") != 0) {
+        return nullptr;
+    }
     for (size_t i = 0; i < ggml_backend_reg_count(); ++i) {
         if (void * proc = ggml_backend_reg_get_proc_address(ggml_backend_reg_get(i), name)) {
             return proc;
@@ -161,12 +169,26 @@ bool share_each(llama_context * dst, const llama_context * src, F && f) {
 
 } // namespace
 
+// A backend that cannot export is not a misconfiguration, it is a backend that cannot: ggml-cpu is the one that
+// matters here, and a hybrid route can legitimately decode on the CPU. Failing the context would make
+// ONEBIT_KV_SHARE=1 turn a working server into one that does not start (measured 2026-11-05); instead the KV gets an
+// ordinary buffer, llama_kv_share_regions reports no region, `?action=share` refuses that context per request, and the
+// engine's route falls back to its state file for that request. The backend's own name is in the warning so the
+// operator can tell "this decoder cannot" from "this decoder was not asked to".
+static ggml_backend_buffer_t share_degrade(ggml_context * ctx, ggml_backend_buffer_type_t buft,
+        std::vector<llama_kv_shared_region> & out, const char * why) {
+    LLAMA_LOG_WARN("%s: %s %s; its KV cache is allocated normally and a shared handoff will be refused for this "
+                   "context (the state-file handoff still works)\n", __func__, ggml_backend_buft_name(buft), why);
+    out.clear();
+    return ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+}
+
 ggml_backend_buffer_t llama_share_alloc(ggml_context * ctx, ggml_backend_buffer_type_t buft,
         std::vector<llama_kv_shared_region> & out) {
     using export_fn = bool (*)(ggml_backend_buffer_t, int *, size_t *);
     auto export_dmabuf = (export_fn) share_proc(buft, "ggml_backend_buffer_export_dmabuf");
     if (export_dmabuf == nullptr) {
-        throw std::runtime_error(format("shared memory: %s cannot export its memory", ggml_backend_buft_name(buft)));
+        return share_degrade(ctx, buft, out, "cannot export its memory");
     }
     const std::vector<share_chunk> chunks = share_layout(ctx, buft);
     std::vector<ggml_backend_buffer_t> bufs;
@@ -181,7 +203,12 @@ ggml_backend_buffer_t llama_share_alloc(ggml_context * ctx, ggml_backend_buffer_
             for (auto * b : bufs) {
                 ggml_backend_buffer_free(b);
             }
-            throw std::runtime_error(format("shared memory: %s allocation or dma-buf export failed", ggml_backend_buft_name(buft)));
+            for (const auto & r : out) {
+#ifndef _WIN32
+                if (r.fd >= 0) { ::close(r.fd); }
+#endif
+            }
+            return share_degrade(ctx, buft, out, "allocation or dma-buf export failed");
         }
         out[c].size   = chunks[c].size;
         out[c].layout = chunks[c].layout;

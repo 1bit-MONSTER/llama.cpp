@@ -2748,8 +2748,9 @@ private:
                     // the count first (n_out = 0 fills nothing), then the regions
                     const size_t n_regions = llama_kv_share_regions(ctx_tgt, nullptr, 0);
                     if (n_regions == 0) {
-                        send_error(task, "This server's memory has no shareable region: it was not created with "
-                                         "ONEBIT_KV_SHARE=1",
+                        send_error(task, "This server's memory has no shareable region: either it was not created "
+                                         "with ONEBIT_KV_SHARE=1, or its KV backend cannot export memory (the "
+                                         "load-time warning names the backend)",
                                          ERROR_TYPE_NOT_SUPPORTED);
                         break;
                     }
