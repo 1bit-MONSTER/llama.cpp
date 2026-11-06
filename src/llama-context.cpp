@@ -154,9 +154,13 @@ llama_context::llama_context(
     if (model.arch == LLM_ARCH_EAGLE3 || model.arch == LLM_ARCH_DFLASH || model.arch == LLM_ARCH_QWEN4EXP) {
         if (model.tok_embd == nullptr || model.output == nullptr) {
             if (params.ctx_other == nullptr) {
-                throw std::runtime_error(model.arch_name() + " requires ctx_other to be set (this warning is normal during memory fitting)");
+                // engine #681: the memory-fitting probe has no target context. The real draft context sets ctx_other
+                // in common_speculative_init; warn here so fitting can measure instead of refusing the draft head.
+                LLAMA_LOG_WARN("%s: %s has no tok_embd/output and no ctx_other; target-dependent setup is skipped\n",
+                               __func__, model.arch_name());
+            } else {
+                cparams.ctx_other = params.ctx_other;
             }
-            cparams.ctx_other = params.ctx_other;
         }
     }
 
