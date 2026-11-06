@@ -495,3 +495,95 @@ const llama_token * llama_adapter_get_alora_invocation_tokens(const llama_adapte
     GGML_ASSERT(adapter);
     return adapter->alora_invocation_tokens.data();
 }
+
+int32_t llama_adapter_lora_set_factors(
+        llama_adapter_lora * adapter,
+        const char * name,
+        const void * a_data, size_t a_size,
+        const void * b_data, size_t b_size) {
+    if (adapter == nullptr || name == nullptr || (a_data == nullptr && b_data == nullptr)) {
+        return -1;
+    }
+
+    const auto pos = adapter->ab_map.find(name);
+    if (pos == adapter->ab_map.end()) {
+        return -2;
+    }
+
+    const auto & w = pos->second;
+    if (a_data != nullptr && a_size != ggml_nbytes(w.a)) {
+        return -3;
+    }
+    if (b_data != nullptr && b_size != ggml_nbytes(w.b)) {
+        return -3;
+    }
+
+    if (a_data != nullptr) {
+        ggml_backend_tensor_set(w.a, a_data, 0, a_size);
+    }
+    if (b_data != nullptr) {
+        ggml_backend_tensor_set(w.b, b_data, 0, b_size);
+    }
+
+    return 0;
+}
+
+int32_t llama_adapter_lora_set_factors_multi(
+        llama_adapter_lora * adapter,
+        const llama_adapter_lora_factor * factors,
+        size_t n_factors) {
+    if (adapter == nullptr || (factors == nullptr && n_factors > 0)) {
+        return -1;
+    }
+
+    // check the whole batch first, so a bad entry does not apply half a batch
+    for (size_t i = 0; i < n_factors; ++i) {
+        const auto & f = factors[i];
+        if (f.name == nullptr || (f.a_data == nullptr && f.b_data == nullptr)) {
+            return -1;
+        }
+        const auto pos = adapter->ab_map.find(f.name);
+        if (pos == adapter->ab_map.end()) {
+            return -2;
+        }
+        if (f.a_data != nullptr && f.a_size != ggml_nbytes(pos->second.a)) {
+            return -3;
+        }
+        if (f.b_data != nullptr && f.b_size != ggml_nbytes(pos->second.b)) {
+            return -3;
+        }
+    }
+
+    for (size_t i = 0; i < n_factors; ++i) {
+        const auto & f = factors[i];
+        const auto pos = adapter->ab_map.find(f.name);
+        if (f.a_data != nullptr) {
+            ggml_backend_tensor_set(pos->second.a, f.a_data, 0, f.a_size);
+        }
+        if (f.b_data != nullptr) {
+            ggml_backend_tensor_set(pos->second.b, f.b_data, 0, f.b_size);
+        }
+    }
+
+    return 0;
+}
+
+size_t llama_adapter_lora_n_factors(const llama_adapter_lora * adapter) {
+    if (adapter == nullptr) {
+        return 0;
+    }
+    return adapter->ab_map.size();
+}
+
+int32_t llama_adapter_lora_factor_name_by_index(const llama_adapter_lora * adapter, size_t i, char * buf, size_t buf_size) {
+    if (adapter == nullptr || i >= adapter->ab_map.size()) {
+        if (buf != nullptr && buf_size > 0) {
+            buf[0] = '\0';
+        }
+        return -1;
+    }
+
+    auto it = adapter->ab_map.begin();
+    std::advance(it, i);
+    return snprintf(buf, buf_size, "%s", it->first.c_str());
+}
