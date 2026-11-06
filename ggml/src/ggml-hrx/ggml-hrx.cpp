@@ -1396,7 +1396,13 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
 
 static bool device_supports_buffer_type(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
     auto * context = device_context(device);
-    return buft == &context->buft || buft == &context->host_buft || ggml_backend_buft_is_host(buft);
+    if (buft == &context->buft || buft == &context->host_buft) {
+        return true;
+    }
+    // Claiming another backend's host buffer makes the scheduler place host-resident weights and every
+    // node that follows them on HRX, so a CPU-only graph (-ngl 0) runs on the device over host tensors
+    // (engine #1078). The in-place host path is opt-in now: GGML_HRX_CLAIM_HOST_BUFTS=1 asks for it.
+    return environment_flag_enabled("GGML_HRX_CLAIM_HOST_BUFTS") && ggml_backend_buft_is_host(buft);
 }
 
 static const ggml_backend_device_i device_i = {
