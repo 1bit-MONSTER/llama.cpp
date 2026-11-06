@@ -614,6 +614,13 @@ static bool llama_sampler_backend_support(
     for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
         struct ggml_tensor * op = ggml_graph_node(gf, i);
 
+        // engine #681: reshape/view/permute/transpose are metadata-only views; the scheduler resolves them, and a
+        // backend that cannot execute them standalone (HRX) must not reject the sampler graph because of one.
+        if (op->op == GGML_OP_RESHAPE || op->op == GGML_OP_VIEW ||
+            op->op == GGML_OP_PERMUTE || op->op == GGML_OP_TRANSPOSE) {
+            continue;
+        }
+
         if (!ggml_backend_dev_supports_op(device, op)) {
             LLAMA_LOG_WARN("%s: device '%s' does not have support for op %s needed for sampler '%s'\n",
                     __func__, ggml_backend_dev_name(device), ggml_op_name(op->op), smpl->iface->name(smpl));
