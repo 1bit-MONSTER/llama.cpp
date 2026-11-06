@@ -89,11 +89,15 @@ static void finish(const DispatchMatchContext & context, DispatchMatch & match, 
     match.dispatches.push_back(std::move(dispatch));
 }
 
+// engine #1259: every kernel in small_rows_f32.loom carries `index.assume ... range(%column_count, 1, LIMIT)`, and a
+// Loom range is EXCLUSIVE of its upper bound, so the kernel refuses LIMIT itself. A matcher that accepts `<= LIMIT` hands
+// the JIT a parameter its own assume rejects, which surfaces as `rejected 'index.assume'` or `unsupported HRX node` at
+// prepare time instead of a CPU fallback - the class fixed for the 32-expert router in #221. Keep the bounds exclusive.
 static bool match_softmax_rows(const DispatchMatchContext & context, DispatchMatch & match) {
     const Value * input  = nullptr;
     const Value * output = nullptr;
     if (!row_op_values(context, GGML_OP_SOFT_MAX, GGML_TYPE_F32, input, output) || !same_shape(*input, *output) ||
-        input->ne[0] > 4096) {
+        input->ne[0] >= 4096) {
         return false;
     }
     const SoftMaxParams * params = op_params_as<SoftMaxParams>(context.root_node->params);
@@ -113,7 +117,7 @@ static bool match_softmax_rows(const DispatchMatchContext & context, DispatchMat
 static bool match_sum_rows(const DispatchMatchContext & context, DispatchMatch & match) {
     const Value * input  = nullptr;
     const Value * output = nullptr;
-    if (!row_op_values(context, GGML_OP_SUM_ROWS, GGML_TYPE_F32, input, output) || input->ne[0] > 4096 ||
+    if (!row_op_values(context, GGML_OP_SUM_ROWS, GGML_TYPE_F32, input, output) || input->ne[0] >= 4096 ||
         output->ne[0] != 1 || output->ne[1] != input->ne[1] || output->ne[2] != input->ne[2] ||
         output->ne[3] != input->ne[3]) {
         return false;
@@ -132,7 +136,7 @@ static bool match_argsort_rows(const DispatchMatchContext & context, DispatchMat
     const Value * input  = nullptr;
     const Value * output = nullptr;
     if (!row_op_values(context, GGML_OP_ARGSORT, GGML_TYPE_I32, input, output) || !same_shape(*input, *output) ||
-        input->ne[0] > 1024) {
+        input->ne[0] >= 1024) {
         return false;
     }
     const ArgsortParams * params = op_params_as<ArgsortParams>(context.root_node->params);
@@ -155,7 +159,7 @@ static bool match_norm_rows(const DispatchMatchContext & context, DispatchMatch 
     const Value * input  = nullptr;
     const Value * output = nullptr;
     if (!row_op_values(context, GGML_OP_NORM, GGML_TYPE_F32, input, output) || !same_shape(*input, *output) ||
-        input->ne[0] > 65536) {
+        input->ne[0] >= 65536) {
         return false;
     }
     const RmsNormParams * params = op_params_as<RmsNormParams>(context.root_node->params);
@@ -197,9 +201,11 @@ static bool match_get_rows_small(const DispatchMatchContext & context, DispatchM
     const int64_t s = source->ne[1];
     const int64_t b = source->ne[2];
     const int64_t r = ids->ne[0];
-    if ((w >= 4 && w % 4 == 0) || w > 65536 || s > 65536 || b > 65536 || r > 65536 || source->ne[3] != 1 ||
+    // kernel assumes range(%id_stride, 1, 1048576); the matcher had no bound on it at all
+    const int64_t id_stride = static_cast<int64_t>(ids->nb[1] / sizeof(int32_t));
+    if ((w >= 4 && w % 4 == 0) || w >= 65536 || s >= 65536 || b >= 65536 || r >= 65536 || source->ne[3] != 1 ||
         ids->ne[1] != b || ids->ne[2] != 1 || ids->ne[3] != 1 || output->ne[0] != w || output->ne[1] != r ||
-        output->ne[2] != b || output->ne[3] != 1) {
+        output->ne[2] != b || output->ne[3] != 1 || id_stride >= 1048576) {
         return false;
     }
     Dispatch dispatch;
@@ -691,6 +697,29 @@ static bool match_geglu_strided(const DispatchMatchContext & context, DispatchMa
 }
 
 }  // namespace
+
+bool small_rows_argsort_tensor_supported(const struct ggml_tensor * op) {
+    // Nothing else in the backend produces ARGSORT ids (common.argsort_rows_f32 is the only registration for the op), so
+    // when the matcher declines a shape - or the registration is switched off for a measurement with
+    // GGML_HRX_DISABLE_DISPATCH - the node has to decline here as well and keep its CPU fallback. Without this the
+    // scheduler claims the node, no dispatch covers it, and the whole graph fails with
+    // "unsupported HRX node ... ARGSORT" instead of splitting (engine #1259). Same pattern as hip_top_k_tensor_supported.
+    const char * disabled = std::getenv("GGML_HRX_DISABLE_DISPATCH");
+    if (disabled != nullptr && std::string(disabled).find("common.argsort_rows_f32") != std::string::npos) {
+        return false;
+    }
+    if (op == nullptr || op->src[0] == nullptr || op->src[0]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_I32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(op->src[0]) || !ggml_is_contiguous(op)) {
+        return false;
+    }
+    // the kernel assumes range(%column_count, 1, 1024) and range(%rank, 0, 1023), i.e. columns < 1024
+    if (op->src[0]->ne[0] <= 0 || op->src[0]->ne[0] >= 1024) {
+        return false;
+    }
+    return ggml_are_same_shape(op->src[0], op);
+}
 
 void register_small_rows_dispatches(DispatchRegistryBuilder & registry) {
     registry.add({ "common.softmax_rows_f32", GGML_OP_SOFT_MAX, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,

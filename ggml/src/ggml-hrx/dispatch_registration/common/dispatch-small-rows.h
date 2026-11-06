@@ -23,4 +23,8 @@ namespace ggml::hrx {
 // ggml_argsort_rows_f32, ggml_norm_rows_f32, ggml_get_rows_small_f32 and ggml_copy_strided_f32.
 void register_small_rows_dispatches(DispatchRegistryBuilder & registry);
 
+// Bounded per-node claim for ARGSORT (engine #1259): the shapes common.argsort_rows_f32 executes, and nothing when that
+// registration is switched off. Consulted from device_supports_op so a declined node falls back to the CPU.
+bool small_rows_argsort_tensor_supported(const struct ggml_tensor * op);
+
 }  // namespace ggml::hrx

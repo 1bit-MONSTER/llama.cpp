@@ -1,3 +1,4 @@
+#include "dispatch_registration/common/dispatch-small-rows.h"
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
 #include "hrx-1bit-safety.h"
@@ -1341,6 +1342,12 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     // so anything else keeps its CPU fallback instead of becoming an unsupported HRX node (engine #679).
     if (op->op == GGML_OP_TOP_K) {
         return ggml::hrx::hip_top_k_tensor_supported(op);
+    }
+    // ARGSORT ids are produced only by common/dispatch-small-rows.cpp (common.argsort_rows_f32): claim only the shapes
+    // that matcher executes, so a declined shape - or that registration switched off with GGML_HRX_DISABLE_DISPATCH -
+    // keeps its CPU fallback instead of becoming an unsupported HRX node (engine #1259).
+    if (op->op == GGML_OP_ARGSORT) {
+        return ggml::hrx::small_rows_argsort_tensor_supported(op);
     }
     // A model weight in a host buffer has to be materialized into device memory before this backend can bind it, and
     // that residency is bounded (HostWeightCache::limit). A weight that cannot fit is declined here so the CPU serves
