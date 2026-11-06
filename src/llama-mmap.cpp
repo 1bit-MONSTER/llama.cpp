@@ -465,9 +465,19 @@ struct llama_mmap::impl {
 #ifdef _POSIX_MAPPED_FILES
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
 
-    impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges) {
+    impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges,
+         bool writable) {
         size = file->size();
         int fd = file->file_id();
+        // engine #856: a backend that can import a host region into its own buffers (HRX) needs the mapping to be
+        // writable, because a read-write lock of the pages is the only form the HSA API offers - importing a read-only
+        // mapping fails with a bare generic error (measured 2026-11-06).
+        //
+        // It must be MAP_SHARED, not MAP_PRIVATE: MAP_POPULATE and mlock fault pages in with FOLL_WRITE, and on a
+        // private writable mapping that breaks CoW, so the kernel copies the whole file into anonymous memory at load
+        // time (measured: MAP_PRIVATE|PROT_RW + populate = +1024 MiB of RssAnon for a 1 GiB file, versus +0 with the
+        // same mapping read page by page, and +0 for MAP_SHARED|PROT_READ). A shared writable mapping keeps every page
+        // in the page cache, still shared between processes, and HSA can lock it without copying anything.
         int flags = MAP_SHARED;
         if (numa) { prefetch = 0; }
 #ifdef __linux__
@@ -478,7 +488,7 @@ struct llama_mmap::impl {
         // MAP_POPULATE would fault in the lazy ranges too
         if (prefetch && lazy_ranges.empty()) { flags |= MAP_POPULATE; }
 #endif
-        addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
+        addr = mmap(NULL, file->size(), writable ? (PROT_READ | PROT_WRITE) : PROT_READ, flags, fd, 0);
         if (addr == MAP_FAILED) {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
         }
@@ -663,7 +673,8 @@ struct llama_mmap::impl {
 };
 
 llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa,
-        const ranges & lazy_ranges) : pimpl(std::make_unique<impl>(file, prefetch, numa, lazy_ranges)) {}
+        const ranges & lazy_ranges, bool writable)
+    : pimpl(std::make_unique<impl>(file, prefetch, numa, lazy_ranges, writable)) {}
 llama_mmap::~llama_mmap() = default;
 
 size_t llama_mmap::size() const { return pimpl->size; }

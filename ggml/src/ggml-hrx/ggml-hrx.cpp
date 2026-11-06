@@ -157,6 +157,16 @@ static bool buffer_type_is_host(ggml_backend_buffer_type_t buft) {
     return static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->host_visible;
 }
 
+// engine #856: the A/B switch for importing the loader's mapping (see device_buffer_from_host_ptr).
+static bool import_host_pointer_enabled() {
+    static const bool disabled = [] {
+        const char * env = std::getenv("GGML_HRX_WEIGHT_HOST_PLACEMENT");
+        return env != nullptr && env[0] == '0';
+    }();
+    return !disabled;
+}
+
+
 static bool buffer_submit_and_wait(ggml_backend_hrx_device_context * device,
                                    hrx_status_t (*submit)(hrx_stream_t, void *),
                                    void * user_data) {
@@ -209,7 +219,9 @@ static void buffer_free(ggml_backend_buffer_t buffer) {
     if (context->buffer != nullptr) {
         hrx_buffer_release(context->buffer);
     }
-    ggml::hrx::onebit::pool_release(buffer->size);
+    if (!context->imported) {
+        ggml::hrx::onebit::pool_release(buffer->size);
+    }
     delete context;
 }
 
@@ -849,7 +861,7 @@ static void device_props(ggml_backend_dev_t device, ggml_backend_dev_props * pro
     device_memory(device, &props->memory_free, &props->memory_total);
     props->type      = GGML_BACKEND_DEVICE_TYPE_GPU;
     props->device_id = nullptr;
-    props->caps      = { true, true, false, false };
+    props->caps      = { true, true, import_host_pointer_enabled(), false };
 }
 
 static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parameters) {
@@ -884,6 +896,58 @@ static ggml_backend_buffer_type_t device_buffer_type(ggml_backend_dev_t device) 
 
 static ggml_backend_buffer_type_t device_host_buffer_type(ggml_backend_dev_t device) {
     return &device_context(device)->host_buft;
+}
+
+// engine #856: at -ngl 99 the loader places every offloaded weight in one device buffer, and this backend serves a dense
+// MUL_MAT weight from the repacked resident copy it materialises on first use - so the loader's GGUF-layout copy is a
+// second copy of the same bytes that nothing reads (5.9 GiB of GTT for a 2.38 GiB model, 2376 MiB of it that buffer).
+//
+// Importing the loader's mapping removes that copy without moving the weight off the device: the tensor stays in this
+// backend's own buffer type, so the scheduler keeps the op here, while the pages are the mapping's own file pages and
+// cost no device memory. Moving the weight to a host buffer type instead would hand the node to the CPU, because that
+// path needs offload_op (ggml-backend.cpp:929-935) which this backend does not implement. GGML_HRX_WEIGHT_HOST_PLACEMENT=0
+// turns the capability off, which is the A/B control.
+static ggml_backend_buffer_t device_buffer_from_host_ptr(ggml_backend_dev_t device, void * ptr, size_t size,
+                                                         size_t max_tensor_size) {
+    GGML_UNUSED(max_tensor_size);
+    if (!import_host_pointer_enabled() || ptr == nullptr || size == 0) {
+        return nullptr;
+    }
+    auto *              device_ctx = device_context(device);
+    hrx_buffer_params_t params     = {
+        HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE | HRX_MEMORY_TYPE_HOST_COHERENT,
+        HRX_MEMORY_ACCESS_ALL,
+        HRX_BUFFER_USAGE_DEFAULT,
+        0,
+    };
+    // the region the loader hands over starts at a tensor offset, and hsa_amd_memory_lock wants a page-aligned address
+    // (an unaligned one fails with a bare HSA_STATUS_ERROR - measured 2026-11-06, first import attempt). Import the
+    // page-aligned superset and keep the aligned address as the buffer base; a tensor's offset inside it then includes
+    // the small delta, which is exactly what the host-mapped lookup needs.
+    const uintptr_t page        = 4096;
+    const uintptr_t unaligned   = reinterpret_cast<uintptr_t>(ptr);
+    const uintptr_t aligned     = unaligned & ~(page - 1);
+    const size_t    delta       = unaligned - aligned;
+    const size_t    import_size = size + delta;
+    hrx_buffer_t allocation = nullptr;
+    if (!HRX_CHECK(hrx_allocator_import_buffer(hrx_device_allocator(device_ctx->device), params,
+                                               reinterpret_cast<void *>(aligned), import_size, &allocation))) {
+        GGML_LOG_WARN("%s: cannot import a %zu MiB host region, falling back to a device buffer (engine #856)\n",
+                      __func__, size / 1024 / 1024);
+        return nullptr;
+    }
+    const uint64_t generation = g_allocation_generation.fetch_add(1);
+    auto * context = new (std::nothrow) ggml_backend_hrx_buffer_context{
+        device_ctx, allocation, reinterpret_cast<uint8_t *>(aligned), generation, generation, false, true,
+    };
+    if (context == nullptr) {
+        hrx_buffer_release(allocation);
+        return nullptr;
+    }
+    // register it as host-mapped storage so the in-place get/set paths and direct bindings find it, exactly as an
+    // allocated host buffer does (ggml-hrx.cpp buffer_alloc)
+    device_ctx->host_buffers.add(allocation, context->base, import_size);
+    return ggml_backend_buffer_init(device_buffer_type(device), buffer_i, context, import_size);
 }
 
 static bool eager_capability_declared(enum ggml_op op) {
@@ -1421,7 +1485,7 @@ static const ggml_backend_device_i device_i = {
     device_init,
     device_buffer_type,
     device_host_buffer_type,
-    nullptr,
+    device_buffer_from_host_ptr,
     device_supports_op,
     device_supports_buffer_type,
     nullptr,

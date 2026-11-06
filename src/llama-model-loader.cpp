@@ -537,6 +537,7 @@ llama_model_loader::llama_model_loader(
         bool check_tensors,
         bool no_alloc,
         bool load_mtp,
+        bool map_weights_writable,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
@@ -573,7 +574,9 @@ llama_model_loader::llama_model_loader(
         get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
-        files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
+        // engine #856: a shared writable mapping needs the file opened for writing; llama.cpp only sets this flag when
+        // every file of the model passed its W_OK check
+        files.emplace_back(new llama_file(fname.c_str(), map_weights_writable ? "r+b" : "rb", use_direct_io));
         contexts.emplace_back(ctx);
 
         // Save tensors data offset of the main file.
@@ -641,7 +644,7 @@ llama_model_loader::llama_model_loader(
                     }
                 }
 
-                files.emplace_back(new llama_file(fname_split, "rb", use_direct_io));
+                files.emplace_back(new llama_file(fname_split, map_weights_writable ? "r+b" : "rb", use_direct_io));
                 contexts.emplace_back(ctx);
 
                 // Save tensors data offset info of the shard.
@@ -826,6 +829,7 @@ llama_model_loader::llama_model_loader(
     this->check_tensors = check_tensors;
     this->no_alloc = no_alloc;
     this->load_mtp = load_mtp;
+    this->map_weights_writable = map_weights_writable;
 }
 
 std::string llama_model_loader::get_arch_name() const {
@@ -1429,7 +1433,7 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
             const size_t prefetch_size = prefetch && use_mmap ? -1 : 0;
 
             std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), prefetch_size, is_numa,
-                    lazy.for_file(idx));
+                    lazy.for_file(idx), map_weights_writable);
             mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
                 std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());
