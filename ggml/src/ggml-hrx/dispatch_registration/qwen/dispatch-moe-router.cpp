@@ -81,7 +81,13 @@ static bool same_shape(const Value & lhs, const Value & rhs) {
 }
 
 static bool is_supported_expert_count(int64_t expert_count) {
-    return expert_count >= 32 && expert_count <= 512 && expert_count % 32 == 0;
+    // engine #1259: router_top8_f32 computes experts_per_lane0 = expert_count / wave_size and assumes
+    // [1, 16]; 32 experts give 0 with a 64-lane wave and the kernel's assume rejects the launch. A real
+    // MoE has >= 64 experts (our models 128/256), so refusing the smaller counts sends the test graph's
+    // standalone ops through their own dispatches instead of a launch that cannot compile.
+    // the kernel scans wave_size * (expert_count / wave_size) experts, so a count that is not a multiple
+    // of the 64-lane wave leaves a remainder unscanned (288 = 4*64 + 32). Refuse it; a real MoE is 128/256.
+    return expert_count >= 64 && expert_count <= 512 && expert_count % 64 == 0;
 }
 
 static bool is_supported_route_count(int64_t route_count, int64_t expert_count) {
