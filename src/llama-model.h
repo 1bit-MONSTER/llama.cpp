@@ -303,6 +303,10 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_enc = nullptr;
     struct ggml_tensor * ffn_down_enc = nullptr;
     struct ggml_tensor * ffn_up_enc   = nullptr;
+    // zamba2: the per-layer MLP adapter (hidden -> rank -> 2*n_ff), applied as base + B*(A*x); null when the
+    // adapter was baked into ffn_up at conversion time
+    struct ggml_tensor * ffn_gate_up_adapter_a = nullptr;
+    struct ggml_tensor * ffn_gate_up_adapter_b = nullptr;
 
     // ff MoE
     struct ggml_tensor * ffn_gate_inp      = nullptr;

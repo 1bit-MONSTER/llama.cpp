@@ -1602,7 +1602,8 @@ ggml_tensor * llm_graph_context::build_ffn(
          ggml_tensor * act_scales,
      llm_ffn_op_type   type_op,
    llm_ffn_gate_type   type_gate,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * up_delta) const {
     // NVFP4 support is currently restricted to
     // 1) LORA absence (*_s would be applied after LORA residual, which is incorrect)
     // 2) bias absense (*_s would be applied after bias addition, which is incorrect)
@@ -1632,6 +1633,13 @@ ggml_tensor * llm_graph_context::build_ffn(
     if (up_b) {
         tmp = ggml_add(ctx0, tmp, up_b);
         cb(tmp, "ffn_up_b", il);
+    }
+
+    // a low-rank adapter added to the fused gate/up output (zamba2: base + B*(A*x)); an addition to the matmul
+    // result, so it is placed before the split and the activation, exactly where the checkpoint applies it
+    if (up_delta) {
+        tmp = ggml_add(ctx0, tmp, up_delta);
+        cb(tmp, "ffn_up_delta", il);
     }
 
     if (up_s) {

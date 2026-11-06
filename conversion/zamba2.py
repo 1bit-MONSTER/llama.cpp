@@ -64,6 +64,15 @@ class Zamba2Model(Mamba2Model):
         self._adapter_cache: dict[str, Tensor] = {}
         self._use_attn_adapters = self.hparams.get("use_shared_attention_adapter", False)
         self._use_mlp_adapters = self.hparams.get("use_shared_mlp_adapter", True)
+        # The MLP adapter is stored instead of merged when the checkpoint actually carries one
+        self._store_mlp_adapter = self._use_mlp_adapters and any(
+            "gate_up_proj_adapter_list" in t for t in self.model_tensors)
+        self._adapter_rank = int(self.hparams.get("adapter_rank", 0) or 0)
+        if self._store_mlp_adapter and self._adapter_rank <= 0:
+            raise ValueError(
+                f"{self.dir_model}: the MLP adapters are stored separately, so the checkpoint must declare "
+                "adapter_rank; without it the low-rank tensors cannot be sized"
+            )
 
         adapter_pattern = re.compile(
             r"model\.layers\.(\d+)\.shared_transformer\."
@@ -85,11 +94,16 @@ class Zamba2Model(Mamba2Model):
         # Tails of a shared block that this checkpoint stores no per-layer adapter for are
         # byte-identical in every layer using the block, so they are written once, at the
         # block's source layer, and the loader aliases the other layers to it
-        # (llama_model_zamba2).  A tail with an adapter is per layer after merging and stays
-        # per layer -- that one cannot be shared without changing the graph.
+        # (llama_model_zamba2).  Attention adapters, when a checkpoint has them, are still merged
+        # into the per-layer copies -- that is unchanged.  The MLP adapter is NOT merged: the base
+        # gate_up is shared like the rest of the block and each layer keeps its low-rank pair,
+        # applied in the graph as base + B*(A*x) (engine #1036 cause 2).  Baking it per layer cost
+        # 1.13 B params on the 7B, and its 11 duplicated copies of a 102 MB matrix bought nothing.
         adapted = {tail for tail, atype in self._ADAPTER_MAP.items()
-                   if any(atype in t for t in self.model_tensors)}
+                   if atype.startswith("linear_") and any(atype in t for t in self.model_tensors)}
         self._shared_tails = self._SHARED_TAILS - adapted
+        if self._store_mlp_adapter:
+            self._shared_tails = self._shared_tails | {"feed_forward.gate_up_proj.weight"}
 
     def _get_adapter_contribution(self, src_layer: int, adapter_type: str, visit_idx: int) -> Tensor | None:
         """Compute up @ down for a given adapter, returning the additive correction."""
@@ -160,6 +174,11 @@ class Zamba2Model(Mamba2Model):
         self.gguf_writer.add_ssm_time_step_rank(n_heads)
         self.gguf_writer.add_ssm_group_count(self.n_group)
 
+        if self._store_mlp_adapter:
+            # the one key that tells the loader which of the two forms this file is: > 0 means ffn_up is the
+            # shared base and every hybrid layer carries a rank-sized A/B pair
+            self.gguf_writer.add_zamba2_ffn_gate_up_adapter_rank(self._adapter_rank)
+
         self.gguf_writer.add_file_type(self.ftype)
 
     # Block tails that carry no per-layer adapter in a Zamba2 checkpoint, i.e. the ones the
@@ -183,7 +202,27 @@ class Zamba2Model(Mamba2Model):
     }
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Skip adapter weights — they are pre-merged into shared weights below
+        # The per-layer MLP adapter is written as its two low-rank factors, at the hybrid layer that owns it,
+        # instead of being baked into that layer's copy of the shared gate_up matrix. The index in the
+        # checkpoint's adapter_list is the hybrid visit index, which is exactly how the layers map to blocks.
+        if self._store_mlp_adapter and "feed_forward.gate_up_proj_adapter_list" in name:
+            m = re.match(
+                r"model\.layers\.(\d+)\.shared_transformer\.feed_forward\.gate_up_proj_adapter_list\.(\d+)\.([01])\.weight$",
+                name)
+            if m is None or bid is None or bid not in self._shared_block_src:
+                # entries for other blocks are nn.Identity and carry no weights; duplicates from ties are
+                # read once, at the block's source layer, like the shared tails above
+                return
+            visit_idx = int(m.group(2))
+            seq = int(m.group(3))  # 0 = down (hidden -> rank), 1 = up (rank -> 2*ff)
+            if visit_idx >= len(self._hybrid_layers):
+                raise ValueError(f"{name}: adapter index {visit_idx} has no hybrid layer")
+            target_bid = self._hybrid_layers[visit_idx]
+            tensor = gguf.MODEL_TENSOR.FFN_GATE_UP_ADAPTER_A if seq == 0 else gguf.MODEL_TENSOR.FFN_GATE_UP_ADAPTER_B
+            yield (self.format_tensor_name(tensor, target_bid), data_torch)
+            return
+
+        # Skip adapter weights that are pre-merged into shared weights below
         if "adapter" in name.lower():
             return
 
@@ -210,13 +249,12 @@ class Zamba2Model(Mamba2Model):
                     yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_POST_NORM, target_bid), data_torch)
                 return
 
-            # Check if this weight has a corresponding adapter type
+            # Check if this weight has a corresponding adapter type. Only the attention adapters are merged
+            # here; the MLP one is stored, so its base is shared and untouched.
             adapter_type = self._ADAPTER_MAP.get(tail)
             use_adapter = False
             if adapter_type:
                 if adapter_type.startswith("linear_") and self._use_attn_adapters:
-                    use_adapter = True
-                elif adapter_type == "gate_up_proj_adapter_list" and self._use_mlp_adapters:
                     use_adapter = True
 
             # Delegate to the parent's tensor-name mapping, once per target layer.

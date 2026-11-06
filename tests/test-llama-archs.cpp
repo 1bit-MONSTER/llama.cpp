@@ -183,6 +183,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         // the shared attention block runs on concat(hidden, embeddings): 2 * n_embd wide
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   2 * n_embd_head);
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, 2 * n_embd_head);
+        if (arch == LLM_ARCH_ZAMBA2) {
+            // exercise the low-rank MLP adapter form (engine #1036 cause 2) rather than the merged one:
+            // it is the newer path, it adds tensors the saver has to round-trip, and the merged form is
+            // what every published Zamba2 GGUF already exercises
+            ms.add_kv(LLM_KV_ZAMBA2_FFN_GATE_UP_ADAPTER_RANK, uint32_t(8));
+        }
     }
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,          1e-5f);

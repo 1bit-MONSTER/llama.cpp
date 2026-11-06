@@ -22,6 +22,8 @@ void llama_model_zamba2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
     ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
     ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+    // absent in files written before the MLP adapter was stored separately (engine #1036 cause 2)
+    ml.get_key(LLM_KV_ZAMBA2_FFN_GATE_UP_ADAPTER_RANK, hparams.zamba2_ffn_gate_up_adapter_rank, false);
 
     // All layers have Mamba-2 (recurrent state needed for all)
     std::fill(hparams.is_recr_impl.begin(), hparams.is_recr_impl.end(), true);
@@ -38,7 +40,7 @@ void llama_model_zamba2::load_arch_hparams(llama_model_loader & ml) {
     hparams.f_attention_scale = 1.0f / sqrtf(float(hparams.n_embd_head_v_full) / 2.0f);
 }
 
-void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
+void llama_model_zamba2::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t d_conv     = hparams.ssm_d_conv;
@@ -50,6 +52,15 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
     const int64_t d_proj     = d_inner + d_conv_dim + n_head_ssm;
 
     const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
+
+    // Two forms of the file, told apart by one key. Before this key existed the per-layer MLP adapter was baked
+    // into ffn_up at conversion time, so every hybrid layer carries its own full [n_embd, 2*n_ff] copy of a
+    // matrix that is otherwise shared per block (engine #1036 cause 2: 1.13 B params on the 7B). With the key
+    // set, ffn_up is the shared base -- stored once per block, like the rest of the shared transformer block --
+    // and each hybrid layer carries the low-rank pair that makes its FFN different, applied in the graph as
+    // base + B*(A*x). Old files keep loading: rank 0 means ffn_up is per layer and no adapter is read.
+    uint32_t gate_up_adapter_rank = hparams.zamba2_ffn_gate_up_adapter_rank;
+    const bool ffn_up_adapter = gate_up_adapter_rank > 0;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -87,8 +98,8 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
 
             // Everything belonging to the shared block is optional per layer: a layer that carries
             // no copy is aliased to its block's source after this loop, and a file with no copy at
-            // all is refused there rather than once per tensor. ffn_up is not shared -- the
-            // per-layer MLP adapter is baked into it at conversion time.
+            // all is refused there rather than once per tensor. ffn_up is part of the shared block
+            // only in the adapter form, where the per-layer difference is the low-rank pair below.
             const int shared = TENSOR_NOT_REQUIRED;
 
             // Pre-attention norm (4096-dim, operates on concat)
@@ -100,8 +111,17 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
 
             // FFN (fused gate+up, split internally by GEGLU)
             layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, shared);
-            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, 2*n_ff}, 0);
+            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, 2*n_ff},
+                    ffn_up_adapter ? shared : 0);
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, shared);
+
+            if (ffn_up_adapter) {
+                // GGUF stores matmul weights as [in, out]: A is hidden -> rank, B is rank -> 2*n_ff
+                layer.ffn_gate_up_adapter_a = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_ADAPTER_A, "weight", i),
+                        {n_embd, gate_up_adapter_rank}, 0);
+                layer.ffn_gate_up_adapter_b = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_ADAPTER_B, "weight", i),
+                        {gate_up_adapter_rank, 2*n_ff}, 0);
+            }
 
             // Linear mixing (transformer output -> mamba input adjustment)
             layer.ssm_mix = create_tensor(tn(LLM_TENSOR_SSM_MIX, "weight", i), {n_embd, n_embd}, 0);
@@ -136,6 +156,11 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
         layer.wo              = src.wo;
         layer.ffn_norm        = src.ffn_norm;
         layer.ffn_down        = src.ffn_down;
+        // only when the file does not carry one: the adapter form stores ffn_up once per block, while a
+        // loader that fabricates tensors (no weights on disk, e.g. the arch test) gives every layer its own
+        if (layer.ffn_up == nullptr) {
+            layer.ffn_up = src.ffn_up;
+        }
     }
 }
 
@@ -216,11 +241,22 @@ llama_model_zamba2::graph::graph(const llama_model & model, const llm_graph_para
             cur = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
+            // The per-layer MLP adapter, applied to the same normed input as the fused gate+up matmul and added to
+            // its output (checkpoint: gate_up_proj(x) + adapter(x), no LoRA alpha/rank scaling). Absent in files
+            // written before the adapter form existed, where the adapter is baked into ffn_up instead.
+            ggml_tensor * gate_up_delta = NULL;
+            if (model.layers[il].ffn_gate_up_adapter_a != NULL) {
+                ggml_tensor * adapter = build_lora_mm(model.layers[il].ffn_gate_up_adapter_a, cur);
+                cb(adapter, "ffn_gate_up_adapter_a", il);
+                gate_up_delta = build_lora_mm(model.layers[il].ffn_gate_up_adapter_b, adapter);
+                cb(gate_up_delta, "ffn_gate_up_adapter_b", il);
+            }
+
             cur = build_ffn(cur,
                     model.layers[il].ffn_up,   NULL, NULL,
                     NULL,                      NULL, NULL,
                     model.layers[il].ffn_down, NULL, NULL,
-                    NULL, LLM_FFN_GEGLU, LLM_FFN_SEQ, il);
+                    NULL, LLM_FFN_GEGLU, LLM_FFN_SEQ, il, gate_up_delta);
             cb(cur, "ffn_out", il);
 
             // Step 3: Linear mixing (transformer output projection)

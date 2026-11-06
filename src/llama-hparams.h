@@ -167,6 +167,10 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
+    // zamba2: 0 or absent = the per-layer MLP adapter is baked into ffn_up; > 0 = ffn_up is the shared base and
+    // each hybrid layer carries a low-rank adapter pair of this rank (engine #1036 cause 2)
+    uint32_t zamba2_ffn_gate_up_adapter_rank = 0;
+
     // for Kimi Linear KDA
     uint32_t n_embd_head_kda = 0;
 
