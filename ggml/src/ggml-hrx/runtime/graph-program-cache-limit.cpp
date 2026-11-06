@@ -68,12 +68,17 @@ bool trim_graph_programs(ggml_backend_hrx_context & context, GraphProgram * curr
     context.graph_programs.evict(victims);
     context.prepared_programs.clear();
     // one line per trim: it should come when a new shape pushes the cache over, not during steady
-    // decode that reuses the programs already there
+    // decode that reuses the programs already there. The line names the eviction policy and carries the cache's
+    // cumulative build/hit counts, because the policy question (engine #841: drop the oldest or the largest when the
+    // byte bound is what trips) is answered by counting rebuilds, and a trim line without them cannot answer it.
     static std::atomic<uint64_t> trims{ 0 };
+    const GraphProgramCacheStats counts = context.graph_programs.stats();
     GGML_LOG_WARN("%s: HRX graph program cache trimmed (%zu of %zu programs, %zu -> %zu MiB retained, budget "
-                  "%zu MiB, %zu max): kept the current one, trim %llu\n",
+                  "%zu MiB, %zu max): kept the current one, trim %llu, evict=%s, builds=%llu hits=%llu\n",
                   __func__, victims.size(), held_before, bytes_before >> 20, context.graph_programs.bytes() >> 20,
-                  budget >> 20, max_programs, static_cast<unsigned long long>(++trims));
+                  budget >> 20, max_programs, static_cast<unsigned long long>(++trims),
+                  graph_program_evict_policy_name(), static_cast<unsigned long long>(counts.builds),
+                  static_cast<unsigned long long>(counts.hits));
     return true;
 }
 
