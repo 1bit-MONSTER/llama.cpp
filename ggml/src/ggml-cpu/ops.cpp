@@ -1,4 +1,5 @@
 #include "ops.h"
+#include <atomic>
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
@@ -5133,6 +5134,26 @@ static void ggml_compute_forward_set_rows_impl(
 
                 const int64_t i1 = *(idx_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
 
+                if (i1 < 0 || i1 >= ne1) {
+                    static std::atomic<int> dumped{0};
+                    if (dumped.fetch_add(1) == 0) {
+                        const char * view = dst->view_src ? dst->view_src->name : "(none)";
+                        GGML_LOG_ERROR("1251 SET_ROWS invalid: dst='%s' view_src='%s' dst_type=%s ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] src0='%s' type=%s ne=[%lld,%lld,%lld,%lld] src1='%s' type=%s ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] idx_type=%s nth=%d ith=%d ir0=%lld ir1=%lld i03=%lld i02=%lld i10=%lld i11=%lld i12=%lld ne1=%lld idx=%lld
+",
+                            dst->name, view, ggml_type_name(dst->type), (long long)ne0, (long long)ne1, (long long)ne2, (long long)ne3,
+                            (size_t)nb0, (size_t)nb1, (size_t)nb2, (size_t)nb3, src0->name, ggml_type_name(src0->type),
+                            (long long)ne00, (long long)ne01, (long long)ne02, (long long)ne03, src1->name, ggml_type_name(src1->type),
+                            (long long)ne10, (long long)ne11, (long long)ne12, (long long)ne13, (size_t)nb10, (size_t)nb11, (size_t)nb12, (size_t)nb13,
+                            (sizeof(idx_t)==4 ? "i32" : "i64"), nth, ith, (long long)ir0, (long long)ir1, (long long)i03, (long long)i02, (long long)i10, (long long)i11, (long long)i12,
+                            (long long)ne1, (long long)i1);
+                        GGML_LOG_ERROR("1251 idx sample:");
+                        for (int64_t k = 0; k < std::min<int64_t>(8, ne11); ++k) {
+                            GGML_LOG_ERROR("1251  idx[%lld]=%lld
+", (long long)k, (long long)*(idx_t *)((char *)src1->data + (i12*nb12 + (k%ne11)*nb11)));
+                        }
+                        ggml_print_backtrace();
+                    }
+                }
                 GGML_ASSERT(i1 >= 0 && i1 < ne1);
 
                 if constexpr (std::is_same_v<src_t, float>) {
