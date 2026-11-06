@@ -152,6 +152,50 @@ int main() {
         REQUIRE(budget.total_bytes() == 24 * MiB);
     }
     {
+        // size-aware byte-bound eviction drops the largest program, so one trim moves the number
+        GraphProgramBudget budget;
+        budget.note(1, 1 * MiB);  // oldest
+        budget.note(2, 4 * MiB);  // largest
+        budget.note(3, 1 * MiB);  // newest
+        const auto by_size = budget.plan_evictions(4 * MiB, 0, 0, false, true);
+        REQUIRE(by_size.size() == 1);
+        REQUIRE(by_size[0] == 2);
+        // the same cache under the age order needs two victims (oldest first)
+        const auto by_age = budget.plan_evictions(4 * MiB, 0, 0, false, false);
+        REQUIRE(by_age.size() == 2);
+        REQUIRE(by_age[0] == 1);
+        REQUIRE(by_age[1] == 2);
+    }
+    {
+        // the count bound keeps the age order even when size-aware eviction is on
+        GraphProgramBudget budget;
+        budget.note(1, 1 * MiB);
+        budget.note(2, 8 * MiB);
+        budget.note(3, 1 * MiB);
+        const auto victims = budget.plan_evictions(0, 2, 0, false, true);
+        REQUIRE(victims.size() == 1);
+        REQUIRE(victims[0] == 1);  // oldest, not the largest
+    }
+    {
+        // size-aware is a no-op when only the count bound binds
+        GraphProgramBudget budget;
+        for (uint64_t uid = 1; uid <= 4; ++uid) {
+            budget.note(uid, uid * MiB);
+        }
+        const auto victims = budget.plan_evictions(0, 2, 0, false, true);
+        REQUIRE(victims.size() == 2);
+        REQUIRE(victims[0] == 1);
+        REQUIRE(victims[1] == 2);
+    }
+    {
+        // the eviction-order parser: lru/age are the old order, unset and anything else is size-first
+        REQUIRE(ggml::hrx::parse_graph_program_size_aware_eviction(nullptr));
+        REQUIRE(ggml::hrx::parse_graph_program_size_aware_eviction(""));
+        REQUIRE(ggml::hrx::parse_graph_program_size_aware_eviction("size"));
+        REQUIRE(!ggml::hrx::parse_graph_program_size_aware_eviction("lru"));
+        REQUIRE(!ggml::hrx::parse_graph_program_size_aware_eviction("age"));
+    }
+    {
         // the env parser: MiB in, bytes out, and the documented default for anything unusable
         REQUIRE(ggml::hrx::parse_graph_program_cache_budget_bytes(nullptr) == 8192 * MiB);
         REQUIRE(ggml::hrx::parse_graph_program_cache_budget_bytes("") == 8192 * MiB);

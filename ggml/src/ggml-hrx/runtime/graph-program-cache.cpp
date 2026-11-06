@@ -837,7 +837,8 @@ std::vector<uint64_t> GraphProgramCache::plan_evictions(size_t               bud
                                                         size_t               max_programs,
                                                         const GraphProgram * keep) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return budget_.plan_evictions(budget_bytes, max_programs, keep != nullptr ? keep->uid() : 0, keep != nullptr);
+    return budget_.plan_evictions(budget_bytes, max_programs, keep != nullptr ? keep->uid() : 0, keep != nullptr,
+                                  graph_program_size_aware_eviction());
 }
 
 void GraphProgramCache::retally_retained_bytes(const std::function<size_t(uint64_t)> & extra_bytes) {

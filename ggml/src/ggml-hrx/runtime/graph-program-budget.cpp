@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 
 namespace ggml::hrx {
 
@@ -35,6 +36,19 @@ size_t parse_graph_program_cache_budget_bytes(const char * mib) {
 size_t graph_program_cache_budget_bytes() {
     static const size_t bytes = parse_graph_program_cache_budget_bytes(std::getenv("GGML_HRX_GRAPH_PROGRAM_CACHE_MB"));
     return bytes;
+}
+
+bool parse_graph_program_size_aware_eviction(const char * value) {
+    if (value == nullptr || *value == '\0') {
+        return true;  // byte-bound trims drop the largest programs first
+    }
+    return std::strcmp(value, "lru") != 0 && std::strcmp(value, "age") != 0;
+}
+
+bool graph_program_size_aware_eviction() {
+    static const bool size_aware = parse_graph_program_size_aware_eviction(
+        std::getenv("GGML_HRX_GRAPH_PROGRAM_EVICT"));
+    return size_aware;
 }
 
 void GraphProgramBudget::note(uint64_t uid, size_t bytes) {
@@ -74,35 +88,46 @@ size_t GraphProgramBudget::size() const {
 std::vector<uint64_t> GraphProgramBudget::plan_evictions(size_t budget,
                                                          size_t max_programs,
                                                          uint64_t keep,
-                                                         bool     has_keep) const {
+                                                         bool     has_keep,
+                                                         bool     size_aware) const {
     std::vector<uint64_t> victims;
-    size_t                total  = 0;
-    size_t                count  = 0;
-    std::vector<std::pair<uint64_t, uint64_t>> by_age;  // (used, uid), oldest first
-    by_age.reserve(entries_.size());
+    size_t                total = 0;
+    size_t                count = 0;
+    struct Candidate {
+        size_t   bytes;
+        uint64_t used;
+        uint64_t uid;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(entries_.size());
     for (const auto & entry : entries_) {
         if (has_keep && entry.first == keep) {
             continue;
         }
         total += entry.second.bytes;
         ++count;
-        by_age.emplace_back(entry.second.used, entry.first);
+        candidates.push_back({ entry.second.bytes, entry.second.used, entry.first });
     }
-    const bool over_bytes  = budget != 0 && total > budget;
-    const bool over_count  = max_programs != 0 && count > max_programs;
+    const bool over_bytes = budget != 0 && total > budget;
+    const bool over_count = max_programs != 0 && count > max_programs;
     if (!over_bytes && !over_count) {
         return victims;
     }
-    std::sort(by_age.begin(), by_age.end());
-    for (const auto & candidate : by_age) {
+    // A trim triggered by bytes drops the largest programs first, so it actually moves the retained bytes;
+    // the count bound keeps the age order. Both tie-break on age (oldest first).
+    const bool by_size = size_aware && over_bytes;
+    std::sort(candidates.begin(), candidates.end(), [by_size](const Candidate & a, const Candidate & b) {
+        if (by_size && a.bytes != b.bytes) {
+            return a.bytes > b.bytes;
+        }
+        return a.used < b.used;
+    });
+    for (const auto & candidate : candidates) {
         if ((!over_bytes || total <= budget) && (!over_count || count <= max_programs)) {
             break;
         }
-        victims.push_back(candidate.second);
-        const auto found = entries_.find(candidate.second);
-        if (found != entries_.end()) {
-            total -= found->second.bytes;
-        }
+        victims.push_back(candidate.uid);
+        total -= candidate.bytes;
         if (count > 0) {
             --count;
         }

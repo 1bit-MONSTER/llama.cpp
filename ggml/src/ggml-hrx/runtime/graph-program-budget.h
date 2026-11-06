@@ -20,10 +20,13 @@
 // 1 GiB for a large prefill shape, and the cache used to hold every shape it ever built: a long-lived server
 // answering prompts of varying length grew its GTT without a bound (112 GiB was seen on 2026-10-01). The count
 // limit in graph-program-cache-limit.h bounds the number of programs but not their size, and drops everything but
-// the current program when it trips. This bounds the bytes and drops least-recently-used programs only.
+// the current program when it trips. This bounds the bytes.
 //
 // GGML_HRX_GRAPH_PROGRAM_CACHE_MB: budget in MiB (default 8192: a 27B model's hot shapes plus another
 // model's fit; 0 keeps every program, the old behaviour).
+// GGML_HRX_GRAPH_PROGRAM_EVICT: eviction order when the byte budget binds. "size" (default) drops the largest
+// programs first, so a trim actually moves the retained bytes; "lru" drops the oldest first. The count bound
+// (GGML_HRX_GRAPH_PROGRAM_CACHE) always evicts least recently used programs.
 
 #include <cstddef>
 #include <cstdint>
@@ -37,6 +40,10 @@ size_t graph_program_cache_budget_bytes();
 // The parser behind it, so a host test can check the values without touching the environment:
 // MiB in, bytes out; 0 means unbounded; anything unparsable is the 8192 MiB default.
 size_t parse_graph_program_cache_budget_bytes(const char * mib);
+// Eviction order: "lru"/"age" keep the old age-first order, anything else (and unset) is size-first for
+// byte-bound trims.
+bool parse_graph_program_size_aware_eviction(const char * value);
+bool graph_program_size_aware_eviction();
 
 class GraphProgramBudget {
   public:
@@ -53,11 +60,14 @@ class GraphProgramBudget {
     size_t total_bytes() const;
     size_t size() const;
 
-    // The programs to drop so that at most `budget` bytes and `max_programs` entries remain, least
-    // recently used first. `keep` (when `has_keep`) is never returned and is not counted against the
-    // budget, so the program being executed cannot be swapped out from under the caller. Empty when
-    // nothing has to go; `budget == 0` and `max_programs == 0` mean no limit.
-    std::vector<uint64_t> plan_evictions(size_t budget, size_t max_programs, uint64_t keep, bool has_keep) const;
+    // The programs to drop so that at most `budget` bytes and `max_programs` entries remain. When the
+    // byte budget binds and `size_aware` is set, the largest programs go first (a trim then actually moves
+    // the retained bytes); otherwise, and always for the count bound, least recently used go first.
+    // `keep` (when `has_keep`) is never returned and is not counted against the budget, so the program
+    // being executed cannot be swapped out from under the caller. Empty when nothing has to go;
+    // `budget == 0` and `max_programs == 0` mean no limit.
+    std::vector<uint64_t> plan_evictions(size_t budget, size_t max_programs, uint64_t keep, bool has_keep,
+                                         bool size_aware = false) const;
 
   private:
     struct Entry {
