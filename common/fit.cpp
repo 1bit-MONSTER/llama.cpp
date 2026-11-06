@@ -803,16 +803,8 @@ enum common_params_fit_status common_fit_params(
         LOG_WRN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
         status = COMMON_PARAMS_FIT_STATUS_FAILURE;
     } catch (const std::runtime_error & e) {
-        // engine #681: an MTP draft head (qwen4exp/eagle3/dflash) has no tok_embd/output and needs the target
-        // context; the fitting probe has none, so the context constructor refuses it. Keep the caller's parameters
-        // and let the real draft context (which sets ctx_other) run.
-        if (std::string(e.what()).find("requires ctx_other to be set") != std::string::npos) {
-            LOG_WRN("%s: draft model needs ctx_other; skipping memory fitting for it\n", __func__);
-            status = COMMON_PARAMS_FIT_STATUS_SUCCESS;
-        } else {
-            LOG_ERR("%s: encountered an error while trying to fit params to free device memory: %s\n", __func__, e.what());
-            status = COMMON_PARAMS_FIT_STATUS_ERROR;
-        }
+        LOG_ERR("%s: encountered an error while trying to fit params to free device memory: %s\n", __func__, e.what());
+        status = COMMON_PARAMS_FIT_STATUS_ERROR;
     }
     const int64_t t1_us = llama_time_us();
     LOG_TRC("%s: fitting params to free memory took %.2f seconds\n", __func__, (t1_us - t0_us) * 1e-6);
