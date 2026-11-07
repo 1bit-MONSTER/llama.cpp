@@ -126,7 +126,8 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader & ml) {
             // Linear mixing (transformer output -> mamba input adjustment)
             layer.ssm_mix = create_tensor(tn(LLM_TENSOR_SSM_MIX, "weight", i), {n_embd, n_embd}, 0);
 
-            if (layer.wq != nullptr) {
+            // wo, not wq: with attention adapters the converter writes q/k/v (adapter merged) in every hybrid layer
+            if (layer.wo != nullptr) {
                 shared_src.push_back(i);
             }
             shared_use.push_back(i);
@@ -145,14 +146,16 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader & ml) {
     }
     for (size_t v = 0; v < shared_use.size(); ++v) {
         auto & layer = layers[shared_use[v]];
-        if (layer.wq != nullptr) {
+        if (layer.wo != nullptr) {
             continue;
         }
         const auto & src = layers[shared_src[v % shared_src.size()]];
         layer.attn_post_norm = src.attn_post_norm;
-        layer.wq              = src.wq;
-        layer.wk              = src.wk;
-        layer.wv              = src.wv;
+        if (layer.wq == nullptr) {
+            layer.wq = src.wq;
+            layer.wk = src.wk;
+            layer.wv = src.wv;
+        }
         layer.wo              = src.wo;
         layer.ffn_norm        = src.ffn_norm;
         layer.ffn_down        = src.ffn_down;
