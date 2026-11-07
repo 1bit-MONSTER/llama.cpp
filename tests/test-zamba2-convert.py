@@ -91,6 +91,8 @@ def make_checkpoint(out: Path, n_blocks: int, attn_adapter: bool, hybrid: list[i
         layers_block_type=["hybrid" if i in hybrid else "mamba" for i in range(n_layer)],
         num_mem_blocks=n_blocks, use_shared_attention_adapter=attn_adapter, use_shared_mlp_adapter=True,
         adapter_rank=RANK, mamba_d_state=16, mamba_d_conv=4, mamba_expand=2, mamba_headdim=16, mamba_ngroups=1,
+        # set both: transformers 4.x derives headdim from n_mamba_heads (default 8), 5.x keeps headdim and n_mamba_heads unrelated
+        n_mamba_heads=2 * HIDDEN // 16,
         use_mem_rope=True, max_position_embeddings=64, tie_word_embeddings=True,
     )
     torch.manual_seed(seed)
