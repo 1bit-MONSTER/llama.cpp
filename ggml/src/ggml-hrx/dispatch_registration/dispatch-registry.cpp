@@ -101,10 +101,20 @@ static bool dispatch_disabled(const DispatchRegistration & registration) {
 // this prefix, so a run without the dump is planned exactly as before. The root is exempt as well - a match
 // always writes its root's output.
 static bool tensor_is_readback_request(const ggml_tensor * tensor) {
-    constexpr const char * k_readback_prefix = "zha-readback.";
-    constexpr size_t       k_prefix_len      = sizeof("zha-readback.") - 1;
-    return tensor != nullptr && (tensor->flags & GGML_TENSOR_FLAG_OUTPUT) != 0 &&
-           std::strncmp(tensor->name, k_readback_prefix, k_prefix_len) == 0;
+    // Two callers need a covered value to stay host-readable: the ZHA dump ("zha-readback.", engine #1078) and the
+    // backend-ops suite, whose `fusion_test_nodes()` are the values it compares ("hrx-readback.", engine #1259). A fused
+    // match must not swallow either: the value has to exist outside the fused program, or the read-back sees whatever the
+    // buffer held before - measured as `selected_experts` returning the ARGSORT input's float bytes.
+    if (tensor == nullptr || (tensor->flags & GGML_TENSOR_FLAG_OUTPUT) == 0) {
+        return false;
+    }
+    static constexpr const char * k_prefixes[] = { "zha-readback.", "hrx-readback." };
+    for (const char * prefix : k_prefixes) {
+        if (std::strncmp(tensor->name, prefix, std::strlen(prefix)) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static size_t first_covered_requested_output(const DispatchMatchContext & context, const DispatchMatch & match) {
