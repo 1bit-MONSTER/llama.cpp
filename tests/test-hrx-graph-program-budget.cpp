@@ -20,6 +20,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #define REQUIRE(condition)                                                                           \
@@ -150,6 +151,53 @@ int main() {
         budget.resize(42, 64 * MiB);
         REQUIRE(budget.size() == 3);
         REQUIRE(budget.total_bytes() == 24 * MiB);
+    }
+    {
+        // the byte-bound order is selectable (engine #841): "size" drops the largest first so each trim returns
+        // real bytes, age keeps the shipped order, and the count bound stays oldest-first either way
+        GraphProgramBudget budget;
+        budget.note(1, 1 * MiB);   // oldest, small
+        budget.note(2, 2 * MiB);
+        budget.note(3, 32 * MiB);  // newest, and the only one that matters to a byte budget
+        ::setenv("GGML_HRX_GRAPH_PROGRAM_EVICT", "size", 1);
+        const auto by_size = plan(budget, 4 * MiB, 0, 0, false);
+        REQUIRE(by_size.size() == 1);
+        REQUIRE(by_size[0] == 3);  // largest first, not oldest first
+        const auto by_size_both = plan(budget, 2 * MiB, 0, 0, false);
+        REQUIRE(by_size_both.size() == 2);  // 32 then 2 leaves 1 MiB, which fits, so it stops there
+        REQUIRE(by_size_both[0] == 3);
+        REQUIRE(by_size_both[1] == 2);
+        // equal sizes fall back to age, so the order stays deterministic
+        GraphProgramBudget ties;
+        ties.note(11, 8 * MiB);
+        ties.note(12, 8 * MiB);
+        ties.note(13, 8 * MiB);
+        REQUIRE(plan(ties, 8 * MiB, 0, 0, false)[0] == 11);
+        // the count bound is still answered by age under the same env
+        REQUIRE(plan(ties, 0, 1, 0, false)[0] == 11);
+        // and when ONE trim has to satisfy both bounds, this order drives the count bound's victims too: there is one
+        // victim list, and the byte constraint is the one that needs the most drops. Pinned rather than left implicit,
+        // because "the count bound stays oldest-first" is only true while the byte bound is not also tripped.
+        REQUIRE(plan(budget, 4 * MiB, 1, 0, false).size() == 2);   // size: [3, 2] (a byte-bound trip, count also over)
+        REQUIRE(plan(budget, 4 * MiB, 1, 0, false)[0] == 3);
+        ::unsetenv("GGML_HRX_GRAPH_PROGRAM_EVICT");
+        const auto by_age = plan(budget, 4 * MiB, 0, 0, false);
+        REQUIRE(by_age.size() == 3);    // 35 MiB against 4 MiB needs all three out of the cache either way
+        REQUIRE(by_age[0] == 1);        // but the shipped order still takes the oldest first
+        // and an unparsable value is the age order, not a third policy
+        ::setenv("GGML_HRX_GRAPH_PROGRAM_EVICT", "largest", 1);
+        REQUIRE(plan(budget, 4 * MiB, 0, 0, false)[0] == 1);  // unparsable -> age order
+        ::unsetenv("GGML_HRX_GRAPH_PROGRAM_EVICT");
+    }
+    {
+        // the policy the trim log line prints has to be the policy that actually ran, or the log lies about the arm
+        ::unsetenv("GGML_HRX_GRAPH_PROGRAM_EVICT");
+        REQUIRE(std::strcmp(ggml::hrx::graph_program_evict_policy_name(), "age") == 0);
+        ::setenv("GGML_HRX_GRAPH_PROGRAM_EVICT", "size", 1);
+        REQUIRE(std::strcmp(ggml::hrx::graph_program_evict_policy_name(), "size") == 0);
+        ::setenv("GGML_HRX_GRAPH_PROGRAM_EVICT", "largest", 1);
+        REQUIRE(std::strcmp(ggml::hrx::graph_program_evict_policy_name(), "age") == 0);
+        ::unsetenv("GGML_HRX_GRAPH_PROGRAM_EVICT");
     }
     {
         // the env parser: MiB in, bytes out, and the documented default for anything unusable
