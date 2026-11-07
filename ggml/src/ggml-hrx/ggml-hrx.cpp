@@ -157,13 +157,15 @@ static bool buffer_type_is_host(ggml_backend_buffer_type_t buft) {
     return static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->host_visible;
 }
 
-// engine #856: the A/B switch for importing the loader's mapping (see device_buffer_from_host_ptr).
+// engine #856: the switch for importing the loader's mapping (see device_buffer_from_host_ptr). Off by default since
+// engine #1339: on larger models (a dense 16.4 GB GGUF, a 76 GB one) the import never finishes and the load waits with no
+// error, so GGML_HRX_WEIGHT_HOST_PLACEMENT=1 opts in until that is fixed.
 static bool import_host_pointer_enabled() {
-    static const bool disabled = [] {
+    static const bool enabled = [] {
         const char * env = std::getenv("GGML_HRX_WEIGHT_HOST_PLACEMENT");
-        return env != nullptr && env[0] == '0';
+        return env != nullptr && env[0] == '1';
     }();
-    return !disabled;
+    return enabled;
 }
 
 
@@ -905,8 +907,8 @@ static ggml_backend_buffer_type_t device_host_buffer_type(ggml_backend_dev_t dev
 // Importing the loader's mapping removes that copy without moving the weight off the device: the tensor stays in this
 // backend's own buffer type, so the scheduler keeps the op here, while the pages are the mapping's own file pages and
 // cost no device memory. Moving the weight to a host buffer type instead would hand the node to the CPU, because that
-// path needs offload_op (ggml-backend.cpp:929-935) which this backend does not implement. GGML_HRX_WEIGHT_HOST_PLACEMENT=0
-// turns the capability off, which is the A/B control.
+// path needs offload_op (ggml-backend.cpp:929-935) which this backend does not implement. The capability is opt-in with
+// GGML_HRX_WEIGHT_HOST_PLACEMENT=1 (engine #1339); unset or 0 keeps the device copy.
 static ggml_backend_buffer_t device_buffer_from_host_ptr(ggml_backend_dev_t device, void * ptr, size_t size,
                                                          size_t max_tensor_size) {
     GGML_UNUSED(max_tensor_size);
