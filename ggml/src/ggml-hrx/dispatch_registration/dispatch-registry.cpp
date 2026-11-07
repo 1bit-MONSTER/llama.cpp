@@ -5,6 +5,8 @@
 #include <string>
 #include "dispatch-registry.h"
 #include "dispatch-fusion-order.h"
+#include "ggml-backend.h"
+#include "ggml-impl.h"
 
 #include "common/dispatch-common.h"
 #include "llm/dispatch-attention-qkv.h"
@@ -170,6 +172,64 @@ static void dispatch_log_match(const DispatchRegistration & registration) {
     }
 }
 
+// engine #1316: a match may not ask for a packed layout of a weight that another node reads in the native layout - a
+// tied token embedding, gathered by GET_ROWS and contracted by the output MUL_MAT. A command program holds one binding per
+// value, so the packing request and the native one collide and the executor refuses the whole program
+// ("weight value 0 has conflicting resident layout requests", llama_decode ret = -3). Declining the match here lets the
+// next registration for the same root op - the native-format one - handle the node, so both consumers share a single
+// resident copy. Before this, moving the input layer onto the device was a hard failure rather than an option.
+static bool match_requests_packed_layout_of_natively_read_weight(const DispatchMatchContext & context,
+                                                                const DispatchMatch &        candidate,
+                                                                const char *                 registration_name) {
+    // A/B control, default on: GGML_HRX_LAYOUT_CONFLICT_NO_PACK=0 restores the previous behaviour (the packed match is
+    // taken and the program is refused), which is what makes the cost of this gate measurable in one box state.
+    static const bool enabled = [] {
+        const char * env = std::getenv("GGML_HRX_LAYOUT_CONFLICT_NO_PACK");
+        return env == nullptr || env[0] == '\0' || env[0] != '0';
+    }();
+    if (!enabled || !context.graph.has_index()) {
+        return false;
+    }
+    const ValueMap & values = context.graph.values();
+    for (const Dispatch & dispatch : candidate.dispatches) {
+        for (const DispatchBinding & binding : dispatch.bindings) {
+            if (binding.layout == kNativeWeightLayout) {
+                continue;
+            }
+            // Only a weight that is already device-resident can hit the conflict: the packing request and the native gather
+            // then both need a resident binding of one value. When the weight is in a host buffer instead - the default,
+            // where the input layer stays on the CPU - the gather is not on this backend at all and this gate must stay out
+            // of the way, which is the difference between 0 nodes off with LLAMA_INPUT_LAYER_ON_DEV=1 and a needless
+            // de-optimisation of the shipped path.
+            const Value * value = values.find(binding.value);
+            if (value == nullptr || value->tensor == nullptr || value->tensor->buffer == nullptr ||
+                ggml_backend_buffer_is_host(value->tensor->buffer)) {
+                continue;
+            }
+            for (const GraphNode * consumer : context.graph.index().consumers(binding.value)) {
+                if (consumer != nullptr && consumer->op == GGML_OP_GET_ROWS) {
+                    // greppable, because this changes a graph's placement: same rule as the host-weight decline in
+                    // host-weight-placement.cpp. Once per (registration, weight), and GGML_LOG_ERROR because the CLI's log
+                    // sink drops WARN.
+                    static std::mutex            log_mutex;
+                    static std::set<std::string> logged;
+                    const std::string            key = std::string(registration_name != nullptr ? registration_name : "?") +
+                                            "|" + (value->tensor->name != nullptr ? value->tensor->name : "?");
+                    std::lock_guard<std::mutex> lock(log_mutex);
+                    if (logged.insert(key).second) {
+                        GGML_LOG_ERROR("hrx dispatch: %s declined - it asks for layout '%s' of weight '%s', which GET_ROWS "
+                                       "also reads natively, so one program would need two resident layouts of it "
+                                       "(engine #1316)\n",
+                                       key.c_str(), binding.layout.c_str(), value->tensor->name);
+                    }
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool DispatchRegistry::match(const DispatchMatchContext & context, DispatchMatch & match) const {
     return this->match(context, match, nullptr);
 }
@@ -191,7 +251,11 @@ bool DispatchRegistry::match(const DispatchMatchContext & context,
             continue;
         }
         DispatchMatch candidate;
-        const bool    matched = registration.matcher != nullptr && registration.matcher(context, candidate);
+        bool          matched = registration.matcher != nullptr && registration.matcher(context, candidate);
+        if (matched && match_requests_packed_layout_of_natively_read_weight(context, candidate, registration.name)) {
+            // engine #1316: see the helper - the next registration for this root op gets the node instead.
+            matched = false;
+        }
         const size_t  covered_output = matched ? first_covered_requested_output(context, candidate) : kNoNode;
         if (matched && covered_output != kNoNode) {
             dispatch_log_requested_output(registration, context.graph, covered_output);

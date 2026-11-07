@@ -129,6 +129,23 @@ static bool is_bias_shape(const Value & value, int64_t output_size) {
     return true;
 }
 
+// engine #1316: a weight that some node reads in the native layout - a tied token embedding, gathered by GET_ROWS -
+// cannot also be packed for this matmul. A command program holds one binding per value, so the packing request and the
+// native request collide and the executor refuses the program ("weight value 0 has conflicting resident layout
+// requests"), which is what made LLAMA_INPUT_LAYER_ON_DEV=1 fail with `ret = -3`. Using the native format here keeps both
+// consumers on one resident copy.
+static bool weight_has_native_layout_reader(const Graph & graph, const Value & value) {
+    if (!graph.has_index()) {
+        return false;
+    }
+    for (const GraphNode * consumer : graph.index().consumers(value.id)) {
+        if (consumer != nullptr && consumer->op == GGML_OP_GET_ROWS) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool has_normalized_rope_consumer(const Graph & graph, const Value & value) {
     if (!graph.has_index()) {
         return false;
@@ -1061,7 +1078,8 @@ static bool build_mul_mat_dispatch(const DispatchMatchContext & context,
     // below: that path binds the packed transient as the activation and packing would overwrite it with a pass over the
     // strided source. Element-wise weights never pack, so this only rules out an untested combination.
     const bool pack_rows = match.token_count <= 5 && match.output_size % 64 == 0 &&
-                           match.weight->alias_source.value < 0 && !match.strided_activation;
+                           match.weight->alias_source.value < 0 && !match.strided_activation &&
+                           !weight_has_native_layout_reader(context.graph, *match.weight);
     const bool can_pack_q4 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q4K;
     const bool can_pack_q6 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q6K;
     bool       pack_q4     = false;
