@@ -1514,6 +1514,16 @@ struct test_case {
         if (fused_nodes_to_verify.size() == 0 && run_whole_graph()) {
             fused_nodes_to_verify.push_back(out);
         }
+        // These are the values this test compares, i.e. the caller will read them back after compute. Declare that to the
+        // backend, so a fused match cannot swallow them and a recycled intermediate keeps its bytes: HRX honours the name
+        // marker for exactly this (engine #1259; the ZHA dump uses the same mechanism with its own prefix).
+        for (ggml_tensor * t : fused_nodes_to_verify) {
+            if (t != nullptr && (t->flags & GGML_TENSOR_FLAG_OUTPUT) == 0) {
+                std::string name = t->name;
+                ggml_format_name(t, "hrx-readback.%s", name.c_str());
+                t->flags |= GGML_TENSOR_FLAG_OUTPUT;
+            }
+        }
         const bool cmp_ok = ggml_backend_compare_graph_backend(backend1, backend2, gf, callback, &ud,
                                                                run_whole_graph() ? fused_nodes_to_verify.data() : nullptr,
                                                                fused_nodes_to_verify.size());
@@ -6144,18 +6154,6 @@ struct test_topk_moe : public test_case {
 
         ggml_set_name(weights, "weights");
         return weights;
-    }
-    bool waive_node(const char * backend, ggml_tensor * t) override {
-        if (t != selected_experts || std::strncmp(backend, "HRX", 3) != 0) {
-            return false;
-        }
-        static bool said = false;
-        if (!said) {
-            said = true;
-            printf("WAIVER [%s] TOPK_MOE: selected_experts is an internal non-contiguous VIEW of the ARGSORT output; "
-                            "HRX does not materialise such a view as a host-readable output. The routed weights output is still compared (engine #1259)\n", backend);
-        }
-        return true;
     }
 
     // Verify two outputs
