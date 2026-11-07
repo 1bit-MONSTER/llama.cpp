@@ -1,6 +1,7 @@
 #include "graph-executor.h"
 
 #include "backend-buffer-binding.h"
+#include "hrx-interop-utils.h"
 #include "ggml-impl.h"
 #include "runtime/graph-program-cache-limit.h"
 #include "runtime/graph-replay.h"
@@ -166,6 +167,22 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     }
 
     result.code = GGML_STATUS_SUCCESS;
+
+    // engine #1251: a download this program staged is only a *queued* memcpy until mark_stream_synchronized() runs
+    // (GraphReplayStreamState::add_host_writeback defers the publish to the next backend synchronize). ggml's
+    // scheduler shares a host tensor between the HRX split and a CPU split without inserting a copy — it is the same
+    // memory, so there is nothing to copy — which means a CPU node in the next split can read that tensor before
+    // anything synchronizes HRX. The Qwen4-exp QSA mask is exactly that shape: a CPU fill of -inf, a device SET_ROWS
+    // that unmasks the top-k cells, and a CPU add that consumes the result; without this publish the add reads the
+    // fill's -inf for every cell and every logit is NaN. Publish here, i.e. copy the materialised host output back
+    // before the graph compute returns.
+    if (context_.graph_replay_state.has_pending_host_writebacks()) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context_.stream))) {
+            result.status.log("synchronize HRX stream to publish host writebacks: %s", error->c_str());
+            result.code = GGML_STATUS_FAILED;
+        }
+        context_.graph_replay_state.mark_stream_synchronized();
+    }
     return result;
 }
 

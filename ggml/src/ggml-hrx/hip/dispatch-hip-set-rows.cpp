@@ -29,8 +29,8 @@
 //
 // Dims 2 and 3 are handled by slicing rather than by the kernel: ggml_set_rows batches over them with the indices
 // broadcast as dst_dim % indices_dim (ggml-cpu/ops.cpp set_rows), so the matcher emits one dispatch per slice with
-// its own byte offsets into the rows, indices and output bindings. The model's QSA mask is one slice; the
-// test-backend-ops cases that this kernel can take are 3 to 6.
+// its own byte offsets into the rows, indices and output bindings. The model's QSA mask is one slice per ubatch token
+// (decode: one; a 512-token prefill ubatch: 512), and the test-backend-ops cases that this kernel can take are 3 to 6.
 //
 // GGML_HRX_DISABLE_DISPATCH=hip.set_rows turns the matcher off, which makes the node fall back to the CPU
 // backend through the same path -- that is the A/B switch for the model row.
@@ -56,7 +56,12 @@ constexpr int64_t kSetRowsMaxTokens      = 1 << 20;
 constexpr int64_t kSetRowsMaxHidden      = 1 << 15;
 constexpr int64_t kSetRowsMaxCacheRows    = 1 << 27;
 constexpr int64_t kSetRowsMaxWorkItems    = std::numeric_limits<uint32_t>::max();
-constexpr int64_t kSetRowsMaxSlices       = 64;
+// Dispatch-count bound, not a kernel bound: dims 2 and 3 are sliced (one dispatch per slice), so this caps how many
+// commands one node may add to the command buffer. It has to cover a prefill ubatch: the QSA mask rebuild is
+// [1, n_kv, n_ubatch, n_stream], i.e. one slice per ubatch token, and at 64 a >64-token prefill fell back to the CPU
+// backend, where the scheduler-read indices arrive corrupted and ggml-cpu's set_rows trips its out-of-range assert
+// (engine #1251, 18,754-token prompt). 8192 covers 4x the default `-b/-ub 2048` with the stream factor.
+constexpr int64_t kSetRowsMaxSlices       = 8192;
 constexpr uint32_t kSetRowsWorkgroupSize  = 256;
 constexpr uint32_t kSetRowsVecWidth       = 4;
 
@@ -223,10 +228,18 @@ void register_hip_set_rows_dispatch(DispatchRegistryBuilder & registry) {
     if (!hip_code_object_embedded("hip_set_rows")) {
         return;
     }
+    // `cache` is read_write, not write: SET_ROWS is a read-modify-write of the destination (ggml-cpu's
+    // ggml_compute_forward_set_rows_impl keeps every row the indices do not name), and the access decides the host
+    // staging round trip. As a pure Write the executor uploads nothing and downloads the whole slice afterwards
+    // (runtime/command-program-executor.cpp:744-745), so a host-placed destination is overwritten outside the named
+    // rows with whatever the fresh staging buffer held. Qwen4-exp's QSA mask is exactly that case — an f16 mask
+    // filled with -INFINITY on the CPU, scattered by this kernel — and the rewrite turned every unmasked cell into
+    // garbage, i.e. NaN logits for every token (engine #1251). The Loom matchers declare the same binding read_write
+    // (kernel-corpus/kernels/loom-libs/manifest.json, ggml_set_rows: read,read,read_write).
     ggml::hrx::register_hip_kernel({
         "hip_set_rows",
         "hip_set_rows",
-        { { "rows", ResourceAccess::Read }, { "indices", ResourceAccess::Read }, { "cache", ResourceAccess::Write } },
+        { { "rows", ResourceAccess::Read }, { "indices", ResourceAccess::Read }, { "cache", ResourceAccess::ReadWrite } },
         { "token_count", "packets", "packet_width", "hidden_size", "cache_row_count", "row_format", "index_format",
           "cache_format" },  // by-value kernel arguments, in order
         { "token_count", "packets" },  // read by launch_hip_set_rows to size the grid
