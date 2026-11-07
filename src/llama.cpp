@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <unistd.h>
 #include <cstring>
 #include <ctime>
 #include <stdexcept>
@@ -304,8 +305,43 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
 static std::pair<int, llama_model *> llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
         const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model_params & params) {
     try {
+        // engine #856: if any device can import a host region into its own buffers, map the weights writable so it can
+        // do that instead of copying them (a read-write lock is the only form the HSA API offers).
+        // params.devices == NULL means "all available devices", which is what llama-cli and the server pass, so the
+        // capability has to be read from the registry in that case (the first version only walked params.devices and
+        // therefore never saw the capability at all).
+        bool map_weights_writable = false;
+        if (params.devices != nullptr) {
+            for (ggml_backend_dev_t * dev = params.devices; *dev != nullptr && !map_weights_writable; ++dev) {
+                ggml_backend_dev_props props;
+                ggml_backend_dev_get_props(*dev, &props);
+                // the CPU backend also advertises this capability, and it does not want a writable weight mapping
+                map_weights_writable = props.type != GGML_BACKEND_DEVICE_TYPE_CPU && props.caps.buffer_from_host_ptr;
+            }
+        } else {
+            for (size_t i = 0, n = ggml_backend_dev_count(); i < n && !map_weights_writable; ++i) {
+                ggml_backend_dev_props props;
+                ggml_backend_dev_get_props(ggml_backend_dev_get(i), &props);
+                map_weights_writable = props.type != GGML_BACKEND_DEVICE_TYPE_CPU && props.caps.buffer_from_host_ptr;
+            }
+        }
+        if (map_weights_writable) {
+            // a shared writable mapping needs the file opened for writing, and an import over a read-only mapping fails;
+            // check every file of the model up front and fall back to the shared read-only mapping
+            auto can_write = [](const std::string & path) { return !path.empty() && access(path.c_str(), W_OK) == 0; };
+            for (const auto & path : splits) {
+                if (!can_write(path)) {
+                    map_weights_writable = false;
+                    break;
+                }
+            }
+            if (map_weights_writable && !can_write(fname)) {
+                map_weights_writable = false;
+            }
+        }
         llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.load_mode,
-            params.check_tensors, params.no_alloc, params.load_mtp, params.kv_overrides, params.tensor_buft_overrides);
+            params.check_tensors, params.no_alloc, params.load_mtp, map_weights_writable, params.kv_overrides,
+            params.tensor_buft_overrides);
 
         ml.lazy.mode = params.lazy_mode;
 

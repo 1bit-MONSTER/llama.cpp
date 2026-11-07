@@ -1623,7 +1623,34 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         // a lazy context is mapped whatever the load mode, but the memory-fit pass maps nothing
         const bool is_lazy_mapped = ctx_key.lazy && !ml.no_alloc;
 
-        if ((ml.use_mmap || is_lazy_mapped) && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
+        // engine #856: a backend that imports this region into its own buffers pins every page of it. That only pays
+        // when the region is (close to) this ctx's own tensors; with CPU-placed tensors interleaved in the same file -
+        // a MoE under -ot exps=CPU - the range spans the whole file and pinning it costs far more than the device copy
+        // it would replace (measured: 18.6 GB model, >14 min stuck in load, against 31 s for the same model with the
+        // import disabled). So the import is taken only for a tight region, per file, and the whole ctx falls back to a
+        // normal device buffer otherwise.
+        bool host_ptr_region_tight = buffer_from_host_ptr_supported && is_default_buft;
+        if (host_ptr_region_tight && (ml.use_mmap || is_lazy_mapped) && use_mmap_buffer) {
+            size_t ctx_bytes = 0;
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                ctx_bytes += ggml_nbytes(t);
+            }
+            // a little slack for alignment and index tensors, but not a factor of the model
+            const size_t slack = ctx_bytes / 8 + ((size_t) 1 << 20);   // NB: << binds looser than +, parentheses matter
+            for (uint32_t idx = 0; idx < ml.files.size() && host_ptr_region_tight; idx++) {
+                void * addr = nullptr;
+                size_t first, last; // NOLINT
+                ml.get_mapping_range(&first, &last, &addr, idx, ctx);
+                if (first >= last) {
+                    continue;
+                }
+                if (last - first > ctx_bytes + slack) {
+                    host_ptr_region_tight = false;
+                }
+            }
+        }
+
+        if (host_ptr_region_tight && (ml.use_mmap || is_lazy_mapped) && use_mmap_buffer) {
             GGML_ASSERT(!ml.no_alloc);
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 // only the mmap region containing the tensors in the model is mapped to the backend buffer
