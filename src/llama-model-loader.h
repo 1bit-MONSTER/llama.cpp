@@ -80,12 +80,12 @@ struct llama_model_loader {
 
     bool use_mmap = false;
     bool use_direct_io = false;
+    // engine #1339: drop each weight's page-cache pages once it has been read, so a read() load does not leave a
+    // second copy of the model in memory (set by load_tensors for HRX)
+    bool drop_page_cache = false;
     bool check_tensors;
     bool no_alloc;
     bool load_mtp;
-
-    // engine #856: map the weight files writable so a backend that imports host regions (HRX) can zero-copy them
-    bool map_weights_writable;
 
     // handle TENSOR_READ_LAZY
     // use case: keep PLE / engrams embd tensors on disk, read them on demand
@@ -185,7 +185,6 @@ struct llama_model_loader {
         bool check_tensors,
         bool no_alloc,
         bool load_mtp,
-        bool map_weights_writable,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 

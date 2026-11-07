@@ -36,6 +36,10 @@ struct llama_file {
 
     size_t read_alignment() const;
     bool has_direct_io() const;
+
+    // ask the kernel to drop the clean page-cache pages of [offset, offset + len) (len 0 = to the end of the file);
+    // no-op where posix_fadvise is not available
+    void drop_page_cache(size_t offset, size_t len) const;
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;
@@ -47,7 +51,7 @@ struct llama_mmap {
 
     llama_mmap(const llama_mmap &) = delete;
     llama_mmap(struct llama_file * file, size_t prefetch = (size_t) -1, bool numa = false,
-               const ranges & lazy_ranges = {}, bool writable = false);
+               const ranges & lazy_ranges = {});
     ~llama_mmap();
 
     size_t size() const;

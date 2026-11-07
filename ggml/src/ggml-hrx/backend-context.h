@@ -34,9 +34,6 @@ struct ggml_backend_hrx_buffer_context {
     uint64_t                          identity;
     uint64_t                          generation;
     bool                              direct_host_binding;
-    // engine #856: the storage is a caller-owned host region (the loader's mapping) that was imported, not allocated
-    // from the device, so it is not charged to the pool and must not release pool bytes on free.
-    bool                              imported = false;
 };
 
 struct ggml_backend_hrx_device_context {
