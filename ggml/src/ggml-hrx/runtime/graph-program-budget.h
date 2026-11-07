@@ -34,6 +34,12 @@ namespace ggml::hrx {
 
 size_t graph_program_cache_budget_bytes();
 
+// Which order the byte bound evicts in: "age" (the shipped behaviour) or "size"
+// (GGML_HRX_GRAPH_PROGRAM_EVICT=size). Exposed so the trim log line can name the policy it ran under: a log that
+// does not say which order produced it is the same trap as a build that does not say whether it has the addons
+// (engine #841, 2026-11-05 17:5x).
+const char * graph_program_evict_policy_name();
+
 // The parser behind it, so a host test can check the values without touching the environment:
 // MiB in, bytes out; 0 means unbounded; anything unparsable is the 8192 MiB default.
 size_t parse_graph_program_cache_budget_bytes(const char * mib);
