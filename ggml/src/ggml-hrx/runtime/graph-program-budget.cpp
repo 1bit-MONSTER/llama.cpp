@@ -113,8 +113,11 @@ std::vector<uint64_t> GraphProgramBudget::plan_evictions(size_t budget,
     }
     std::sort(by_age.begin(), by_age.end());
     if (over_bytes && evict_largest_first()) {
-        // The byte bound is about bytes, so drop the programs that give the most back - the count bound stays
-        // oldest-first, because "how many shapes do I keep" is the question age answers (engine #841).
+        // The byte bound is about bytes, so drop the programs that give the most back. There is one victim list, so
+        // when a single trim has to satisfy both bounds this order drives the count bound's victims too: the byte
+        // constraint is the one that needs the most drops to satisfy, and a largest-first pass satisfies both sooner
+        // than an oldest-first pass satisfies the bytes (engine #841). With the byte bound not tripped the count bound
+        // is untouched and stays oldest-first, which is the question age answers.
         std::stable_sort(by_age.begin(), by_age.end(), [this](const auto & a, const auto & b) {
             return entries_.at(a.second).bytes > entries_.at(b.second).bytes;
         });

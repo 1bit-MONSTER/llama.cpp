@@ -175,6 +175,11 @@ int main() {
         REQUIRE(plan(ties, 8 * MiB, 0, 0, false)[0] == 11);
         // the count bound is still answered by age under the same env
         REQUIRE(plan(ties, 0, 1, 0, false)[0] == 11);
+        // and when ONE trim has to satisfy both bounds, this order drives the count bound's victims too: there is one
+        // victim list, and the byte constraint is the one that needs the most drops. Pinned rather than left implicit,
+        // because "the count bound stays oldest-first" is only true while the byte bound is not also tripped.
+        REQUIRE(plan(budget, 4 * MiB, 1, 0, false).size() == 2);   // size: [3, 2] (a byte-bound trip, count also over)
+        REQUIRE(plan(budget, 4 * MiB, 1, 0, false)[0] == 3);
         ::unsetenv("GGML_HRX_GRAPH_PROGRAM_EVICT");
         const auto by_age = plan(budget, 4 * MiB, 0, 0, false);
         REQUIRE(by_age.size() == 3);    // 35 MiB against 4 MiB needs all three out of the cache either way
