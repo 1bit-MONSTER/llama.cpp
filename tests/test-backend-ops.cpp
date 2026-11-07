@@ -8308,6 +8308,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
+    // engine #1251: the Qwen4-exp QSA mask rebuild is an element-wise (hidden == 1) scatter batched over the ubatch,
+    // i.e. [1, n_kv, n_ubatch] with one slice per token, and the HIP matcher slices dim 2/3 into one dispatch each. A
+    // batch past the old cap of 64 sent the node to the CPU backend, so 128 slices is the shape that has to run here.
+    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I32, { 1, 8, 128, 1 }, { 1, 1 }, 2, false));
+    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I32, { 1, 64, 128, 1 }, { 1, 1 }, 7, false));
+    // engine #1251: the Qwen4-exp QSA mask rebuild exactly — f32 zero rows scattered into an f16 cache, i32 indices,
+    // one element per row (hidden == 1), and a slice per batch token. Before the matcher's slice cap was raised this
+    // shape never ran on HRX above 64 tokens; on device it is the shape the model exercises.
+    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_I32, { 1, 256, 32, 1 }, { 1, 1 }, 256, false));
+    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_I32, { 1, 512, 8, 1 }, { 1, 1 }, 512, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_Q8_0, GGML_TYPE_I32, { 256, 5, 1, 3 }, { 1, 1, }, 1, false));
     for (ggml_type src_type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
         for (ggml_type type : all_types) {
