@@ -171,6 +171,20 @@ size_t pool_budget_after_refusal(size_t budget, size_t size) {
     return next;
 }
 
+size_t pool_budget_refresh(size_t uncapped, size_t cap, size_t cap_free, size_t free_now) {
+    if (cap == 0) {
+        return uncapped;  // no cap in force
+    }
+    if (free_now > cap_free) {
+        // The pool has grown since the refusal, so the cap's evidence no longer holds: a transient refusal must not become a
+        // permanent ceiling (engine #1502 review).
+        GGML_LOG_INFO("%s: the pool grew from %.1f MiB to %.1f MiB free since the last refusal; lifting the %.1f MiB cap\n",
+                      __func__, cap_free / (double) kMiB, free_now / (double) kMiB, cap / (double) kMiB);
+        return uncapped;
+    }
+    return cap < uncapped ? cap : uncapped;
+}
+
 bool pool_reserve(size_t budget, size_t size, const char * what) {
     const size_t used = g_pool_allocated.load();
     if (pool_live_check_enabled()) {

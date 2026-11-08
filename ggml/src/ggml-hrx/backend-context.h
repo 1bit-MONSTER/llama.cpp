@@ -45,6 +45,10 @@ struct ggml_backend_hrx_device_context {
     // What this process may plan to put on the device: the GTT ceiling less what other processes already hold at
     // registration (engine #680). Every HRX buffer is charged against it.
     size_t                                         memory_budget = 0;
+    // Cap applied after an allocation the allocator refused, and the free figure seen at that moment (engine #1502). The cap is
+    // lifted as soon as a later observation shows a larger free pool.
+    size_t                                         memory_budget_cap      = 0;
+    size_t                                         memory_budget_cap_free = 0;
     bool                                           use_direct_host_bindings = false;
     ggml_backend_buffer_type                       buft               = {};
     ggml_backend_hrx_buffer_type_context           buft_context       = {};

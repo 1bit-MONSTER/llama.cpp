@@ -69,6 +69,28 @@ int main() {
     expect_eq("budget already below size-1 is not raised", pool_budget_after_refusal(2 * GiB, 8 * GiB), 2 * GiB);
     expect_eq("refusal of 8 GiB against an 8 GiB budget leaves 8 GiB - 1", pool_budget_after_refusal(8 * GiB, 8 * GiB), 8 * GiB - 1);
 
+    // The arm the review of #251 asked for: a cap is evidence about the pool at one instant, so it must be refutable. These four
+    // arms are the reviewer's own numbers - GTT in use swinging between 35.8 GiB of a 68.2 GiB budget and 93.9 GiB of a 0.5 GiB one
+    // inside a session, and a 4.7 GiB model refused at 13.6 / 13.5 / 10.8 GiB in three consecutive attempts.
+    using ggml::hrx::onebit::pool_budget_refresh;
+
+    const size_t cap      = refused - 1;      // 15.34 GiB, from the refusal above
+    const size_t cap_free = 45 * GiB;         // what the pool showed when it refused
+    const size_t uncapped = 44 * GiB;         // what pool_budget() would say now (free - 16 GiB reserve)
+
+    expect_eq("no cap in force: refresh returns the uncapped budget", pool_budget_refresh(uncapped, 0, 0, 10 * GiB), uncapped);
+    expect_eq("pool unchanged since the refusal: the cap holds", pool_budget_refresh(uncapped, cap, cap_free, cap_free), cap);
+    expect_eq("pool SMALLER since the refusal: the cap still holds",
+              pool_budget_refresh(uncapped, cap, cap_free, 20 * GiB), cap);
+    expect_eq("pool GREW since the refusal: the cap is lifted and the refused size is admissible again",
+              pool_budget_refresh(uncapped, cap, cap_free, cap_free + 1), uncapped);
+    // The four constants the reviewer cited, as one sequence: refused at 13.6 GiB of budget, then the pool frees.
+    const size_t b_small = 136 * MiB;         // 13.6 GiB budget
+    const size_t cap4    = pool_budget_after_refusal(b_small, 4 * GiB + 700 * MiB);   // the 4.7 GiB model refused
+    expect_true("a 4.7 GiB model refused at a 13.6 GiB budget is capped below its size", cap4 < 4 * GiB + 700 * MiB);
+    expect_true("when the pool frees the same model is admissible again",
+                pool_budget_refresh(68 * GiB, cap4, 20 * GiB, 60 * GiB) > 4 * GiB + 700 * MiB);
+
     printf(failures == 0 ? "test-hrx-pool-refusal-budget: all requirements passed\n"
                          : "test-hrx-pool-refusal-budget: %d FAILED\n", failures);
     return failures == 0 ? 0 : 1;

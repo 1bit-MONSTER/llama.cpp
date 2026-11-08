@@ -41,6 +41,11 @@ size_t pool_budget(size_t memory_total, size_t memory_free);
 // restart, which is stated in the log line.
 size_t pool_budget_after_refusal(size_t budget, size_t size);
 
+// The budget to use now, given the cap recorded at the last refusal. A cap is evidence about the pool at ONE instant, and this box's
+// pool moves by tens of GiB within minutes, so the cap is refuted by any later observation of a LARGER free pool: the size that did not
+// fit then may fit now. |cap| == 0 means no cap is in force. |cap_free| is the free figure seen when the cap was applied.
+size_t pool_budget_refresh(size_t uncapped, size_t cap, size_t cap_free, size_t free_now);
+
 // The reserve the ceiling keeps for the driver and for kernel/transient spikes, in bytes.
 size_t pool_reserve_bytes();
 
