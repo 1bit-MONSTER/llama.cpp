@@ -133,6 +133,10 @@ public:
     // the list can be handed out without closing it.
     bool share_regions(std::vector<llama_kv_shared_region_pod> & out) const;
 
+    // [1bit] target 1: where each of this cache's K/V tensors sits inside the region it now maps, and its row width
+    // (llama-kv-share.cpp). The provider side of a handoff, after share_import.
+    bool share_tensors(std::vector<llama_kv_shared_tensor> & out) const;
+
     //
     // llama_memory_i
     //

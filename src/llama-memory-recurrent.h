@@ -70,6 +70,8 @@ public:
 
     // [1bit] the exported regions of this memory, owner side: flattened [buffer][chunk], appended
     bool share_regions(std::vector<llama_kv_shared_region_pod> & out) const;
+    // [1bit] the recurrent state is not K/V rows and a provider does not write it: this reports nothing
+    bool share_tensors(std::vector<llama_kv_shared_tensor> & out) const;
 
     // find a contiguous slot of memory cells and emplace the ubatch there
     bool find_slot(const llama_ubatch & ubatch);
