@@ -10063,6 +10063,84 @@ static void run_two_independent_add_f32() {
     ggml_backend_free(backend);
 }
 
+// engine #841: the cache's prepared-program counters are lifetime totals, so evicting a program must not remove what it
+// built, and evicting the same uid twice must not count it twice. This is the one behaviour the fold owns. It is a
+// device case and not a host case for a checkable reason: prepared_stats_ is only incremented inside
+// GraphProgram::execute_with_result after a successful prepare_command_program, which needs a device context, so a host
+// version of this test would assert 0 == 0 - that is also why the existing host cases that build programs assert only
+// the graph-level builds/hits.
+static void run_prepared_stats_survive_eviction() {
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    auto * backend_context = static_cast<ggml_backend_hrx_context *>(backend->context);
+    REQUIRE(backend_context != nullptr);
+
+    auto compute_add = [&](uint64_t uid, int64_t element_count) {
+        ggml_init_params params = {};
+        params.mem_size         = 256 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+
+        ggml_tensor * a   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, element_count);
+        ggml_tensor * b   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, element_count);
+        ggml_tensor * out = ggml_add(ctx, a, b);
+        REQUIRE(a != nullptr);
+        REQUIRE(b != nullptr);
+        REQUIRE(out != nullptr);
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, out);
+        graph->uid = uid;
+
+        ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+        REQUIRE(buffer != nullptr);
+
+        std::vector<float> a_data(element_count, 1.0f);
+        std::vector<float> b_data(element_count, 2.0f);
+        ggml_backend_tensor_set(a, a_data.data(), 0, a_data.size() * sizeof(float));
+        ggml_backend_tensor_set(b, b_data.data(), 0, b_data.size() * sizeof(float));
+        REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(backend);
+
+        std::vector<float> actual(element_count);
+        ggml_backend_tensor_get(out, actual.data(), 0, actual.size() * sizeof(float));
+        REQUIRE(actual[0] == 3.0f);
+
+        ggml_backend_buffer_free(buffer);
+        ggml_free(ctx);
+    };
+
+    // two distinct shapes, so the cache holds two programs each with its own prepared program
+    compute_add(4101, 1024);
+    compute_add(4102, 2048);
+
+    const ggml::hrx::GraphProgramCacheStats before = backend_context->graph_programs.stats();
+    REQUIRE(before.builds == 2);
+    REQUIRE(before.prepared_program_builds == 2); // one preparation per shape, as the counters are meant to read
+
+    // evicting one program must carry its counts into the cache instead of deleting them with it
+    backend_context->graph_programs.evict({ 4101 });
+    const ggml::hrx::GraphProgramCacheStats after = backend_context->graph_programs.stats();
+    REQUIRE(after.prepared_program_builds == before.prepared_program_builds);
+    REQUIRE(after.prepared_program_hits == before.prepared_program_hits);
+    REQUIRE(after.builds == before.builds);
+
+    // and it is idempotent: the same uid twice cannot be folded twice
+    backend_context->graph_programs.evict({ 4101 });
+    const ggml::hrx::GraphProgramCacheStats repeated = backend_context->graph_programs.stats();
+    REQUIRE(repeated.prepared_program_builds == before.prepared_program_builds);
+
+    // dropping everything (the backend-free path) keeps the lifetime totals as well
+    backend_context->graph_programs.clear();
+    const ggml::hrx::GraphProgramCacheStats cleared = backend_context->graph_programs.stats();
+    REQUIRE(cleared.prepared_program_builds == before.prepared_program_builds);
+    REQUIRE(cleared.prepared_program_hits == before.prepared_program_hits);
+
+    ggml_backend_free(backend);
+}
+
 static void run_chained_add_f32() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -11612,7 +11690,30 @@ static int run_cases(const char * label, const std::vector<Case> & cases) {
     return (failed + unexpected) == 0 ? 0 : 1;
 }
 
-int main() {
+int main(int argc, char ** argv) {
+    // Optional case filter: `hrx-backend-test <case> [<case>...]` runs only the named cases. Without it the whole suite
+    // runs, which is what CI does; with it a single device case can be run on its own in seconds, which is what a
+    // one-behaviour test like prepared_stats_survive_eviction() is useful for.
+    const std::vector<std::string> only(argv + 1, argv + argc);
+    std::vector<std::string>       unmatched = only;  // a name that selects nothing is an error, not a no-op: running
+                                                     // zero cases and exiting 0 is how a filter typo looks like a pass
+    const auto keep_named = [&unmatched](const std::vector<Case> & cases) {
+        if (unmatched.empty()) {
+            return cases;
+        }
+        std::vector<Case> kept;
+        for (const Case & c : cases) {
+            for (auto want = unmatched.begin(); want != unmatched.end(); ++want) {
+                if (*want == c.name) {
+                    kept.push_back(c);
+                    unmatched.erase(want);
+                    break;
+                }
+            }
+        }
+        std::printf("filter: %zu of %zu case(s) selected\n", kept.size(), cases.size());
+        return kept;
+    };
     const std::vector<Case> host_cases = {
         { "status", [] { run_status_checks(); } },
         { "command_plan_metadata", [] { run_command_plan_metadata_checks(); } },
@@ -11680,10 +11781,21 @@ int main() {
         { "qwen_decode_publication_consumer_qualification", [] { run_qwen_decode_publication_consumer_qualification_checks(); } },
         { "qwen_weighted_reduce_next_rmsnorm_q8_publication", [] { run_qwen_weighted_reduce_next_rmsnorm_q8_publication_checks(); } },
         { "symmetric_i4_consumer_qualification", [] { run_symmetric_i4_consumer_qualification_checks(); } },    };
-    int failed = run_cases("host", host_cases);
+    int failed = run_cases("host", keep_named(host_cases));
 
+    // The HRX backend is a dynamic backend in every build that produces libggml-hrx.so, and nothing registered it
+    // for this binary: the device count below was always 0 there, so the whole device half of this suite printed
+    // "skipped" and exited 0. Every other HRX test loads the backends first (tests/test-hrx-decode-stride.cpp:177)
+    // and test-backend-ops does the same (test-backend-ops.cpp:10840); this one did not.
+    if (ggml_backend_hrx_get_device_count() == 0) {
+        ggml_backend_load_all();
+    }
     if (ggml_backend_hrx_get_device_count() == 0) {
         std::printf("device: skipped, no HRX devices available\n");
+        for (const std::string & name : unmatched) {
+            std::printf("[FAIL] no case named '%s' (device cases cannot run without an HRX device)\n", name.c_str());
+            ++failed;
+        }
         return failed == 0 ? 0 : 1;
     }
 
@@ -11695,11 +11807,17 @@ int main() {
         { "scale_f32", [] { run_scale_f32(); } },
         { "scale_f32_inplace", [] { run_scale_f32_inplace(); } },
         { "two_independent_add_f32", [] { run_two_independent_add_f32(); } },
+        { "prepared_stats_survive_eviction", [] { run_prepared_stats_survive_eviction(); } },
         { "chained_add_f32", [] { run_chained_add_f32(); } },
         { "same_uid_distinct_graph_reuses_graph_program", [] { run_same_uid_distinct_graph_reuses_graph_program(); } },
         { "same_uid_distinct_graph_reuses_graph_program.distinct_uid", [] { run_same_uid_distinct_graph_reuses_graph_program(true); } },
         { "unsupported_op_fails", [] { run_unsupported_op_fails(); } },
     };
-    failed += run_cases("device", device_cases);
+    failed += run_cases("device", keep_named(device_cases));
+    for (const std::string & name : unmatched) {
+        std::printf("[FAIL] no case named '%s' (device cases only run when an HRX device is present, so check "
+                    "GGML_BACKEND_PATH as well as the spelling)\n", name.c_str());
+        ++failed;
+    }
     return failed == 0 ? 0 : 1;
 }
