@@ -7379,6 +7379,77 @@ struct test_fill : public test_case {
     }
 };
 
+// engine #1346: the composite pattern the Qwen4-exp QSA indexer builds — ggml_top_k producing the *indices* that a
+// ggml_set_rows scatter consumes — as one graph, which no single-op case covers. A device path can be correct for
+// TOP_K alone and for SET_ROWS alone and still hand the scatter the wrong tensor when both run in one graph, which is
+// how the model failed (an f16 KQ mask scattered at index-list positions, NaN logits). Reference-checked like every
+// other case: the same graph runs on the reference backend and the indices are compared exactly.
+struct test_top_k_set_rows : public test_case {
+    const std::array<int64_t, 4> ne;   // score columns x rows
+    const int64_t k;                   // cells selected per row
+
+    std::string vars() override { return VARS_TO_STR2(ne, k); }
+
+    test_top_k_set_rows(std::array<int64_t, 4> ne, int64_t k) : ne(ne), k(k) {}
+
+    // TOP_K's index order is unspecified, so the intermediate tensors cannot be compared positionally: the scatter's
+    // output is a set operation over the index list (each selected row gets zeros, everything else is untouched), so
+    // comparing the final mask alone is the order-independent check this case needs.
+    bool run_whole_graph() override { return true; }
+
+    double max_err() override { return 0.0; }
+
+    double max_nmse_err() override { return 0.0; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // exactly the Qwen4-exp indexer's shape: scores [cells, tokens] -> index list [k, tokens] -> scatter into an
+        // f16 mask [1, cells, tokens] with f32 zero rows [1, k, tokens]. No view or repeat is needed at this shape, so
+        // the graph is the model's chain and nothing else.
+        ggml_tensor * scores = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, ne[0], ne[1], 1);
+        ggml_set_param(scores);
+        ggml_set_name(scores, "scores");
+
+        ggml_tensor * idx = ggml_top_k(ctx, scores, (int) k);
+        ggml_set_name(idx, "idx");
+
+        // Constant background, exactly as the model builds it (`ggml_fill(kq_mask, -INFINITY)`): a random mask would be
+        // re-initialised per backend and the comparison would be measuring the RNG, not the scatter. With a constant
+        // background the result is a set operation — each selected row becomes 0, everything else stays -inf — so it is
+        // independent of the unordered index list.
+        // The mask and the scattered rows are *params*, not fills: FILL has no HRX claim, so a fill-backed mask makes the
+        // whole node set unplaceable (the same structural fact engine #1251 documented for the model's own mask). Params
+        // are initialised once and copied to both backends, so the background is identical on the reference and the
+        // target and the comparison measures the scatter.
+        ggml_tensor * mask = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 1, ne[0], ne[1]);
+        ggml_set_param(mask);
+        ggml_set_name(mask, "mask");
+
+        ggml_tensor * zeros = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, k, ne[1]);
+        ggml_set_param(zeros);
+        ggml_set_name(zeros, "zeros");
+
+        ggml_tensor * out = ggml_set_rows(ctx, mask, zeros, idx);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op) || t->type == GGML_TYPE_I32 || t->type == GGML_TYPE_I64) {
+                continue;   // the index list is produced by top_k
+            }
+            // The scattered rows are all zeros, as in the model (`ggml_fill(zeros, 0.0f)`). They have to be constant: the
+            // top-k index order is unspecified, so random row values would be permuted differently by the two backends and
+            // the comparison would measure that permutation rather than the scatter.
+            if (strcmp(t->name, "zeros") == 0) {
+                init_tensor_uniform(t, 0.0f, 0.0f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_SOLVE_TRI
 struct test_solve_tri : public test_case {
     const ggml_type              type;
@@ -9601,6 +9672,28 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {8192,   nrows, 1, 1}, k, true));
             test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {202048, nrows, 1, 1}, k, true));
         }
+    }
+
+    // engine #1346: a large k WITH a large row count — the Qwen4-exp QSA indexer selects indexer_top_k + r - 1
+    // (2051) cells per token out of the indexer's compressed cell space, one row per ubatch token (512 in a prefill
+    // ubatch). Every row above pairs a large k with rows <= 2, or a large row count with k <= 32, so this combination
+    // was not covered by any known-answer case.
+    for (int64_t ncols : {2560, 11520}) {
+        for (int64_t nrows : {64, 512}) {
+            if (2051 <= ncols) {
+                test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {ncols, nrows, 1, 1}, 2051));
+            }
+        }
+    }
+    // engine #1346: index list -> mask scatter in one graph. Tiny shapes first: if a 64-cell / k=8 / 2-token case fails,
+    // the case's own construction is wrong; if only the wide ones fail, the defect is shape-dependent.
+    for (int64_t ntok : {1, 2}) {
+        test_cases.emplace_back(new test_top_k_set_rows({64, ntok, 1, 1}, 8));
+        test_cases.emplace_back(new test_top_k_set_rows({256, ntok, 1, 1}, 64));
+    }
+    for (int64_t ntok : {4, 32, 128}) {
+        test_cases.emplace_back(new test_top_k_set_rows({2560, ntok, 1, 1}, 2051));
+        test_cases.emplace_back(new test_top_k_set_rows({8192, ntok, 1, 1}, 2051));
     }
 
     // DFlash2 selector: 16 candidates per block position (dflash.selector_top_k of the Qwen3.8-27B drafters)
