@@ -857,8 +857,12 @@ void GraphProgramCache::retally_retained_bytes(const std::function<size_t(uint64
 }
 
 void GraphProgramCache::drop_program(uint64_t uid) {
-    // The one place a cached program is destroyed, so the lifetime counters cannot be left behind: fold its prepared
-    // counts into the cache first, otherwise stats() would lose them and a trim would make the total go backwards.
+    // The one place a single cached program is destroyed, so the lifetime counters cannot be left behind: fold its
+    // prepared counts into the cache first, otherwise stats() would lose them and a trim would make the total go
+    // backwards. Idempotent per uid, so a uid listed twice cannot be folded twice. (No caller exists for retain_only
+    // today - grep finds only the declaration and this definition - so its budget_.forget() below is new accounting on
+    // an unreachable path rather than a behaviour change; it is the correct accounting, since a budget entry for a
+    // program no longer in the cache is exactly the stale state plan_evictions() must not see.)
     const auto found = programs_.find(uid);
     if (found == programs_.end()) {
         return;
@@ -877,10 +881,7 @@ void GraphProgramCache::evict(const std::vector<uint64_t> & uids) {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     for (uint64_t uid : uids) {
-        if (last_program_ != nullptr && last_program_->uid() == uid) {
-            last_program_ = nullptr;
-        }
-        drop_program(uid);
+        drop_program(uid);  // also clears last_program_ if it pointed at this uid
     }
     validated_matches_.clear();  // it holds raw program pointers
 }

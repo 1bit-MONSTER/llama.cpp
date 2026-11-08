@@ -166,7 +166,8 @@ class GraphProgramCache {
   private:
     // carry a program's own prepared counters into the cache before it is destroyed, so stats() stays a lifetime total
     void fold_prepared_stats(const GraphProgram & program);
-    // destroy one cached program through the one path that folds those counters (evict / retain_only / clear)
+    // destroy one cached program, folding its counters in first; `evict` and `retain_only` go through it, `clear`
+    // folds in bulk because it is dropping everything anyway
     void drop_program(uint64_t uid);
 
     GraphProgramLookup get_or_build_impl(const ggml_cgraph &  graph,
