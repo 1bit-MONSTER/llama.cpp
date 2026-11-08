@@ -112,6 +112,8 @@ class GraphProgram {
 struct GraphProgramCacheStats {
     uint64_t builds                  = 0;
     uint64_t hits                    = 0;
+    // lifetime totals, not levels: the counts of programs this cache has already dropped are folded into the cache
+    // as they are erased, so these only ever grow and a trim cannot make them go backwards (engine #841).
     uint64_t prepared_program_builds = 0;
     uint64_t prepared_program_hits   = 0;
 };
@@ -162,6 +164,12 @@ class GraphProgramCache {
     void clear();
 
   private:
+    // carry a program's own prepared counters into the cache before it is destroyed, so stats() stays a lifetime total
+    void fold_prepared_stats(const GraphProgram & program);
+    // destroy one cached program, folding its counters in first; `evict` and `retain_only` go through it, `clear`
+    // folds in bulk because it is dropping everything anyway
+    void drop_program(uint64_t uid);
+
     GraphProgramLookup get_or_build_impl(const ggml_cgraph &  graph,
                                          const KernelCorpus & corpus,
                                          const std::string &  target);

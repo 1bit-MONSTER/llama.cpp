@@ -814,6 +814,9 @@ size_t GraphProgram::retained_bytes() const {
 
 GraphProgramCacheStats GraphProgramCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
+    // stats_ carries the programs this cache has already dropped (folded in at every erase), and the live ones are
+    // added here, so the totals only ever grow: a trim cannot make the counter go backwards (engine #841 - a
+    // per-request rebuild delta read -1 the moment a program was evicted).
     GraphProgramCacheStats      stats = stats_;
     for (const auto & entry : programs_) {
         const PreparedCommandProgramCacheStats prepared = entry.second->prepared_stats();
@@ -821,6 +824,12 @@ GraphProgramCacheStats GraphProgramCache::stats() const {
         stats.prepared_program_hits += prepared.hits;
     }
     return stats;
+}
+
+void GraphProgramCache::fold_prepared_stats(const GraphProgram & program) {
+    const PreparedCommandProgramCacheStats prepared = program.prepared_stats();
+    stats_.prepared_program_builds += prepared.builds;
+    stats_.prepared_program_hits += prepared.hits;
 }
 
 size_t GraphProgramCache::size() const {
@@ -847,17 +856,32 @@ void GraphProgramCache::retally_retained_bytes(const std::function<size_t(uint64
     }
 }
 
+void GraphProgramCache::drop_program(uint64_t uid) {
+    // The one place a single cached program is destroyed, so the lifetime counters cannot be left behind: fold its
+    // prepared counts into the cache first, otherwise stats() would lose them and a trim would make the total go
+    // backwards. Idempotent per uid, so a uid listed twice cannot be folded twice. (No caller exists for retain_only
+    // today - grep finds only the declaration and this definition - so its budget_.forget() below is new accounting on
+    // an unreachable path rather than a behaviour change; it is the correct accounting, since a budget entry for a
+    // program no longer in the cache is exactly the stale state plan_evictions() must not see.)
+    const auto found = programs_.find(uid);
+    if (found == programs_.end()) {
+        return;
+    }
+    fold_prepared_stats(*found->second);
+    if (last_program_ == found->second.get()) {
+        last_program_ = nullptr;
+    }
+    programs_.erase(found);
+    budget_.forget(uid);
+}
+
 void GraphProgramCache::evict(const std::vector<uint64_t> & uids) {
     if (uids.empty()) {
         return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
     for (uint64_t uid : uids) {
-        if (last_program_ != nullptr && last_program_->uid() == uid) {
-            last_program_ = nullptr;
-        }
-        programs_.erase(uid);
-        budget_.forget(uid);
+        drop_program(uid);  // also clears last_program_ if it pointed at this uid
     }
     validated_matches_.clear();  // it holds raw program pointers
 }
@@ -865,7 +889,13 @@ void GraphProgramCache::evict(const std::vector<uint64_t> & uids) {
 void GraphProgramCache::retain_only(const GraphProgram * keep) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = programs_.begin(); it != programs_.end();) {
-        it = it->second.get() == keep ? std::next(it) : programs_.erase(it);
+        if (it->second.get() == keep) {
+            it = std::next(it);
+            continue;
+        }
+        const uint64_t uid = it->first;
+        ++it;
+        drop_program(uid);
     }
     validated_matches_.clear();
     last_program_ = programs_.empty() ? nullptr : programs_.begin()->second.get();
@@ -877,6 +907,9 @@ void GraphProgramCache::retain_only(const GraphProgram * keep) {
 
 void GraphProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto & entry : programs_) {
+        fold_prepared_stats(*entry.second);
+    }
     validated_matches_.clear();
     programs_.clear();
     budget_       = GraphProgramBudget{};
