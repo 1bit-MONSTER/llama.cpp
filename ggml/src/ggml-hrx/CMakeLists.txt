@@ -34,6 +34,40 @@ if(HRX_SOURCE_DIR)
     if(IREE_ROCM_PATH)
         list(APPEND GGML_HRX_CMAKE_ARGS -DIREE_ROCM_PATH=${IREE_ROCM_PATH})
     endif()
+
+    # GCC 15's -Warray-bounds mis-fires inside the bundled IREE async continuation iterator:
+    #   runtime/src/iree/async/util/continuation.h:75
+    #     iterator->operations.values[iterator->next_head_index - 1]->flags
+    # That index is an unsigned iree_host_size_t (`next_head_index`, continuation.h:47) which is *pre-incremented* in the
+    # do-while body before the subscript is evaluated, and the early return above the loop proves it is < count on entry -
+    # so whenever the subscript is evaluated the index is in 0..count-1 and the access is in bounds. GCC 15 inlines this
+    # header and its value-range analysis loses the ">= 1 after the pre-increment" fact across the do-while, so it warns
+    # about a hypothetical index of -1 (a warning we reproduced on gcc 15.2.0; the same source built here on Oct 31 with an
+    # earlier compiler).
+    #
+    # A second GCC 15 false positive sits behind the first, in loom's AIE2P transpose lowering:
+    #   loom/src/loom/target/arch/amd/xdna/aie2p/lower/transpose.c:366
+    #     for (lane = lane_count; lane < padded_lane_count; ++lane) source_lanes[lane] = (uint8_t)lane;
+    # reported as "writing 16 bytes into a region of size 15" at offset [113,128] of a 128-byte array. The write is in
+    # bounds because `lane_count` is bounded by 128 for every type the carrier table admits (vector_carrier.c: I1 <= 128,
+    # accumulator <= 2048/bit_count, ordinary <= 1024/bit_count), so the power-of-two `padded_lane_count` is <= 128 too. GCC
+    # vectorises the fill and cannot see that invariant, which is established in another translation unit.
+    #
+    # The third is not a false positive, and it is the reason the list has three entries: loom/tooling/testbench/
+    # expectation.c:1112 formats "(int)name.size, name.data" with `%.*s`, and an empty string view can carry a NULL data
+    # pointer, so a NULL can reach %s - latent UB, in an error-message path of a testbench tool, in AMD's tree (which this
+    # fork must not modify). Demoting it here is the only place we can act on it; it cannot change any shipped code path.
+    #
+    # Only the -Werror promotions are dropped, only for the deps build, and only on GCC >= 15: an older compiler or the outer
+    # build keeps -Werror for all three, so a real out-of-bounds elsewhere still fails the build. -Wno-error= rather than
+    # -Wno- keeps every diagnostic in the log.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 15)
+        set(GGML_HRX_DEPS_GCC15_FLAGS
+            " -Wno-error=array-bounds -Wno-error=stringop-overflow -Wno-error=format-overflow")
+        list(APPEND GGML_HRX_CMAKE_ARGS
+            "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}${GGML_HRX_DEPS_GCC15_FLAGS}"
+            "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}${GGML_HRX_DEPS_GCC15_FLAGS}")
+    endif()
     if(FETCHCONTENT_BASE_DIR)
         list(APPEND GGML_HRX_CMAKE_ARGS -DFETCHCONTENT_BASE_DIR=${FETCHCONTENT_BASE_DIR})
     endif()
