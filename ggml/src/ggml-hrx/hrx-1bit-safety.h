@@ -37,14 +37,34 @@ size_t pool_budget(size_t memory_total, size_t memory_free);
 // ever gets about the provider's real ceiling, so spend it - but spend only what it proves: this size did not fit, so cap the
 // budget at size-1 (the largest size still admissible) instead of subtracting the whole refused size, which would compound across
 // retries and wedge a retrying process at zero. The next launch of that size is then refused at admission with both numbers,
-// instead of failing again at model load. A budget of 0 means "device size unknown, unfettered" and stays 0. Recovery requires a
-// restart, which is stated in the log line.
+// instead of failing again at model load. A budget of 0 means "device size unknown, unfettered" and stays 0. The cap is not
+// permanent: pool_budget_observe() lifts it as soon as the pool is observed to have grown past the refusal's own figure.
 size_t pool_budget_after_refusal(size_t budget, size_t size);
 
-// The budget to use now, given the cap recorded at the last refusal. A cap is evidence about the pool at ONE instant, and this box's
-// pool moves by tens of GiB within minutes, so the cap is refuted by any later observation of a LARGER free pool: the size that did not
-// fit then may fit now. |cap| == 0 means no cap is in force. |cap_free| is the free figure seen when the cap was applied.
-size_t pool_budget_refresh(size_t uncapped, size_t cap, size_t cap_free, size_t free_now);
+// The admission state: the budget admission uses, the cap recorded at the last refusal (0 = none), and the free figure seen when
+// that cap was applied. The cap is evidence about the pool at ONE instant, so it is kept with its evidence rather than on its own.
+struct pool_budget_state_t {
+    size_t budget   = 0;
+    size_t cap      = 0;
+    size_t cap_free = 0;
+};
+
+// Bytes this process currently holds against the pool (the ledger pool_reserve/pool_release maintain).
+size_t pool_allocated();
+
+// Records a refusal of |size| bytes, seen with |free_now| free: that size can no longer be admitted, so the budget is capped at
+// size-1, and the free figure is kept so the cap can be refuted later.
+pool_budget_state_t pool_budget_note_refusal(pool_budget_state_t state, size_t size, size_t free_now);
+
+// Recomputes the budget from a live observation of the pool (|free_bytes| from the driver's counters, which already contain this
+// process's own allocations, and |allocated| = pool_allocated()).
+//
+// Two properties this exists to keep (engine #1502 review):
+//  - the process's own memory is counted ONCE: the counters include it, so the basis for pool_budget() adds it back, because
+//    pool_remaining() subtracts the ledger again further down the admission path;
+//  - a cap is cleared only when it is LIFTED (the pool grew past the figure the refusal saw). When the pool is smaller the cap and
+//    its evidence are kept, and only this call's budget is bounded by it - otherwise one low reading becomes a permanent ceiling.
+pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state);
 
 // The reserve the ceiling keeps for the driver and for kernel/transient spikes, in bytes.
 size_t pool_reserve_bytes();

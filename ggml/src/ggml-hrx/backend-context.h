@@ -49,6 +49,9 @@ struct ggml_backend_hrx_device_context {
     // lifted as soon as a later observation shows a larger free pool.
     size_t                                         memory_budget_cap      = 0;
     size_t                                         memory_budget_cap_free = 0;
+    // Guards the three budget fields above: buffer_alloc writes them on a refusal while device_memory rewrites them from an
+    // observation, and both can run concurrently during a load (engine #1502 review).
+    std::mutex                                     memory_budget_mutex;
     bool                                           use_direct_host_bindings = false;
     ggml_backend_buffer_type                       buft               = {};
     ggml_backend_hrx_buffer_type_context           buft_context       = {};
