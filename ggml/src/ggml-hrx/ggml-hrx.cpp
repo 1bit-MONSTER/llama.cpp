@@ -2,6 +2,7 @@
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
 #include "hrx-1bit-safety.h"
+#include "runtime/host-memory-available.h"
 #include "ggml-hrx-dmabuf.h"
 
 #include "backend-buffer-binding.h"
@@ -1522,7 +1523,9 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         size_t device_free            = device_ctx->memory_total;
         size_t device_total           = device_ctx->memory_total;
         device_free_total(device_ctx.get(), device_free, device_total);
-        device_ctx->memory_budget = ggml::hrx::onebit::pool_budget(device_ctx->memory_total, device_free);
+        const size_t host_available = ggml::hrx::host_memory_available_bytes();
+        device_ctx->memory_budget =
+            ggml::hrx::onebit::pool_budget(device_ctx->memory_total, device_free, host_available);
         if (device_ctx->memory_budget == 0 && device_ctx->memory_total != 0) {
             // Nothing fits under the ceiling: refuse the device here, loudly, instead of planning a launch that can
             // reach the fault line (#680). Report only, do not try to be clever about it.
@@ -1539,13 +1542,18 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         if (device_ctx->memory_budget != 0) {
             const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
             GGML_LOG_WARN("ggml_hrx: %s guardrail: GTT total %.1f GiB, in use %.1f GiB, ceiling %.1f GiB "
-                          "(reserve %.1f GiB), pool budget %.1f GiB - a launch that needs more is refused here "
-                          "rather than faulting the device (engine #680)\n",
+                          "(reserve %.1f GiB), pool budget %.1f GiB (GTT term %.1f GiB, host MemAvailable %.1f GiB) - a "
+                          "launch that needs more is refused here rather than faulting the device (engine #680)\n",
                           device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
                           (device_total > device_free ? device_total - device_free : 0) / (1024.0 * 1024.0 * 1024.0),
                           (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0),
                           reserve / (1024.0 * 1024.0 * 1024.0),
-                          device_ctx->memory_budget / (1024.0 * 1024.0 * 1024.0));
+                          device_ctx->memory_budget / (1024.0 * 1024.0 * 1024.0),
+                          (device_ctx->memory_total > reserve ? device_ctx->memory_total - reserve : 0) /
+                                  (1024.0 * 1024.0 * 1024.0) -
+                              (device_ctx->memory_total > device_free ? device_ctx->memory_total - device_free : 0) /
+                                  (1024.0 * 1024.0 * 1024.0),
+                          host_available / (1024.0 * 1024.0 * 1024.0));
         }
         device_ctx->description       = *name + " (" + *architecture + ")";
         device_ctx->architecture      = *architecture;

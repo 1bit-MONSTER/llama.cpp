@@ -81,7 +81,7 @@ bool gtt_counters(size_t & total, size_t & used) {
     return false;
 }
 
-size_t pool_budget(size_t memory_total, size_t memory_free) {
+size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available) {
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     if (env != nullptr) {
         const long long mb = std::atoll(env);
@@ -95,7 +95,16 @@ size_t pool_budget(size_t memory_total, size_t memory_free) {
     const size_t reserve = pool_reserve_bytes();
     const size_t ceiling = memory_total > reserve ? memory_total - reserve : 0;
     const size_t in_use  = memory_total > memory_free ? memory_total - memory_free : 0;
-    return ceiling > in_use ? ceiling - in_use : 0;
+    const size_t by_gtt  = ceiling > in_use ? ceiling - in_use : 0;
+    // engine #1502: GTT on this box is DRAM, so the pool the allocator draws from is bounded by what the host can give it,
+    // not only by the GTT counter. The engine's own admission check has always used min(GTT free, MemAvailable)
+    // (app/mem_admit.h); the fork's safety net used the GTT term alone and therefore over-stated the budget - measured:
+    // 74.8 GiB in use gave a 29.2 GiB budget while hsa_amd_memory_pool_allocate refused a 15.35 GiB buffer with
+    // OUT_OF_RESOURCES, i.e. the real ceiling at that moment was the host's, ~14 GiB below the GTT one.
+    if (memory_available != 0 && memory_available < by_gtt) {
+        return memory_available;
+    }
+    return by_gtt;
 }
 
 // engine #1417: the budget above is a snapshot taken at device open, and the ledger is per-process, so another process

@@ -28,7 +28,9 @@ namespace ggml::hrx::onebit {
 // budget is the GTT ceiling (memory_total minus GGML_HRX_GTT_RESERVE_MB, default 16384) less what other processes
 // already hold (memory_total - memory_free). A GTT plan past this budget is refused at allocation instead of
 // faulting the device: #680 is a gfxhub page fault plus a MODE2 reset at GTT 106.5 of 120 GiB.
-size_t pool_budget(size_t memory_total, size_t memory_free);
+// engine #1502: `memory_available` is the host's MemAvailable. On this box GTT and DRAM are the same pool, so the
+// allocator below is bounded by both; 0 means "unknown" and keeps the GTT-only arithmetic.
+size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available);
 
 // The reserve the ceiling keeps for the driver and for kernel/transient spikes, in bytes.
 size_t pool_reserve_bytes();

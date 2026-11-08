@@ -360,6 +360,16 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-arena-refusal PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-arena-refusal COMMAND test-hrx-arena-refusal)
 
+    # the pool guardrail's budget arithmetic: pure, no device (engine #1502 — GTT and DRAM are the same pool on an APU)
+    add_executable(test-hrx-pool-budget test-hrx-pool-budget.cpp
+        ../ggml/src/ggml-hrx/hrx-1bit-safety.cpp
+        ../ggml/src/ggml-hrx/runtime/host-memory-available.cpp)
+    target_include_directories(test-hrx-pool-budget PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    # hrx-1bit-safety.cpp logs through GGML_LOG_*, so the test links ggml-base for the log implementation rather than
+    # stubbing a symbol whose signature could drift from the real one.
+    target_link_libraries(test-hrx-pool-budget PRIVATE ggml-base)
+    add_test(NAME test-hrx-pool-budget COMMAND test-hrx-pool-budget)
+
     # MemAvailable parsing for the unbounded-residency warning: pure, no device and no /proc (engine #669)
     add_executable(test-hrx-host-memory-available test-hrx-host-memory-available.cpp
         ../ggml/src/ggml-hrx/runtime/host-memory-available.cpp)
