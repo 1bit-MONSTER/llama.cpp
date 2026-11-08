@@ -26,7 +26,7 @@ template.decl @ggml.mul_mat_q6_k_i8_prepacked.body(%token_count: index, %input_s
 
 template.decl @ggml.mul_mat_q6_k_packed.selected_refine.body(%token_count: index, %input_size0: index, %output_size0: index, %scale_row_layout: index, %candidate_count0: index, %input: buffer, %weight: buffer, %candidates: buffer, %output: buffer)
 
-template.decl @ggml.mul_mat_q6_k_packed.prefill_wave32.body(%input_is_f16: i1, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %output: buffer)
+template.decl @ggml.mul_mat_q6_k_packed.prefill_wave32.body(%input_is_f16: i1, %weight_layout: index, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %output: buffer)
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_q6_k_prefill_gfx11_wave32 {subgroup_size = 32}
 
@@ -1276,7 +1276,7 @@ template.def<@ggml.mul_mat_q6_k_packed.publish_f32_wave32> device @ggml_mul_mat_
   template.return
 }
 
-template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat_q6_k_packed_prefill_wave32_body(%input_is_f16: i1, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %output: buffer) {
+template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat_q6_k_packed_prefill_wave32_body(%input_is_f16: i1, %weight_layout: index, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %output: buffer) {
   %output_accumulation = config.get @ggml.mul_mat_q6_k_packed.output_accumulation : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
@@ -1298,6 +1298,10 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
   %c96 = index.constant 96 : index
   %c112 = index.constant 112 : index
   %c128 = index.constant 128 : index
+  %c63i = index.constant 63 : index
+  %c1152 = index.constant 1152 : offset
+  %c17536 = index.constant 17536 : offset
+  %c128o = index.constant 128 : offset
   %c210 = index.constant 210 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
@@ -1353,11 +1357,55 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
       %weight_local_row = index.assume %load_row [range(%load_row, 0, 127)] : index
       %channel = index.add %channel_tile_base, %weight_local_row : index
       %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
+      // engine #856: which resident layout this weight is read in. 0 = the loader's stored QQ6_K rows (today's default);
+      // 1 = the repacked int8 tiles the decode kernel already reads, so prefill and decode can share ONE copy.
+      // The k-mapping is exact: prefill covers 32 channels per call as two 16-wide halves, which is one packed (group,half)
+      // pair; and a prefill workgroup covers 128 output channels against 64 rows per packed tile, so tile = channel_tile*2
+      // + (row >= 64) and the in-tile row is row & 63.
+      %is_packed = index.cmp eq, %weight_layout, %c1 : index
       %weight_values0, %weight_values1 = scf.if %valid_channel -> (vector<16xf16>, vector<16xf16>) {
-        %channel_byte_index = index.mul %channel, %weight_row_bytes : index
-        %row_byte_base = index.cast %channel_byte_index : index to offset
-        %half_packet = scalar.constant false : i1
-        %decoded0, %decoded1 = func.call @ggml_q6k_f16_pair(%half_packet, %weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (i1, buffer, offset, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+        %decoded0, %decoded1 = scf.if %is_packed -> (vector<16xf16>, vector<16xf16>) {
+          %packed_row = index.rem %weight_local_row, %c64 : index
+          %upper_64 = index.cmp ugt, %weight_local_row, %c63i : index
+          %tile_half = scf.select %upper_64, %c1, %c0 : index
+          %tile_lo = index.mul %channel_tile, %c2 : index
+          %tile_idx0 = index.add %tile_lo, %tile_half : index
+          %tile_block0 = index.mul %tile_idx0, %quant_block_count : index
+          %tile_idx = index.add %tile_block0, %quant_block : index
+          %tile_base = index.scale %tile_idx, %c17536 : index, offset -> offset
+          %scale_base = index.add %tile_base, %c128o : offset
+          %code_base = index.add %tile_base, %c1152 : offset
+          %d_view = buffer.view %weight_noalias[%tile_base] : buffer -> view<64xf16>
+          %scale_view = buffer.view %weight_noalias[%scale_base] : buffer -> view<8x64x2xi8>
+          %code_view = buffer.view %weight_noalias[%code_base] : buffer -> view<8x64x32xi8>
+          %group_next = index.add %quant_group, %c1 : index
+          %k_half = index.mul %load_half, %c16 : index
+          %d = view.load %d_view[%packed_row] : view<64xf16> -> f16
+          %d_f32 = scalar.extf %d : f16 to f32
+          %s0_i8 = view.load %scale_view[%quant_group, %packed_row, %load_half] : view<8x64x2xi8> -> i8
+          %s1_i8 = view.load %scale_view[%group_next, %packed_row, %load_half] : view<8x64x2xi8> -> i8
+          %s0 = scalar.sitofp %s0_i8 : i8 to f32
+          %s1 = scalar.sitofp %s1_i8 : i8 to f32
+          %c0v = vector.load %code_view[%quant_group, %packed_row, %k_half] : view<8x64x32xi8> -> vector<16xi8>
+          %c1v = vector.load %code_view[%group_next, %packed_row, %k_half] : view<8x64x32xi8> -> vector<16xi8>
+          %c0f = vector.sitofp %c0v : vector<16xi8> to vector<16xf32>
+          %c1f = vector.sitofp %c1v : vector<16xi8> to vector<16xf32>
+          %m0 = scalar.mulf %s0, %d_f32 : f32
+          %m1 = scalar.mulf %s1, %d_f32 : f32
+          %m0v = vector.splat %m0 : vector<16xf32>
+          %m1v = vector.splat %m1 : vector<16xf32>
+          %v0f = vector.mulf %c0f, %m0v : vector<16xf32>
+          %v1f = vector.mulf %c1f, %m1v : vector<16xf32>
+          %v0 = vector.fptrunc %v0f : vector<16xf32> to vector<16xf16>
+          %v1 = vector.fptrunc %v1f : vector<16xf32> to vector<16xf16>
+          scf.yield %v0, %v1 : vector<16xf16>, vector<16xf16>
+        } else {
+          %channel_byte_index = index.mul %channel, %weight_row_bytes : index
+          %row_byte_base = index.cast %channel_byte_index : index to offset
+          %half_packet = scalar.constant false : i1
+          %d0, %d1 = func.call @ggml_q6k_f16_pair(%half_packet, %weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (i1, buffer, offset, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+          scf.yield %d0, %d1 : vector<16xf16>, vector<16xf16>
+        }
         scf.yield %decoded0, %decoded1 : vector<16xf16>, vector<16xf16>
       } else {
         scf.yield %c0_f16x4, %c0_f16x4 : vector<16xf16>, vector<16xf16>
@@ -1478,7 +1526,10 @@ kernel.def target(@ggml_mul_mat_q6_k_prefill_gfx11_wave32) export("ggml_mul_mat_
   %channel_tile = kernel.workgroup.id<y> : index
   %token_tile = kernel.workgroup.id<x> : index
   %input_is_f16 = scalar.constant false : i1
-  template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
+  // engine #856: 0 = read the loader's stored Q6_K rows (today's behaviour); 1 = read the
+  // repacked int8 tiles the decode kernel already uses, so both share one resident copy.
+  %weight_layout = index.constant 0 : index
+  template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %weight_layout, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, index, index, index, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -1574,7 +1625,87 @@ kernel.def target(@ggml_mul_mat_q6_k_prefill_gfx11_wave32) export("ggml_mul_mat_
     func.call @ggml_mul_mat_quantized_f16_prefill_wave32(%weight_format, %prefill_binary_op, %paired, %packed_input, %paired, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %weight, %output, %output) : (index, index, i1, i1, i1, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
   } else {
     %input_is_f16 = scalar.constant true : i1
-    template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
+    // engine #856: 0 = read the loader's stored Q6_K rows (today's behaviour); 1 = read the
+    // repacked int8 tiles the decode kernel already uses, so both share one resident copy.
+    %weight_layout = index.constant 0 : index
+    template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %weight_layout, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, index, index, index, index, index, index, buffer, buffer, buffer)
+  }
+  kernel.return
+}
+
+// engine #856: the same prefill kernel reading the REPACKED int8 tiles instead of the loader's stored Q6_K rows, so a
+// weight whose decode consumer already packs it needs only ONE resident copy. Numerically identical to the stored path
+// on 32k tokens of wikitext (PPL 14.4050 both, ±0.398) - the int8 repack is free on ordinary text.
+kernel.def target(@ggml_mul_mat_q6_k_prefill_gfx11_wave32) export("ggml_mul_mat_q6_k_f16_wmma_prefill_from_packed") @ggml_mul_mat_q6_k_f16_wmma_prefill_from_packed(%token_count: index) {
+  %input_size = config.get @ggml.mul_mat_q6_k_packed.input_size : index
+  %output_size = config.get @ggml.mul_mat_q6_k_packed.output_size : index
+  %token_capacity = config.get @ggml.mul_mat_q6_k_packed.token_capacity : index
+  %output_accumulation = config.get @ggml.mul_mat_q6_k_packed.output_accumulation : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c512 = index.constant 512 : index
+  %c1024 = index.constant 1024 : index
+  %minimum_workgroups = index.constant 32 : index
+  %token_tail = index.rem %token_count, %c256 : index
+  %channel_tail = index.rem %output_size, %c128 : index
+  %full_tokens = index.cmp eq, %token_tail, %c0 : index
+  %full_channels = index.cmp eq, %channel_tail, %c0 : index
+  %overwrite = index.cmp eq, %output_accumulation, %c0 : index
+  %full_tile = scalar.andi %full_tokens, %full_channels : i1
+  %wide_tile = scalar.andi %full_tile, %overwrite : i1
+  %padded_output_size = index.add %output_size, %c127 : index
+  %ordinary_output_tiles = index.div %padded_output_size, %c128 : index
+  %padded_token_count = index.add %token_capacity, %c127 : index
+  %small_token_tiles = index.div %padded_token_count, %c128 : index
+  %wide_token_tiles = index.div %token_count, %c256 : index
+  %staged_token_tiles = scf.select %wide_tile, %wide_token_tiles, %small_token_tiles : index
+  %wide_workgroup_size = scf.select %wide_tile, %c512, %c256 : index
+  %larger_output_tiles = index.div %output_size, %c256 : index
+  %larger_grid = index.mul %wide_token_tiles, %larger_output_tiles : index
+  %enough_workgroups = index.cmp uge, %larger_grid, %minimum_workgroups : index
+  %larger_channel_tail = index.rem %output_size, %c256 : index
+  %larger_full_channels = index.cmp eq, %larger_channel_tail, %c0 : index
+  %larger_full_tile = scalar.andi %wide_tile, %larger_full_channels : i1
+  %multiple_token_tiles = index.cmp ugt, %wide_token_tiles, %c1 : index
+  %larger_grid_tile = scalar.andi %larger_full_tile, %enough_workgroups : i1
+  %larger_tile = scalar.andi %larger_grid_tile, %multiple_token_tiles : i1
+  %staged_workgroup_size = scf.select %larger_tile, %c1024, %wide_workgroup_size : index
+  %staged_output_tiles = scf.select %larger_tile, %larger_output_tiles, %ordinary_output_tiles : index
+  %packed, %packed_n_tile = func.call pure @ggml_q6k_prefill_packed_tile(%token_count, %input_size, %output_size, %output_accumulation) : (index, index, index, index) -> (i1, index)
+  %c8 = index.constant 8 : index
+  %packed_workgroup_size = index.mul %packed_n_tile, %c8 : index
+  %packed_token_tiles = index.div %token_count, %c512 : index
+  %packed_output_tiles = index.div %output_size, %packed_n_tile : index
+  %workgroup_size = scf.select %packed, %packed_workgroup_size, %staged_workgroup_size : index
+  %token_tiles = scf.select %packed, %packed_token_tiles, %staged_token_tiles : index
+  %output_tiles = scf.select %packed, %packed_output_tiles, %staged_output_tiles : index
+  kernel.launch.config workgroups(%token_tiles, %output_tiles, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %input_size = config.get @ggml.mul_mat_q6_k_packed.input_size : index
+  %output_size = config.get @ggml.mul_mat_q6_k_packed.output_size : index
+  %token_capacity = config.get @ggml.mul_mat_q6_k_packed.token_capacity : index
+  %output_accumulation = config.get @ggml.mul_mat_q6_k_packed.output_accumulation : index
+  %packed_input, %packed_n_tile = func.call pure @ggml_q6k_prefill_packed_tile(%token_capacity, %input_size, %output_size, %output_accumulation) : (index, index, index, index) -> (i1, index)
+  %bounded_token_count = index.assume %token_count [range(%token_count, 128, 2048), le(%token_count, %token_capacity)] : index
+  %channel_tile = kernel.workgroup.id<y> : index
+  %token_tile = kernel.workgroup.id<x> : index
+  %workgroup_size = kernel.workgroup.size<x> : index
+  %c512 = index.constant 512 : index
+  %wide_tile = index.cmp uge, %workgroup_size, %c512 : index
+  scf.if %wide_tile {
+    %weight_format = index.constant 6 : index
+    %paired = scalar.constant false : i1
+    %prefill_binary_op = index.constant 0 : index
+    func.call @ggml_mul_mat_quantized_f16_prefill_wave32(%weight_format, %prefill_binary_op, %paired, %packed_input, %paired, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %weight, %output, %output) : (index, index, i1, i1, i1, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  } else {
+    %input_is_f16 = scalar.constant true : i1
+    // engine #856: 0 = read the loader's stored Q6_K rows (today's behaviour); 1 = read the
+    // repacked int8 tiles the decode kernel already uses, so both share one resident copy.
+    %weight_layout = index.constant 1 : index
+    template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %weight_layout, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, index, index, index, index, index, index, buffer, buffer, buffer)
   }
   kernel.return
 }

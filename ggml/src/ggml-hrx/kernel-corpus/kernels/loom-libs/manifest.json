@@ -4469,6 +4469,57 @@
       ]
     },
     {
+      "name": "ggml_mul_mat_q6_k_f16_wmma_prefill_from_packed",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_q6_k_f16_wmma_prefill_from_packed",
+      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/q6_k_f16.loom",
+          "motifs/dequant.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/mul_mat_quantized_f16_prefill.loom",
+          "motifs/binary_f32_apply.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/q6_k_f16.loom",
+        "motifs/dequant.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/mul_mat_quantized_f16_prefill.loom",
+        "motifs/binary_f32_apply.loom"
+      ]
+    },
+    {
       "name": "ggml_mul_mat_q6_k_packed_token1_f16_wmma",
       "family": "loom_libs",
       "symbol": "ggml_mul_mat_q6_k_packed_token1_f16_wmma",
