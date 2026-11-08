@@ -490,6 +490,9 @@ static bool placement_fallback_quiet() {
     return end != value && *end == '\0' && parsed <= 0;
 }
 
+// defined below device registration; the strict-placement report needs the live pool state
+static void device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes);
+
 static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, void * user_data) {
     const bool strict = environment_flag_enabled("GGML_HRX_STRICT");
     const int  level  = placement_report_level();
@@ -569,10 +572,26 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
     }
 
     if (strict && first_off != nullptr) {
-        GGML_ABORT("%s: GGML_HRX_STRICT=1: \"%s\" is %s %s ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] and is not placed on HRX; %" PRId64 " of %d nodes off HRX (%s), %d splits\n",
+        // The split is a function of the *shared* GTT pool, which other processes on this APU move, so a strict refusal is
+        // not a property of the model or of the build. Without the pool numbers an operator reads "X is not placed on HRX"
+        // as a model problem; with them the same line says which state produced the split and that a fallback exists
+        // (strict-placement ticket, measured on this box: 37.5 GiB in use serves, 47.5 GiB in use refuses).
+        double in_use_gib = 0.0, total_gib = 0.0, budget_gib = 0.0;
+        {
+            auto * hrx_context = hrx != nullptr ? static_cast<ggml_backend_hrx_context *>(hrx->context) : nullptr;
+            if (hrx_context != nullptr && hrx_context->device != nullptr) {
+                size_t free_bytes = 0, total_bytes = 0;
+                device_free_total(hrx_context->device, free_bytes, total_bytes);
+                const double gib          = 1024.0 * 1024.0 * 1024.0;
+                total_gib                 = (double) total_bytes / gib;
+                in_use_gib                = (double) (total_bytes > free_bytes ? total_bytes - free_bytes : 0) / gib;
+                budget_gib                = (double) hrx_context->device->memory_budget / gib;
+            }
+        }
+        GGML_ABORT("%s: GGML_HRX_STRICT=1: \"%s\" is %s %s ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] and is not placed on HRX; %" PRId64 " of %d nodes off HRX (%s), %d splits. Shared GTT pool: %.1f of %.1f GiB in use, HRX pool budget %.1f GiB - the split follows that pool, so --no-strict-device (or a retry on a quieter box) runs those nodes on the CPU\n",
                    __func__, first_off->name, ggml_op_name(first_off->op), ggml_type_name(first_off->type),
                    first_off->ne[0], first_off->ne[1], first_off->ne[2], first_off->ne[3], off_nodes, graph->n_nodes,
-                   off_detail.c_str(), ggml_backend_sched_get_n_splits(sched));
+                   off_detail.c_str(), ggml_backend_sched_get_n_splits(sched), in_use_gib, total_gib, budget_gib);
     }
 
     if (level >= 1) {
