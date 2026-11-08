@@ -8408,6 +8408,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // limit, not a layout one; the reference is the same graph on the CPU backend.
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 256, 4096, 256, {1, 2}, {1, 1}, {0, 1, 2, 3}, 0));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 128, 8464, 64, {1, 16}, {1, 1}, {0, 1, 2, 3}, 0));
+    // and the plain 2-D contraction at the same token count (no planes): the CLIP MLP projections are this shape
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 1024, 8464, 1024, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0));
 
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));

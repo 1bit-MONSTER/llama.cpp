@@ -1150,6 +1150,25 @@ static bool build_mul_mat_dispatch(const DispatchMatchContext & context,
     if (match.has_fused_unary) {
         dispatch_match.covered_nodes.push_back(match.unary_node_index);
     }
+    if (match.token_count > kMulMatPrefillMaxTokens) {
+        // Above the tile's token range this is only safe for the plain 2-D contraction: a chunked dispatch cannot carry the
+        // activation packing or the split-k path (both rewrite the whole activation), and it must bind the input itself.
+        if (pack_q4 || pack_q6 || split_k || activation.value != match.input->id || match.has_fused_unary) {
+            return false;
+        }
+        const size_t input_row  = static_cast<size_t>(match.input->nb[1]);
+        const size_t output_row = static_cast<size_t>(match.output->nb[1]);
+        const size_t input_last  = static_cast<size_t>(match.input_size) * sizeof(float);
+        const size_t output_last = static_cast<size_t>(match.output_size) * sizeof(float);
+        return append_token_chunked_dispatches(dispatch, match.token_count, kMulMatPrefillMaxTokens,
+                                              { { 0, input_row, input_last }, { 2, output_row, output_last } },
+                                              "token_count",
+                                              [](Dispatch & part, int64_t count) {
+                                                  part.kernel.compile_parameters["ggml.workload.token_capacity"] =
+                                                      common_to_config_value(count);
+                                              },
+                                              dispatch_match);
+    }
     dispatch_match.dispatches.push_back(std::move(dispatch));
     return true;
 }
@@ -1440,7 +1459,7 @@ static bool match_batched_decode_mul_mat_dispatch(const DispatchMatchContext & c
 
 static bool match_mul_mat_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     CommonMulMatMatch match = common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel,
-                                                             false, true, false, true);
+                                                             false, true, false, true, true);
     if (!match.matched()) {
         return false;
     }
