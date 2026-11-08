@@ -17,6 +17,7 @@
 
 #include "ggml-impl.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -159,9 +160,12 @@ size_t pool_budget_after_refusal(size_t budget, size_t size) {
     if (budget == 0) {
         return 0;  // unknown device size: keep the unfettered behaviour
     }
-    const size_t next = budget > size ? budget - size : 0;
+    // Evidence-bounded, not deficit-estimated: the one thing this refusal proves is that *this size* did not fit, so the
+    // largest size still admissible is size-1. Subtracting the whole refused size would compound across retries - four
+    // failures of 5 GiB against a 20 GiB budget would wedge the process at 0 - while proving no more than size-1 does.
+    const size_t next = std::min(budget, size > 0 ? size - 1 : 0);
     GGML_LOG_WARN("%s: the allocator refused %.1f MiB that the guardrail had admitted (budget %.1f MiB); the budget is now "
-                  "%.1f MiB, so the next launch of this size is refused at admission instead of failing at model load "
+                  "%.1f MiB, so the next launch of that size is refused at admission instead of failing at model load "
                   "(engine #1502; a restart restores the estimate)\n",
                   __func__, size / (double) kMiB, budget / (double) kMiB, next / (double) kMiB);
     return next;

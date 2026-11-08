@@ -49,25 +49,25 @@ int main() {
     const size_t refused  = 15 * GiB + 359 * MiB;   // 15.35 GiB
     const size_t after    = pool_budget_after_refusal(budget, refused);
 
-    expect_eq("29.2 GiB budget after a refused 15.35 GiB", after, budget - refused);
+    expect_eq("29.2 GiB budget after a refused 15.35 GiB is size-1, not budget-size", after, refused - 1);
     expect_true("the refused size no longer fits the new budget", after < refused);
     expect_true("a 4 GiB request still fits the new budget", 4 * GiB <= after);
 
     // A budget of 0 means "device size unknown, unfettered" and must not become a limit.
     expect_eq("budget 0 stays 0 (unfettered)", pool_budget_after_refusal(0, 15 * GiB), 0);
 
-    // A refusal larger than the whole budget floors at zero rather than wrapping.
-    expect_eq("refusal of 40 GiB against a 29.2 GiB budget floors at 0", pool_budget_after_refusal(budget, 40 * GiB), 0);
-
-    // Exactly-equal refusal consumes the budget.
-    expect_eq("refusal equal to the budget leaves 0", pool_budget_after_refusal(8 * GiB, 8 * GiB), 0);
-
-    // Repeated refusals of the same size converge to 0 and never wrap.
+    // Repeated refusals of the *same* size must not compound: the evidence is one-bound, so the budget settles at size-1.
     size_t b = 20 * GiB;
     for (int i = 0; i < 8; i++) {
         b = pool_budget_after_refusal(b, 5 * GiB);
     }
-    expect_eq("four 5 GiB refusals against a 20 GiB budget reach 0 and stay", b, 0);
+    expect_eq("eight 5 GiB refusals against a 20 GiB budget settle at size-1, no compounding", b, 5 * GiB - 1);
+    expect_true("the repeatedly refused size still does not fit", b < 5 * GiB);
+
+    // A refusal larger than the budget cannot *raise* it, and a budget already below size-1 is left alone.
+    expect_eq("refusal of 40 GiB against a 29.2 GiB budget leaves the budget unchanged", pool_budget_after_refusal(budget, 40 * GiB), budget);
+    expect_eq("budget already below size-1 is not raised", pool_budget_after_refusal(2 * GiB, 8 * GiB), 2 * GiB);
+    expect_eq("refusal of 8 GiB against an 8 GiB budget leaves 8 GiB - 1", pool_budget_after_refusal(8 * GiB, 8 * GiB), 8 * GiB - 1);
 
     printf(failures == 0 ? "test-hrx-pool-refusal-budget: all requirements passed\n"
                          : "test-hrx-pool-refusal-budget: %d FAILED\n", failures);

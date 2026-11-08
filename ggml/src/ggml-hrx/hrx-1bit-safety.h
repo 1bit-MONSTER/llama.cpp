@@ -34,9 +34,11 @@ size_t pool_budget(size_t memory_total, size_t memory_free);
 //
 // The guardrail can only estimate what the pool will serve - ROCr exposes no "available" query, so pool_budget() comes from the
 // sysfs GTT counter. When the allocator then refuses a size the budget admitted, that refusal is the only information the process
-// ever gets about the provider's real ceiling, so spend it: shrink the budget by the refused size, floored at zero. The next launch
-// of that size is then refused at admission with both numbers, instead of failing again at model load. A budget of 0 means "device
-// size unknown, unfettered" and stays 0. Recovery requires a restart, which is stated in the log line.
+// ever gets about the provider's real ceiling, so spend it - but spend only what it proves: this size did not fit, so cap the
+// budget at size-1 (the largest size still admissible) instead of subtracting the whole refused size, which would compound across
+// retries and wedge a retrying process at zero. The next launch of that size is then refused at admission with both numbers,
+// instead of failing again at model load. A budget of 0 means "device size unknown, unfettered" and stays 0. Recovery requires a
+// restart, which is stated in the log line.
 size_t pool_budget_after_refusal(size_t budget, size_t size);
 
 // The reserve the ceiling keeps for the driver and for kernel/transient spikes, in bytes.
