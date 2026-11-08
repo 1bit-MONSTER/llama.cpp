@@ -22,6 +22,14 @@ if(HRX_SOURCE_DIR)
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
         -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        # engine#1461: an ExternalProject configures with a FRESH cache, so the C/CXX flags the parent was
+        # given do not arrive here by themselves - and these deps are where Loom's __FILE__ lives
+        # (libloomc.so.0 carried 7 build-machine paths into the shipped payload). The engine hands
+        # llama.cpp -ffile-prefix-map entries for its source tree, its add-on and its build tree
+        # (cmake/hrx.cmake's ONEBIT_HRX_PATH_MAP_FLAGS), and this passes them on. Empty when the parent
+        # sets none, so a plain llama.cpp build is unchanged.
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
         -DIREE_BUILD_TESTS=OFF
         -DIREE_BUILD_BENCHMARKS=OFF
         -DIREE_HAL_DRIVER_DEFAULTS=OFF
