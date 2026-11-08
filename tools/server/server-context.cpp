@@ -3667,7 +3667,12 @@ private:
                             SLT_ERR(slot, "failed to process image, res = %d\n", res);
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
                             slot.release();
-                            continue;
+                            // The slot is done, skip it entirely. release() moves the task into task_prev and
+                            // resets slot.task, so `continue` re-enters the chunk loop and its next
+                            // `slot.task->n_tokens()` dereferences null - the SIGSEGV in engine #1489 (a failed
+                            // CLIP encode killed llama-server 3 ms after this error line). Upstream master returns
+                            // at the equivalent handler.
+                            return;
                         }
 
                         slot.n_prompt_tokens_processed += n_tokens_out;
