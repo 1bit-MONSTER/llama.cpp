@@ -6082,6 +6082,7 @@ struct test_topk_moe : public test_case {
     const float scale_w;
     ggml_tensor * weights {};
     ggml_tensor * selected_experts {};
+    ggml_tensor * logits {};
 
     test_topk_moe(std::array<int64_t, 4> ne              = { 10, 5, 1, 1 },
                   int                    n_expert_used   = 1,
@@ -6112,6 +6113,7 @@ struct test_topk_moe : public test_case {
         const int n_tokens = ne[1];
 
         ggml_tensor * logits = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        this->logits         = logits;
         ggml_tensor * probs            =
             (gating_func == GATING_FUNC_SOFTMAX) ? ggml_soft_max(ctx, logits) :
             (gating_func == GATING_FUNC_SIGMOID) ? ggml_sigmoid(ctx, logits) :
@@ -6154,6 +6156,32 @@ struct test_topk_moe : public test_case {
 
         ggml_set_name(weights, "weights");
         return weights;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        // Base fill first, so every other tensor keeps the coverage it had.
+        test_case::initialize_tensors(ctx);
+        if (logits == nullptr) {
+            return;
+        }
+        // The ids comparison below asserts an *exact* index set, which with random logits can turn on a last bit: with 256
+        // experts over 6 routes the 6th and 7th values are within a few ULPs in ~0.1 % of cases (~33 % of full-suite runs),
+        // and the CPU and HRX paths compute those probabilities in different places, so the order - and the id - flips while
+        // the gathered weight moves by ~1e-7, inside this test's tolerance. That is the shape of the row that flaked at pin
+        // a3e8d42c9 (engine #1259). Space the logits instead: exactly representable values 2^-9 apart, shuffled per row, so
+        // adjacent probabilities differ by ~1e-3 and an id can only differ if a producer is genuinely wrong.
+        const int64_t n = logits->ne[0];
+        std::vector<float> data(ggml_nelements(logits));
+        std::vector<float> row(n);
+        for (int64_t i = 0; i < n; ++i) {
+            row[i] = (float) (i - n / 2) * (1.0f / 512.0f);
+        }
+        std::mt19937 rng(0x1259u + (unsigned) n);
+        for (int64_t r = 0; r < ggml_nrows(logits); ++r) {
+            std::shuffle(row.begin(), row.end(), rng);
+            std::copy(row.begin(), row.end(), data.begin() + r * n);
+        }
+        ggml_backend_tensor_set(logits, data.data(), 0, ggml_nbytes(logits));
     }
 
     // Verify two outputs
