@@ -279,6 +279,15 @@ inline bool common_is_supported_prefill_token_count(int64_t token_count) {
     return token_count > 1 && token_count <= 2048;
 }
 
+// One dispatch carries at most 2048 prefill tokens (the tile's range). A caller that splits the token dimension into chunks
+// can accept more than that, up to this ceiling: a vision graph contracts a whole image at once (a CLIP attention matmul is
+// 8464 tokens over 16 planes) and every operand layout is fine there - only the tile's row range is not.
+inline constexpr int64_t kCommonMaxChunkedTokens = int64_t{ 1 } << 16;
+
+inline bool common_is_supported_chunked_token_count(int64_t token_count) {
+    return token_count > 1 && token_count <= kCommonMaxChunkedTokens;
+}
+
 inline bool common_is_supported_decode_token_count(int64_t token_count) {
     return token_count == 1;
 }
@@ -475,7 +484,8 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
                                                          bool              decode,
                                                          bool              elementwise_k_tail = false,
                                                          bool              allow_batched = false,
-                                                         bool              allow_row_padded_activation = false) {
+                                                         bool              allow_row_padded_activation = false,
+                                                         bool              allow_token_chunks = false) {
     CommonMulMatMatch match;
     if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
         return match;
@@ -517,7 +527,8 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
     const int64_t output_size           = weight->ne[1];
     const int64_t token_count           = input->ne[1];
     const bool    token_count_supported = decode ? common_is_supported_decode_token_count(token_count) :
-                                                   common_is_supported_prefill_token_count(token_count);
+                                                   (allow_token_chunks ? common_is_supported_chunked_token_count(token_count) :
+                                                                         common_is_supported_prefill_token_count(token_count));
     if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
         !token_count_supported ||
         !(elementwise_k_tail ? common_is_supported_plain_dense_input_size(format, input_size) :

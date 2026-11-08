@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 #include "dispatch-mul-mat-common.h"
+#include "dispatch-token-chunks.h"
 #include "dispatch-mul-mat-iq3-xxs.h"
 #include "dispatch-mul-mat-tail.h"
 #include "ggml.h"
@@ -18,6 +19,12 @@
 
 namespace ggml::hrx {
 namespace {
+
+// The prefill tile's token range: `common_is_supported_prefill_token_count` caps a single dispatch at 2048 tokens, which
+// is a tile bound rather than a shape or layout limit. A vision graph contracts far more rows at once (a CLIP attention
+// matmul is 8464 image tokens x 16 planes), so those nodes fell to the CPU while every operand layout was fine. Chunk the
+// token dimension instead, exactly as ROPE and FLASH_ATTN do above their kernel ranges.
+static constexpr int64_t kMulMatPrefillMaxTokens = 2048;
 
 static constexpr KernelCatalogRef kMulMatF32F32WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_f32_f32_wmma");
@@ -1386,6 +1393,25 @@ static bool build_batched_mul_mat_dispatch(const DispatchMatchContext & context,
         dispatch.bindings.push_back({ match.input->id, input_offset, match.input->byte_count - input_offset });
         dispatch.bindings.push_back({ match.weight->id, weight_offset, match.weight->byte_count - weight_offset });
         dispatch.bindings.push_back({ match.output->id, output_offset, match.output->byte_count - output_offset });
+        if (!decode && match.token_count > kMulMatPrefillMaxTokens) {
+            // One chunked set per plane: the activation's and the output's rows in dim 1 are the token dimension, so
+            // each chunk rebinds them and carries the token capacity of its own row count.
+            const size_t input_row  = static_cast<size_t>(match.input->nb[1]);
+            const size_t output_row = static_cast<size_t>(match.output->nb[1]);
+            const size_t input_last  = static_cast<size_t>(match.input_size) * sizeof(float);
+            const size_t output_last = static_cast<size_t>(match.output_size) * sizeof(float);
+            if (!append_token_chunked_dispatches(dispatch, match.token_count, kMulMatPrefillMaxTokens,
+                                                 { { 0, input_row, input_last }, { 2, output_row, output_last } },
+                                                 "token_count",
+                                                 [&](Dispatch & part, int64_t count) {
+                                                     part.kernel.compile_parameters[token_capacity_key] =
+                                                         common_to_config_value(count);
+                                                 },
+                                                 dispatch_match)) {
+                return false;
+            }
+            continue;
+        }
         dispatch_match.dispatches.push_back(std::move(dispatch));
     }
 
@@ -1394,8 +1420,8 @@ static bool build_batched_mul_mat_dispatch(const DispatchMatchContext & context,
 }
 
 static bool match_batched_mul_mat_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    CommonMulMatMatch match =
-        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel, false, true, true);
+    CommonMulMatMatch match = common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatF32F32WmmaKernel,
+                                                              false, true, true, false, true);
     if (!match.matched()) {
         return false;
     }
