@@ -376,6 +376,11 @@ static const ggml_backend_buffer_i buffer_i = {
     nullptr,
 };
 
+// engine #1502 (#251) calls this from buffer_alloc, eight hundred lines above its definition, with no declaration in
+// scope - so the translation unit does not compile ("'device_free_total' was not declared in this scope"). One forward
+// declaration is enough; the definition and its callers are unchanged.
+static void device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes);
+
 static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_t size) {
     ggml::hrx::onebit::poison_selftest();  // no-op unless GGML_HRX_POISON_SELFTEST=1
     if (ggml::hrx::onebit::device_poisoned(__func__)) {
