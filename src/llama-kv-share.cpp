@@ -306,6 +306,7 @@ bool llama_kv_cache::share_import(const std::vector<llama_kv_shared_region_pod> 
         LLAMA_LOG_ERROR("%s: no shared regions to import\n", __func__);
         return false;
     }
+    const size_t first_region = next;
     for (size_t i = 0; i < ctxs_bufs.size(); ++i) {
         ggml_context * ctx = ctxs_bufs[i].first.get();
         ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(ctxs_bufs[i].second.get());
@@ -315,6 +316,9 @@ bool llama_kv_cache::share_import(const std::vector<llama_kv_shared_region_pod> 
         }
         ctxs_bufs[i].second.reset(buf); // frees the buffer this cache had
     }
+    // how many regions this cache consumed, for share_tensors: a walk that meets a different number of buffers means a
+    // region holds no K/V tensor of these layers and every ordinal after it would be wrong
+    n_share_regions = uint32_t(next - first_region);
     return true;
 }
 
@@ -348,6 +352,64 @@ bool llama_kv_share_from(llama_context * dst, llama_context * src) {
     }
     dst->kv_memory_rebound();
     return true;
+}
+
+// [1bit] target 1: the tensors a prefill provider writes, and where they are. A tensor's offset is taken from its own
+// buffer's base, which is the region it was mapped into (ggml_backend_dev_buffer_from_dmabuf returns a buffer over the
+// region window), and `region` is the ordinal of the first buffer the walk meets -- the same order share_place fills,
+// so it is the index into the region list the decoder sent.
+bool llama_kv_cache::share_tensors(std::vector<llama_kv_shared_tensor> & out) const {
+    std::vector<const void *> bases;
+    auto region_of = [&](const void * base) {
+        for (size_t i = 0; i < bases.size(); ++i) {
+            if (bases[i] == base) return uint32_t(i);
+        }
+        bases.push_back(base);
+        return uint32_t(bases.size() - 1);
+    };
+    for (const auto & L : layers) {
+        for (uint32_t is_v = 0; is_v < 2; ++is_v) {
+            ggml_tensor * t = is_v ? L.v : L.k;
+            if (t == nullptr || t->buffer == nullptr || t->data == nullptr) {
+                continue;
+            }
+            const char * base = (const char *) ggml_backend_buffer_get_base(t->buffer);
+            out.push_back({ L.il, is_v, region_of(base), uint64_t((const char *) t->data - base),
+                            uint64_t(ggml_nbytes(t)), uint64_t(t->ne[0]) });
+        }
+    }
+    // A refusal, not a shifted ordinal: if the walk met a different number of buffers than share_import mapped, some
+    // region holds no K/V tensor of these layers and every ordinal after it is wrong. Only checked when this cache
+    // actually imported (n_share_regions is set there).
+    if (n_share_regions != 0 && bases.size() != n_share_regions) {
+        LLAMA_LOG_ERROR("%s: %zu buffer(s) seen for %u imported region(s): a region holds no K/V tensor of these "
+                        "layers, so the region ordinals would be wrong -- refusing to report them\n", __func__,
+                        bases.size(), n_share_regions);
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+bool llama_memory_recurrent::share_tensors(std::vector<llama_kv_shared_tensor> &) const {
+    return true;   // the recurrent state is not K/V rows; a prefill provider does not write it
+}
+
+size_t llama_kv_share_tensor_map(llama_context * ctx, llama_kv_share_tensor * out, size_t n_out) {
+    std::vector<llama_kv_shared_tensor> tensors;
+    if (!share_each(ctx, ctx, [&](auto & d, const auto &) { return d.share_tensors(tensors); })) {
+        return 0;
+    }
+    const size_t n = std::min(n_out, tensors.size());
+    for (size_t i = 0; i < n; ++i) {
+        out[i].layer     = tensors[i].layer;
+        out[i].is_v      = tensors[i].is_v;
+        out[i].region    = tensors[i].region;
+        out[i].offset    = tensors[i].offset;
+        out[i].bytes     = tensors[i].bytes;
+        out[i].row_elems = tensors[i].row_elems;
+    }
+    return tensors.size();
 }
 
 bool llama_kv_cells_copy(llama_context * dst, const llama_context * src) {

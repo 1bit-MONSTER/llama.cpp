@@ -28,6 +28,7 @@ else()
     endif()
     add_subdirectory(tokenize)
     add_subdirectory(kvshare-prefill) # [1bit] target 1: reference provider for a shared KV region
+    add_subdirectory(kvshare-tensor-map) # [1bit] target 1: the tensor table a provider writes into (engine#753)
     add_subdirectory(parser)
     add_subdirectory(tts)
     add_subdirectory(mtmd)
