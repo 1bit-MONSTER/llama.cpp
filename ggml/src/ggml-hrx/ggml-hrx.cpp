@@ -411,8 +411,18 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         // The allocator refused what the budget admitted: that is the only information this process gets about what the pool can
         // actually serve (ROCr has no "available" query - engine #1502), so shrink the budget and say so. The request still fails
         // here; the point is that the *next* one fails at admission with both numbers.
-        type_context->device->memory_budget =
-            ggml::hrx::onebit::pool_budget_after_refusal(type_context->device->memory_budget, size);
+        size_t free_now = 0, total_now = 0;
+        device_free_total(type_context->device, free_now, total_now);
+        {
+            std::lock_guard<std::mutex> lock(type_context->device->memory_budget_mutex);
+            ggml::hrx::onebit::pool_budget_state_t state{
+                type_context->device->memory_budget, type_context->device->memory_budget_cap,
+                type_context->device->memory_budget_cap_free };
+            state = ggml::hrx::onebit::pool_budget_note_refusal(state, size, free_now);
+            type_context->device->memory_budget          = state.budget;
+            type_context->device->memory_budget_cap      = state.cap;
+            type_context->device->memory_budget_cap_free = state.cap_free;
+        }
         return nullptr;
     }
     uint8_t * base = reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
@@ -835,6 +845,18 @@ static void device_memory(ggml_backend_dev_t device, size_t * free, size_t * tot
     // Report what the device really has free, not memory_total: a scheduler that is told the whole 120 GiB is
     // available cannot refuse or degrade a launch that does not fit (engine #680).
     device_free_total(device_ctx, free_bytes, total_bytes);
+    if (device_ctx->memory_budget_cap != 0) {
+        // This is the one place the pool is already observed, so it is where a cap is refuted or confirmed (engine #1502 review):
+        // the whole rule lives in pool_budget_observe() so it can be tested without a device.
+        std::lock_guard<std::mutex> lock(device_ctx->memory_budget_mutex);
+        ggml::hrx::onebit::pool_budget_state_t state{
+            device_ctx->memory_budget, device_ctx->memory_budget_cap, device_ctx->memory_budget_cap_free };
+        state                       = ggml::hrx::onebit::pool_budget_observe(device_ctx->memory_total, free_bytes,
+                                                                           ggml::hrx::onebit::pool_allocated(), state);
+        device_ctx->memory_budget      = state.budget;
+        device_ctx->memory_budget_cap  = state.cap;
+        device_ctx->memory_budget_cap_free = state.cap_free;
+    }
     if (device_ctx->memory_budget != 0) {
         const size_t remaining = ggml::hrx::onebit::pool_remaining(device_ctx->memory_budget);
         free_bytes             = free_bytes < remaining ? free_bytes : remaining;

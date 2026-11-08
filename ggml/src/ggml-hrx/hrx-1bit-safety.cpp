@@ -17,6 +17,7 @@
 
 #include "ggml-impl.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -159,12 +160,50 @@ size_t pool_budget_after_refusal(size_t budget, size_t size) {
     if (budget == 0) {
         return 0;  // unknown device size: keep the unfettered behaviour
     }
-    const size_t next = budget > size ? budget - size : 0;
+    // Evidence-bounded, not deficit-estimated: the one thing this refusal proves is that *this size* did not fit, so the
+    // largest size still admissible is size-1. Subtracting the whole refused size would compound across retries - four
+    // failures of 5 GiB against a 20 GiB budget would wedge the process at 0 - while proving no more than size-1 does.
+    const size_t next = std::min(budget, size > 0 ? size - 1 : 0);
     GGML_LOG_WARN("%s: the allocator refused %.1f MiB that the guardrail had admitted (budget %.1f MiB); the budget is now "
-                  "%.1f MiB, so the next launch of this size is refused at admission instead of failing at model load "
-                  "(engine #1502; a restart restores the estimate)\n",
+                  "%.1f MiB, so the next launch of that size is refused at admission instead of failing at model load "
+                  "(engine #1502; a later observation of a larger free pool lifts it)\n",
                   __func__, size / (double) kMiB, budget / (double) kMiB, next / (double) kMiB);
     return next;
+}
+
+size_t pool_allocated() {
+    return g_pool_allocated.load();
+}
+
+pool_budget_state_t pool_budget_note_refusal(pool_budget_state_t state, size_t size, size_t free_now) {
+    state.budget   = pool_budget_after_refusal(state.budget, size);
+    state.cap      = state.budget;
+    state.cap_free = free_now;
+    return state;
+}
+
+pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state) {
+    if (state.cap == 0) {
+        return state;  // no cap in force: the registration-time budget stands
+    }
+    if (free_bytes > state.cap_free) {
+        // The pool has grown past the figure the refusal saw, so the cap's evidence no longer holds: a transient refusal must not
+        // become a permanent ceiling (engine #1502 review). Recompute from the current figures and drop the cap.
+        const size_t uncapped = pool_budget(memory_total, free_bytes + allocated);
+        GGML_LOG_INFO("%s: the pool grew from %.1f MiB to %.1f MiB free since the last refusal; lifting the %.1f MiB cap to "
+                      "%.1f MiB\n",
+                      __func__, state.cap_free / (double) kMiB, free_bytes / (double) kMiB, state.cap / (double) kMiB,
+                      uncapped / (double) kMiB);
+        state.budget   = uncapped;
+        state.cap      = 0;
+        state.cap_free = 0;
+        return state;
+    }
+    // The pool is no larger than it was at the refusal: keep the cap AND its evidence, and bound only this call's budget by it.
+    // Clearing it here would freeze the low reading for the rest of the process (engine #1502 review).
+    const size_t capped = pool_budget(memory_total, free_bytes + allocated);
+    state.budget = state.cap < capped ? state.cap : capped;
+    return state;
 }
 
 bool pool_reserve(size_t budget, size_t size, const char * what) {

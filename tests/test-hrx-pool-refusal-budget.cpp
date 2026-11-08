@@ -49,25 +49,67 @@ int main() {
     const size_t refused  = 15 * GiB + 359 * MiB;   // 15.35 GiB
     const size_t after    = pool_budget_after_refusal(budget, refused);
 
-    expect_eq("29.2 GiB budget after a refused 15.35 GiB", after, budget - refused);
+    expect_eq("29.2 GiB budget after a refused 15.35 GiB is size-1, not budget-size", after, refused - 1);
     expect_true("the refused size no longer fits the new budget", after < refused);
     expect_true("a 4 GiB request still fits the new budget", 4 * GiB <= after);
 
     // A budget of 0 means "device size unknown, unfettered" and must not become a limit.
     expect_eq("budget 0 stays 0 (unfettered)", pool_budget_after_refusal(0, 15 * GiB), 0);
 
-    // A refusal larger than the whole budget floors at zero rather than wrapping.
-    expect_eq("refusal of 40 GiB against a 29.2 GiB budget floors at 0", pool_budget_after_refusal(budget, 40 * GiB), 0);
-
-    // Exactly-equal refusal consumes the budget.
-    expect_eq("refusal equal to the budget leaves 0", pool_budget_after_refusal(8 * GiB, 8 * GiB), 0);
-
-    // Repeated refusals of the same size converge to 0 and never wrap.
+    // Repeated refusals of the *same* size must not compound: the evidence is one-bound, so the budget settles at size-1.
     size_t b = 20 * GiB;
     for (int i = 0; i < 8; i++) {
         b = pool_budget_after_refusal(b, 5 * GiB);
     }
-    expect_eq("four 5 GiB refusals against a 20 GiB budget reach 0 and stay", b, 0);
+    expect_eq("eight 5 GiB refusals against a 20 GiB budget settle at size-1, no compounding", b, 5 * GiB - 1);
+    expect_true("the repeatedly refused size still does not fit", b < 5 * GiB);
+
+    // A refusal larger than the budget cannot *raise* it, and a budget already below size-1 is left alone.
+    expect_eq("refusal of 40 GiB against a 29.2 GiB budget leaves the budget unchanged", pool_budget_after_refusal(budget, 40 * GiB), budget);
+    expect_eq("budget already below size-1 is not raised", pool_budget_after_refusal(2 * GiB, 8 * GiB), 2 * GiB);
+    expect_eq("refusal of 8 GiB against an 8 GiB budget leaves 8 GiB - 1", pool_budget_after_refusal(8 * GiB, 8 * GiB), 8 * GiB - 1);
+
+    // The arms the review of #251 asked for: drive the state machine the device actually runs (note_refusal -> observe), not only the
+    // pure cap. The numbers are the reviewer's own, and the first one is the doubling they measured.
+    using ggml::hrx::onebit::pool_budget_observe;
+    using ggml::hrx::onebit::pool_budget_note_refusal;
+    using ggml::hrx::onebit::pool_budget_state_t;
+
+    const size_t total   = 120 * GiB;
+    const size_t our_mem = 15 * GiB;        // this process's own model: in the counters AND in the ledger
+
+    // Registration: nothing held by us yet, another process holds 20 GiB.
+    pool_budget_state_t st;
+    st.budget = 84 * GiB;                   // 104 ceiling - 20 held by the other process
+
+    // A refusal while we hold 15 GiB ourselves: cap at size-1, and record the free figure the counters showed.
+    const size_t free_at_refusal = total - 20 * GiB - our_mem;      // 85 GiB
+    st = pool_budget_note_refusal(st, 80 * GiB, free_at_refusal);
+    expect_eq("cap after refusing 80 GiB is size-1", st.cap, 80 * GiB - 1);
+
+    // The other process now holds 1 GiB LESS than at the refusal, so the cap is lifted.
+    st = pool_budget_observe(total, free_at_refusal + GiB, our_mem, st);
+    expect_eq("lifting the cap restores the registration budget (own memory counted once)", st.budget, 85 * GiB);
+    expect_eq("the cap is cleared when it is lifted", st.cap, 0);
+
+    // And the defect the review named: a pool that SHRINKS must not clear the cap, or the low reading freezes forever.
+    pool_budget_state_t st2;
+    st2.budget = 30 * GiB;
+    st2 = pool_budget_note_refusal(st2, 40 * GiB, total - 45 * GiB);          // refusal seen with 75 GiB free
+    st2 = pool_budget_observe(total, total - 90 * GiB, our_mem, st2);         // other process grew by 45 GiB
+    expect_eq("a shrinking pool keeps the cap (it is not cleared)", st2.cap, 30 * GiB);
+    expect_eq("a shrinking pool keeps the cap's evidence", st2.cap_free, total - 45 * GiB);
+    expect_true("a shrinking pool never ends up above the cap", st2.budget <= st2.cap);
+
+    // The reviewer's 4.7 GiB sequence, with the typo they caught fixed: 13.6 GiB, not 136 MiB.
+    const size_t b_small = 13 * GiB + 614 * MiB;                              // 13.6 GiB
+    pool_budget_state_t st3;
+    st3.budget = b_small;
+    st3 = pool_budget_note_refusal(st3, 4 * GiB + 700 * MiB, 20 * GiB);
+    expect_true("a 4.7 GiB model refused at a 13.6 GiB budget is capped below its size", st3.cap < 4 * GiB + 700 * MiB);
+    st3 = pool_budget_observe(total, 60 * GiB, 0, st3);                       // the pool frees
+    expect_true("when the pool frees the same model is admissible again", st3.budget > 4 * GiB + 700 * MiB);
+    expect_eq("no cap in force: an observation changes nothing", pool_budget_observe(total, 10 * GiB, 0, pool_budget_state_t{20 * GiB, 0, 0}).budget, 20 * GiB);
 
     printf(failures == 0 ? "test-hrx-pool-refusal-budget: all requirements passed\n"
                          : "test-hrx-pool-refusal-budget: %d FAILED\n", failures);
