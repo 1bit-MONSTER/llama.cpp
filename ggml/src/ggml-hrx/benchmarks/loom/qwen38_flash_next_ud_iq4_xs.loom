@@ -83,6 +83,58 @@ check.scenario public @qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_case {
   check.return
 }
 
+// Differential correctness case for the table decode: same tables and geometry as the case above, but the two
+// kernels run as target and oracle and their outputs are compared bitwise.
+check.scenario public @qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_diff_case {
+  check.trial[1](%trial: index, %entropy: check.entropy) {
+    %token_count = check.literal value(2048) : index
+    %route_count = check.literal value(10) : index
+    %expert_count = check.literal value(512) : index
+    %input = check.generate.fill value(0) : tensor<20971520xi8>
+    %expert_table = check.generate.fill value(0) : tensor<4196352xi8>
+    %partition_table = check.generate.fill value(0) : tensor<4612xi8>
+    %gate_weight = check.generate.fill value(0) : tensor<321126400xi8>
+    %up_weight = check.generate.fill value(0) : tensor<321126400xi8>
+    %output = check.generate.fill value(0) : tensor<52428800xi8>
+    check.generate<@flashnext_routed_tables>(%token_count, %route_count, %expert_count, %partition_table, %expert_table) : (index, index, index, tensor<4612xi8>, tensor<4196352xi8>) -> ()
+    // element-wise known-answer test (engine #572): the shipped kernel is the target, the IQ3_XXS table
+    // variant the oracle, over identical buffers; the outputs must agree bitwise.
+    check.compare<@ggml_mul_mat_id_swiglu_f32_f32_wmma, @ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table>[%token_count](%token_count, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output) : (index, tensor<20971520xi8>, tensor<4196352xi8>, tensor<4612xi8>, tensor<321126400xi8>, tensor<321126400xi8>, tensor<52428800xi8>) -> () {
+      check.expect.bitwise actual(%output) expected(%output) : tensor<52428800xi8>
+    }
+  }
+  check.return
+}
+
+// Same as the diff case above, but the expert output width is 648 instead of 640: 648 % 64 != 0 and 648 % 16 != 0,
+// so this case can actually FAIL if a tiling/epilogue assumption exists. The 640 case cannot - it is a multiple of
+// both. Added 2026-11-07 after the N%16 prefill-GEMM defect (FACTS-prefill-n16.md) showed my fixture had no width
+// that could express that class of bug.
+check.scenario public @qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_diff648_case {
+  check.trial[1](%trial: index, %entropy: check.entropy) {
+    %token_count = check.literal value(2048) : index
+    %route_count = check.literal value(10) : index
+    %expert_count = check.literal value(512) : index
+    %input = check.generate.fill value(0) : tensor<20971520xi8>
+    %expert_table = check.generate.fill value(0) : tensor<4196352xi8>
+    %partition_table = check.generate.fill value(0) : tensor<4612xi8>
+    %gate_weight = check.generate.fill value(0) : tensor<325140480xi8>
+    %up_weight = check.generate.fill value(0) : tensor<325140480xi8>
+    %output = check.generate.fill value(0) : tensor<53084160xi8>
+    check.generate<@flashnext_routed_tables>(%token_count, %route_count, %expert_count, %partition_table, %expert_table) : (index, index, index, tensor<4612xi8>, tensor<4196352xi8>) -> ()
+    // element-wise known-answer test (engine #572): the shipped kernel is the target, the IQ3_XXS table
+    // variant the oracle, over identical buffers; the outputs must agree bitwise.
+    check.compare<@ggml_mul_mat_id_swiglu_f32_f32_wmma, @ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table>[%token_count](%token_count, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output) : (index, tensor<20971520xi8>, tensor<4196352xi8>, tensor<4612xi8>, tensor<325140480xi8>, tensor<325140480xi8>, tensor<53084160xi8>) -> () {
+      check.expect.bitwise actual(%output) expected(%output) : tensor<53084160xi8>
+    }
+  }
+  check.return
+}
+
+check.benchmark<@qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_diff648_case> @qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_diff648
+
+check.benchmark<@qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_diff_case> @qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_diff
+
 check.benchmark<@qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs_case> @qwen38_flash_next_pp2048_gate_up_swiglu_iq3_xxs
 
 check.scenario public @qwen38_flash_next_pp2048_gate_up_swiglu_iq4_xs_case {
