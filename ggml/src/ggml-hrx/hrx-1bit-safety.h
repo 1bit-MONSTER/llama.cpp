@@ -30,6 +30,15 @@ namespace ggml::hrx::onebit {
 // faulting the device: #680 is a gfxhub page fault plus a MODE2 reset at GTT 106.5 of 120 GiB.
 size_t pool_budget(size_t memory_total, size_t memory_free);
 
+// The budget after an allocation the allocator refused, given the size it refused (engine #1502).
+//
+// The guardrail can only estimate what the pool will serve - ROCr exposes no "available" query, so pool_budget() comes from the
+// sysfs GTT counter. When the allocator then refuses a size the budget admitted, that refusal is the only information the process
+// ever gets about the provider's real ceiling, so spend it: shrink the budget by the refused size, floored at zero. The next launch
+// of that size is then refused at admission with both numbers, instead of failing again at model load. A budget of 0 means "device
+// size unknown, unfettered" and stays 0. Recovery requires a restart, which is stated in the log line.
+size_t pool_budget_after_refusal(size_t budget, size_t size);
+
 // The reserve the ceiling keeps for the driver and for kernel/transient spikes, in bytes.
 size_t pool_reserve_bytes();
 

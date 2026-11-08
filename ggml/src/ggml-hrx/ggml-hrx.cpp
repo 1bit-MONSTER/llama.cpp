@@ -408,6 +408,11 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
     if (size > 0 && !HRX_CHECK(hrx_allocator_allocate_buffer(hrx_device_allocator(type_context->device->device), params,
                                                              size, &allocation))) {
         ggml::hrx::onebit::pool_release(size);
+        // The allocator refused what the budget admitted: that is the only information this process gets about what the pool can
+        // actually serve (ROCr has no "available" query - engine #1502), so shrink the budget and say so. The request still fails
+        // here; the point is that the *next* one fails at admission with both numbers.
+        type_context->device->memory_budget =
+            ggml::hrx::onebit::pool_budget_after_refusal(type_context->device->memory_budget, size);
         return nullptr;
     }
     uint8_t * base = reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);

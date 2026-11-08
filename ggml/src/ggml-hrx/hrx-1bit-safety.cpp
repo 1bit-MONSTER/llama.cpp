@@ -155,6 +155,18 @@ static size_t pool_live_margin_bytes() {
     return margin;
 }
 
+size_t pool_budget_after_refusal(size_t budget, size_t size) {
+    if (budget == 0) {
+        return 0;  // unknown device size: keep the unfettered behaviour
+    }
+    const size_t next = budget > size ? budget - size : 0;
+    GGML_LOG_WARN("%s: the allocator refused %.1f MiB that the guardrail had admitted (budget %.1f MiB); the budget is now "
+                  "%.1f MiB, so the next launch of this size is refused at admission instead of failing at model load "
+                  "(engine #1502; a restart restores the estimate)\n",
+                  __func__, size / (double) kMiB, budget / (double) kMiB, next / (double) kMiB);
+    return next;
+}
+
 bool pool_reserve(size_t budget, size_t size, const char * what) {
     const size_t used = g_pool_allocated.load();
     if (pool_live_check_enabled()) {
