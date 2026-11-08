@@ -7466,6 +7466,24 @@ struct test_top_k_set_rows : public test_case {
             if (ggml_is_view_op(t->op) || t->type == GGML_TYPE_I32 || t->type == GGML_TYPE_I64) {
                 continue;   // the index list is produced by top_k
             }
+            // Space the scores so the selected index set is unique (the same remedy the TOPK_MOE row uses, #238): with a
+            // random fill the row can contain duplicate scores, and where it does the top-k index set is genuinely
+            // ambiguous while this comparison is exact.
+            if (strcmp(t->name, "scores") == 0) {
+                const int64_t n = t->ne[0];
+                std::vector<float> data(ggml_nelements(t));
+                std::vector<float> row(n);
+                for (int64_t i = 0; i < n; ++i) {
+                    row[i] = (float) (i - n / 2) * (1.0f / 512.0f);
+                }
+                std::mt19937 rng(0x1346u + (unsigned) n);
+                for (int64_t r = 0; r < ggml_nrows(t); ++r) {
+                    std::shuffle(row.begin(), row.end(), rng);
+                    std::copy(row.begin(), row.end(), data.begin() + r * n);
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(float));
+                continue;
+            }
             // The scattered rows are all zeros, as in the model (`ggml_fill(zeros, 0.0f)`). They have to be constant: the
             // top-k index order is unspecified, so random row values would be permuted differently by the two backends and
             // the comparison would measure that permutation rather than the scatter.
