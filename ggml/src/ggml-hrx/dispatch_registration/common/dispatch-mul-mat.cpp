@@ -1,5 +1,7 @@
 #include "dispatch-mul-mat.h"
 
+#include "ggml-impl.h"
+
 #include "dispatch-copy.h"
 
 #include <cstdlib>
@@ -74,6 +76,26 @@ static constexpr KernelCatalogRef kMulMatQ6KF32WmmaPrefillWave32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_q6_k_f32_wmma_prefill_wave32");
 static constexpr KernelCatalogRef kMulMatQ6KF16WmmaPrefillWave32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_q6_k_f16_wmma_prefill_wave32");
+// engine #856: the same f16 prefill kernel reading the REPACKED int8 tiles the decode consumer already uses, so a
+// q6_k weight needs ONE resident copy instead of one per layout. Opt-in (GGML_HRX_Q6K_PACKED_PREFILL=1): the stored
+// path stays the default until PPL and tok/s are measured against it.
+static constexpr KernelCatalogRef kMulMatQ6KF16WmmaPrefillFromPackedKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_q6_k_f16_wmma_prefill_from_packed");
+static bool q6k_packed_prefill_enabled() {
+    // Says which path it took, once. Without this the knob is invisible: GGML_HRX_LOG_DISPATCH prints registration names, and
+    // this selection swaps the kernel ref *inside* one registration, so a dispatch histogram cannot tell the two apart - a run
+    // with the knob on looks identical to one with it off (measured 2026-11-08, which is why this line exists).
+    static const bool enabled = [] {
+        const char * env = std::getenv("GGML_HRX_Q6K_PACKED_PREFILL");
+        const bool   on  = env != nullptr && env[0] == '1';
+        // ERROR, not INFO: the CLI's log sink drops WARN and below (the same reason #1316's gate logs at ERROR), and an
+        // invisible selection is how the previous attempt at this validation came back "inconclusive".
+        GGML_LOG_ERROR("%s: engine #856 q6_k prefill reads the %s layout (GGML_HRX_Q6K_PACKED_PREFILL=%s)\n", __func__,
+                      on ? "REPACKED" : "stored", on ? "1" : "unset");
+        return on;
+    }();
+    return enabled;
+}
 static constexpr KernelCatalogRef kSelectSymmetricI4K32GroupsKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_select_symmetric_i4_k32_groups");
 static constexpr KernelCatalogRef kMulMatQ6KSymmetricI2ScanToken1Kernel =
@@ -675,7 +697,9 @@ static bool match_q6_k_prefill_wave32_dispatch(const DispatchMatchContext & cont
         return false;
     }
     return build_q6_k_prefill_wave32_dispatch(match, activation.value, activation.length,
-                                              kMulMatQ6KF16WmmaPrefillWave32Kernel, context.root_index,
+                                              q6k_packed_prefill_enabled() ? kMulMatQ6KF16WmmaPrefillFromPackedKernel
+                                                                           : kMulMatQ6KF16WmmaPrefillWave32Kernel,
+                                              context.root_index,
                                               dispatch_match);
 }
 
