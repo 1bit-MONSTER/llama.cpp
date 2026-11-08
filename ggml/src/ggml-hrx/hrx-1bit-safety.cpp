@@ -18,6 +18,8 @@
 #include "ggml-impl.h"
 
 #include <atomic>
+#include <chrono>
+#include <mutex>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -96,8 +98,82 @@ size_t pool_budget(size_t memory_total, size_t memory_free) {
     return ceiling > in_use ? ceiling - in_use : 0;
 }
 
+// engine #1417: the budget above is a snapshot taken at device open, and the ledger is per-process, so another process
+// growing its model after we opened is invisible to it - the check passes and the allocation reaches a device that is at its
+// ceiling. GGML_HRX_POOL_LIVE_CHECK=1 adds a live consult of the driver's own counters to the reservation, so the promise
+// "refused here rather than faulting the device" holds under concurrency too.
+//
+// Off by default, deliberately: enabling it makes admission depend on what other processes are doing, so a launch that works
+// on an idle box can refuse on a busy one. That trade is the operator's to take; this code only makes it available.
+// GGML_HRX_POOL_LIVE_MARGIN_MB leaves headroom for concurrent growth (default 0 - refuse only when the box truly has no room).
+static bool pool_live_check_enabled() {
+    static const bool enabled = [] {
+        const char * env = std::getenv("GGML_HRX_POOL_LIVE_CHECK");
+        return env != nullptr && env[0] != '\0' && std::atoi(env) != 0;
+    }();
+    return enabled;
+}
+
+// Two sysfs reads per allocation is fine for a model load and wasteful in a long run, so the live reading is cached for a
+// short window: the guardrail only has to be right about the box, not to the millisecond, and a stale-by-50 ms figure can only
+// under-refuse by that window's worth of growth.
+static bool pool_live_counters(size_t & total, size_t & used) {
+    static std::mutex      mutex;
+    static size_t          cached_total = 0;
+    static size_t          cached_used  = 0;
+    static std::chrono::steady_clock::time_point cached_at{};
+    static bool            valid        = false;
+
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto                  now = std::chrono::steady_clock::now();
+    if (!valid || now - cached_at >= std::chrono::milliseconds(50)) {
+        size_t t = 0;
+        size_t u = 0;
+        if (!gtt_counters(t, u)) {
+            valid = false;
+            return false;
+        }
+        cached_total = t;
+        cached_used  = u;
+        cached_at    = now;
+        valid        = true;
+    }
+    total = cached_total;
+    used  = cached_used;
+    return true;
+}
+
+static size_t pool_live_margin_bytes() {
+    static const size_t margin = [] {
+        const char * env = std::getenv("GGML_HRX_POOL_LIVE_MARGIN_MB");
+        if (env == nullptr || env[0] == '\0') {
+            return static_cast<size_t>(0);
+        }
+        const long long mb = std::atoll(env);
+        return mb > 0 ? static_cast<size_t>(mb) * 1024u * 1024u : static_cast<size_t>(0);
+    }();
+    return margin;
+}
+
 bool pool_reserve(size_t budget, size_t size, const char * what) {
     const size_t used = g_pool_allocated.load();
+    if (pool_live_check_enabled()) {
+        size_t total = 0;
+        size_t in_use = 0;
+        if (pool_live_counters(total, in_use)) {
+            const size_t live_free = in_use >= total ? 0 : total - in_use;
+            const size_t margin    = pool_live_margin_bytes();
+            const size_t wanted    = size + (margin > SIZE_MAX - size ? SIZE_MAX - size : margin);
+            if (wanted > live_free) {
+                GGML_LOG_ERROR("%s: HRX pool limit: %s of %.1f MiB does not fit the live device budget "
+                               "(%.1f MiB free - %.1f MiB margin of %.1f MiB); unset GGML_HRX_POOL_LIVE_CHECK to use the "
+                               "open-time snapshot instead (engine #1417)\n",
+                               __func__, what, size / (double) kMiB, live_free / (double) kMiB, margin / (double) kMiB,
+                               total / (double) kMiB);
+                return false;
+            }
+        }
+    }
     if (budget == 0) {
         return true;  // unknown device size: keep the unfettered behaviour
     }
