@@ -122,6 +122,11 @@ public:
     // [1bit] zero-copy KV sharing (llama-kv-share.cpp)
     bool share_from(const llama_kv_cache & src);
     bool share_import(const std::vector<llama_kv_shared_region_pod> & regions, size_t & next);
+
+    // [1bit] how many regions share_import mapped: share_tensors uses it to refuse a walk that met a different number of
+    // buffers than were imported (a region holding no K/V tensor of the walked layers would otherwise shift every later
+    // ordinal by one, and a provider would write into the wrong region with nothing in the message)
+    uint32_t n_share_regions = 0;
     bool cells_copy_from(const llama_kv_cache & src);
 
     // [1bit] target 1: this cache owns the KV region and an outside prefill provider has already written the

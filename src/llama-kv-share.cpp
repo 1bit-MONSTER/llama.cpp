@@ -306,6 +306,7 @@ bool llama_kv_cache::share_import(const std::vector<llama_kv_shared_region_pod> 
         LLAMA_LOG_ERROR("%s: no shared regions to import\n", __func__);
         return false;
     }
+    const size_t first_region = next;
     for (size_t i = 0; i < ctxs_bufs.size(); ++i) {
         ggml_context * ctx = ctxs_bufs[i].first.get();
         ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(ctxs_bufs[i].second.get());
@@ -315,6 +316,9 @@ bool llama_kv_cache::share_import(const std::vector<llama_kv_shared_region_pod> 
         }
         ctxs_bufs[i].second.reset(buf); // frees the buffer this cache had
     }
+    // how many regions this cache consumed, for share_tensors: a walk that meets a different number of buffers means a
+    // region holds no K/V tensor of these layers and every ordinal after it would be wrong
+    n_share_regions = uint32_t(next - first_region);
     return true;
 }
 
@@ -373,6 +377,16 @@ bool llama_kv_cache::share_tensors(std::vector<llama_kv_shared_tensor> & out) co
             out.push_back({ L.il, is_v, region_of(base), uint64_t((const char *) t->data - base),
                             uint64_t(ggml_nbytes(t)), uint64_t(t->ne[0]) });
         }
+    }
+    // A refusal, not a shifted ordinal: if the walk met a different number of buffers than share_import mapped, some
+    // region holds no K/V tensor of these layers and every ordinal after it is wrong. Only checked when this cache
+    // actually imported (n_share_regions is set there).
+    if (n_share_regions != 0 && bases.size() != n_share_regions) {
+        LLAMA_LOG_ERROR("%s: %zu buffer(s) seen for %u imported region(s): a region holds no K/V tensor of these "
+                        "layers, so the region ordinals would be wrong -- refusing to report them\n", __func__,
+                        bases.size(), n_share_regions);
+        out.clear();
+        return false;
     }
     return true;
 }
