@@ -931,6 +931,10 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
         context->device = device_ctx;
         context->stream = stream;
         context->name   = device_ctx->name;
+        // engine #1711: the transient arena is pool memory, so it is charged against the same budget the buffer type
+        // allocator charges (one ledger, `hrx-1bit-safety.h`). 0 keeps the pre-#1711 behaviour: an unknown device size
+        // means nothing to check against, which is the convention `pool_reserve` already uses.
+        context->transient_arena.set_pool_budget(device_ctx->memory_budget);
     }
     auto * backend = context != nullptr ? new (std::nothrow)
                                               ggml_backend{ ggml_backend_hrx_guid(), backend_i, device, context } :

@@ -46,6 +46,15 @@ class TransientArena {
     AllocationLease acquire_allocation_lease();
     void            clear();
 
+    // engine #1711: the arena's buffer is pool memory like any other, so it is charged against the same ledger the
+    // backend's buffer type allocator uses (`pool_reserve`/`pool_release`, hrx-1bit-safety.h). Before this, only ggml
+    // tensor buffers were charged: a launch whose scratch outgrew the pool failed inside libhrx AFTER admission said it
+    // fit, which is engine #1417's shape -- the guardrail promised "a launch that needs more is refused here" and the
+    // one allocation a large case actually grows into was invisible to it.
+    // 0 means "the device size is unknown", the same convention `pool_reserve` uses: charge nothing, keep the old
+    // behaviour, and let the allocator decide.
+    void set_pool_budget(size_t budget);
+
     TransientArenaAllocationRef current_allocation() const;
 
     size_t capacity() const;
@@ -58,6 +67,7 @@ class TransientArena {
     TransientArenaAllocationRef current_allocation_locked() const;
 
     mutable std::mutex mutex_;
+    size_t             pool_budget_         = 0;   // 0 = unknown device size: uncharged, as pool_reserve does
     hrx_buffer_t       buffer_              = nullptr;
     std::vector<hrx_buffer_t> diagnostic_retired_buffers_;
     size_t             allocation_capacity_ = 0;

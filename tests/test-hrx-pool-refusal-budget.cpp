@@ -182,6 +182,38 @@ int main() {
                 !pool_live_fits(1 * MiB, gtt, 0, SIZE_MAX));
     expect_true("a zero-size request with room passes", pool_live_fits(0, gtt, gtt - 1 * GiB, margin_256));
 
+
+    // engine #1711: the transient arena is charged against this same ledger, and the sequence it uses must leave the
+    // ledger exactly where it started -- after a grow, after a refused grow, and after a clear. This is the accounting
+    // the change adds, tested without a device because the ledger is the whole of it.
+    {
+        using namespace ggml::hrx::onebit;
+        const size_t budget = 4 * GiB;
+        const size_t before = pool_allocated();
+        // grow 64 MiB -> 256 MiB the way the arena does it: release the old charge, then reserve the new one
+        const size_t first = 64 * MiB, second = 256 * MiB;
+        expect_true("arena: the first grow is admitted", pool_reserve(budget, first, "the transient arena"));
+        expect_true("arena: the ledger holds the first size", pool_allocated() >= before + first);
+        pool_release(first);                                        // the arena releases the old buffer first
+        expect_true("arena: releasing the old charge returns the ledger", pool_allocated() == before);
+        expect_true("arena: the grow to 4x is admitted", pool_reserve(budget, second, "the transient arena"));
+        expect_true("arena: the ledger holds the NEW size, not the sum", pool_allocated() == before + second);
+        pool_release(second);                                       // clear()
+        expect_true("arena: clear() returns the ledger to where it started", pool_allocated() == before);
+
+        // a grow that does not fit is refused, and the arena's "nothing was allocated: give the charge back" arm leaves
+        // no charge behind
+        const size_t huge = budget + 1 * MiB;
+        expect_true("arena: a scratch larger than the whole budget is refused", !pool_reserve(budget, huge, "the transient arena"));
+        pool_release(huge);                                         // the arm the fix has: the charge is given back
+        expect_true("arena: a refused grow leaves the ledger untouched", pool_allocated() == before);
+
+        // and with an unknown device size (0) nothing is charged at all, which is the pre-#1711 behaviour
+        expect_true("arena: budget 0 admits everything", pool_reserve(0, huge, "the transient arena"));
+        pool_release(huge);
+        expect_true("arena: and charge nothing", pool_allocated() == before);
+    }
+
     printf(failures == 0 ? "test-hrx-pool-refusal-budget: all requirements passed\n"
                          : "test-hrx-pool-refusal-budget: %d FAILED\n", failures);
     return failures == 0 ? 0 : 1;

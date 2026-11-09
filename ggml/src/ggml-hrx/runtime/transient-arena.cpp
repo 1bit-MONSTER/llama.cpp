@@ -1,5 +1,6 @@
 #include "transient-arena.h"
 
+#include "hrx-1bit-safety.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 
@@ -34,11 +35,22 @@ TransientArena::~TransientArena() {
     clear();
 }
 
+void TransientArena::set_pool_budget(size_t budget) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pool_budget_ = budget;
+}
+
 void TransientArena::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (buffer_ != nullptr) {
         hrx_buffer_release(buffer_);
         buffer_ = nullptr;
+        // engine #1711: the arena held this much of the pool, so clearing it gives the pool those bytes back. A
+        // diagnostic run keeps retired buffers alive in `diagnostic_retired_buffers_` and those stay charged, which is
+        // exactly the pressure that mode exists to reproduce.
+        if (pool_budget_ != 0 && allocation_capacity_ != 0) {
+            ggml::hrx::onebit::pool_release(allocation_capacity_);
+        }
     }
     for (hrx_buffer_t buffer : diagnostic_retired_buffers_) {
         hrx_buffer_release(buffer);
@@ -88,6 +100,12 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
             return status;
         }
         hrx_buffer_release(buffer_);
+        // engine #1711: release the old charge BEFORE reserving the new one, so the ledger holds at most one arena per
+        // process and a grow from A to B is charged as B, not A+B. This is why the fix is not "charge the delta": the
+        // old buffer is released first (its bytes are gone either way), so the honest sequence is release-then-reserve.
+        if (pool_budget_ != 0 && allocation_capacity_ != 0) {
+            ggml::hrx::onebit::pool_release(allocation_capacity_);
+        }
         }
         buffer_              = nullptr;
         allocation_capacity_ = 0;
@@ -100,10 +118,22 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         HRX_BUFFER_USAGE_DEFAULT,
         0,
     };
+    // engine #1711: admission. A launch whose scratch does not fit the pool is refused HERE, with both numbers, instead of
+    // reaching the runtime allocator and failing after the ceiling said it fit (engine #1417's shape).
+    if (pool_budget_ != 0 && !ggml::hrx::onebit::pool_reserve(pool_budget_, required_size, "the transient arena")) {
+        status.log("the transient arena needs %.1f MiB and the pool budget is %.1f MiB with %.1f MiB already charged; "
+                   "refusing this launch at admission rather than letting the runtime allocator fail (engine #1711)",
+                   required_size / (double) (1u << 20), pool_budget_ / (double) (1u << 20),
+                   ggml::hrx::onebit::pool_allocated() / (double) (1u << 20));
+        return status;
+    }
     hrx_buffer_t allocation = nullptr;
     if (ErrorResult error = take_status(
             hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, required_size, &allocation))) {
         status.log("allocate transient arena: %s", error->c_str());
+        if (pool_budget_ != 0) {
+            ggml::hrx::onebit::pool_release(required_size);   // nothing was allocated: give the charge back
+        }
         return status;
     }
 
