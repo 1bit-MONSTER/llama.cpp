@@ -1583,6 +1583,10 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         size_t device_total           = device_ctx->memory_total;
         device_free_total(device_ctx.get(), device_free, device_total);
         device_ctx->memory_budget = ggml::hrx::onebit::pool_budget(device_ctx->memory_total, device_free);
+        // engine#1711: the per-launch scratch is charged against the same budget as the tensor buffers. Without this the
+        // guardrail could only refuse a launch whose *tensors* did not fit, while the arena a large case actually grows
+        // into allocated uncharged.
+        device_ctx->transient_arena.set_budget(&device_ctx->memory_budget);
         if (device_ctx->memory_budget == 0 && device_ctx->memory_total != 0) {
             // Nothing fits under the ceiling: refuse the device here, loudly, instead of planning a launch that can
             // reach the fault line (#680). Report only, do not try to be clever about it.

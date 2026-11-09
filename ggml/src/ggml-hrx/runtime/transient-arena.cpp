@@ -1,5 +1,9 @@
 #include "transient-arena.h"
 
+#include "transient-arena-budget.h"
+
+#include "hrx-1bit-safety.h"
+
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 
@@ -36,6 +40,7 @@ TransientArena::~TransientArena() {
 
 void TransientArena::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
+    release_budget_locked();
     if (buffer_ != nullptr) {
         hrx_buffer_release(buffer_);
         buffer_ = nullptr;
@@ -46,6 +51,13 @@ void TransientArena::clear() {
     diagnostic_retired_buffers_.clear();
     allocation_capacity_ = 0;
     allocation_id_       = kInvalidTransientArenaAllocationId;
+}
+
+void TransientArena::release_budget_locked() {
+    if (budget_charged_ != 0 && budget_ != nullptr && *budget_ != 0) {
+        onebit::pool_release(budget_charged_);
+    }
+    budget_charged_ = 0;
 }
 
 uint64_t TransientArena::next_allocation_id() {
@@ -79,6 +91,17 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         status.log("missing HRX stream for transient arena allocation");
         return status;
     }
+    // engine#1711: the scratch is charged against the pool budget like a tensor buffer, so a launch whose scratch does
+    // not fit is refused here instead of reaching the runtime allocator and taking the box to the fault line.
+    if (budget_ != nullptr && *budget_ != 0) {
+        const TransientArenaCharge plan = plan_transient_arena_charge(allocation_capacity_, required_size, *budget_);
+        if (plan.refuse) {
+            status.log("transient arena: refusing a %zu byte scratch: the pool budget is %zu bytes (GGML_HRX_POOL_LIMIT_MB "
+                       "or the GTT ceiling, engine #680/#1711)",
+                       plan.charge_bytes, *budget_);
+            return status;
+        }
+    }
     if (buffer_ != nullptr) {
         if (diagnostic_fresh) {
             diagnostic_retired_buffers_.push_back(buffer_);
@@ -107,6 +130,15 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         return status;
     }
 
+    release_budget_locked();
+    if (budget_ != nullptr && *budget_ != 0 &&
+        !onebit::pool_reserve(*budget_, required_size, "transient arena scratch")) {
+        // Cannot happen after the plan above (the same comparison, the same lock), and it is not silent if it does.
+        hrx_buffer_release(allocation);
+        status.log("transient arena: the pool refused a %zu byte scratch after planning it", required_size);
+        return status;
+    }
+    budget_charged_      = required_size;
     buffer_              = allocation;
     allocation_capacity_ = required_size;
     allocation_id_       = next_allocation_id();

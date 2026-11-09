@@ -39,6 +39,11 @@ class TransientArena {
     TransientArena() = default;
     ~TransientArena();
 
+    // engine#1711: the pool budget this arena's scratch is charged against. A pointer rather than a copy because the
+    // device context computes it at init and would otherwise have to push it in again; nullptr (the default) means the
+    // arena is uncharged, which is what every test that builds one directly keeps getting.
+    void set_budget(size_t * budget) { budget_ = budget; }
+
     TransientArena(const TransientArena &)             = delete;
     TransientArena & operator=(const TransientArena &) = delete;
 
@@ -53,6 +58,7 @@ class TransientArena {
     uint64_t allocation_id() const;
 
   private:
+    void                        release_budget_locked();
     uint64_t                    next_allocation_id();
     Status                      ensure_capacity_locked(hrx_device_t device, hrx_stream_t stream, size_t required_size);
     TransientArenaAllocationRef current_allocation_locked() const;
@@ -60,6 +66,8 @@ class TransientArena {
     mutable std::mutex mutex_;
     hrx_buffer_t       buffer_              = nullptr;
     std::vector<hrx_buffer_t> diagnostic_retired_buffers_;
+    size_t *           budget_              = nullptr;
+    size_t             budget_charged_      = 0;
     size_t             allocation_capacity_ = 0;
     uint64_t           allocation_id_       = kInvalidTransientArenaAllocationId;
     uint64_t           next_allocation_id_  = 1;

@@ -365,6 +365,12 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-arena-refusal PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-arena-refusal COMMAND test-hrx-arena-refusal)
 
+    # The transient arena's share of the pool budget (engine#1711): the pure decision, no device. The property is that
+    # the arena is charged what it HOLDS, so a launch that fits inside an existing buffer is charged nothing.
+    add_executable(test-hrx-arena-budget test-hrx-arena-budget.cpp)
+    target_include_directories(test-hrx-arena-budget PRIVATE ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-arena-budget COMMAND test-hrx-arena-budget)
+
     # MemAvailable parsing for the unbounded-residency warning: pure, no device and no /proc (engine #669)
     add_executable(test-hrx-host-memory-available test-hrx-host-memory-available.cpp
         ../ggml/src/ggml-hrx/runtime/host-memory-available.cpp)
