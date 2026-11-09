@@ -50,7 +50,7 @@ const DispatchTarget kTarget{ "gfx1151" };
 // A graph shaped like the failing one: an external leaf, one op that produces a value on this backend, and a
 // no-op layout alias on top of it. `produced` selects whether the alias's input is that produced value (the
 // real graph) or a second external leaf (what can_execute_standalone_op_as_graph builds).
-enum class ViewKind { NoOpAlias, OffsetAlias, StridedView };
+enum class ViewKind { NoOpAlias, OffsetAlias, StridedView, WideWindow };
 
 bool plans_with_view(ViewKind kind, bool produced) {
     ggml_init_params params = { /*mem_size*/ 32 * 1024 * 1024, /*mem_buffer*/ nullptr, /*no_alloc*/ false };
@@ -70,6 +70,17 @@ bool plans_with_view(ViewKind kind, bool produced) {
         case ViewKind::NoOpAlias:    view = ggml_view_2d(ctx, base, 2048, 2, base->nb[1], 0); break;
         case ViewKind::OffsetAlias:  view = ggml_view_2d(ctx, base, 2048, 2, base->nb[1], base->nb[1]); break;
         case ViewKind::StridedView:  view = ggml_view_2d(ctx, base, 2048, 2, 2 * base->nb[1], 0); break;
+        case ViewKind::WideWindow: {
+            // THE SHAPE engine #1467 actually refuses, with the numbers the run printed:
+            //   VIEW f32[2048,2,1,1]  nb=[4,32768,65536,65536]  offs=8192
+            // i.e. rows of 2048 f32 taken from a buffer whose rows are 8192 f32 apart (nb[1] = 32768 bytes = 4x the
+            // width), starting one row in (offs = 8192 bytes = 2048 f32). The wide source is never registered as a
+            // value - the run also printed view_src_unregistered - so both of find_alias_source's tensor-identity
+            // lookups miss and the view gets a storage of its own.
+            ggml_tensor * wide = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8192, 4);
+            view               = ggml_view_2d(ctx, wide, 2048, 2, 32768, 8192);
+            break;
+        }
     }
     REQUIRE(view != nullptr);
     ggml_tensor * out  = ggml_scale(ctx, view, 0.5f);
@@ -124,6 +135,8 @@ int main() {
     std::printf("no-op alias, produced input : %s\n", noop_produced ? "plans" : "REFUSED");
     std::printf("offset alias, produced input: %s\n", offset ? "plans" : "REFUSED");
     std::printf("strided view, produced input: %s\n", strided ? "plans" : "REFUSED");
+    const bool wide = plans_with_view(ViewKind::WideWindow, true);
+    std::printf("wide window view (node 20) : %s\n", wide ? "plans" : "REFUSED");
 
     // A no-op layout alias plans whether its input is an External leaf (the single-node graph that
     // can_execute_standalone_op_as_graph builds) or a value this backend produces (the real graph). That REFUTES
@@ -138,5 +151,9 @@ int main() {
     // the safe outcome it is today: the plan is refused, not silently computed through a wrong layout. If a consumer
     // ever accepts a strided alias, THIS assertion is where it should become visible.
     REQUIRE(!strided);
+    // Documented CURRENT behaviour, and it is the defect: the projector's wide-window view is refused because it aliases
+    // bytes the graph never registered, and nothing can dispatch a layout-alias op. The densify dispatch that fixes this
+    // flips this assertion to REQUIRE(wide) - when that lands, this line is where the change is visible.
+    REQUIRE(!wide);
     return 0;
 }
