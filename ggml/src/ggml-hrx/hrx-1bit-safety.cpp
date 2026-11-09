@@ -83,6 +83,11 @@ bool gtt_counters(size_t & total, size_t & used) {
     return false;
 }
 
+bool pool_budget_is_fixed_limit() {
+    const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
+    return env != nullptr && std::atoll(env) > 0;
+}
+
 size_t pool_budget(size_t memory_total, size_t memory_free) {
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     if (env != nullptr) {

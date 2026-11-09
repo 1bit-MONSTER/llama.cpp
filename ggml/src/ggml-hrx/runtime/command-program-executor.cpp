@@ -717,14 +717,20 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
                 // flash-attention bug. Name the size and the budget the upload competed for.
                 size_t gtt_total = 0, gtt_used = 0;
                 if (ggml::hrx::onebit::gtt_counters(gtt_total, gtt_used)) {
-                    const size_t gtt_free   = gtt_total > gtt_used ? gtt_total - gtt_used : 0;
-                    const size_t budget     = ggml::hrx::onebit::pool_budget(gtt_total, gtt_free);
+                    const bool  fixed    = ggml::hrx::onebit::pool_budget_is_fixed_limit();
+                    const size_t gtt_free = gtt_total > gtt_used ? gtt_total - gtt_used : 0;
+                    const size_t left     = ggml::hrx::onebit::pool_budget(gtt_total, gtt_free);
+                    const double as_gib   = 1.0 / (1024.0 * 1024.0 * 1024.0);
+                    // #1618 review: pool_budget() is the headroom LEFT NOW (ceiling - in use), not the figure the
+                    // open-time guardrail line calls the pool budget, and under GGML_HRX_POOL_LIMIT_MB it is a fixed
+                    // limit instead. Naming it correctly is the whole point of this line.
                     status.log("materialize host weight value %d failed: %zu bytes requested, "
-                               "GTT %.2f of %.2f GiB in use, pool budget %.2f GiB",
+                               "GTT %.2f of %.2f GiB in use, %s %.2f GiB%s",
                                binding.value.value, source.length,
-                               (double)gtt_used / (1024.0 * 1024.0 * 1024.0),
-                               (double)gtt_total / (1024.0 * 1024.0 * 1024.0),
-                               (double)budget / (1024.0 * 1024.0 * 1024.0));
+                               (double)gtt_used * as_gib, (double)gtt_total * as_gib,
+                               fixed ? "fixed limit" : "headroom now", (double)left * as_gib,
+                               fixed ? " (GGML_HRX_POOL_LIMIT_MB)"
+                                     : " (ceiling - in use; the open-time pool budget is the guardrail line)");
                 } else {
                     status.log("materialize host weight value %d failed: %zu bytes requested",
                                binding.value.value, source.length);
