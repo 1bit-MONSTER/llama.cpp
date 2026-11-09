@@ -1,3 +1,5 @@
+#include <cinttypes>
+#include <cstdio>
 #include "dispatch-scheduler.h"
 
 #include "ggml.h"
@@ -6,7 +8,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <sstream>
-#include <cinttypes>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -109,38 +110,36 @@ static std::string unsupported_node_message(const Graph & graph, size_t index, c
         // is_layout_alias_node() is this predicate exactly (graph/graph.cpp): a message that restates the scheduler's rule
         // is a message that will describe a scheduler that no longer exists. Same reasoning as rope-claim-params.h sharing
         // its predicates with the matchers in #257.
-        const char * relation = is_layout_alias_node(graph, node) ? "same_storage" : "not_aliasing_input";
-        // WHICH lookup missed, not just that one did. A view can fail to alias for two very different reasons and they
-        // lead to different repairs: the tensor its view_src points at was never registered as a value in this graph
-        // (register it, or resolve by storage range), or it WAS registered and the map still gave the view a storage of
-        // its own (that would be a bug in the assignment itself). engine #1467's text tower hits one of these and the
-        // field above could not say which.
-        const char * why = "";
-        const Value * out = graph.values().find(node.output);
-        if (out != nullptr && out->tensor != nullptr) {
-            const ggml_tensor * src = out->tensor->view_src;
-            if (relation != nullptr && std::strcmp(relation, "not_aliasing_input") == 0) {
-                why = (src != nullptr && graph.values().find_tensor(src) != nullptr)
-                          ? "(view_src_registered_but_storage_differs)"
-                          : "(view_src_unregistered)";
+        // `aliasing` is the decision; the string is derived from it, never the other way round (review of #262: the
+        // first version compared the string it had just built to decide whether to look further).
+        const bool   aliasing = is_layout_alias_node(graph, node);
+        const char * relation = aliasing ? "same_storage" : "not_aliasing_input";
+        // WHICH lookup missed, read from the VALUE, not re-asked of the map. The map has grown since the storage was
+        // assigned, so `find_tensor(view_src)` here can succeed where it failed then and this message would name the
+        // wrong repair. AliasMiss is recorded at assignment time for exactly this (value-map.h), and it is the half of
+        // this PR that the review called blocking.
+        const char * why   = "";
+        const Value * out  = graph.values().find(node.output);
+        if (!aliasing && out != nullptr) {
+            switch (out->alias_miss) {
+                case AliasMiss::NoAliasSource: why = "(no_alias_source)"; break;
+                case AliasMiss::ExactViewSrc:  why = "(aliased_view_src_not_the_input)"; break;
+                case AliasMiss::RangeFallback: why = "(aliased_storage_root_fallback_not_the_input)"; break;
+                case AliasMiss::None:          break;
             }
         }
-        // THE FACTS, not another story. Six hypotheses have died on this node, so the message now carries what they were
-        // each guessing at: the two ValueStorageIds (equal ids mean the map agreed; different ids mean it did not), and the
-        // output tensor's strides and offset. With `alias=` and the `why=` above, one run says which storage the map gave the
-        // view, whether it is its input's, and what layout the view describes (engine #1467).
+        // THE FACTS, on top of the recorded reason: six hypotheses died on this node, so the message also carries the two
+        // ValueStorageIds and what layout the view describes (engine #1467). `why` above is the assignment-time reason
+        // (AliasMiss), which the pin's version computes and which must not be re-asked of the map here.
         std::string facts;
-        if (relation != nullptr && std::strcmp(relation, "not_aliasing_input") == 0 && node.inputs.size() == 1) {
-            const Value * out_v = graph.values().find(node.output);
-            const Value * in_v  = graph.values().find(node.inputs[0]);
-            if (out_v != nullptr && in_v != nullptr) {
+        if (!aliasing && out != nullptr && out->tensor != nullptr && node.inputs.size() == 1) {
+            const Value * in_v = graph.values().find(node.inputs[0]);
+            if (in_v != nullptr) {
                 char buf[192];
-                const ggml_tensor * t = out_v->tensor;
-                std::snprintf(buf, sizeof buf, " storages=out%d/in%d nb=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64
-                                               "] offs=%zu",
-                              out_v->storage.value, in_v->storage.value,
-                              t != nullptr ? t->nb[0] : 0, t != nullptr ? t->nb[1] : 0, t != nullptr ? t->nb[2] : 0,
-                              t != nullptr ? t->nb[3] : 0, t != nullptr ? t->view_offs : size_t(0));
+                const ggml_tensor * t = out->tensor;
+                std::snprintf(buf, sizeof buf, " storages=out%d/in%d nb=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] offs=%zu",
+                              out->storage.value, in_v->storage.value, t->nb[0], t->nb[1], t->nb[2], t->nb[3],
+                              t->view_offs);
                 facts = buf;
             }
         }
