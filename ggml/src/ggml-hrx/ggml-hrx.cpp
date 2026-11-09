@@ -2,6 +2,8 @@
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
 #include "hrx-1bit-safety.h"
+#include "runtime/failure-status.h"
+#include "runtime/host-memory-available.h"
 #include "ggml-hrx-dmabuf.h"
 
 #include "backend-buffer-binding.h"
@@ -24,8 +26,10 @@
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cinttypes>
+#include <cstdio>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -240,6 +244,14 @@ static void buffer_memset(ggml_backend_buffer_t buffer,
 // one dispatch queue, and the synchronize that follows completes them before the caller continues. The staging
 // buffer is kept per device (few distinct sizes) instead of being allocated per copy: per-copy allocate/release is
 // what libhrx's per-size pools retain (engine #669).
+// engine #856: the staging buffer is capped, and a larger copy goes through it in chunks. Sizing it to the largest
+// copy kept one host-mapped buffer the size of the largest weight (995 MiB on a 27B, usually the token embedding)
+// resident in GTT for the life of the process, only to stage the load. Each chunk is synchronized before the
+// buffer is reused, so the ordering of engine #696 is unchanged. The callers hold buffer_stream_mutex across all
+// chunks of one copy, so no other staged copy can reallocate the buffer between them. The buffer still never
+// shrinks: it stays at most kCopyStagingChunk per device for the life of the process, kept for reuse on purpose.
+static constexpr size_t kCopyStagingChunk = 64ull << 20;
+
 static bool ensure_copy_staging(ggml_backend_hrx_device_context * device, size_t size) {
     if (device->copy_staging_size >= size) {
         return true;
@@ -264,13 +276,21 @@ static bool ordered_upload(ggml_backend_hrx_device_context * device,
                            hrx_buffer_t                    destination,
                            size_t                          offset) {
     std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
-    if (!ensure_copy_staging(device, size)) {
+    const size_t                chunk = std::min(size, kCopyStagingChunk);
+    if (!ensure_copy_staging(device, chunk)) {
         return false;
     }
-    std::memcpy(device->copy_staging_mapped, data, size);
-    return HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, device->copy_staging, 0, destination, offset,
-                                            size)) &&
-           HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
+    const auto * source = static_cast<const uint8_t *>(data);
+    for (size_t done = 0; done < size; done += chunk) {
+        const size_t n = std::min(chunk, size - done);
+        std::memcpy(device->copy_staging_mapped, source + done, n);
+        if (!HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, device->copy_staging, 0, destination,
+                                              offset + done, n)) ||
+            !HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool ordered_download(ggml_backend_hrx_device_context * device,
@@ -279,16 +299,21 @@ static bool ordered_download(ggml_backend_hrx_device_context * device,
                              void *                          data,
                              size_t                          size) {
     std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
-    if (!ensure_copy_staging(device, size)) {
+    const size_t                chunk = std::min(size, kCopyStagingChunk);
+    if (!ensure_copy_staging(device, chunk)) {
         return false;
     }
-    const bool ok = HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, source, offset, device->copy_staging, 0,
-                                                     size)) &&
-                    HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
-    if (ok) {
-        std::memcpy(data, device->copy_staging_mapped, size);
+    auto * destination = static_cast<uint8_t *>(data);
+    for (size_t done = 0; done < size; done += chunk) {
+        const size_t n = std::min(chunk, size - done);
+        if (!HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, source, offset + done, device->copy_staging, 0,
+                                              n)) ||
+            !HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+            return false;
+        }
+        std::memcpy(destination + done, device->copy_staging_mapped, n);
     }
-    return ok;
+    return true;
 }
 
 static void buffer_set(ggml_backend_buffer_t buffer,
@@ -379,7 +404,11 @@ static const ggml_backend_buffer_i buffer_i = {
 // engine #1502 (#251) calls this from buffer_alloc, eight hundred lines above its definition, with no declaration in
 // scope - so the translation unit does not compile ("'device_free_total' was not declared in this scope"). One forward
 // declaration is enough; the definition and its callers are unchanged.
-static void device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes);
+// The declaration must match the definition's type: it is `bool` (it reports whether the driver counters were
+// available). Two merges each added a forward declaration - #252's above, #240's `bool` one further down - and the
+// `void`/`bool` pair is an ambiguous redeclaration, so the translation unit fails to compile at the `bool` declaration
+// and the pin builds for nobody. One word, and every lane that builds this pin is unblocked.
+static bool device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes);
 
 static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_t size) {
     ggml::hrx::onebit::poison_selftest();  // no-op unless GGML_HRX_POISON_SELFTEST=1
@@ -510,6 +539,11 @@ static bool placement_fallback_quiet() {
     return end != value && *end == '\0' && parsed <= 0;
 }
 
+// defined below device registration; the strict-placement report needs the live pool state. Returns false when NEITHER
+// source answered and the out-params are a fallback, so a caller can say "unavailable" instead of printing a number it
+// did not measure (a manufactured 0.0 GiB in use is the same lie the ceiling exists to prevent).
+static bool device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes);
+
 static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, void * user_data) {
     const bool strict = environment_flag_enabled("GGML_HRX_STRICT");
     const int  level  = placement_report_level();
@@ -589,10 +623,31 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
     }
 
     if (strict && first_off != nullptr) {
-        GGML_ABORT("%s: GGML_HRX_STRICT=1: \"%s\" is %s %s ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] and is not placed on HRX; %" PRId64 " of %d nodes off HRX (%s), %d splits\n",
+        // The split is a function of the *shared* GTT pool, which other processes on this APU move, so a strict refusal is
+        // not a property of the model or of the build. Without the pool numbers an operator reads "X is not placed on HRX"
+        // as a model problem; with them the same line says which state produced the split and that a fallback exists
+        // (strict-placement ticket, measured on this box: 37.5 GiB in use serves, 47.5 GiB in use refuses).
+        // The pool segment is a STRING, not three %.1f arguments: when neither source answered, printing "0.0 of 120.0 GiB
+        // in use" would manufacture the most reassuring possible number at the exact moment the operator is asking whether
+        // the box or the model caused the refusal. Unavailable has to be sayable.
+        char pool_detail[160] = "state unavailable (neither the driver nor the GTT counters answered)";
+        {
+            auto * hrx_context = hrx != nullptr ? static_cast<ggml_backend_hrx_context *>(hrx->context) : nullptr;
+            if (hrx_context != nullptr && hrx_context->device != nullptr) {
+                size_t free_bytes = 0, total_bytes = 0;
+                if (device_free_total(hrx_context->device, free_bytes, total_bytes)) {
+                    const double gib  = 1024.0 * 1024.0 * 1024.0;
+                    const double use  = (double) (total_bytes > free_bytes ? total_bytes - free_bytes : 0) / gib;
+                    const double tot  = (double) total_bytes / gib;
+                    const double budg = (double) hrx_context->device->memory_budget / gib;
+                    std::snprintf(pool_detail, sizeof(pool_detail), "%.1f of %.1f GiB in use, HRX pool budget %.1f GiB", use, tot, budg);
+                }
+            }
+        }
+        GGML_ABORT("%s: GGML_HRX_STRICT=1: \"%s\" is %s %s ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] and is not placed on HRX; %" PRId64 " of %d nodes off HRX (%s), %d splits. Shared GTT pool: %s - the split follows that pool, so --no-strict-device (or a retry on a quieter box) runs those nodes on the CPU\n",
                    __func__, first_off->name, ggml_op_name(first_off->op), ggml_type_name(first_off->type),
                    first_off->ne[0], first_off->ne[1], first_off->ne[2], first_off->ne[3], off_nodes, graph->n_nodes,
-                   off_detail.c_str(), ggml_backend_sched_get_n_splits(sched));
+                   off_detail.c_str(), ggml_backend_sched_get_n_splits(sched), pool_detail);
     }
 
     if (level >= 1) {
@@ -772,12 +827,36 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
     auto *                                context  = static_cast<ggml_backend_hrx_context *>(backend->context);
     const ggml::hrx::GraphExecutor        executor = ggml::hrx::GraphExecutor(*context);
     const ggml::hrx::GraphExecutionResult result   = executor.execute(*graph);
+    // engine #1618: a resource failure must not leave this backend as a generic failure. llama.cpp maps ALLOC_FAILED to
+    // its own -2 and FAILED to -3, and the server prints one sentence for "out of memory" and another for "Compute error"
+    // - so without this classification a host-memory allocation the pool could not serve reads to the client as a kernel
+    // fault, which is what made #1618 look like a flash-attention defect for a day.
+    enum ggml_status code = result.success() ? GGML_STATUS_SUCCESS
+                                             : ggml::hrx::failure_status(result.status.errors(), result.code);
     if (!result.success()) {
         // Print the LAST reason: a matcher that declined also logs why, and those lines come first, so
         // errors().front() named a matcher while the graph failed on the node left without a dispatch
         // (2026-10-20 census: a q8_0 KV cache printed the qwen postprocess refusal for a graph that broke
         // on another node). The earlier reasons follow, bounded, for context.
         const std::vector<std::string> & reasons = result.status.errors();
+        // The classification above reads the WHOLE set, while the headline below prints the last reason. When the two differ,
+        // a resource failure would return ALLOC_FAILED while the log's first sentence points at a dispatch decision - the
+        // same "the log knew, the client did not" split in miniature (engine #1618 review), so print the classifying message
+        // as the headline and keep the rest as context.
+        if (const std::string * suspicious = ggml::hrx::failure_unmatched_allocation(reasons)) {
+            GGML_LOG_WARN("%s: an allocation-looking failure did not match the resource needles, so it is reported as a "
+                          "compute failure: %s (extend kResourceNeedles if this is an out-of-memory status)\n", __func__,
+                          suspicious->c_str());
+        }
+        const std::string * classifying = nullptr;
+        for (const std::string & reason : reasons) {
+            if (ggml::hrx::failure_looks_like_allocation({ reason })) {
+                classifying = &reason;
+            }
+        }
+        if (classifying != nullptr && !reasons.empty() && classifying != &reasons.back()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, classifying->c_str());
+        }
         if (reasons.empty()) {
             GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(result.status));
         } else {
@@ -791,7 +870,7 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
             }
         }
     }
-    return result.code;
+    return code;
 }
 
 static const ggml_backend_i backend_i = {
@@ -824,23 +903,24 @@ static const char * device_description(ggml_backend_dev_t device) {
 // GTT free and total as the driver sees them. hrx_device_memory_info is the proper source but the AMDGPU HAL does
 // not report availability (libhrx: "did not provide available memory in its observation"), so the driver's own
 // counters are the fallback - and they are the only cross-process view, which is what the #680 ceiling needs.
-static void device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes) {
+static bool device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes) {
     size_t hal_free  = 0;
     size_t hal_total = 0;
     if (hrx_status_is_ok(hrx_device_memory_info(device_ctx->device, &hal_free, &hal_total)) && hal_total != 0) {
         free_bytes  = hal_free;
         total_bytes = hal_total;
-        return;
+        return true;
     }
     size_t gtt_total = 0;
     size_t gtt_used  = 0;
     if (ggml::hrx::onebit::gtt_counters(gtt_total, gtt_used) && gtt_total != 0) {
         total_bytes = gtt_total;
         free_bytes  = gtt_total > gtt_used ? gtt_total - gtt_used : 0;
-        return;
+        return true;
     }
     free_bytes  = device_ctx->memory_total;
     total_bytes = device_ctx->memory_total;
+    return false;
 }
 
 static void device_memory(ggml_backend_dev_t device, size_t * free, size_t * total) {
@@ -1554,7 +1634,13 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         size_t device_free            = device_ctx->memory_total;
         size_t device_total           = device_ctx->memory_total;
         device_free_total(device_ctx.get(), device_free, device_total);
-        device_ctx->memory_budget = ggml::hrx::onebit::pool_budget(device_ctx->memory_total, device_free);
+        // A failed /proc read is "unknown", not "zero bytes left": kHostUnknown disables the term, while a measured zero must
+        // refuse - a host with nothing left is the worst moment to admit a launch (engine #1502).
+        const size_t host_raw       = ggml::hrx::host_memory_available_bytes();
+        const size_t host_available = host_raw == 0 ? ggml::hrx::onebit::kHostUnknown : host_raw;
+        const ggml::hrx::onebit::pool_budget_terms_t terms =
+            ggml::hrx::onebit::pool_budget_terms(device_ctx->memory_total, device_free, host_available);
+        device_ctx->memory_budget = terms.budget;
         if (device_ctx->memory_budget == 0 && device_ctx->memory_total != 0) {
             // Nothing fits under the ceiling: refuse the device here, loudly, instead of planning a launch that can
             // reach the fault line (#680). Report only, do not try to be clever about it.
@@ -1571,13 +1657,16 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         if (device_ctx->memory_budget != 0) {
             const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
             GGML_LOG_WARN("ggml_hrx: %s guardrail: GTT total %.1f GiB, in use %.1f GiB, ceiling %.1f GiB "
-                          "(reserve %.1f GiB), pool budget %.1f GiB - a launch that needs more is refused here "
-                          "rather than faulting the device (engine #680)\n",
+                          "(reserve %.1f GiB), pool budget %.1f GiB (GTT term %.1f GiB, host MemAvailable %.1f GiB) - a launch that needs more is refused here "
+                          "rather than faulting the device (engine #680; bound by %s)\n",
                           device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
                           (device_total > device_free ? device_total - device_free : 0) / (1024.0 * 1024.0 * 1024.0),
                           (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0),
                           reserve / (1024.0 * 1024.0 * 1024.0),
-                          device_ctx->memory_budget / (1024.0 * 1024.0 * 1024.0));
+                          terms.budget / (1024.0 * 1024.0 * 1024.0),
+                          terms.gtt_term / (1024.0 * 1024.0 * 1024.0),
+                          host_raw == 0 ? -1.0 : terms.host_available / (1024.0 * 1024.0 * 1024.0),
+                          terms.host_bound ? "the host" : (host_raw == 0 ? "the GTT counter (host unreadable)" : "the GTT counter"));
         }
         device_ctx->description       = *name + " (" + *architecture + ")";
         device_ctx->architecture      = *architecture;
