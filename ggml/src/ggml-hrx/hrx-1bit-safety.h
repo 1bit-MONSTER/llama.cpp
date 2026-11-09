@@ -28,7 +28,10 @@ namespace ggml::hrx::onebit {
 // budget is the GTT ceiling (memory_total minus GGML_HRX_GTT_RESERVE_MB, default 16384) less what other processes
 // already hold (memory_total - memory_free). A GTT plan past this budget is refused at allocation instead of
 // faulting the device: #680 is a gfxhub page fault plus a MODE2 reset at GTT 106.5 of 120 GiB.
-size_t pool_budget(size_t memory_total, size_t memory_free);
+// |memory_available| is the host's MemAvailable (0 = unknown, which keeps the GTT-only arithmetic). On an APU the GTT ceiling
+// and DRAM are the same pool, so what the allocator can serve is bounded by both: this is the term that differs between two loads
+// with identical GTT counters and opposite outcomes (engine #1502).
+size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available);
 
 // The budget after an allocation the allocator refused, given the size it refused (engine #1502).
 //
@@ -64,7 +67,8 @@ pool_budget_state_t pool_budget_note_refusal(pool_budget_state_t state, size_t s
 //    pool_remaining() subtracts the ledger again further down the admission path;
 //  - a cap is cleared only when it is LIFTED (the pool grew past the figure the refusal saw). When the pool is smaller the cap and
 //    its evidence are kept, and only this call's budget is bounded by it - otherwise one low reading becomes a permanent ceiling.
-pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state);
+pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, size_t memory_available,
+                                        pool_budget_state_t state);
 
 // The reserve the ceiling keeps for the driver and for kernel/transient spikes, in bytes.
 size_t pool_reserve_bytes();

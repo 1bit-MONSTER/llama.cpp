@@ -83,7 +83,7 @@ bool gtt_counters(size_t & total, size_t & used) {
     return false;
 }
 
-size_t pool_budget(size_t memory_total, size_t memory_free) {
+size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available) {
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     if (env != nullptr) {
         const long long mb = std::atoll(env);
@@ -97,7 +97,15 @@ size_t pool_budget(size_t memory_total, size_t memory_free) {
     const size_t reserve = pool_reserve_bytes();
     const size_t ceiling = memory_total > reserve ? memory_total - reserve : 0;
     const size_t in_use  = memory_total > memory_free ? memory_total - memory_free : 0;
-    return ceiling > in_use ? ceiling - in_use : 0;
+    const size_t by_gtt  = ceiling > in_use ? ceiling - in_use : 0;
+    // engine #1502: the GTT counter is not the allocator's ceiling on an APU. Letting a 15.35 GiB buffer through a 29.2 GiB
+    // budget while the host had ~15 GiB left made the failure land inside hsa_amd_memory_pool_allocate and read as
+    // "llama_model_load: error loading model" (two Hyperloom measurements scored 0.0 that way). The engine's admission check has
+    // always used min(GTT free, MemAvailable) (app/mem_admit.h); this is the same two-term model in the fork's safety net.
+    if (memory_available != 0 && memory_available < by_gtt) {
+        return memory_available;
+    }
+    return by_gtt;
 }
 
 // engine #1417: the budget above is a snapshot taken at device open, and the ledger is per-process, so another process
@@ -194,14 +202,15 @@ pool_budget_state_t pool_budget_note_refusal(pool_budget_state_t state, size_t s
     return state;
 }
 
-pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state) {
+pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, size_t memory_available,
+                                        pool_budget_state_t state) {
     if (state.cap == 0) {
         return state;  // no cap in force: the registration-time budget stands
     }
     if (free_bytes > state.cap_free) {
         // The pool has grown past the figure the refusal saw, so the cap's evidence no longer holds: a transient refusal must not
         // become a permanent ceiling (engine #1502 review). Recompute from the current figures and drop the cap.
-        const size_t uncapped = pool_budget(memory_total, free_bytes + allocated);
+        const size_t uncapped = pool_budget(memory_total, free_bytes + allocated, memory_available);
         GGML_LOG_INFO("%s: the pool grew from %.1f MiB to %.1f MiB free since the last refusal; lifting the %.1f MiB cap to "
                       "%.1f MiB\n",
                       __func__, state.cap_free / (double) kMiB, free_bytes / (double) kMiB, state.cap / (double) kMiB,
@@ -213,7 +222,7 @@ pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, 
     }
     // The pool is no larger than it was at the refusal: keep the cap AND its evidence, and bound only this call's budget by it.
     // Clearing it here would freeze the low reading for the rest of the process (engine #1502 review).
-    const size_t capped = pool_budget(memory_total, free_bytes + allocated);
+    const size_t capped = pool_budget(memory_total, free_bytes + allocated, memory_available);
     state.budget = state.cap < capped ? state.cap : capped;
     return state;
 }
