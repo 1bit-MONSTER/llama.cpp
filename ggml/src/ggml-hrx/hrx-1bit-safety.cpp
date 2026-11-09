@@ -101,16 +101,21 @@ size_t pool_budget(size_t memory_total, size_t memory_free) {
 
 // engine #1417: the budget above is a snapshot taken at device open, and the ledger is per-process, so another process
 // growing its model after we opened is invisible to it - the check passes and the allocation reaches a device that is at its
-// ceiling. GGML_HRX_POOL_LIVE_CHECK=1 adds a live consult of the driver's own counters to the reservation, so the promise
-// "refused here rather than faulting the device" holds under concurrency too.
+// ceiling, where it fails inside the allocator instead of at admission. A live consult of the driver's own counters closes
+// that window, and it is ON BY DEFAULT (engine #1417's report was a 74.8 GiB reading at device open against ~90 GiB when the
+// allocation happened; no fixed threshold on those numbers can separate the two).
 //
-// Off by default, deliberately: enabling it makes admission depend on what other processes are doing, so a launch that works
-// on an idle box can refuse on a busy one. That trade is the operator's to take; this code only makes it available.
-// GGML_HRX_POOL_LIVE_MARGIN_MB leaves headroom for concurrent growth (default 0 - refuse only when the box truly has no room).
+// The trade the old default made is now the operator's opt-OUT rather than opt-in: admission depends on what other processes
+// are doing, so a launch that fits an idle box can be refused on a busy one. GGML_HRX_POOL_LIVE_CHECK=0 restores the
+// open-time snapshot exactly.
+//
+// GGML_HRX_POOL_LIVE_MARGIN_MB leaves headroom for growth that happens between the cached counters and the allocation
+// (default 256 MiB - irrelevant on a quiet box's 120 GiB pool, enough to absorb the cache window and the rounding in the
+// driver's counters).
 static bool pool_live_check_enabled() {
     static const bool enabled = [] {
         const char * env = std::getenv("GGML_HRX_POOL_LIVE_CHECK");
-        return env != nullptr && env[0] != '\0' && std::atoi(env) != 0;
+        return env == nullptr || env[0] == '\0' || std::atoi(env) != 0;
     }();
     return enabled;
 }
@@ -148,7 +153,7 @@ static size_t pool_live_margin_bytes() {
     static const size_t margin = [] {
         const char * env = std::getenv("GGML_HRX_POOL_LIVE_MARGIN_MB");
         if (env == nullptr || env[0] == '\0') {
-            return static_cast<size_t>(0);
+            return static_cast<size_t>(256) * kMiB;
         }
         const long long mb = std::atoll(env);
         return mb > 0 ? static_cast<size_t>(mb) * 1024u * 1024u : static_cast<size_t>(0);
@@ -206,19 +211,27 @@ pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, 
     return state;
 }
 
+// Does |size| fit the live pool with |margin| of headroom? Pure, so the test drives it: the numbers come from the driver's
+// counters, and the arithmetic that matters is the underflow guard (|used| can exceed |total| transiently) and the margin
+// saturation (|margin| is an operator input and may be absurd).
+bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin) {
+    const size_t live_free = used >= total ? 0 : total - used;
+    const size_t wanted    = size + (margin > SIZE_MAX - size ? SIZE_MAX - size : margin);
+    return wanted <= live_free;
+}
+
 bool pool_reserve(size_t budget, size_t size, const char * what) {
     const size_t used = g_pool_allocated.load();
     if (pool_live_check_enabled()) {
         size_t total = 0;
         size_t in_use = 0;
         if (pool_live_counters(total, in_use)) {
-            const size_t live_free = in_use >= total ? 0 : total - in_use;
-            const size_t margin    = pool_live_margin_bytes();
-            const size_t wanted    = size + (margin > SIZE_MAX - size ? SIZE_MAX - size : margin);
-            if (wanted > live_free) {
+            const size_t margin = pool_live_margin_bytes();
+            if (!pool_live_fits(size, total, in_use, margin)) {
+                const size_t live_free = in_use >= total ? 0 : total - in_use;
                 GGML_LOG_ERROR("%s: HRX pool limit: %s of %.1f MiB does not fit the live device budget "
-                               "(%.1f MiB free - %.1f MiB margin of %.1f MiB); unset GGML_HRX_POOL_LIVE_CHECK to use the "
-                               "open-time snapshot instead (engine #1417)\n",
+                               "(%.1f MiB free - %.1f MiB margin of %.1f MiB); this is the live check, on by default since "
+                               "engine #1417 - set GGML_HRX_POOL_LIVE_CHECK=0 to use the open-time snapshot instead\n",
                                __func__, what, size / (double) kMiB, live_free / (double) kMiB, margin / (double) kMiB,
                                total / (double) kMiB);
                 return false;

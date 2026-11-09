@@ -75,6 +75,10 @@ size_t pool_reserve_bytes();
 bool gtt_counters(size_t & total, size_t & used);
 
 // Charge `size` against `budget`; false (with one log line naming the sizes) when it does not fit.
+// True when |size| fits the live pool (|total|, |used| from the driver's counters) with |margin| of headroom. Pure, so the
+// test drives it; the underflow and margin-saturation guards live here rather than in the caller.
+bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin);
+
 bool pool_reserve(size_t budget, size_t size, const char * what);
 
 // Give bytes back. Every failure path in an allocation must call this.

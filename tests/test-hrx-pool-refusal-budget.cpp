@@ -111,6 +111,40 @@ int main() {
     expect_true("when the pool frees the same model is admissible again", st3.budget > 4 * GiB + 700 * MiB);
     expect_eq("no cap in force: an observation changes nothing", pool_budget_observe(total, 10 * GiB, 0, pool_budget_state_t{20 * GiB, 0, 0}).budget, 20 * GiB);
 
+    // engine #1417: the live check is now the DEFAULT, so the decision it makes is worth pinning like the cap above. The
+    // numbers are the report's own: a 120 GiB pool, a box that had 74.8 GiB in use at device open and ~90 GiB when the
+    // 15.35 GiB allocation was attempted.
+    using ggml::hrx::onebit::pool_live_fits;
+
+    const size_t gtt = 120 * GiB;
+    const size_t margin_256 = 256 * MiB;
+
+    expect_true("a 15.35 GiB buffer fits 45 GiB free with the default margin",
+                pool_live_fits(refused, gtt, gtt - 45 * GiB, margin_256));
+    // The case the live check exists for, built from the report's own numbers: the open-time budget was
+    // 104 - 74.8 = 29.2 GiB, so a 20 GiB buffer is ADMITTED by the snapshot. If a neighbour then grew the box to
+    // 105 GiB in use (15 GiB free), the snapshot still admits it and the failure lands in the allocator; the live
+    // check refuses it at admission, which is the whole of engine #1417's ask.
+    const size_t snapshot_budget = gtt - 16 * GiB - 748 * GiB / 10;      // 29.2 GiB, printed in the report
+    const size_t stale_request   = 20 * GiB;
+    expect_true("the open-time snapshot admits a 20 GiB buffer (29.2 GiB budget)",
+                stale_request <= snapshot_budget);
+    expect_true("a neighbour growing the box to 105 GiB in use makes the live check refuse that buffer",
+                !pool_live_fits(stale_request, gtt, 105 * GiB, margin_256));
+    expect_true("with the neighbour gone the same buffer passes again",
+                pool_live_fits(stale_request, gtt, gtt - 45 * GiB, margin_256));
+    expect_true("the margin is required headroom, not decoration: 16 GiB free refuses a 16 GiB request",
+                !pool_live_fits(16 * GiB, gtt, gtt - 16 * GiB, margin_256));
+    expect_true("the same request passes with the margin set to 0",
+                pool_live_fits(16 * GiB, gtt, gtt - 16 * GiB, 0));
+    expect_true("used > total (a transient counter artefact) is free == 0, not an underflow",
+                !pool_live_fits(1 * MiB, gtt, gtt + 8 * GiB, 0));
+    expect_true("used == total refuses anything larger than the margin",
+                !pool_live_fits(1 * MiB, gtt, gtt, margin_256));
+    expect_true("an absurd margin saturates instead of wrapping",
+                !pool_live_fits(1 * MiB, gtt, 0, SIZE_MAX));
+    expect_true("a zero-size request with room passes", pool_live_fits(0, gtt, gtt - 1 * GiB, margin_256));
+
     printf(failures == 0 ? "test-hrx-pool-refusal-budget: all requirements passed\n"
                          : "test-hrx-pool-refusal-budget: %d FAILED\n", failures);
     return failures == 0 ? 0 : 1;
