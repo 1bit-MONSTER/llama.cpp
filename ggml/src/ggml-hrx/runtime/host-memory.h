@@ -249,6 +249,8 @@ class HostWeightExecutionScope {
 
 struct HostStagingBuffer {
     HostStagingBuffer() = default;
+    // engine#1711: bytes this staging buffer holds against the pool ledger. The object owns exactly one buffer, so the
+    // charge is taken on allocate and given back in clear() -- no delta arithmetic, unlike the two arenas.
     ~HostStagingBuffer();
 
     HostStagingBuffer(HostStagingBuffer && other) noexcept;
@@ -262,13 +264,15 @@ struct HostStagingBuffer {
     HostBufferRef source_host_buffer;
     int32_t      value     = -1;
     size_t       length    = 0;
+    size_t       charged_bytes_ = 0;   // engine#1711: pool bytes held for this buffer
     bool         upload    = false;
     bool         download  = false;
 
     void clear();
 };
 
-Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging);
+Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging,
+                                    size_t pool_budget = 0);
 Status allocate_mapped_host_staging_buffer(hrx_device_t device,
                                            size_t       size,
                                            hrx_buffer_t & buffer,

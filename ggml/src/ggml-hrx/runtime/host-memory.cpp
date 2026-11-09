@@ -2122,6 +2122,10 @@ void HostStagingBuffer::clear() {
         hrx_buffer_release(buffer);
         buffer = nullptr;
     }
+    if (charged_bytes_ > 0) {
+        ggml::hrx::onebit::pool_release(charged_bytes_);   // engine#1711
+        charged_bytes_ = 0;
+    }
     host_data = nullptr;
     source_host_buffer = HostBufferRef{};
     value     = -1;
@@ -2130,11 +2134,30 @@ void HostStagingBuffer::clear() {
     download  = false;
 }
 
-Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging) {
+Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging,
+                                    size_t pool_budget) {
     staging.clear();
+    // engine#1711: staging buffers are device-visible memory too. Charged before the allocation (a refusal must leave
+    // the previous state intact -- clear() above has already released the old charge, so a refusal here just means no
+    // staging buffer) and given back in clear(), which every path reaches: the destructor, the move-assignment, and the
+    // next allocate.
+    bool charge_taken = false;
+    if (size > 0 && pool_budget > 0) {
+        if (!ggml::hrx::onebit::pool_reserve(pool_budget, size, "a host staging buffer")) {
+            Status refused;
+            refused.log("refused: a %zu-byte host staging buffer does not fit the pool", size);
+            return refused;
+        }
+        charge_taken = true;
+    }
     Status status = allocate_device_buffer(device, size, staging.buffer);
     if (status.success()) {
         staging.length = size;
+        if (charge_taken) {
+            staging.charged_bytes_ = size;
+        }
+    } else if (charge_taken) {
+        ggml::hrx::onebit::pool_release(size);
     }
     return status;
 }
