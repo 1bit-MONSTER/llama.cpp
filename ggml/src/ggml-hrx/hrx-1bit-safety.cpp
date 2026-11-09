@@ -83,21 +83,46 @@ bool gtt_counters(size_t & total, size_t & used) {
     return false;
 }
 
-size_t pool_budget(size_t memory_total, size_t memory_free) {
+bool pool_budget_is_fixed_limit() {
+    const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
+    return env != nullptr && std::atoll(env) > 0;
+}
+
+pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, size_t memory_available) {
+    pool_budget_terms_t t;
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     if (env != nullptr) {
         const long long mb = std::atoll(env);
         if (mb > 0) {
-            return static_cast<size_t>(mb) * kMiB;
+            // An operator-set limit is the budget outright, not a min() of terms; keeping it distinguishable is what
+            // pool_budget_is_fixed_limit() reports so a caller can word the line correctly (llama.cpp #255).
+            t.host_available = memory_available;
+            t.gtt_term       = static_cast<size_t>(mb) * kMiB;
+            t.budget         = t.gtt_term;
+            return t;
         }
     }
     if (memory_total == 0) {
-        return 0;  // unknown device size: keep the unfettered behaviour
+        return t;  // unknown device size: keep the unfettered behaviour
     }
     const size_t reserve = pool_reserve_bytes();
     const size_t ceiling = memory_total > reserve ? memory_total - reserve : 0;
     const size_t in_use  = memory_total > memory_free ? memory_total - memory_free : 0;
-    return ceiling > in_use ? ceiling - in_use : 0;
+    t.gtt_term       = ceiling > in_use ? ceiling - in_use : 0;
+    t.host_available = memory_available;
+    // engine #1502: on an APU the GTT counter is not the allocator's ceiling, so the budget is the smaller of the two terms -
+    // the same model the engine's own admission check has always used (app/mem_admit.h).
+    if (memory_available != kHostUnknown && memory_available < t.gtt_term) {
+        t.budget     = memory_available;
+        t.host_bound = true;
+    } else {
+        t.budget = t.gtt_term;
+    }
+    return t;
+}
+
+size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available) {
+    return pool_budget_terms(memory_total, memory_free, memory_available).budget;
 }
 
 // engine #1417: the budget above is a snapshot taken at device open, and the ledger is per-process, so another process
@@ -194,14 +219,15 @@ pool_budget_state_t pool_budget_note_refusal(pool_budget_state_t state, size_t s
     return state;
 }
 
-pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state) {
+pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state,
+                                        size_t memory_available) {
     if (state.cap == 0) {
         return state;  // no cap in force: the registration-time budget stands
     }
     if (free_bytes > state.cap_free) {
         // The pool has grown past the figure the refusal saw, so the cap's evidence no longer holds: a transient refusal must not
         // become a permanent ceiling (engine #1502 review). Recompute from the current figures and drop the cap.
-        const size_t uncapped = pool_budget(memory_total, free_bytes + allocated);
+        const size_t uncapped = pool_budget(memory_total, free_bytes + allocated, memory_available);
         GGML_LOG_INFO("%s: the pool grew from %.1f MiB to %.1f MiB free since the last refusal; lifting the %.1f MiB cap to "
                       "%.1f MiB\n",
                       __func__, state.cap_free / (double) kMiB, free_bytes / (double) kMiB, state.cap / (double) kMiB,
@@ -213,7 +239,7 @@ pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, 
     }
     // The pool is no larger than it was at the refusal: keep the cap AND its evidence, and bound only this call's budget by it.
     // Clearing it here would freeze the low reading for the rest of the process (engine #1502 review).
-    const size_t capped = pool_budget(memory_total, free_bytes + allocated);
+    const size_t capped = pool_budget(memory_total, free_bytes + allocated, memory_available);
     state.budget = state.cap < capped ? state.cap : capped;
     return state;
 }
