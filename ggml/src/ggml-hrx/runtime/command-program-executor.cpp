@@ -387,7 +387,8 @@ static Status ensure_transient_arena(const CommandProgramExecutionContext & cont
     if (commands.transients.arena_size == 0) {
         return status;
     }
-    status = context.transient_arena->ensure_capacity(context.device, context.stream, commands.transients.arena_size);
+    status = context.transient_arena->ensure_capacity(context.device, context.stream, commands.transients.arena_size,
+                                                            context.pool_budget);
     if (!status.success()) {
         return status;
     }
@@ -1912,7 +1913,8 @@ bool bind_and_execute_prepared_command_program(const CommandProgramExecutionCont
     TransientArena::AllocationLease lease = context.transient_arena->acquire_allocation_lease();
     {
         const HostGapScope scope("prep.transient");
-        status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size);
+        status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size,
+                                                            context.pool_budget);
     }
     if (!status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(status));
@@ -2011,7 +2013,8 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
         {
             const HostGapScope scope("replay.transient");
             lease  = context.transient_arena->acquire_allocation_lease();
-            status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size);
+            status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size,
+                                                            context.pool_budget);
             if (status.success()) {
                 transient_allocation = lease.current_allocation();
                 if (!bind_prepared_command_program_transients(commands, transient_allocation, prepared)) {

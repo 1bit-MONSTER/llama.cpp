@@ -147,6 +147,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         &context_.host_weights,
         &context_.device->host_buffers,
         &context_.graph_replay_state,
+        context_.device->memory_budget,
     };
     PreparedCommandProgramCacheExecutionResult execution;
     {
