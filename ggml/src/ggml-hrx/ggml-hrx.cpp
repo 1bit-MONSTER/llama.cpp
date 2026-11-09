@@ -2,6 +2,7 @@
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
 #include "hrx-1bit-safety.h"
+#include "runtime/failure-status.h"
 #include "ggml-hrx-dmabuf.h"
 
 #include "backend-buffer-binding.h"
@@ -803,6 +804,12 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
     auto *                                context  = static_cast<ggml_backend_hrx_context *>(backend->context);
     const ggml::hrx::GraphExecutor        executor = ggml::hrx::GraphExecutor(*context);
     const ggml::hrx::GraphExecutionResult result   = executor.execute(*graph);
+    // engine #1618: a resource failure must not leave this backend as a generic failure. llama.cpp maps ALLOC_FAILED to
+    // its own -2 and FAILED to -3, and the server prints one sentence for "out of memory" and another for "Compute error"
+    // - so without this classification a host-memory allocation the pool could not serve reads to the client as a kernel
+    // fault, which is what made #1618 look like a flash-attention defect for a day.
+    enum ggml_status code = result.success() ? GGML_STATUS_SUCCESS
+                                             : ggml::hrx::failure_status(result.status.errors(), result.code);
     if (!result.success()) {
         // Print the LAST reason: a matcher that declined also logs why, and those lines come first, so
         // errors().front() named a matcher while the graph failed on the node left without a dispatch
@@ -822,7 +829,7 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
             }
         }
     }
-    return result.code;
+    return code;
 }
 
 static const ggml_backend_i backend_i = {

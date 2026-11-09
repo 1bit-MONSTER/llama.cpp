@@ -3856,7 +3856,15 @@ private:
                     err = "Invalid input batch.";
                 }
 
-                if (ret < -1) {
+                if (ret == -2) {
+                    // llama_decode's -2 is GGML_STATUS_ALLOC_FAILED: the backend could not get the memory a node needed
+                    // (engine #1618). Saying "Compute error" here is what made a pool exhaustion read as a kernel fault
+                    // to every client, so name the resource and the way out.
+                    err = "Out of memory: the device could not allocate the memory this step needs. Free the device "
+                          "(another process's resident model, a smaller -c/-ngl, or a smaller -ub) and retry.";
+                }
+
+                if (ret < -1 && ret != -2) {
                     // TODO: update slot state based on llama_memory_seq_pos_min() and llama_memory_seq_pos_max()
                     err = "Compute error.";
                 }
