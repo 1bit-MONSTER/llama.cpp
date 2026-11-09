@@ -57,6 +57,12 @@ LLAMA_API size_t llama_kv_share_tensor_map(struct llama_context * ctx, struct ll
 // Returns how many regions exist; fills at most n_out of them.
 LLAMA_API size_t llama_kv_share_regions(struct llama_context * ctx, struct llama_kv_share_region * out, size_t n_out);
 
+// [1bit] Target 1: the layout a context EXPECTS of its regions -- one entry per chunk, `size` bytes and the `layout` hash an
+// importer checks -- with no exporter in the loop. `llama_kv_share_regions` reports what a context *did* export (which needs
+// one); this reports what it would *accept*, so a provider can be tested against a region the test fabricates
+// (engine#753: the NPU writer's gate then needs no GPU).
+LLAMA_API size_t llama_kv_share_layout(struct llama_context * ctx, struct llama_kv_share_region * out, size_t n_out);
+
 // [1bit] Target 1: map those regions in a context of the same model and context params (the prefill provider),
 // so its KV tensors are the owner's memory. Needs a backend that can map a dma-buf (ggml-cpu can; HRX exports).
 LLAMA_API bool llama_kv_share_import(struct llama_context * ctx, const struct llama_kv_share_region * regions, size_t n_regions);

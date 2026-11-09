@@ -142,6 +142,11 @@ public:
     // (llama-kv-share.cpp). The provider side of a handoff, after share_import.
     bool share_tensors(std::vector<llama_kv_shared_tensor> & out) const;
 
+    // [1bit] target 1: the chunks this cache EXPECTS (size + layout hash) for the context it would create, computed with no
+    // export -- what an importer checks against (llama-kv-share.cpp). Named apart from the free share_layout() it calls,
+    // which a member of the same name would hide.
+    bool expects_layout(std::vector<llama_kv_shared_region_pod> & out) const;
+
     //
     // llama_memory_i
     //

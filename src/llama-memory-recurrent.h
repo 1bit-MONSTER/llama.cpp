@@ -62,6 +62,9 @@ public:
     // reads once on every handoff whatever the prompt length is; as a shared region it stays where it is.
     bool share_from(const llama_memory_recurrent & src);
     bool share_import(const std::vector<llama_kv_shared_region_pod> & regions, size_t & next);
+
+    // [1bit] the recurrent state is not handed over as a region; the attention cache's chunks are the layout
+    bool expects_layout(std::vector<llama_kv_shared_region_pod> & out) const;
     bool cells_copy_from(const llama_memory_recurrent & src);
 
     // [1bit] target 1: an outside provider prefilled into the exported region, so its last cell holds the state
