@@ -90,6 +90,25 @@ int main() {
         REQUIRE(!p.refuse);
     }
 
+    {
+        // THE ORDER (engine#1711 review): reserve before allocate, and the replaced capacity released before either.
+        // A first version of this change allocated first and reserved after, so the allocation that can fault ran
+        // before admission -- which is the failure the change exists to close, reintroduced by ordering.
+        using ggml::hrx::TransientArenaStep;
+        using ggml::hrx::transient_arena_steps;
+        const auto grow = transient_arena_steps(plan_transient_arena_charge(1024, 4096, 8192));
+        REQUIRE(grow.size() == 3);
+        REQUIRE(grow[0] == TransientArenaStep::ReleaseOld);
+        REQUIRE(grow[1] == TransientArenaStep::Reserve);
+        REQUIRE(grow[2] == TransientArenaStep::Allocate);
+        const auto first = transient_arena_steps(plan_transient_arena_charge(0, 4096, 8192));
+        REQUIRE(first.size() == 2);
+        REQUIRE(first[0] == TransientArenaStep::Reserve);
+        REQUIRE(first[1] == TransientArenaStep::Allocate);
+        const auto none = transient_arena_steps(plan_transient_arena_charge(4096, 1024, 8192));
+        REQUIRE(none.empty());
+    }
+
     if (failures != 0) {
         std::printf("test-hrx-arena-budget: %d failure(s)\n", failures);
         return 1;

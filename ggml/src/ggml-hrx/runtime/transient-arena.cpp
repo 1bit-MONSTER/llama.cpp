@@ -91,12 +91,15 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         status.log("missing HRX stream for transient arena allocation");
         return status;
     }
-    // engine#1711: the scratch is charged against the pool budget like a tensor buffer, so a launch whose scratch does
-    // not fit is refused here instead of reaching the runtime allocator and taking the box to the fault line.
+    // engine#1711: the scratch is charged against the pool budget like a tensor buffer. The COARSE check here is a fast
+    // path for the obvious case only -- a request larger than the whole budget cannot fit however empty the pool is. It
+    // is not the gate: the gate is `pool_reserve` below, which is the only thing that can see what the tensor buffers
+    // have already taken, and it runs BEFORE the allocator (review of this PR: reserving after the allocation lets the
+    // allocation that can fault happen first, which is the whole failure this change exists to close).
     if (budget_ != nullptr && *budget_ != 0) {
         const TransientArenaCharge plan = plan_transient_arena_charge(allocation_capacity_, required_size, *budget_);
         if (plan.refuse) {
-            status.log("transient arena: refusing a %zu byte scratch: the pool budget is %zu bytes (GGML_HRX_POOL_LIMIT_MB "
+            status.log("transient arena: refusing a %zu byte scratch: the whole pool budget is %zu bytes (GGML_HRX_POOL_LIMIT_MB "
                        "or the GTT ceiling, engine #680/#1711)",
                        plan.charge_bytes, *budget_);
             return status;
@@ -117,6 +120,20 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         allocation_id_       = kInvalidTransientArenaAllocationId;
     }
 
+    // The replaced capacity goes back to the pool first, then the request is admitted, and only an admitted request
+    // reaches the allocator: reserve-then-allocate is the order that makes "refused here rather than faulting the
+    // device" true. The reverse order was in the first version of this change and it left the faulting allocation
+    // exactly where it was.
+    release_budget_locked();
+    const bool charged = budget_ != nullptr && *budget_ != 0;
+    if (charged && !onebit::pool_reserve(*budget_, required_size, "transient arena scratch")) {
+        status.log("transient arena: refusing a %zu byte scratch: the pool budget is %zu bytes and the tensor buffers "
+                   "are already charged against it (GGML_HRX_POOL_LIMIT_MB or the GTT ceiling, engine #680/#1711)",
+                   required_size, *budget_);
+        return status;
+    }
+    budget_charged_ = charged ? required_size : 0;
+
     hrx_buffer_params_t params = {
         HRX_MEMORY_TYPE_DEVICE_LOCAL,
         HRX_MEMORY_ACCESS_ALL,
@@ -126,19 +143,11 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
     hrx_buffer_t allocation = nullptr;
     if (ErrorResult error = take_status(
             hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, required_size, &allocation))) {
+        release_budget_locked();  // the reservation is not kept for an allocation that did not happen
         status.log("allocate transient arena: %s", error->c_str());
         return status;
     }
 
-    release_budget_locked();
-    if (budget_ != nullptr && *budget_ != 0 &&
-        !onebit::pool_reserve(*budget_, required_size, "transient arena scratch")) {
-        // Cannot happen after the plan above (the same comparison, the same lock), and it is not silent if it does.
-        hrx_buffer_release(allocation);
-        status.log("transient arena: the pool refused a %zu byte scratch after planning it", required_size);
-        return status;
-    }
-    budget_charged_      = required_size;
     buffer_              = allocation;
     allocation_capacity_ = required_size;
     allocation_id_       = next_allocation_id();

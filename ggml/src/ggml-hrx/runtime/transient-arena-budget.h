@@ -30,6 +30,7 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 namespace ggml::hrx {
 
@@ -38,8 +39,13 @@ struct TransientArenaCharge {
     bool   release_first = false;  // its current capacity must go back to the pool first (it is being replaced)
     size_t release_bytes = 0;
     size_t charge_bytes  = 0;  // what the pool must accept before the allocation may happen
-    bool   refuse        = false;  // the budget cannot take charge_bytes
+    bool   refuse        = false;  // a request larger than the WHOLE budget: a fast path, not the gate (see below)
 };
+
+// The order the arena must perform the steps in, so a test can pin it without an allocator (engine#1711's review: the
+// first version reserved AFTER allocating, which left the faulting allocation exactly where it was). Reserve comes
+// before allocate, and the replaced capacity is released before either.
+enum class TransientArenaStep { ReleaseOld, Reserve, Allocate };
 
 // capacity: the arena's current allocation (0 when it has none). required: the size the caller needs. budget: the pool
 // budget the device was admitted with (0 = unset, which the guardrail treats as unbounded).
@@ -54,6 +60,21 @@ inline TransientArenaCharge plan_transient_arena_charge(size_t capacity, size_t 
     plan.charge_bytes  = required;
     plan.refuse        = budget != 0 && required > budget;
     return plan;
+}
+
+// The steps for a planned grow, in order. `release_old` is dropped when there is nothing to replace, so a test can assert
+// the relative order of the two that matter rather than a fixed length.
+inline std::vector<TransientArenaStep> transient_arena_steps(const TransientArenaCharge & plan) {
+    std::vector<TransientArenaStep> steps;
+    if (!plan.allocate) {
+        return steps;
+    }
+    if (plan.release_first) {
+        steps.push_back(TransientArenaStep::ReleaseOld);
+    }
+    steps.push_back(TransientArenaStep::Reserve);
+    steps.push_back(TransientArenaStep::Allocate);
+    return steps;
 }
 
 }  // namespace ggml::hrx
