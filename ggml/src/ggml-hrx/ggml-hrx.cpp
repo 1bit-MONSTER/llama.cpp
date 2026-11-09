@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <cinttypes>
+#include <cstdio>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -510,6 +511,11 @@ static bool placement_fallback_quiet() {
     return end != value && *end == '\0' && parsed <= 0;
 }
 
+// defined below device registration; the strict-placement report needs the live pool state. Returns false when NEITHER
+// source answered and the out-params are a fallback, so a caller can say "unavailable" instead of printing a number it
+// did not measure (a manufactured 0.0 GiB in use is the same lie the ceiling exists to prevent).
+static bool device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes);
+
 static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, void * user_data) {
     const bool strict = environment_flag_enabled("GGML_HRX_STRICT");
     const int  level  = placement_report_level();
@@ -589,10 +595,31 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
     }
 
     if (strict && first_off != nullptr) {
-        GGML_ABORT("%s: GGML_HRX_STRICT=1: \"%s\" is %s %s ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] and is not placed on HRX; %" PRId64 " of %d nodes off HRX (%s), %d splits\n",
+        // The split is a function of the *shared* GTT pool, which other processes on this APU move, so a strict refusal is
+        // not a property of the model or of the build. Without the pool numbers an operator reads "X is not placed on HRX"
+        // as a model problem; with them the same line says which state produced the split and that a fallback exists
+        // (strict-placement ticket, measured on this box: 37.5 GiB in use serves, 47.5 GiB in use refuses).
+        // The pool segment is a STRING, not three %.1f arguments: when neither source answered, printing "0.0 of 120.0 GiB
+        // in use" would manufacture the most reassuring possible number at the exact moment the operator is asking whether
+        // the box or the model caused the refusal. Unavailable has to be sayable.
+        char pool_detail[160] = "state unavailable (neither the driver nor the GTT counters answered)";
+        {
+            auto * hrx_context = hrx != nullptr ? static_cast<ggml_backend_hrx_context *>(hrx->context) : nullptr;
+            if (hrx_context != nullptr && hrx_context->device != nullptr) {
+                size_t free_bytes = 0, total_bytes = 0;
+                if (device_free_total(hrx_context->device, free_bytes, total_bytes)) {
+                    const double gib  = 1024.0 * 1024.0 * 1024.0;
+                    const double use  = (double) (total_bytes > free_bytes ? total_bytes - free_bytes : 0) / gib;
+                    const double tot  = (double) total_bytes / gib;
+                    const double budg = (double) hrx_context->device->memory_budget / gib;
+                    std::snprintf(pool_detail, sizeof(pool_detail), "%.1f of %.1f GiB in use, HRX pool budget %.1f GiB", use, tot, budg);
+                }
+            }
+        }
+        GGML_ABORT("%s: GGML_HRX_STRICT=1: \"%s\" is %s %s ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] and is not placed on HRX; %" PRId64 " of %d nodes off HRX (%s), %d splits. Shared GTT pool: %s - the split follows that pool, so --no-strict-device (or a retry on a quieter box) runs those nodes on the CPU\n",
                    __func__, first_off->name, ggml_op_name(first_off->op), ggml_type_name(first_off->type),
                    first_off->ne[0], first_off->ne[1], first_off->ne[2], first_off->ne[3], off_nodes, graph->n_nodes,
-                   off_detail.c_str(), ggml_backend_sched_get_n_splits(sched));
+                   off_detail.c_str(), ggml_backend_sched_get_n_splits(sched), pool_detail);
     }
 
     if (level >= 1) {
@@ -824,23 +851,24 @@ static const char * device_description(ggml_backend_dev_t device) {
 // GTT free and total as the driver sees them. hrx_device_memory_info is the proper source but the AMDGPU HAL does
 // not report availability (libhrx: "did not provide available memory in its observation"), so the driver's own
 // counters are the fallback - and they are the only cross-process view, which is what the #680 ceiling needs.
-static void device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes) {
+static bool device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes) {
     size_t hal_free  = 0;
     size_t hal_total = 0;
     if (hrx_status_is_ok(hrx_device_memory_info(device_ctx->device, &hal_free, &hal_total)) && hal_total != 0) {
         free_bytes  = hal_free;
         total_bytes = hal_total;
-        return;
+        return true;
     }
     size_t gtt_total = 0;
     size_t gtt_used  = 0;
     if (ggml::hrx::onebit::gtt_counters(gtt_total, gtt_used) && gtt_total != 0) {
         total_bytes = gtt_total;
         free_bytes  = gtt_total > gtt_used ? gtt_total - gtt_used : 0;
-        return;
+        return true;
     }
     free_bytes  = device_ctx->memory_total;
     total_bytes = device_ctx->memory_total;
+    return false;
 }
 
 static void device_memory(ggml_backend_dev_t device, size_t * free, size_t * total) {
