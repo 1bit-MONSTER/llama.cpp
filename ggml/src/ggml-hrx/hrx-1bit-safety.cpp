@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <mutex>
 #include <cinttypes>
@@ -82,35 +83,71 @@ bool gtt_counters(size_t & total, size_t & used) {
     return false;
 }
 
-size_t pool_budget(size_t memory_total, size_t memory_free) {
+bool pool_budget_is_fixed_limit() {
+    const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
+    return env != nullptr && std::atoll(env) > 0;
+}
+
+pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, size_t memory_available) {
+    pool_budget_terms_t t;
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     if (env != nullptr) {
         const long long mb = std::atoll(env);
         if (mb > 0) {
-            return static_cast<size_t>(mb) * kMiB;
+            // An operator-set limit is the budget outright, not a min() of terms; keeping it distinguishable is what
+            // pool_budget_is_fixed_limit() reports so a caller can word the line correctly (llama.cpp #255).
+            t.host_available = memory_available;
+            t.gtt_term       = static_cast<size_t>(mb) * kMiB;
+            t.budget         = t.gtt_term;
+            return t;
         }
     }
     if (memory_total == 0) {
-        return 0;  // unknown device size: keep the unfettered behaviour
+        return t;  // unknown device size: keep the unfettered behaviour
     }
     const size_t reserve = pool_reserve_bytes();
     const size_t ceiling = memory_total > reserve ? memory_total - reserve : 0;
     const size_t in_use  = memory_total > memory_free ? memory_total - memory_free : 0;
-    return ceiling > in_use ? ceiling - in_use : 0;
+    t.gtt_term       = ceiling > in_use ? ceiling - in_use : 0;
+    t.host_available = memory_available;
+    // engine #1502: on an APU the GTT counter is not the allocator's ceiling, so the budget is the smaller of the two terms -
+    // the same model the engine's own admission check has always used (app/mem_admit.h).
+    if (memory_available != kHostUnknown && memory_available < t.gtt_term) {
+        t.budget     = memory_available;
+        t.host_bound = true;
+    } else {
+        t.budget = t.gtt_term;
+    }
+    return t;
+}
+
+size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available) {
+    return pool_budget_terms(memory_total, memory_free, memory_available).budget;
 }
 
 // engine #1417: the budget above is a snapshot taken at device open, and the ledger is per-process, so another process
 // growing its model after we opened is invisible to it - the check passes and the allocation reaches a device that is at its
-// ceiling. GGML_HRX_POOL_LIVE_CHECK=1 adds a live consult of the driver's own counters to the reservation, so the promise
-// "refused here rather than faulting the device" holds under concurrency too.
+// ceiling, where it fails inside the allocator instead of at admission. A live consult of the driver's own counters closes
+// that window, and it is ON BY DEFAULT (engine #1417's report was a 74.8 GiB reading at device open against ~90 GiB when the
+// allocation happened; no fixed threshold on those numbers can separate the two).
 //
-// Off by default, deliberately: enabling it makes admission depend on what other processes are doing, so a launch that works
-// on an idle box can refuse on a busy one. That trade is the operator's to take; this code only makes it available.
-// GGML_HRX_POOL_LIVE_MARGIN_MB leaves headroom for concurrent growth (default 0 - refuse only when the box truly has no room).
+// The trade the old default made is now the operator's opt-OUT rather than opt-in: admission depends on what other processes
+// are doing, so a launch that fits an idle box can be refused on a busy one. GGML_HRX_POOL_LIVE_CHECK=0 restores the
+// open-time snapshot exactly.
+//
+// GGML_HRX_POOL_LIVE_MARGIN_MB leaves headroom for growth that happens between the cached counters and the allocation
+// (default 256 MiB - irrelevant on a quiet box's 120 GiB pool, enough to absorb the cache window and the rounding in the
+// driver's counters).
 static bool pool_live_check_enabled() {
     static const bool enabled = [] {
         const char * env = std::getenv("GGML_HRX_POOL_LIVE_CHECK");
-        return env != nullptr && env[0] != '\0' && std::atoi(env) != 0;
+        if (env == nullptr || env[0] == '\0') {
+            return true;
+        }
+        // Fail safe: only an explicit 0/false/no turns the guard off. std::atoi would read "true", "yes" or a typo as 0 and
+        // silently remove the check, which is the wrong direction for a guardrail.
+        const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(env[0])));
+        return !(c == '0' || c == 'f' || c == 'n');
     }();
     return enabled;
 }
@@ -148,7 +185,7 @@ static size_t pool_live_margin_bytes() {
     static const size_t margin = [] {
         const char * env = std::getenv("GGML_HRX_POOL_LIVE_MARGIN_MB");
         if (env == nullptr || env[0] == '\0') {
-            return static_cast<size_t>(0);
+            return static_cast<size_t>(256) * kMiB;
         }
         const long long mb = std::atoll(env);
         return mb > 0 ? static_cast<size_t>(mb) * 1024u * 1024u : static_cast<size_t>(0);
@@ -182,14 +219,15 @@ pool_budget_state_t pool_budget_note_refusal(pool_budget_state_t state, size_t s
     return state;
 }
 
-pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state) {
+pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state,
+                                        size_t memory_available) {
     if (state.cap == 0) {
         return state;  // no cap in force: the registration-time budget stands
     }
     if (free_bytes > state.cap_free) {
         // The pool has grown past the figure the refusal saw, so the cap's evidence no longer holds: a transient refusal must not
         // become a permanent ceiling (engine #1502 review). Recompute from the current figures and drop the cap.
-        const size_t uncapped = pool_budget(memory_total, free_bytes + allocated);
+        const size_t uncapped = pool_budget(memory_total, free_bytes + allocated, memory_available);
         GGML_LOG_INFO("%s: the pool grew from %.1f MiB to %.1f MiB free since the last refusal; lifting the %.1f MiB cap to "
                       "%.1f MiB\n",
                       __func__, state.cap_free / (double) kMiB, free_bytes / (double) kMiB, state.cap / (double) kMiB,
@@ -201,9 +239,18 @@ pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, 
     }
     // The pool is no larger than it was at the refusal: keep the cap AND its evidence, and bound only this call's budget by it.
     // Clearing it here would freeze the low reading for the rest of the process (engine #1502 review).
-    const size_t capped = pool_budget(memory_total, free_bytes + allocated);
+    const size_t capped = pool_budget(memory_total, free_bytes + allocated, memory_available);
     state.budget = state.cap < capped ? state.cap : capped;
     return state;
+}
+
+// Does |size| fit the live pool with |margin| of headroom? Pure, so the test drives it: the numbers come from the driver's
+// counters, and the arithmetic that matters is the underflow guard (|used| can exceed |total| transiently) and the margin
+// saturation (|margin| is an operator input and may be absurd).
+bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin) {
+    const size_t live_free = used >= total ? 0 : total - used;
+    const size_t wanted    = size + (margin > SIZE_MAX - size ? SIZE_MAX - size : margin);
+    return wanted <= live_free;
 }
 
 bool pool_reserve(size_t budget, size_t size, const char * what) {
@@ -212,13 +259,12 @@ bool pool_reserve(size_t budget, size_t size, const char * what) {
         size_t total = 0;
         size_t in_use = 0;
         if (pool_live_counters(total, in_use)) {
-            const size_t live_free = in_use >= total ? 0 : total - in_use;
-            const size_t margin    = pool_live_margin_bytes();
-            const size_t wanted    = size + (margin > SIZE_MAX - size ? SIZE_MAX - size : margin);
-            if (wanted > live_free) {
+            const size_t margin = pool_live_margin_bytes();
+            if (!pool_live_fits(size, total, in_use, margin)) {
+                const size_t live_free = in_use >= total ? 0 : total - in_use;
                 GGML_LOG_ERROR("%s: HRX pool limit: %s of %.1f MiB does not fit the live device budget "
-                               "(%.1f MiB free - %.1f MiB margin of %.1f MiB); unset GGML_HRX_POOL_LIVE_CHECK to use the "
-                               "open-time snapshot instead (engine #1417)\n",
+                               "(%.1f MiB free - %.1f MiB margin of %.1f MiB); this is the live check, on by default since "
+                               "engine #1417 - set GGML_HRX_POOL_LIVE_CHECK=0 to use the open-time snapshot instead\n",
                                __func__, what, size / (double) kMiB, live_free / (double) kMiB, margin / (double) kMiB,
                                total / (double) kMiB);
                 return false;

@@ -353,6 +353,50 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(weight_stats.resident_bytes == 0);
 }
 
+// engine #856: a copy larger than the staging cap goes through the capped buffer in chunks. The bytes must arrive
+// intact across chunk edges (a non-multiple tail, a non-zero offset) and the staging buffer must stay at the cap
+// instead of growing to the copy size.
+// Copies through the capped staging buffer: exactly the cap, one byte over it, and two chunks plus a partial tail,
+// all at an unaligned offset. Each must arrive intact and leave the staging buffer at or below the cap.
+static void run_chunked_copy_checks(ggml_backend_t backend) {
+    ggml_backend_hrx_context * hrx = backend_context(backend);
+
+    constexpr size_t kCap    = 64ull << 20;
+    constexpr size_t kOffset = 4096 + 12;
+    constexpr size_t kMax    = 2 * kCap + 12345;
+    ggml_init_params params  = {};
+    params.mem_size          = 16 * 1024;
+    params.no_alloc          = true;
+    ggml_context * context   = ggml_init(params);
+    REQUIRE(context != nullptr);
+    ggml_tensor *         tensor = ggml_new_tensor_1d(context, GGML_TYPE_I8, static_cast<int64_t>(kOffset + kMax));
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_buffer(backend, kOffset + kMax + 4096);
+    REQUIRE(buffer != nullptr);
+    tensor->buffer = buffer;
+    tensor->data   = ggml_backend_buffer_get_base(buffer);
+    REQUIRE(ggml_backend_buffer_init_tensor(buffer, tensor) == GGML_STATUS_SUCCESS);
+
+    uint32_t x = 0x9e3779b9u;
+    for (const size_t bytes : { kCap, kCap + 1, kMax }) {
+        std::vector<uint8_t> input(bytes);
+        for (uint8_t & b : input) {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            b = static_cast<uint8_t>(x);
+        }
+        ggml_backend_tensor_set(tensor, input.data(), kOffset, bytes);
+        REQUIRE(hrx->device->copy_staging_size <= kCap);
+        std::vector<uint8_t> output(bytes, 0);
+        ggml_backend_tensor_get(tensor, output.data(), kOffset, bytes);
+        REQUIRE(hrx->device->copy_staging_size <= kCap);
+        REQUIRE(std::memcmp(output.data(), input.data(), bytes) == 0);
+    }
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(context);
+}
+
 template <typename F>
 static void run_with_hrx_backend(F && f) {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
@@ -386,6 +430,11 @@ static void register_hrx_buffer_cases(test_runner::Suite & suite) {
     suite.device_case("host_weight_cache", [] {
         run_with_hrx_backend([](ggml_backend_t, ggml_backend_hrx_context * context) {
             run_host_weight_cache_checks(context);
+        });
+    });
+    suite.device_case("chunked_copy", [] {
+        run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
+            run_chunked_copy_checks(backend);
         });
     });
 }

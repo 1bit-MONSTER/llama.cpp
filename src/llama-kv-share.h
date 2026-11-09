@@ -36,6 +36,18 @@ struct llama_kv_shared_region {
     ~llama_kv_shared_region();
 };
 
+// [1bit] target 1, the table a prefill provider needs: which cache tensor sits where inside its region, and how wide
+// one position's row is. `share_layout()` computes exactly this and `llama_share_import` maps the regions over the
+// tensors; until now the offsets were dropped on the way (engine#753).
+struct llama_kv_shared_tensor {
+    uint32_t layer     = 0;   // the model's layer index
+    uint32_t is_v      = 0;   // 0 = K, 1 = V
+    uint32_t region    = 0;   // which entry of the region list this tensor lands in
+    uint64_t offset    = 0;   // bytes from the start of that region
+    uint64_t bytes     = 0;   // the whole tensor
+    uint64_t row_elems = 0;   // elements per position (ne[0]): the row a provider writes
+};
+
 // the same region, handed out: a POD, so whoever receives the list does not close the owner's fd
 struct llama_kv_shared_region_pod {
     int      fd     = -1;

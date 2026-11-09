@@ -10,6 +10,7 @@
 #include "runtime/hrx-sleeping-wait.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/transient-arena.h"
+#include "hrx-1bit-safety.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -387,7 +388,8 @@ static Status ensure_transient_arena(const CommandProgramExecutionContext & cont
     if (commands.transients.arena_size == 0) {
         return status;
     }
-    status = context.transient_arena->ensure_capacity(context.device, context.stream, commands.transients.arena_size);
+    status = context.transient_arena->ensure_capacity(context.device, context.stream, commands.transients.arena_size,
+                                                            context.pool_budget);
     if (!status.success()) {
         return status;
     }
@@ -709,9 +711,31 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
                 continue;
             }
             HostWeightAcquireResult resident =
-                context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source);
+                context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source, context.pool_budget);
             if (!resident.valid()) {
-                status.log("materialize host weight value %d failed", binding.value.value);
+                // engine #1618: this line and the HSA error behind it carried no pool figure,
+                // so an 89 GB model materialized against a 66.6 GiB budget read as a
+                // flash-attention bug. Name the size and the budget the upload competed for.
+                size_t gtt_total = 0, gtt_used = 0;
+                if (ggml::hrx::onebit::gtt_counters(gtt_total, gtt_used)) {
+                    const bool  fixed    = ggml::hrx::onebit::pool_budget_is_fixed_limit();
+                    const size_t gtt_free = gtt_total > gtt_used ? gtt_total - gtt_used : 0;
+                    const size_t left     = ggml::hrx::onebit::pool_budget(gtt_total, gtt_free);
+                    const double as_gib   = 1.0 / (1024.0 * 1024.0 * 1024.0);
+                    // #1618 review: pool_budget() is the headroom LEFT NOW (ceiling - in use), not the figure the
+                    // open-time guardrail line calls the pool budget, and under GGML_HRX_POOL_LIMIT_MB it is a fixed
+                    // limit instead. Naming it correctly is the whole point of this line.
+                    status.log("materialize host weight value %d failed: %zu bytes requested, "
+                               "GTT %.2f of %.2f GiB in use, %s %.2f GiB%s",
+                               binding.value.value, source.length,
+                               (double)gtt_used * as_gib, (double)gtt_total * as_gib,
+                               fixed ? "fixed limit" : "headroom now", (double)left * as_gib,
+                               fixed ? " (GGML_HRX_POOL_LIMIT_MB)"
+                                     : " (ceiling - in use; the open-time pool budget is the guardrail line)");
+                } else {
+                    status.log("materialize host weight value %d failed: %zu bytes requested",
+                               binding.value.value, source.length);
+                }
                 status.append(resident.status);
                 materialized.push_back(binding);
                 continue;
@@ -995,7 +1019,8 @@ static Status rebind_prepared_host_weights(const CommandProgramExecutionContext 
         // Evicted since this program was prepared (the cache is bounded, see HostWeightCache::limit): put it back and
         // point the prepared bindings at the new buffer. The old one is gone, so nothing else may still reference it.
         HostWeightAcquireResult materialized =
-            context.host_weights->acquire(context.device, context.stream, *context.host_transfers, resident.source);
+            context.host_weights->acquire(context.device, context.stream, *context.host_transfers, resident.source,
+                                          context.pool_budget);
         if (!materialized.valid()) {
             status.append(materialized.status);
             status.log("re-materialize resident host weight value %d failed", resident.value.value);
@@ -1912,7 +1937,8 @@ bool bind_and_execute_prepared_command_program(const CommandProgramExecutionCont
     TransientArena::AllocationLease lease = context.transient_arena->acquire_allocation_lease();
     {
         const HostGapScope scope("prep.transient");
-        status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size);
+        status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size,
+                                                            context.pool_budget);
     }
     if (!status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(status));
@@ -2011,7 +2037,8 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
         {
             const HostGapScope scope("replay.transient");
             lease  = context.transient_arena->acquire_allocation_lease();
-            status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size);
+            status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size,
+                                                            context.pool_budget);
             if (status.success()) {
                 transient_allocation = lease.current_allocation();
                 if (!bind_prepared_command_program_transients(commands, transient_allocation, prepared)) {

@@ -122,6 +122,11 @@ public:
     // [1bit] zero-copy KV sharing (llama-kv-share.cpp)
     bool share_from(const llama_kv_cache & src);
     bool share_import(const std::vector<llama_kv_shared_region_pod> & regions, size_t & next);
+
+    // [1bit] how many regions share_import mapped: share_tensors uses it to refuse a walk that met a different number of
+    // buffers than were imported (a region holding no K/V tensor of the walked layers would otherwise shift every later
+    // ordinal by one, and a provider would write into the wrong region with nothing in the message)
+    uint32_t n_share_regions = 0;
     bool cells_copy_from(const llama_kv_cache & src);
 
     // [1bit] target 1: this cache owns the KV region and an outside prefill provider has already written the
@@ -132,6 +137,15 @@ public:
     // collects the attention cache's first). A POD (not llama_kv_shared_region, whose destructor closes the fd) so
     // the list can be handed out without closing it.
     bool share_regions(std::vector<llama_kv_shared_region_pod> & out) const;
+
+    // [1bit] target 1: where each of this cache's K/V tensors sits inside the region it now maps, and its row width
+    // (llama-kv-share.cpp). The provider side of a handoff, after share_import.
+    bool share_tensors(std::vector<llama_kv_shared_tensor> & out) const;
+
+    // [1bit] target 1: the chunks this cache EXPECTS (size + layout hash) for the context it would create, computed with no
+    // export -- what an importer checks against (llama-kv-share.cpp). Named apart from the free share_layout() it calls,
+    // which a member of the same name would hide.
+    bool expects_layout(std::vector<llama_kv_shared_region_pod> & out) const;
 
     //
     // llama_memory_i

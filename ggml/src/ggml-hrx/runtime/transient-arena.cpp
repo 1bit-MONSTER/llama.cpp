@@ -1,5 +1,8 @@
 #include "transient-arena.h"
 
+#include "hrx-1bit-safety.h"   // engine#1711: the pool ledger (pool_reserve/pool_release)
+#include "transient-arena-charge.h"
+
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 
@@ -14,13 +17,14 @@ TransientArena::AllocationLease::AllocationLease(TransientArena & arena, std::un
 
 Status TransientArena::AllocationLease::ensure_capacity(hrx_device_t device,
                                                         hrx_stream_t stream,
-                                                        size_t       required_size) {
+                                                        size_t       required_size,
+                                                        size_t       pool_budget) {
     Status status;
     if (arena_ == nullptr || !lock_.owns_lock()) {
         status.log("missing transient arena allocation lease");
         return status;
     }
-    return arena_->ensure_capacity_locked(device, stream, required_size);
+    return arena_->ensure_capacity_locked(device, stream, required_size, pool_budget);
 }
 
 TransientArenaAllocationRef TransientArena::AllocationLease::current_allocation() const {
@@ -44,6 +48,10 @@ void TransientArena::clear() {
         hrx_buffer_release(buffer);
     }
     diagnostic_retired_buffers_.clear();
+    if (charged_bytes_ > 0) {
+        ggml::hrx::onebit::pool_release(charged_bytes_);   // engine#1711: retired buffers were charged too
+        charged_bytes_ = 0;
+    }
     allocation_capacity_ = 0;
     allocation_id_       = kInvalidTransientArenaAllocationId;
 }
@@ -56,16 +64,18 @@ uint64_t TransientArena::next_allocation_id() {
     return id;
 }
 
-Status TransientArena::ensure_capacity(hrx_device_t device, hrx_stream_t stream, size_t required_size) {
+Status TransientArena::ensure_capacity(hrx_device_t device, hrx_stream_t stream, size_t required_size,
+                                      size_t pool_budget) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return ensure_capacity_locked(device, stream, required_size);
+    return ensure_capacity_locked(device, stream, required_size, pool_budget);
 }
 
 TransientArena::AllocationLease TransientArena::acquire_allocation_lease() {
     return AllocationLease(*this, std::unique_lock<std::mutex>(mutex_));
 }
 
-Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t stream, size_t required_size) {
+Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t stream, size_t required_size,
+                                               size_t pool_budget) {
     Status status;
     const bool diagnostic_fresh = std::getenv("GGML_HRX_DIAGNOSTIC_FRESH_TRANSIENT_ARENA") != nullptr;
     if (required_size == 0 || (!diagnostic_fresh && allocation_capacity_ >= required_size)) {
@@ -79,6 +89,19 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         status.log("missing HRX stream for transient arena allocation");
         return status;
     }
+    // engine#1711: the guardrail used to be consulted only by the buffer-type allocator, so the arena grew uncharged and a
+    // launch that ran out of pool memory faulted instead of being refused (#680's promise covered tensors only). The charge
+    // is taken BEFORE the old buffer is released: a refusal must leave the arena with the capacity it already had.
+    const ArenaChargePlan charge = plan_arena_charge(required_size, allocation_capacity_, diagnostic_fresh);
+    bool                  charge_taken = false;
+    if (charge.reserve_bytes > 0 && pool_budget > 0) {
+        if (!ggml::hrx::onebit::pool_reserve(pool_budget, charge.reserve_bytes, "the transient arena")) {
+            status.log("refused: the transient arena needs %zu more bytes and the pool has no room", charge.reserve_bytes);
+            return status;
+        }
+        charge_taken   = true;
+        charged_bytes_ += charge.reserve_bytes;
+    }
     if (buffer_ != nullptr) {
         if (diagnostic_fresh) {
             diagnostic_retired_buffers_.push_back(buffer_);
@@ -88,6 +111,12 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
             return status;
         }
         hrx_buffer_release(buffer_);
+            // the superseded allocation is gone from the device, so its charge goes with it; in diagnostic mode the
+            // buffer was retired above and stays resident, so its charge stays too.
+            if (charge.release_bytes > 0) {
+                ggml::hrx::onebit::pool_release(charge.release_bytes);
+                charged_bytes_ -= charged_bytes_ >= charge.release_bytes ? charge.release_bytes : charged_bytes_;
+            }
         }
         buffer_              = nullptr;
         allocation_capacity_ = 0;
@@ -104,6 +133,10 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
     if (ErrorResult error = take_status(
             hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, required_size, &allocation))) {
         status.log("allocate transient arena: %s", error->c_str());
+        if (charge_taken) {
+            ggml::hrx::onebit::pool_release(charge.reserve_bytes);
+            charged_bytes_ -= charged_bytes_ >= charge.reserve_bytes ? charge.reserve_bytes : charged_bytes_;
+        }
         return status;
     }
 

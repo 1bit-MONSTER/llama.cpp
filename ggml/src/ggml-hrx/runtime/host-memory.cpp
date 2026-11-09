@@ -4,6 +4,8 @@
 #include "ggml-quants.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
+#include "hrx-1bit-safety.h"            // engine#1711: pool_reserve/pool_release
+#include "transient-arena-charge.h"     // engine#1711: the same charge decision as the transient arena
 #include "runtime/host-memory-available.h"
 #include "runtime/host-memory-ternary.h"
 
@@ -1665,6 +1667,7 @@ bool HostWeightCache::arena_take_locked(size_t aligned, hrx_buffer_t & buffer, s
 bool HostWeightCache::arena_reserve(hrx_device_t device,
                                     hrx_stream_t stream,
                                     size_t       size,
+                                    size_t       pool_budget,
                                     hrx_buffer_t & buffer,
                                     size_t &     offset,
                                     size_t &     slot) {
@@ -1738,9 +1741,28 @@ bool HostWeightCache::arena_reserve(hrx_device_t device,
             return false;
         }
     }
+    // engine#1711 (second slice): the host-weight arena is device-visible memory like any other, so its growth is
+    // charged to the pool before it happens -- the same decision the transient arena uses. Without this, a large
+    // residency is invisible to `pool_reserve` and the guardrail over-commits by however much the arena holds, which
+    // is what GGML_HRX_HOST_WEIGHT_LIMIT_MB *limits* but never accounts.
+    const ArenaChargePlan charge = plan_arena_charge(target, previous_capacity, false);
+    bool                  charge_taken = false;
+    if (charge.reserve_bytes > 0 && pool_budget > 0) {
+        if (!ggml::hrx::onebit::pool_reserve(pool_budget, charge.reserve_bytes, "the host-weight arena")) {
+            GGML_LOG_ERROR("%s: growing the host weight arena to %.1f MiB needs %zu more bytes and the pool has no room\n",
+                          __func__, target / (1024.0 * 1024.0), charge.reserve_bytes);
+            return false;
+        }
+        charge_taken   = true;
+        charged_bytes_ += charge.reserve_bytes;
+    }
     hrx_buffer_t grown = nullptr;
     const Status status = allocate_device_buffer(device, target, grown);
     if (!status.success()) {
+        if (charge_taken) {
+            ggml::hrx::onebit::pool_release(charge.reserve_bytes);
+            charged_bytes_ -= charged_bytes_ >= charge.reserve_bytes ? charge.reserve_bytes : charged_bytes_;
+        }
         GGML_LOG_ERROR("%s: growing the host weight arena to %.1f MiB failed (limit %.1f MiB, budget %.1f MiB, "
                       "weight %.1f MiB)\n",
                       __func__, target / (1024.0 * 1024.0), limit_ / (1024.0 * 1024.0), budget / (1024.0 * 1024.0),
@@ -1751,6 +1773,10 @@ bool HostWeightCache::arena_reserve(hrx_device_t device,
         std::lock_guard<std::mutex> lock(mutex_);
         if (arena_ != nullptr) {
             hrx_buffer_release(arena_);
+            if (charge.release_bytes > 0) {
+                ggml::hrx::onebit::pool_release(charge.release_bytes);
+                charged_bytes_ -= charged_bytes_ >= charge.release_bytes ? charge.release_bytes : charged_bytes_;
+            }
         }
         // Every slot in the old arena is gone, so no entry may keep pointing at it.
         entries_.clear();
@@ -1848,7 +1874,8 @@ void HostWeightCache::evict_for(hrx_stream_t stream, size_t needed) {
 HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device,
                                                  hrx_stream_t             stream,
                                                  HostTransferManager &    transfers,
-                                                 const HostWeightSource & source) {
+                                                 const HostWeightSource & source,
+                                                 size_t                   pool_budget) {
     HostWeightAcquireResult result;
     if (stream == nullptr) {
         result.status.log("host weight residency requires an HRX stream");
@@ -1949,7 +1976,7 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
             }
         }
         const bool reserved =
-            arena_reserve(device, stream, materialized_length, entry->buffer, entry->offset, entry->slot);
+            arena_reserve(device, stream, materialized_length, pool_budget, entry->buffer, entry->offset, entry->slot);
         if (!reserved) {
             size_t parked   = 0;
             size_t resident = 0;
@@ -2050,6 +2077,10 @@ void HostWeightCache::clear() {
     if (arena_ != nullptr) {
         hrx_buffer_release(arena_);
         arena_ = nullptr;
+    }
+    if (charged_bytes_ > 0) {
+        ggml::hrx::onebit::pool_release(charged_bytes_);   // engine#1711
+        charged_bytes_ = 0;
     }
     arena_capacity_   = 0;
     arena_free_bytes_ = 0;

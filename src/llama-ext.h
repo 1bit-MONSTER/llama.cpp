@@ -36,9 +36,34 @@ struct llama_kv_share_region {
     uint64_t layout;
 };
 
+// [1bit] Target 1, the provider's half of a handoff: one cache tensor inside the region it was mapped into. Offsets
+// are bytes from the start of `region` (the ordinal of the region list), and `row_elems` is the width of one
+// position's row -- a token's K|V row is contiguous in a prefill's output and is NOT contiguous here: K and V are
+// different tensors at different offsets, which is why a writer needs both.
+struct llama_kv_share_tensor {
+    uint32_t layer;      // the model's layer index
+    uint32_t is_v;       // 0 = K, 1 = V
+    uint32_t region;     // which entry of the region list
+    uint64_t offset;     // bytes from the start of that region
+    uint64_t bytes;      // the whole tensor
+    uint64_t row_elems;  // elements per position
+};
+
+// [1bit] Target 1: the tensors of a context that imported a shared region, in cache order (K then V per layer). Writes
+// at most n_out, returns how many there are (so a caller can size first). Empty for a context that did not import.
+LLAMA_API size_t llama_kv_share_tensor_map(struct llama_context * ctx, struct llama_kv_share_tensor * out, size_t n_out);
+
 // [1bit] Target 1: the regions a context created after llama_kv_share_next(true) exported, in buffer order.
 // Returns how many regions exist; fills at most n_out of them.
 LLAMA_API size_t llama_kv_share_regions(struct llama_context * ctx, struct llama_kv_share_region * out, size_t n_out);
+
+// [1bit] Target 1: the layout a context EXPECTS of its regions -- one entry per chunk, `size` bytes and the `layout` hash an
+// importer checks -- with no exporter in the loop. `llama_kv_share_regions` reports what a context *did* export (which needs
+// one); this reports what it would *accept*, so a provider can be tested against a region the test fabricates
+// (engine#753: the NPU writer's gate then needs no GPU).
+// Entries of `out` at or beyond `min(n_out, returned)` are left UNTOUCHED: a caller that ignores the return value and
+// iterates `n_out` entries reads uninitialised memory for the tail.
+LLAMA_API size_t llama_kv_share_layout(struct llama_context * ctx, struct llama_kv_share_region * out, size_t n_out);
 
 // [1bit] Target 1: map those regions in a context of the same model and context params (the prefill provider),
 // so its KV tensors are the owner's memory. Needs a backend that can map a dma-buf (ggml-cpu can; HRX exports).
