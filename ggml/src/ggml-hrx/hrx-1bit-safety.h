@@ -29,6 +29,9 @@ namespace ggml::hrx::onebit {
 // already hold (memory_total - memory_free). A GTT plan past this budget is refused at allocation instead of
 // faulting the device: #680 is a gfxhub page fault plus a MODE2 reset at GTT 106.5 of 120 GiB.
 size_t pool_budget(size_t memory_total, size_t memory_free);
+// true when GGML_HRX_POOL_LIMIT_MB is in force: pool_budget() then returns that fixed limit rather than a
+// remainder, so a caller that prints the figure has to word it differently.
+bool   pool_budget_is_fixed_limit();
 
 // The budget after an allocation the allocator refused, given the size it refused (engine #1502).
 //

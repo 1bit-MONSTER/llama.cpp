@@ -10,6 +10,7 @@
 #include "runtime/hrx-sleeping-wait.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/transient-arena.h"
+#include "hrx-1bit-safety.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -711,7 +712,29 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             HostWeightAcquireResult resident =
                 context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source);
             if (!resident.valid()) {
-                status.log("materialize host weight value %d failed", binding.value.value);
+                // engine #1618: this line and the HSA error behind it carried no pool figure,
+                // so an 89 GB model materialized against a 66.6 GiB budget read as a
+                // flash-attention bug. Name the size and the budget the upload competed for.
+                size_t gtt_total = 0, gtt_used = 0;
+                if (ggml::hrx::onebit::gtt_counters(gtt_total, gtt_used)) {
+                    const bool  fixed    = ggml::hrx::onebit::pool_budget_is_fixed_limit();
+                    const size_t gtt_free = gtt_total > gtt_used ? gtt_total - gtt_used : 0;
+                    const size_t left     = ggml::hrx::onebit::pool_budget(gtt_total, gtt_free);
+                    const double as_gib   = 1.0 / (1024.0 * 1024.0 * 1024.0);
+                    // #1618 review: pool_budget() is the headroom LEFT NOW (ceiling - in use), not the figure the
+                    // open-time guardrail line calls the pool budget, and under GGML_HRX_POOL_LIMIT_MB it is a fixed
+                    // limit instead. Naming it correctly is the whole point of this line.
+                    status.log("materialize host weight value %d failed: %zu bytes requested, "
+                               "GTT %.2f of %.2f GiB in use, %s %.2f GiB%s",
+                               binding.value.value, source.length,
+                               (double)gtt_used * as_gib, (double)gtt_total * as_gib,
+                               fixed ? "fixed limit" : "headroom now", (double)left * as_gib,
+                               fixed ? " (GGML_HRX_POOL_LIMIT_MB)"
+                                     : " (ceiling - in use; the open-time pool budget is the guardrail line)");
+                } else {
+                    status.log("materialize host weight value %d failed: %zu bytes requested",
+                               binding.value.value, source.length);
+                }
                 status.append(resident.status);
                 materialized.push_back(binding);
                 continue;
