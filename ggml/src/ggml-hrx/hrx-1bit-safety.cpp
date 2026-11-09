@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <mutex>
 #include <cinttypes>
@@ -115,7 +116,13 @@ size_t pool_budget(size_t memory_total, size_t memory_free) {
 static bool pool_live_check_enabled() {
     static const bool enabled = [] {
         const char * env = std::getenv("GGML_HRX_POOL_LIVE_CHECK");
-        return env == nullptr || env[0] == '\0' || std::atoi(env) != 0;
+        if (env == nullptr || env[0] == '\0') {
+            return true;
+        }
+        // Fail safe: only an explicit 0/false/no turns the guard off. std::atoi would read "true", "yes" or a typo as 0 and
+        // silently remove the check, which is the wrong direction for a guardrail.
+        const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(env[0])));
+        return !(c == '0' || c == 'f' || c == 'n');
     }();
     return enabled;
 }
