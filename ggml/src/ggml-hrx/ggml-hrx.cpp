@@ -890,7 +890,9 @@ static void device_memory(ggml_backend_dev_t device, size_t * free, size_t * tot
             device_ctx->memory_budget, device_ctx->memory_budget_cap, device_ctx->memory_budget_cap_free };
         state                       = ggml::hrx::onebit::pool_budget_observe(
             device_ctx->memory_total, free_bytes, ggml::hrx::onebit::pool_allocated(),
-            ggml::hrx::host_memory_available_bytes(), state);
+            ggml::hrx::host_memory_available_bytes() == 0 ? ggml::hrx::onebit::kHostUnknown
+                                                         : ggml::hrx::host_memory_available_bytes(),
+            state);
         device_ctx->memory_budget      = state.budget;
         device_ctx->memory_budget_cap  = state.cap;
         device_ctx->memory_budget_cap_free = state.cap_free;
@@ -1587,9 +1589,13 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         size_t device_free            = device_ctx->memory_total;
         size_t device_total           = device_ctx->memory_total;
         device_free_total(device_ctx.get(), device_free, device_total);
-        const size_t host_available = ggml::hrx::host_memory_available_bytes();
-        device_ctx->memory_budget =
-            ggml::hrx::onebit::pool_budget(device_ctx->memory_total, device_free, host_available);
+        // A failed read is "unknown", not "zero bytes left": kHostUnknown disables the term, while a measured zero must
+        // refuse (a host with nothing left is the worst moment to admit a launch). Review of this PR, engine #1502.
+        const size_t host_raw       = ggml::hrx::host_memory_available_bytes();
+        const size_t host_available = host_raw == 0 ? ggml::hrx::onebit::kHostUnknown : host_raw;
+        const ggml::hrx::onebit::pool_budget_terms_t terms =
+            ggml::hrx::onebit::pool_budget_terms(device_ctx->memory_total, device_free, host_available);
+        device_ctx->memory_budget = terms.budget;
         if (device_ctx->memory_budget == 0 && device_ctx->memory_total != 0) {
             // Nothing fits under the ceiling: refuse the device here, loudly, instead of planning a launch that can
             // reach the fault line (#680). Report only, do not try to be clever about it.
@@ -1607,16 +1613,15 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
             GGML_LOG_WARN("ggml_hrx: %s guardrail: GTT total %.1f GiB, in use %.1f GiB, ceiling %.1f GiB "
                           "(reserve %.1f GiB), pool budget %.1f GiB (GTT term %.1f GiB, host MemAvailable %.1f GiB) - a "
-                          "launch that needs more is refused here rather than faulting the device (engine #680)\n",
+                          "launch that needs more is refused here rather than faulting the device (engine #680; bound by %s)\n",
                           device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
                           (device_total > device_free ? device_total - device_free : 0) / (1024.0 * 1024.0 * 1024.0),
                           (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0),
                           reserve / (1024.0 * 1024.0 * 1024.0),
-                          device_ctx->memory_budget / (1024.0 * 1024.0 * 1024.0),
-                          ((device_ctx->memory_total > reserve ? device_ctx->memory_total - reserve : 0) -
-                           (device_ctx->memory_total > device_free ? device_ctx->memory_total - device_free : 0)) /
-                                  (1024.0 * 1024.0 * 1024.0),
-                          host_available / (1024.0 * 1024.0 * 1024.0));
+                          terms.budget / (1024.0 * 1024.0 * 1024.0),
+                          terms.gtt_term / (1024.0 * 1024.0 * 1024.0),
+                          host_raw == 0 ? -1.0 : terms.host_available / (1024.0 * 1024.0 * 1024.0),
+                          terms.host_bound ? "the host" : (host_raw == 0 ? "the GTT counter (host unreadable)" : "the GTT counter"));
         }
         device_ctx->description       = *name + " (" + *architecture + ")";
         device_ctx->architecture      = *architecture;

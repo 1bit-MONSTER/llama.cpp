@@ -83,29 +83,43 @@ bool gtt_counters(size_t & total, size_t & used) {
     return false;
 }
 
-size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available) {
+pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, size_t memory_available) {
+    pool_budget_terms_t t;
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     if (env != nullptr) {
         const long long mb = std::atoll(env);
         if (mb > 0) {
-            return static_cast<size_t>(mb) * kMiB;
+            // An operator-set limit is the budget, floor and ceiling at once; it is not a min() of terms, and saying so
+            // keeps the log from implying the box produced the number.
+            t.host_available = memory_available;
+            t.gtt_term       = static_cast<size_t>(mb) * kMiB;
+            t.budget         = t.gtt_term;
+            return t;
         }
     }
     if (memory_total == 0) {
-        return 0;  // unknown device size: keep the unfettered behaviour
+        return t;  // unknown device size: keep the unfettered behaviour (every field stays 0)
     }
     const size_t reserve = pool_reserve_bytes();
     const size_t ceiling = memory_total > reserve ? memory_total - reserve : 0;
     const size_t in_use  = memory_total > memory_free ? memory_total - memory_free : 0;
-    const size_t by_gtt  = ceiling > in_use ? ceiling - in_use : 0;
+    t.gtt_term       = ceiling > in_use ? ceiling - in_use : 0;
+    t.host_available = memory_available;
     // engine #1502: the GTT counter is not the allocator's ceiling on an APU. Letting a 15.35 GiB buffer through a 29.2 GiB
     // budget while the host had ~15 GiB left made the failure land inside hsa_amd_memory_pool_allocate and read as
-    // "llama_model_load: error loading model" (two Hyperloom measurements scored 0.0 that way). The engine's admission check has
-    // always used min(GTT free, MemAvailable) (app/mem_admit.h); this is the same two-term model in the fork's safety net.
-    if (memory_available != 0 && memory_available < by_gtt) {
-        return memory_available;
+    // "llama_model_load: error loading model". The engine's admission check has always used min(GTT free, MemAvailable)
+    // (app/mem_admit.h); this is the same two-term model in the fork's safety net. kHostUnknown alone disables the term.
+    if (memory_available != kHostUnknown && memory_available < t.gtt_term) {
+        t.budget     = memory_available;
+        t.host_bound = true;
+    } else {
+        t.budget = t.gtt_term;
     }
-    return by_gtt;
+    return t;
+}
+
+size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available) {
+    return pool_budget_terms(memory_total, memory_free, memory_available).budget;
 }
 
 // engine #1417: the budget above is a snapshot taken at device open, and the ledger is per-process, so another process

@@ -28,14 +28,32 @@ namespace ggml::hrx::onebit {
 // budget is the GTT ceiling (memory_total minus GGML_HRX_GTT_RESERVE_MB, default 16384) less what other processes
 // already hold (memory_total - memory_free). A GTT plan past this budget is refused at allocation instead of
 // faulting the device: #680 is a gfxhub page fault plus a MODE2 reset at GTT 106.5 of 120 GiB.
-// |memory_available| is the host's MemAvailable (0 = unknown, which keeps the GTT-only arithmetic). On an APU the GTT ceiling
-// and DRAM are the same pool, so what the allocator can serve is bounded by both: this is the term that differs between two loads
-// with identical GTT counters and opposite outcomes (engine #1502).
+// The two terms the budget is the minimum of, and the budget itself. Returned together so a caller can PRINT what the
+// decision used instead of recomputing it (a second copy of `ceiling - in_use` in a printf agrees today and drifts later),
+// and so the log can name the term that bound.
+struct pool_budget_terms_t {
+    size_t gtt_term       = 0;   // (total - reserve) - in_use, from the driver counters
+    size_t host_available = 0;   // MemAvailable as passed in, or kHostUnknown
+    size_t budget         = 0;   // min(gtt_term, host_available), or gtt_term when the host figure is unknown
+    bool   host_bound     = false;
+};
+
+// |memory_available| is the host's MemAvailable. On an APU the GTT ceiling and DRAM are the same pool, so what the
+// allocator can serve is bounded by both: this is the term that differs between two loads with identical GTT counters and
+// opposite outcomes (engine #1502).
 //
-// The parameter is DEFAULTED so that a caller which only formats a diagnostic (llama.cpp #255 reports a refused host-weight
-// materialize) keeps compiling and keeps meaning "GTT arithmetic only" - the change is additive, not a new required argument
-// every call site has to be told about. A caller that can see /proc should pass it.
-size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available = 0);
+// kHostUnknown means "the host figure could not be read", and only then is the term ignored. It is deliberately NOT 0:
+// a measured zero means the host has nothing left, which is the one case where admitting a launch is worst, and conflating
+// it with "unreadable" would let that case take the fallback (review of this PR).
+//
+// The parameter is DEFAULTED to kHostUnknown so a caller that only formats a diagnostic (llama.cpp #255 reports a refused
+// host-weight materialize) keeps compiling and keeps meaning "GTT arithmetic only" - the change is additive. A caller that
+// can read /proc should pass the figure, and must map a failed read to kHostUnknown rather than to 0.
+inline constexpr size_t kHostUnknown = static_cast<size_t>(-1);
+
+pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, size_t memory_available = kHostUnknown);
+
+size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available = kHostUnknown);
 
 // The budget after an allocation the allocator refused, given the size it refused (engine #1502).
 //
