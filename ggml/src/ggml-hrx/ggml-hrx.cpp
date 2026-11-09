@@ -245,7 +245,9 @@ static void buffer_memset(ggml_backend_buffer_t buffer,
 // engine #856: the staging buffer is capped, and a larger copy goes through it in chunks. Sizing it to the largest
 // copy kept one host-mapped buffer the size of the largest weight (995 MiB on a 27B, usually the token embedding)
 // resident in GTT for the life of the process, only to stage the load. Each chunk is synchronized before the
-// buffer is reused, so the ordering of engine #696 is unchanged.
+// buffer is reused, so the ordering of engine #696 is unchanged. The callers hold buffer_stream_mutex across all
+// chunks of one copy, so no other staged copy can reallocate the buffer between them. The buffer still never
+// shrinks: it stays at most kCopyStagingChunk per device for the life of the process, kept for reuse on purpose.
 static constexpr size_t kCopyStagingChunk = 64ull << 20;
 
 static bool ensure_copy_staging(ggml_backend_hrx_device_context * device, size_t size) {
