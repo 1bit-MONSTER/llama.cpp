@@ -96,6 +96,20 @@ static std::string unsupported_node_message(const Graph & graph, size_t index, c
         append_node_summary(stream, graph, consumers[i]);
     }
     stream << "]";
+    // A layout-alias node is refused here for one of two completely different reasons, and the shape cannot tell them
+    // apart: it is an alias (one input, same storage) whose input was not available yet, or it is NOT an alias at all
+    // (a strided view of the same shape) and therefore needs a dispatch that no registration provides, because no
+    // registration names a layout-alias op as its root. engine #1467's projector is refused at
+    //   VIEW output=f32[2048,2,1,1] <- f32[2048,2,1,1]
+    // and that line alone did not say which case it was, so the next reader had to reproduce it. This costs one line
+    // in the message and answers it in the log.
+    if (is_layout_alias_op(node.op)) {
+        // is_layout_alias_node() is this predicate exactly (graph/graph.cpp): a message that restates the scheduler's rule
+        // is a message that will describe a scheduler that no longer exists. Same reasoning as rope-claim-params.h sharing
+        // its predicates with the matchers in #257.
+        stream << " alias=" << (is_layout_alias_node(graph, node) ? "same_storage" : "not_aliasing_input")
+               << " inputs=" << node.inputs.size();
+    }
     return stream.str();
 }
 

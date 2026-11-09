@@ -399,6 +399,13 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-loom-jit PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-loom-jit COMMAND test-hrx-loom-jit)
 
+    # How a layout-alias node is judged when its input is PRODUCED vs EXTERNAL: engine #1467's projector is
+    # refused at a no-op VIEW that the standalone oracle calls supported because it feeds the view from a leaf.
+    add_executable(test-hrx-view-alias-elision test-hrx-view-alias-elision.cpp)
+    target_link_libraries(test-hrx-view-alias-elision PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-view-alias-elision PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-view-alias-elision COMMAND test-hrx-view-alias-elision)
+
     add_executable(test-hrx-ops test-hrx-ops.cpp)
     target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-ops PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
