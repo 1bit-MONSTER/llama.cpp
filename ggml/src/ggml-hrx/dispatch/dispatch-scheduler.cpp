@@ -109,7 +109,6 @@ static std::string unsupported_node_message(const Graph & graph, size_t index, c
         // is_layout_alias_node() is this predicate exactly (graph/graph.cpp): a message that restates the scheduler's rule
         // is a message that will describe a scheduler that no longer exists. Same reasoning as rope-claim-params.h sharing
         // its predicates with the matchers in #257.
-<<<<<<< HEAD
         const char * relation = is_layout_alias_node(graph, node) ? "same_storage" : "not_aliasing_input";
         // WHICH lookup missed, not just that one did. A view can fail to alias for two very different reasons and they
         // lead to different repairs: the tensor its view_src points at was never registered as a value in this graph
@@ -146,10 +145,6 @@ static std::string unsupported_node_message(const Graph & graph, size_t index, c
             }
         }
         stream << " alias=" << relation << why << facts << " inputs=" << node.inputs.size();
-=======
-        stream << " alias=" << (is_layout_alias_node(graph, node) ? "same_storage" : "not_aliasing_input")
-               << " inputs=" << node.inputs.size();
->>>>>>> e39659538abf14b3433c0bf32756f7dcffbbc6d7
     }
     return stream.str();
 }
