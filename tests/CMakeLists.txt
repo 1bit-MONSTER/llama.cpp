@@ -363,6 +363,12 @@ if (TARGET ggml-hrx)
     add_test(NAME test-hrx-graph-program-budget COMMAND test-hrx-graph-program-budget)
 
     # the host-weight arena refusal's wording: pure helper, no device and no HRX link (engine #900)
+    # the backend's failure classification: resource failure vs compute failure, pure (engine #1618)
+    add_executable(test-hrx-failure-status test-hrx-failure-status.cpp
+        ../ggml/src/ggml-hrx/runtime/failure-status.cpp)
+    target_include_directories(test-hrx-failure-status PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-failure-status COMMAND test-hrx-failure-status)
+
     add_executable(test-hrx-pool-refusal-budget test-hrx-pool-refusal-budget.cpp
                    ../ggml/src/ggml-hrx/hrx-1bit-safety.cpp)
     target_include_directories(test-hrx-pool-refusal-budget PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
