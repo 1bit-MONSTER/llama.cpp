@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <sstream>
+#include <cinttypes>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -124,7 +125,26 @@ static std::string unsupported_node_message(const Graph & graph, size_t index, c
                           : "(view_src_unregistered)";
             }
         }
-        stream << " alias=" << relation << why << " inputs=" << node.inputs.size();
+        // THE FACTS, not another story. Six hypotheses have died on this node, so the message now carries what they were
+        // each guessing at: the two ValueStorageIds (equal ids mean the map agreed; different ids mean it did not), and the
+        // output tensor's strides and offset. With `alias=` and the `why=` above, one run says which storage the map gave the
+        // view, whether it is its input's, and what layout the view describes (engine #1467).
+        std::string facts;
+        if (relation != nullptr && std::strcmp(relation, "not_aliasing_input") == 0 && node.inputs.size() == 1) {
+            const Value * out_v = graph.values().find(node.output);
+            const Value * in_v  = graph.values().find(node.inputs[0]);
+            if (out_v != nullptr && in_v != nullptr) {
+                char buf[192];
+                const ggml_tensor * t = out_v->tensor;
+                std::snprintf(buf, sizeof buf, " storages=out%d/in%d nb=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64
+                                               "] offs=%zu",
+                              out_v->storage.value, in_v->storage.value,
+                              t != nullptr ? t->nb[0] : 0, t != nullptr ? t->nb[1] : 0, t != nullptr ? t->nb[2] : 0,
+                              t != nullptr ? t->nb[3] : 0, t != nullptr ? t->view_offs : size_t(0));
+                facts = buf;
+            }
+        }
+        stream << " alias=" << relation << why << facts << " inputs=" << node.inputs.size();
     }
     return stream.str();
 }
