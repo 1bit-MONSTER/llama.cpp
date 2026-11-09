@@ -455,6 +455,7 @@ GraphSnapshotLoadResult load_graph_snapshot_json(const std::string & contents) {
                 item.at("byte_count").get<size_t>(),
                 item.at("contiguous").get<bool>(),
                 nullptr,
+                AliasMiss::None,
                 std::nullopt,
             };
             if (!parse_value_kind(item.at("kind").get<std::string>(), value.kind)) {
