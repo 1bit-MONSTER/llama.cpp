@@ -7089,6 +7089,48 @@ struct test_flash_attn_ext_pad_nan : public test_flash_attn_ext {
     }
 };
 
+// engine#1539: a learned attention sink exists to keep a query row finite when it can attend to NO key -- then the
+// softmax denominator is exp(sink) alone and the output is 0. The suite's sink cases (`sinks = true`) always fill the
+// mask with finite random biases, so no row is ever fully masked, and that is the one input where the two ways of
+// implementing a sink disagree: an in-softmax sink stays finite, while a post-hoc one (run an un-sunk softmax, then
+// rescale by S/(S+exp(sink-M))) has S = 0 and an un-sunk softmax of 0/0 = NaN, which no rescale can undo.
+// Same buffers on both backends: only one mask row differs.
+struct test_flash_attn_ext_all_masked : public test_flash_attn_ext {
+    const int64_t masked_row; // which query row attends to nothing
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",all_masked_row=" + std::to_string(masked_row);
+    }
+
+    test_flash_attn_ext_all_masked(int64_t hsk, int64_t hsv, int64_t nh, std::array<int64_t, 2> nr23,
+                                   int64_t kv, int64_t nb, int64_t masked_row = 0,
+                                   std::array<int32_t, 4> permute = {0, 1, 2, 3})
+        : test_flash_attn_ext(hsk, hsv, nh, nr23, kv, nb, /*mask =*/ true, /*sinks =*/ true, 0.0f, 0.0f,
+                              GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, permute),
+          masked_row(masked_row) {
+        GGML_ASSERT(kv > 0 && "the case needs at least one KV column");
+        GGML_ASSERT(masked_row >= 0 && masked_row < nb);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "m") == 0) {
+                GGML_ASSERT(t->ne[0] == kv);
+                std::vector<ggml_fp16_t> data(ggml_nelements(t));
+                for (int64_t i1 = 0; i1 < t->ne[1]; i1++) {
+                    for (int64_t i0 = 0; i0 < t->ne[0]; i0++) {
+                        // the masked row sees -INFINITY on every key; every other row sees a finite 0
+                        data[i1*t->ne[0] + i0] = (ggml_fp16_t) (i1 == masked_row ? 0xFC00 : 0x0000);
+                    }
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(ggml_fp16_t));
+                continue;
+            }
+            init_tensor_uniform(t);
+        }
+    }
+};
+
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -9827,6 +9869,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // mixed quant and Q1_0 test cases
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
+    // engine#1539: a query row that can attend to no key, with a learned sink - the sink is the only thing that keeps
+    // the row finite, so this is the case a post-hoc sink implementation fails on. Included with the flint head shape
+    // (128) and with a single query row and a single KV column, where the masked row is the whole problem.
+    for (int64_t nb_ : { 1, 2, 8 }) {
+        test_cases.emplace_back(new test_flash_attn_ext_all_masked(128, 128, 4, {1, 1}, 64, nb_, 0));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext_all_masked(128, 128, 4, {1, 1}, 64, 8, 3));
+    test_cases.emplace_back(new test_flash_attn_ext_all_masked(64, 64, 2, {1, 1}, 32, 4, 1));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(72, 72, 4, {1, 1}, 96, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 96, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F32));
