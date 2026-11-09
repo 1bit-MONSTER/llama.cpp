@@ -98,7 +98,11 @@ bool gtt_counters(size_t & total, size_t & used);
 // Charge `size` against `budget`; false (with one log line naming the sizes) when it does not fit.
 // True when |size| fits the live pool (|total|, |used| from the driver's counters) with |margin| of headroom. Pure, so the
 // test drives it; the underflow and margin-saturation guards live here rather than in the caller.
-bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin);
+// The live check takes the host term too (engine #1502): the counters report GTT, but a hsa_amd_memory_pool_allocate on
+// this APU is served by host RAM, so `min(GTT free, MemAvailable)` is the honest figure -- the same two-term model the
+// open-time budget uses. kHostUnknown disables the term (an unreadable /proc must not refuse anything).
+bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin,
+                    size_t memory_available = kHostUnknown);
 
 bool pool_reserve(size_t budget, size_t size, const char * what);
 

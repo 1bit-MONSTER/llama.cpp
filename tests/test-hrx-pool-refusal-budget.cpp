@@ -124,6 +124,18 @@ int main() {
 
     expect_true("a 15.35 GiB buffer fits 45 GiB free with the default margin",
                 pool_live_fits(refused, gtt, gtt - 45 * GiB, margin_256));
+
+    // The host term (engine #1502): the GTT counters alone admit a request the host cannot serve. These arms are the
+    // reported shape -- a large request, a GTT counter showing room, and little MemAvailable left.
+    expect_true("live: the request the issue reports is refused once the host term is known",
+               !pool_live_fits(16 * GiB, gtt, gtt - 45 * GiB, margin_256, /*memory_available=*/2 * GiB));
+    expect_true("live: the same request passes on the GTT figure alone (the over-promise being fixed)",
+               pool_live_fits(16 * GiB, gtt, gtt - 45 * GiB, margin_256, kHostUnknown));
+    expect_true("live: an unreadable MemAvailable (kHostUnknown) never refuses on its own",
+               pool_live_fits(16 * GiB, gtt, gtt - 45 * GiB, margin_256, kHostUnknown) ==
+               pool_live_fits(16 * GiB, gtt, gtt - 45 * GiB, margin_256));
+    expect_true("live: a host figure LARGER than GTT free does not lift the GTT term",
+               !pool_live_fits(16 * GiB, gtt, gtt - 16 * GiB, margin_256, 200 * GiB));
     // The case the live check exists for, built from the report's own numbers: the open-time budget was
     // 104 - 74.8 = 29.2 GiB, so a 20 GiB buffer is ADMITTED by the snapshot. If a neighbour then grew the box to
     // 105 GiB in use (15 GiB free), the snapshot still admits it and the failure lands in the allocator; the live
