@@ -90,12 +90,15 @@ ValueId ValueMap::get_or_add_tensor_value(const ggml_tensor * tensor, ValueKind 
     ValueId        storage_root;
     ValueId        alias_source_id;
     size_t         storage_offset     = 0;
+    AliasMiss      alias_miss         = AliasMiss::None;
     size_t         storage_byte_count = ggml_nbytes(tensor);
     if (alias_source != nullptr) {
         size_t relative_offset = 0;
         if (!tensor_storage_relative_offset(alias_source->tensor, tensor, relative_offset)) {
             relative_offset = tensor->view_offs;
         }
+        // which way find_alias_source() found it: exact view_src identity, or the storage-root fallback
+        alias_miss         = find_tensor(tensor->view_src) != nullptr ? AliasMiss::ExactViewSrc : AliasMiss::RangeFallback;
         storage            = alias_source->storage;
         storage_root       = alias_source->storage_root;
         alias_source_id    = alias_source->id;
@@ -112,6 +115,11 @@ ValueId ValueMap::get_or_add_tensor_value(const ggml_tensor * tensor, ValueKind 
         storage      = ValueStorageId(static_cast<int32_t>(storages_.size()));
         storage_root = id;
         storages_.push_back({ storage, storage_root, storage_byte_count });
+        // Record the reason HERE, while it is still true: see AliasMiss in value-map.h. No alias source was found,
+        // so this is the only case the branch can produce - a registered view_src is an early return above.
+        if (tensor->view_src != nullptr) {
+            alias_miss = AliasMiss::NoAliasSource;
+        }
     }
 
     Value value = {
@@ -129,6 +137,7 @@ ValueId ValueMap::get_or_add_tensor_value(const ggml_tensor * tensor, ValueKind 
         ggml_nbytes(tensor),
         ggml_is_contiguous(tensor),
         tensor,
+        alias_miss,
         std::nullopt,
     };
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
