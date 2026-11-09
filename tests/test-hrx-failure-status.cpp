@@ -68,6 +68,22 @@ int main() {
     // Any message in the list counts, not just the last: graph_compute prints the last reason but classifies the whole set.
     REQUIRE(failure_looks_like_allocation({ "plan rejected: operand layout", "x: RESOURCE_EXHAUSTED" }));
 
+    // The uncovered set is as visible as the covered one (review of #261): a hip OOM spelling that matches neither needle
+    // stays a compute failure -- the safe direction -- but it must be NAMED, so the next person gets a log line instead of a
+    // lost day. `hipErrorOutOfMemory` is a real hip name and matches neither needle on purpose.
+    using ggml::hrx::failure_unmatched_allocation;
+    const std::vector<std::string> unmatched = { "hip.qsa_attn_select: hipErrorOutOfMemory" };
+    REQUIRE(!failure_looks_like_allocation(unmatched));
+    REQUIRE(failure_status(unmatched) == GGML_STATUS_FAILED);
+    const std::string * hint = failure_unmatched_allocation(unmatched);
+    REQUIRE(hint != nullptr && hint->find("hipErrorOutOfMemory") != std::string::npos);
+
+    // ...and a matched failure produces no warning, so the signal means "uncovered", not "allocation-ish".
+    REQUIRE(failure_unmatched_allocation(pool_exhausted) == nullptr);
+    // A plain kernel fault is not allocation-looking and stays quiet.
+    REQUIRE(failure_unmatched_allocation(kernel_fault) == nullptr);
+    REQUIRE(failure_unmatched_allocation({}) == nullptr);
+
     std::printf("test-hrx-failure-status: all requirements passed\n");
     return 0;
 }

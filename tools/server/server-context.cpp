@@ -3864,7 +3864,7 @@ private:
                           "(another process's resident model, a smaller -c/-ngl, or a smaller -ub) and retry.";
                 }
 
-                if (ret < -1 && ret != -2) {
+                if (ret < -2) {
                     // TODO: update slot state based on llama_memory_seq_pos_min() and llama_memory_seq_pos_max()
                     err = "Compute error.";
                 }

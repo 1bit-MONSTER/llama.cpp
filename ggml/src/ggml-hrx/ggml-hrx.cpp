@@ -816,6 +816,24 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
         // (2026-10-20 census: a q8_0 KV cache printed the qwen postprocess refusal for a graph that broke
         // on another node). The earlier reasons follow, bounded, for context.
         const std::vector<std::string> & reasons = result.status.errors();
+        // The classification above reads the WHOLE set, while the headline below prints the last reason. When the two differ,
+        // a resource failure would return ALLOC_FAILED while the log's first sentence points at a dispatch decision - the
+        // same "the log knew, the client did not" split in miniature (engine #1618 review), so print the classifying message
+        // as the headline and keep the rest as context.
+        if (const std::string * suspicious = ggml::hrx::failure_unmatched_allocation(reasons)) {
+            GGML_LOG_WARN("%s: an allocation-looking failure did not match the resource needles, so it is reported as a "
+                          "compute failure: %s (extend kResourceNeedles if this is an out-of-memory status)\n", __func__,
+                          suspicious->c_str());
+        }
+        const std::string * classifying = nullptr;
+        for (const std::string & reason : reasons) {
+            if (ggml::hrx::failure_looks_like_allocation({ reason })) {
+                classifying = &reason;
+            }
+        }
+        if (classifying != nullptr && !reasons.empty() && classifying != &reasons.back()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, classifying->c_str());
+        }
         if (reasons.empty()) {
             GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(result.status));
         } else {
