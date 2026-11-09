@@ -380,7 +380,11 @@ static const ggml_backend_buffer_i buffer_i = {
 // engine #1502 (#251) calls this from buffer_alloc, eight hundred lines above its definition, with no declaration in
 // scope - so the translation unit does not compile ("'device_free_total' was not declared in this scope"). One forward
 // declaration is enough; the definition and its callers are unchanged.
-static void device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes);
+// The declaration must match the definition's type: it is `bool` (it reports whether the driver counters were
+// available). Two merges each added a forward declaration - #252's above, #240's `bool` one further down - and the
+// `void`/`bool` pair is an ambiguous redeclaration, so the translation unit fails to compile at the `bool` declaration
+// and the pin builds for nobody. One word, and every lane that builds this pin is unblocked.
+static bool device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes);
 
 static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_t size) {
     ggml::hrx::onebit::poison_selftest();  // no-op unless GGML_HRX_POISON_SELFTEST=1
