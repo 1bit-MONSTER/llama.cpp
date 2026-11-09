@@ -10,6 +10,7 @@
 #include "runtime/hrx-sleeping-wait.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/transient-arena.h"
+#include "hrx-1bit-safety.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -711,7 +712,23 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             HostWeightAcquireResult resident =
                 context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source);
             if (!resident.valid()) {
-                status.log("materialize host weight value %d failed", binding.value.value);
+                // engine #1618: this line and the HSA error behind it carried no pool figure,
+                // so an 89 GB model materialized against a 66.6 GiB budget read as a
+                // flash-attention bug. Name the size and the budget the upload competed for.
+                size_t gtt_total = 0, gtt_used = 0;
+                if (ggml::hrx::onebit::gtt_counters(gtt_total, gtt_used)) {
+                    const size_t gtt_free   = gtt_total > gtt_used ? gtt_total - gtt_used : 0;
+                    const size_t budget     = ggml::hrx::onebit::pool_budget(gtt_total, gtt_free);
+                    status.log("materialize host weight value %d failed: %zu bytes requested, "
+                               "GTT %.2f of %.2f GiB in use, pool budget %.2f GiB",
+                               binding.value.value, source.length,
+                               (double)gtt_used / (1024.0 * 1024.0 * 1024.0),
+                               (double)gtt_total / (1024.0 * 1024.0 * 1024.0),
+                               (double)budget / (1024.0 * 1024.0 * 1024.0));
+                } else {
+                    status.log("materialize host weight value %d failed: %zu bytes requested",
+                               binding.value.value, source.length);
+                }
                 status.append(resident.status);
                 materialized.push_back(binding);
                 continue;
