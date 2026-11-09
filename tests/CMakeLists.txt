@@ -350,6 +350,13 @@ add_test(NAME test-server-health COMMAND test-server-health)
 
 if (TARGET ggml-hrx)
     # the program cache's byte budget and LRU order: pure policy, no device and no HRX link
+    # Which rotations the fused registrations accept, i.e. what the claim may assert (engine #1467).
+    # Header-only: no device, no model, and the vision rotation must be rejected here.
+    add_executable(test-hrx-rope-claim-params test-hrx-rope-claim-params.cpp)
+    target_include_directories(test-hrx-rope-claim-params PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-rope-claim-params COMMAND test-hrx-rope-claim-params)
+    target_link_libraries(test-hrx-rope-claim-params PRIVATE ggml)
+
     add_executable(test-hrx-graph-program-budget test-hrx-graph-program-budget.cpp
         ../ggml/src/ggml-hrx/runtime/graph-program-budget.cpp)
     target_include_directories(test-hrx-graph-program-budget PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
