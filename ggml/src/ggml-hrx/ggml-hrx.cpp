@@ -24,6 +24,7 @@
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cinttypes>
 #include <cstdio>
@@ -241,6 +242,14 @@ static void buffer_memset(ggml_backend_buffer_t buffer,
 // one dispatch queue, and the synchronize that follows completes them before the caller continues. The staging
 // buffer is kept per device (few distinct sizes) instead of being allocated per copy: per-copy allocate/release is
 // what libhrx's per-size pools retain (engine #669).
+// engine #856: the staging buffer is capped, and a larger copy goes through it in chunks. Sizing it to the largest
+// copy kept one host-mapped buffer the size of the largest weight (995 MiB on a 27B, usually the token embedding)
+// resident in GTT for the life of the process, only to stage the load. Each chunk is synchronized before the
+// buffer is reused, so the ordering of engine #696 is unchanged. The callers hold buffer_stream_mutex across all
+// chunks of one copy, so no other staged copy can reallocate the buffer between them. The buffer still never
+// shrinks: it stays at most kCopyStagingChunk per device for the life of the process, kept for reuse on purpose.
+static constexpr size_t kCopyStagingChunk = 64ull << 20;
+
 static bool ensure_copy_staging(ggml_backend_hrx_device_context * device, size_t size) {
     if (device->copy_staging_size >= size) {
         return true;
@@ -265,13 +274,21 @@ static bool ordered_upload(ggml_backend_hrx_device_context * device,
                            hrx_buffer_t                    destination,
                            size_t                          offset) {
     std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
-    if (!ensure_copy_staging(device, size)) {
+    const size_t                chunk = std::min(size, kCopyStagingChunk);
+    if (!ensure_copy_staging(device, chunk)) {
         return false;
     }
-    std::memcpy(device->copy_staging_mapped, data, size);
-    return HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, device->copy_staging, 0, destination, offset,
-                                            size)) &&
-           HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
+    const auto * source = static_cast<const uint8_t *>(data);
+    for (size_t done = 0; done < size; done += chunk) {
+        const size_t n = std::min(chunk, size - done);
+        std::memcpy(device->copy_staging_mapped, source + done, n);
+        if (!HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, device->copy_staging, 0, destination,
+                                              offset + done, n)) ||
+            !HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool ordered_download(ggml_backend_hrx_device_context * device,
@@ -280,16 +297,21 @@ static bool ordered_download(ggml_backend_hrx_device_context * device,
                              void *                          data,
                              size_t                          size) {
     std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
-    if (!ensure_copy_staging(device, size)) {
+    const size_t                chunk = std::min(size, kCopyStagingChunk);
+    if (!ensure_copy_staging(device, chunk)) {
         return false;
     }
-    const bool ok = HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, source, offset, device->copy_staging, 0,
-                                                     size)) &&
-                    HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
-    if (ok) {
-        std::memcpy(data, device->copy_staging_mapped, size);
+    auto * destination = static_cast<uint8_t *>(data);
+    for (size_t done = 0; done < size; done += chunk) {
+        const size_t n = std::min(chunk, size - done);
+        if (!HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, source, offset + done, device->copy_staging, 0,
+                                              n)) ||
+            !HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+            return false;
+        }
+        std::memcpy(destination + done, device->copy_staging_mapped, n);
     }
-    return ok;
+    return true;
 }
 
 static void buffer_set(ggml_backend_buffer_t buffer,
