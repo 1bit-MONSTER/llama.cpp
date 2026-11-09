@@ -31,7 +31,11 @@ namespace ggml::hrx::onebit {
 // |memory_available| is the host's MemAvailable (0 = unknown, which keeps the GTT-only arithmetic). On an APU the GTT ceiling
 // and DRAM are the same pool, so what the allocator can serve is bounded by both: this is the term that differs between two loads
 // with identical GTT counters and opposite outcomes (engine #1502).
-size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available);
+//
+// The parameter is DEFAULTED so that a caller which only formats a diagnostic (llama.cpp #255 reports a refused host-weight
+// materialize) keeps compiling and keeps meaning "GTT arithmetic only" - the change is additive, not a new required argument
+// every call site has to be told about. A caller that can see /proc should pass it.
+size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available = 0);
 
 // The budget after an allocation the allocator refused, given the size it refused (engine #1502).
 //
