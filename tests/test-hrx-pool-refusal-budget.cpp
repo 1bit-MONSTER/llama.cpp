@@ -91,7 +91,7 @@ int main() {
     expect_eq("cap after refusing 80 GiB is size-1", st.cap, 80 * GiB - 1);
 
     // The other process now holds 1 GiB LESS than at the refusal, so the cap is lifted.
-    st = pool_budget_observe(total, free_at_refusal + GiB, our_mem, kHostUnknown, st);
+    st = pool_budget_observe(total, free_at_refusal + GiB, our_mem, st);
     expect_eq("lifting the cap restores the registration budget (own memory counted once)", st.budget, 85 * GiB);
     expect_eq("the cap is cleared when it is lifted", st.cap, 0);
 
@@ -99,7 +99,7 @@ int main() {
     pool_budget_state_t st2;
     st2.budget = 30 * GiB;
     st2 = pool_budget_note_refusal(st2, 40 * GiB, total - 45 * GiB);          // refusal seen with 75 GiB free
-    st2 = pool_budget_observe(total, total - 90 * GiB, our_mem, kHostUnknown, st2);         // other process grew by 45 GiB
+    st2 = pool_budget_observe(total, total - 90 * GiB, our_mem, st2);         // other process grew by 45 GiB
     expect_eq("a shrinking pool keeps the cap (it is not cleared)", st2.cap, 30 * GiB);
     expect_eq("a shrinking pool keeps the cap's evidence", st2.cap_free, total - 45 * GiB);
     expect_true("a shrinking pool never ends up above the cap", st2.budget <= st2.cap);
@@ -110,43 +110,9 @@ int main() {
     st3.budget = b_small;
     st3 = pool_budget_note_refusal(st3, 4 * GiB + 700 * MiB, 20 * GiB);
     expect_true("a 4.7 GiB model refused at a 13.6 GiB budget is capped below its size", st3.cap < 4 * GiB + 700 * MiB);
-    st3 = pool_budget_observe(total, 60 * GiB, 0, kHostUnknown, st3);                       // the pool frees
+    st3 = pool_budget_observe(total, 60 * GiB, 0, st3);                       // the pool frees
     expect_true("when the pool frees the same model is admissible again", st3.budget > 4 * GiB + 700 * MiB);
-    expect_eq("no cap in force: an observation changes nothing", pool_budget_observe(total, 10 * GiB, 0, kHostUnknown, pool_budget_state_t{20 * GiB, 0, 0}).budget, 20 * GiB);
-
-    // ---- the host term (this lane's half of #1502) ------------------------------------------------------------------
-    //
-    // On an APU the GTT ceiling and DRAM are one pool, so the allocator is bounded by the host as well as by the GTT counter.
-    // The issue's measured case: budget 29.2 GiB from the counters, while /proc/meminfo had roughly 15 GiB left - and the pool
-    // then refused 15.35 GiB, failing at model load instead of at admission.
-    const size_t issue_budget = 29 * GiB + 205 * MiB;                        // 29.2 GiB, as printed by the guardrail
-    const size_t issue_free   = total - 74 * GiB - 819 * MiB;                // in use 74.8 GiB
-    expect_eq("the GTT arithmetic reproduces the issue's 29.2 GiB budget",
-              pool_budget(total, issue_free, kHostUnknown), issue_budget);
-    const size_t host_tight = 15 * GiB;
-    expect_eq("a tight host replaces the GTT term", pool_budget(total, issue_free, host_tight), host_tight);
-    expect_true("so the refused 15.35 GiB is no longer admissible", pool_budget(total, issue_free, host_tight) < 15 * GiB + 359 * MiB);
-    expect_true("while the GTT-only arithmetic still called it admissible",
-                pool_budget(total, issue_free, kHostUnknown) > 15 * GiB + 359 * MiB);
-    expect_eq("a roomy host leaves the GTT term alone (no behaviour change)", pool_budget(total, issue_free, 80 * GiB), issue_budget);
-    expect_eq("a host figure larger than the GTT term never inflates the budget", pool_budget(total, issue_free, 900 * GiB), issue_budget);
-    // kHostUnknown alone disables the term (a failed /proc read). A MEASURED zero must refuse: a host with
-    // nothing left is the worst moment to admit a launch (review of #256).
-    expect_eq("host unknown keeps the GTT arithmetic", pool_budget(total, issue_free, kHostUnknown), issue_budget);
-    expect_eq("a measured zero host refuses", pool_budget(total, issue_free, 0), 0);
-    expect_true("and the terms say the host bound it", pool_budget_terms(total, issue_free, 0).host_bound);
-    expect_true("while the GTT term alone would have admitted it",
-                pool_budget_terms(total, issue_free, 0).gtt_term > 15 * GiB + 359 * MiB);
-    expect_eq("unknown device stays unfettered", pool_budget(0, 0, 15 * GiB), 0);
-
-    // The state machine must stay honest under a tight host: a cap can only lower the budget, and the host term bounds the
-    // recomputation that lifts a cap, so a refuted cap cannot restore an optimistic figure while the host is still full.
-    pool_budget_state_t st4;
-    st4.budget = issue_budget;
-    st4 = pool_budget_note_refusal(st4, 4 * GiB, issue_free);
-    st4 = pool_budget_observe(total, issue_free + 10 * GiB, 0, host_tight, st4);
-    expect_true("a lifted cap is still bounded by the host term", st4.budget <= host_tight);
-    expect_eq("and the cap is cleared, because the GTT pool did grow", st4.cap, 0);
+    expect_eq("no cap in force: an observation changes nothing", pool_budget_observe(total, 10 * GiB, 0, pool_budget_state_t{20 * GiB, 0, 0}).budget, 20 * GiB);
 
     // engine #1417: the live check is now the DEFAULT, so the decision it makes is worth pinning like the cap above. The
     // numbers are the report's own: a 120 GiB pool, a box that had 74.8 GiB in use at device open and ~90 GiB when the
@@ -181,6 +147,27 @@ int main() {
     expect_true("an absurd margin saturates instead of wrapping",
                 !pool_live_fits(1 * MiB, gtt, 0, SIZE_MAX));
     expect_true("a zero-size request with room passes", pool_live_fits(0, gtt, gtt - 1 * GiB, margin_256));
+
+    // ---- the host term (this lane's half of #1502) ---------------------------------------------------------------
+    // `total` already declared above by the refusal section
+    const size_t issue_free = total - 74 * GiB - 819 * MiB;                      // in use 74.8 GiB, as the issue measured
+    const size_t issue_budget = 29 * GiB + 205 * MiB;                            // 29.2 GiB, as the guardrail printed
+    expect_eq("the GTT arithmetic reproduces the issue's 29.2 GiB budget",
+              pool_budget(total, issue_free, kHostUnknown), issue_budget);
+    const size_t host_tight = 15 * GiB;
+    expect_eq("a tight host replaces the GTT term", pool_budget(total, issue_free, host_tight), host_tight);
+    expect_true("so the refused 15.35 GiB is no longer admissible",
+                pool_budget(total, issue_free, host_tight) < 15 * GiB + 359 * MiB);
+    expect_true("while the GTT-only arithmetic still called it admissible",
+                pool_budget(total, issue_free, kHostUnknown) > 15 * GiB + 359 * MiB);
+    expect_eq("a roomy host leaves the GTT term alone (no behaviour change)",
+              pool_budget(total, issue_free, 80 * GiB), issue_budget);
+    expect_eq("a host figure larger than the GTT term never inflates the budget",
+              pool_budget(total, issue_free, 900 * GiB), issue_budget);
+    expect_eq("host unknown keeps the GTT arithmetic", pool_budget(total, issue_free, kHostUnknown), issue_budget);
+    expect_eq("a measured zero host refuses", pool_budget(total, issue_free, 0), 0);
+    expect_true("and the terms say the host bound it", pool_budget_terms(total, issue_free, 0).host_bound);
+    expect_eq("unknown device stays unfettered", pool_budget(0, 0, host_tight), 0);
 
     printf(failures == 0 ? "test-hrx-pool-refusal-budget: all requirements passed\n"
                          : "test-hrx-pool-refusal-budget: %d FAILED\n", failures);

@@ -6,6 +6,7 @@
 
 #include "dispatch-layout-utils.h"
 #include "dispatch-rope-utils.h"
+#include "rope-claim-params.h"
 #include "ggml.h"
 #include "qwen4exp-hrx-support.h"
 #include "graph/graph-matcher.h"
@@ -129,12 +130,10 @@ static bool is_supported_rope_input_layout(const Value & value, size_t & span_el
     return required <= span_elements;
 }
 
+// The condition itself lives in ggml/src/ggml-hrx/rope-claim-params.h, so the claim in
+// fused-context-claim.h cannot drift away from what this matcher accepts (engine #1467).
 static bool is_supported_rope_params(const RopeParams & params, int64_t head_size) {
-    const bool supported_mode = params.mode == GGML_ROPE_TYPE_NORMAL || params.mode == GGML_ROPE_TYPE_NEOX ||
-                                rope_mode_is_collapsible_imrope(params);
-    return params.n_dims >= 4 && params.n_dims <= head_size && params.n_dims % 4 == 0 && supported_mode &&
-           std::isfinite(params.freq_base) && params.freq_base > 0.0f && std::isfinite(params.freq_scale) &&
-           params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);
+    return rope_params_supported_by_rope_set_rows(params, head_size);
 }
 
 static bool build_rope_theta_table(const GraphNode &      rope,

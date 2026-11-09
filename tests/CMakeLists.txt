@@ -350,6 +350,13 @@ add_test(NAME test-server-health COMMAND test-server-health)
 
 if (TARGET ggml-hrx)
     # the program cache's byte budget and LRU order: pure policy, no device and no HRX link
+    # Which rotations the fused registrations accept, i.e. what the claim may assert (engine #1467).
+    # Header-only: no device, no model, and the vision rotation must be rejected here.
+    add_executable(test-hrx-rope-claim-params test-hrx-rope-claim-params.cpp)
+    target_include_directories(test-hrx-rope-claim-params PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-rope-claim-params COMMAND test-hrx-rope-claim-params)
+    target_link_libraries(test-hrx-rope-claim-params PRIVATE ggml)
+
     add_executable(test-hrx-graph-program-budget test-hrx-graph-program-budget.cpp
         ../ggml/src/ggml-hrx/runtime/graph-program-budget.cpp)
     target_include_directories(test-hrx-graph-program-budget PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
@@ -364,6 +371,10 @@ if (TARGET ggml-hrx)
     add_executable(test-hrx-arena-refusal test-hrx-arena-refusal.cpp)
     target_include_directories(test-hrx-arena-refusal PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-arena-refusal COMMAND test-hrx-arena-refusal)
+    # what the transient arena owes the pool when it grows: pure helper, no device and no HRX link (engine #1711)
+    add_executable(test-hrx-transient-arena-charge test-hrx-transient-arena-charge.cpp)
+    target_include_directories(test-hrx-transient-arena-charge PRIVATE ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-transient-arena-charge COMMAND test-hrx-transient-arena-charge)
 
     # MemAvailable parsing for the unbounded-residency warning: pure, no device and no /proc (engine #669)
     add_executable(test-hrx-host-memory-available test-hrx-host-memory-available.cpp
@@ -391,6 +402,13 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-loom-jit PRIVATE ggml-hrx ggml-hrx-kernel-corpus hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-loom-jit PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-loom-jit COMMAND test-hrx-loom-jit)
+
+    # How a layout-alias node is judged when its input is PRODUCED vs EXTERNAL: engine #1467's projector is
+    # refused at a no-op VIEW that the standalone oracle calls supported because it feeds the view from a leaf.
+    add_executable(test-hrx-view-alias-elision test-hrx-view-alias-elision.cpp)
+    target_link_libraries(test-hrx-view-alias-elision PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-view-alias-elision PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-view-alias-elision COMMAND test-hrx-view-alias-elision)
 
     add_executable(test-hrx-ops test-hrx-ops.cpp)
     target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)

@@ -25,6 +25,7 @@
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cinttypes>
 #include <cstdio>
@@ -242,6 +243,14 @@ static void buffer_memset(ggml_backend_buffer_t buffer,
 // one dispatch queue, and the synchronize that follows completes them before the caller continues. The staging
 // buffer is kept per device (few distinct sizes) instead of being allocated per copy: per-copy allocate/release is
 // what libhrx's per-size pools retain (engine #669).
+// engine #856: the staging buffer is capped, and a larger copy goes through it in chunks. Sizing it to the largest
+// copy kept one host-mapped buffer the size of the largest weight (995 MiB on a 27B, usually the token embedding)
+// resident in GTT for the life of the process, only to stage the load. Each chunk is synchronized before the
+// buffer is reused, so the ordering of engine #696 is unchanged. The callers hold buffer_stream_mutex across all
+// chunks of one copy, so no other staged copy can reallocate the buffer between them. The buffer still never
+// shrinks: it stays at most kCopyStagingChunk per device for the life of the process, kept for reuse on purpose.
+static constexpr size_t kCopyStagingChunk = 64ull << 20;
+
 static bool ensure_copy_staging(ggml_backend_hrx_device_context * device, size_t size) {
     if (device->copy_staging_size >= size) {
         return true;
@@ -266,13 +275,21 @@ static bool ordered_upload(ggml_backend_hrx_device_context * device,
                            hrx_buffer_t                    destination,
                            size_t                          offset) {
     std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
-    if (!ensure_copy_staging(device, size)) {
+    const size_t                chunk = std::min(size, kCopyStagingChunk);
+    if (!ensure_copy_staging(device, chunk)) {
         return false;
     }
-    std::memcpy(device->copy_staging_mapped, data, size);
-    return HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, device->copy_staging, 0, destination, offset,
-                                            size)) &&
-           HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
+    const auto * source = static_cast<const uint8_t *>(data);
+    for (size_t done = 0; done < size; done += chunk) {
+        const size_t n = std::min(chunk, size - done);
+        std::memcpy(device->copy_staging_mapped, source + done, n);
+        if (!HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, device->copy_staging, 0, destination,
+                                              offset + done, n)) ||
+            !HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool ordered_download(ggml_backend_hrx_device_context * device,
@@ -281,16 +298,21 @@ static bool ordered_download(ggml_backend_hrx_device_context * device,
                              void *                          data,
                              size_t                          size) {
     std::lock_guard<std::mutex> lock(device->buffer_stream_mutex);
-    if (!ensure_copy_staging(device, size)) {
+    const size_t                chunk = std::min(size, kCopyStagingChunk);
+    if (!ensure_copy_staging(device, chunk)) {
         return false;
     }
-    const bool ok = HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, source, offset, device->copy_staging, 0,
-                                                     size)) &&
-                    HRX_CHECK(hrx_stream_synchronize(device->buffer_stream));
-    if (ok) {
-        std::memcpy(data, device->copy_staging_mapped, size);
+    auto * destination = static_cast<uint8_t *>(data);
+    for (size_t done = 0; done < size; done += chunk) {
+        const size_t n = std::min(chunk, size - done);
+        if (!HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, source, offset + done, device->copy_staging, 0,
+                                              n)) ||
+            !HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+            return false;
+        }
+        std::memcpy(destination + done, device->copy_staging_mapped, n);
     }
-    return ok;
+    return true;
 }
 
 static void buffer_set(ggml_backend_buffer_t buffer,
@@ -381,9 +403,10 @@ static const ggml_backend_buffer_i buffer_i = {
 // engine #1502 (#251) calls this from buffer_alloc, eight hundred lines above its definition, with no declaration in
 // scope - so the translation unit does not compile ("'device_free_total' was not declared in this scope"). One forward
 // declaration is enough; the definition and its callers are unchanged.
-// ...and the declaration must match the definition's type: it is `bool` (it reports whether the driver counters were
-// available), so a `void` forward declaration is an ambiguous redeclaration and the translation unit still does not
-// compile - the pin built for nobody until this line said `bool`.
+// The declaration must match the definition's type: it is `bool` (it reports whether the driver counters were
+// available). Two merges each added a forward declaration - #252's above, #240's `bool` one further down - and the
+// `void`/`bool` pair is an ambiguous redeclaration, so the translation unit fails to compile at the `bool` declaration
+// and the pin builds for nobody. One word, and every lane that builds this pin is unblocked.
 static bool device_free_total(ggml_backend_hrx_device_context * device_ctx, size_t & free_bytes, size_t & total_bytes);
 
 static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_t size) {
@@ -888,11 +911,8 @@ static void device_memory(ggml_backend_dev_t device, size_t * free, size_t * tot
         std::lock_guard<std::mutex> lock(device_ctx->memory_budget_mutex);
         ggml::hrx::onebit::pool_budget_state_t state{
             device_ctx->memory_budget, device_ctx->memory_budget_cap, device_ctx->memory_budget_cap_free };
-        state                       = ggml::hrx::onebit::pool_budget_observe(
-            device_ctx->memory_total, free_bytes, ggml::hrx::onebit::pool_allocated(),
-            ggml::hrx::host_memory_available_bytes() == 0 ? ggml::hrx::onebit::kHostUnknown
-                                                         : ggml::hrx::host_memory_available_bytes(),
-            state);
+        state                       = ggml::hrx::onebit::pool_budget_observe(device_ctx->memory_total, free_bytes,
+                                                                           ggml::hrx::onebit::pool_allocated(), state);
         device_ctx->memory_budget      = state.budget;
         device_ctx->memory_budget_cap  = state.cap;
         device_ctx->memory_budget_cap_free = state.cap_free;
@@ -1589,8 +1609,8 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         size_t device_free            = device_ctx->memory_total;
         size_t device_total           = device_ctx->memory_total;
         device_free_total(device_ctx.get(), device_free, device_total);
-        // A failed read is "unknown", not "zero bytes left": kHostUnknown disables the term, while a measured zero must
-        // refuse (a host with nothing left is the worst moment to admit a launch). Review of this PR, engine #1502.
+        // A failed /proc read is "unknown", not "zero bytes left": kHostUnknown disables the term, while a measured zero must
+        // refuse - a host with nothing left is the worst moment to admit a launch (engine #1502).
         const size_t host_raw       = ggml::hrx::host_memory_available_bytes();
         const size_t host_available = host_raw == 0 ? ggml::hrx::onebit::kHostUnknown : host_raw;
         const ggml::hrx::onebit::pool_budget_terms_t terms =
@@ -1612,8 +1632,8 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         if (device_ctx->memory_budget != 0) {
             const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
             GGML_LOG_WARN("ggml_hrx: %s guardrail: GTT total %.1f GiB, in use %.1f GiB, ceiling %.1f GiB "
-                          "(reserve %.1f GiB), pool budget %.1f GiB (GTT term %.1f GiB, host MemAvailable %.1f GiB) - a "
-                          "launch that needs more is refused here rather than faulting the device (engine #680; bound by %s)\n",
+                          "(reserve %.1f GiB), pool budget %.1f GiB (GTT term %.1f GiB, host MemAvailable %.1f GiB) - a launch that needs more is refused here "
+                          "rather than faulting the device (engine #680; bound by %s)\n",
                           device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
                           (device_total > device_free ? device_total - device_free : 0) / (1024.0 * 1024.0 * 1024.0),
                           (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0),

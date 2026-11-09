@@ -29,8 +29,7 @@ namespace ggml::hrx::onebit {
 // already hold (memory_total - memory_free). A GTT plan past this budget is refused at allocation instead of
 // faulting the device: #680 is a gfxhub page fault plus a MODE2 reset at GTT 106.5 of 120 GiB.
 // The two terms the budget is the minimum of, and the budget itself. Returned together so a caller can PRINT what the
-// decision used instead of recomputing it (a second copy of `ceiling - in_use` in a printf agrees today and drifts later),
-// and so the log can name the term that bound.
+// decision used instead of recomputing it, and so the log can name the term that bound (engine #1502).
 struct pool_budget_terms_t {
     size_t gtt_term       = 0;   // (total - reserve) - in_use, from the driver counters
     size_t host_available = 0;   // MemAvailable as passed in, or kHostUnknown
@@ -38,22 +37,18 @@ struct pool_budget_terms_t {
     bool   host_bound     = false;
 };
 
-// |memory_available| is the host's MemAvailable. On an APU the GTT ceiling and DRAM are the same pool, so what the
-// allocator can serve is bounded by both: this is the term that differs between two loads with identical GTT counters and
-// opposite outcomes (engine #1502).
-//
-// kHostUnknown means "the host figure could not be read", and only then is the term ignored. It is deliberately NOT 0:
-// a measured zero means the host has nothing left, which is the one case where admitting a launch is worst, and conflating
-// it with "unreadable" would let that case take the fallback (review of this PR).
-//
-// The parameter is DEFAULTED to kHostUnknown so a caller that only formats a diagnostic (llama.cpp #255 reports a refused
-// host-weight materialize) keeps compiling and keeps meaning "GTT arithmetic only" - the change is additive. A caller that
-// can read /proc should pass the figure, and must map a failed read to kHostUnknown rather than to 0.
+// |memory_available| is the host's MemAvailable. On an APU the GTT ceiling and DRAM are the same pool, so what the allocator
+// can serve is bounded by both: this is the term that differs between two loads with identical GTT counters and opposite
+// outcomes (engine #1502). kHostUnknown means "could not be read" and only then is the term ignored - a measured zero means the
+// host has nothing left, the worst moment to admit a launch, so it must refuse. Defaulted so a diagnostic-only caller keeps
+// meaning "GTT arithmetic only" (llama.cpp #255) and every existing call site still compiles.
 inline constexpr size_t kHostUnknown = static_cast<size_t>(-1);
 
 pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, size_t memory_available = kHostUnknown);
-
 size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available = kHostUnknown);
+// true when GGML_HRX_POOL_LIMIT_MB is in force: pool_budget() then returns that fixed limit rather than a
+// remainder, so a caller that prints the figure has to word it differently.
+bool   pool_budget_is_fixed_limit();
 
 // The budget after an allocation the allocator refused, given the size it refused (engine #1502).
 //
@@ -89,8 +84,8 @@ pool_budget_state_t pool_budget_note_refusal(pool_budget_state_t state, size_t s
 //    pool_remaining() subtracts the ledger again further down the admission path;
 //  - a cap is cleared only when it is LIFTED (the pool grew past the figure the refusal saw). When the pool is smaller the cap and
 //    its evidence are kept, and only this call's budget is bounded by it - otherwise one low reading becomes a permanent ceiling.
-pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, size_t memory_available,
-                                        pool_budget_state_t state);
+pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state,
+                                        size_t memory_available = kHostUnknown);
 
 // The reserve the ceiling keeps for the driver and for kernel/transient spikes, in bytes.
 size_t pool_reserve_bytes();

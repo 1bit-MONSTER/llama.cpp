@@ -83,14 +83,19 @@ bool gtt_counters(size_t & total, size_t & used) {
     return false;
 }
 
+bool pool_budget_is_fixed_limit() {
+    const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
+    return env != nullptr && std::atoll(env) > 0;
+}
+
 pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, size_t memory_available) {
     pool_budget_terms_t t;
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     if (env != nullptr) {
         const long long mb = std::atoll(env);
         if (mb > 0) {
-            // An operator-set limit is the budget, floor and ceiling at once; it is not a min() of terms, and saying so
-            // keeps the log from implying the box produced the number.
+            // An operator-set limit is the budget outright, not a min() of terms; keeping it distinguishable is what
+            // pool_budget_is_fixed_limit() reports so a caller can word the line correctly (llama.cpp #255).
             t.host_available = memory_available;
             t.gtt_term       = static_cast<size_t>(mb) * kMiB;
             t.budget         = t.gtt_term;
@@ -98,17 +103,15 @@ pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, s
         }
     }
     if (memory_total == 0) {
-        return t;  // unknown device size: keep the unfettered behaviour (every field stays 0)
+        return t;  // unknown device size: keep the unfettered behaviour
     }
     const size_t reserve = pool_reserve_bytes();
     const size_t ceiling = memory_total > reserve ? memory_total - reserve : 0;
     const size_t in_use  = memory_total > memory_free ? memory_total - memory_free : 0;
     t.gtt_term       = ceiling > in_use ? ceiling - in_use : 0;
     t.host_available = memory_available;
-    // engine #1502: the GTT counter is not the allocator's ceiling on an APU. Letting a 15.35 GiB buffer through a 29.2 GiB
-    // budget while the host had ~15 GiB left made the failure land inside hsa_amd_memory_pool_allocate and read as
-    // "llama_model_load: error loading model". The engine's admission check has always used min(GTT free, MemAvailable)
-    // (app/mem_admit.h); this is the same two-term model in the fork's safety net. kHostUnknown alone disables the term.
+    // engine #1502: on an APU the GTT counter is not the allocator's ceiling, so the budget is the smaller of the two terms -
+    // the same model the engine's own admission check has always used (app/mem_admit.h).
     if (memory_available != kHostUnknown && memory_available < t.gtt_term) {
         t.budget     = memory_available;
         t.host_bound = true;
@@ -216,8 +219,8 @@ pool_budget_state_t pool_budget_note_refusal(pool_budget_state_t state, size_t s
     return state;
 }
 
-pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, size_t memory_available,
-                                        pool_budget_state_t state) {
+pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state,
+                                        size_t memory_available) {
     if (state.cap == 0) {
         return state;  // no cap in force: the registration-time budget stands
     }

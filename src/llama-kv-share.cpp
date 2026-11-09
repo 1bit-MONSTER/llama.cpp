@@ -434,6 +434,38 @@ size_t llama_kv_share_regions(llama_context * ctx, llama_kv_share_region * out, 
     return regions.size();
 }
 
+// [1bit] target 1: the chunks a context EXPECTS, from the same share_layout() the importer checks against, with no export.
+// This is what lets a provider be tested on a box with no GPU: fabricate regions of these sizes carrying these hashes.
+bool llama_kv_cache::expects_layout(std::vector<llama_kv_shared_region_pod> & out) const {
+    for (const auto & cb : ctxs_bufs) {
+        const std::vector<share_chunk> chunks =
+            share_layout(cb.first.get(), ggml_backend_buffer_get_type(cb.second.get()));
+        for (const auto & c : chunks) {
+            out.push_back({-1, 0, c.size, c.layout});
+        }
+    }
+    return true;
+}
+
+bool llama_memory_recurrent::expects_layout(std::vector<llama_kv_shared_region_pod> &) const {
+    return true;   // its state is not handed over as a region
+}
+
+size_t llama_kv_share_layout(llama_context * ctx, llama_kv_share_region * out, size_t n_out) {
+    std::vector<llama_kv_shared_region_pod> chunks;
+    if (!share_each(ctx, ctx, [&](auto & d, const auto &) { return d.expects_layout(chunks); })) {
+        return 0;
+    }
+    const size_t n = std::min(n_out, chunks.size());
+    for (size_t i = 0; i < n; ++i) {
+        out[i].fd     = -1;
+        out[i].offset = 0;
+        out[i].size   = chunks[i].size;
+        out[i].layout = chunks[i].layout;
+    }
+    return chunks.size();
+}
+
 bool llama_kv_share_import(llama_context * ctx, const llama_kv_share_region * regions, size_t n_regions) {
     std::vector<llama_kv_shared_region_pod> in;
     in.reserve(n_regions);
