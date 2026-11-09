@@ -39,6 +39,7 @@
 // standalone test.
 
 #include "ggml.h"
+#include "rope-claim-params.h"
 #include "ubatch-token-limits.h"
 
 #include <cstring>
@@ -155,8 +156,24 @@ inline bool fused_context_claim(const ggml_tensor * op) {
                    op->ne[2] <= 3 && op->ne[0] >= 32 && op->ne[0] <= 65536 && op->ne[0] % 32 == 0;
         // per-head attention normalisation and rotation
         case GGML_OP_RMS_NORM:
-        case GGML_OP_ROPE:
             return fused_context_is_head_row(op) && fused_context_fed_by_op(op);
+        case GGML_OP_ROPE: {
+            // A head-row rotation is claimed only when some fused registration accepts its PARAMETERS as well as
+            // its shape: a claim that is broader than the matchers leaves the node with no dispatch, and the
+            // whole graph fails instead of the node falling back to the CPU. engine #1467 is that failure: the
+            // Qwen3-VL projector's ROPE (n_dims 32 against a 64-wide head, mode GGML_ROPE_TYPE_VISION) is a
+            // head row fed by an op, so it was claimed, and both matchers then rejected it - "ROPE matcher
+            // rejected node: ROPE params or positions shape is unsupported" - which made clip_image_batch_encode
+            // fail on HRX0 at chunk 25 instead of running that node on the CPU. The predicates are shared with the
+            // matchers (rope-claim-params.h) rather than restated here, because restating them is what broke text
+            // decode twice: text rotations satisfy the attention fusion's set, not the ROPE+SET_ROWS one.
+            if (!fused_context_is_head_row(op) || !fused_context_fed_by_op(op)) {
+                return false;
+            }
+            const OpParams     imported = import_op_params(*op);
+            const RopeParams * params   = op_params_as<RopeParams>(imported);
+            return params != nullptr && rope_params_supported_by_any_fusion(*params, op->ne[0]);
+        }
         default:
             return false;
     }

@@ -4,6 +4,7 @@
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
+#include "rope-claim-params.h"
 
 #include <cmath>
 #include <cstdint>
@@ -104,10 +105,10 @@ static std::string to_config_value(int64_t value) {
     return std::to_string(value);
 }
 
+// The condition itself lives in ggml/src/ggml-hrx/rope-claim-params.h, because the claim in
+// fused-context-claim.h has to assert exactly what this matcher accepts (engine #1467).
 static bool is_supported_attention_rope_params(const RopeParams & params, int64_t head_size) {
-    return params.n_dims == head_size && params.mode == GGML_ROPE_TYPE_NORMAL && std::isfinite(params.freq_base) &&
-           params.freq_base > 0.0f && std::isfinite(params.freq_scale) && params.freq_scale > 0.0f &&
-           params.ext_factor == 0.0f && params.attn_factor == 1.0f;
+    return rope_params_supported_by_attention_fusion(params, head_size);
 }
 
 static bool build_rope_theta_table(const GraphNode & rope, int64_t head_size, std::vector<uint8_t> & data) {
