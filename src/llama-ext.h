@@ -61,6 +61,8 @@ LLAMA_API size_t llama_kv_share_regions(struct llama_context * ctx, struct llama
 // importer checks -- with no exporter in the loop. `llama_kv_share_regions` reports what a context *did* export (which needs
 // one); this reports what it would *accept*, so a provider can be tested against a region the test fabricates
 // (engine#753: the NPU writer's gate then needs no GPU).
+// Entries of `out` at or beyond `min(n_out, returned)` are left UNTOUCHED: a caller that ignores the return value and
+// iterates `n_out` entries reads uninitialised memory for the tail.
 LLAMA_API size_t llama_kv_share_layout(struct llama_context * ctx, struct llama_kv_share_region * out, size_t n_out);
 
 // [1bit] Target 1: map those regions in a context of the same model and context params (the prefill provider),

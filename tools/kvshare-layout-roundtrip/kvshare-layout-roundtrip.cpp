@@ -14,6 +14,10 @@
 //
 //   kvshare-layout-roundtrip -m model.gguf [--ctx N]
 //
+// In the ordinary suite (ctest `kvshare_layout_roundtrip`) it runs when KVSHARE_TEST_GGUF names a model and **skips** (exit
+// 77) when it does not: the check is device-free but model-dependent, because a context has to exist before it can report
+// the layout of a cache. Nothing here needs a GPU.
+//
 // Needs `/dev/udmabuf` (root:kvm on this box).
 #include "llama.h"
 #include "llama-ext.h"
@@ -75,11 +79,26 @@ struct Udmabuf {
 int main(int argc, char ** argv) {
     std::string model_path;
     uint32_t n_ctx = 512;
+    bool have_m = false;
     for (int i = 1; i < argc; i++) {
-        if (!std::strcmp(argv[i], "-m") && i + 1 < argc) model_path = argv[++i];
+        if (!std::strcmp(argv[i], "-m") && i + 1 < argc) { model_path = argv[++i]; have_m = true; }
         else if (!std::strcmp(argv[i], "--ctx") && i + 1 < argc) n_ctx = uint32_t(std::atoi(argv[++i]));
     }
-    if (model_path.empty()) { std::fprintf(stderr, "usage: %s -m model.gguf [--ctx N]\n", argv[0]); return 2; }
+    // The ctest runs this with no arguments and reads KVSHARE_TEST_GGUF at RUN time -- `$ENV{}` in a CMake command is
+    // expanded when the build is configured, so baking it in would freeze whatever was set that day.
+    if (model_path.empty()) {
+        if (const char * e = std::getenv("KVSHARE_TEST_GGUF"); e != nullptr && *e != '\0') model_path = e;
+    }
+    if (model_path.empty()) {
+        std::printf("skip: pass -m model.gguf (or set KVSHARE_TEST_GGUF); %s needs a model, not a device\n", argv[0]);
+        return 77;   // ctest SKIP_RETURN_CODE
+    }
+    if (FILE * f = std::fopen(model_path.c_str(), "rb"); f != nullptr) {
+        std::fclose(f);
+    } else {
+        std::printf("skip: no model at %s (set KVSHARE_TEST_GGUF to a small gguf to run this)\n", model_path.c_str());
+        return 77;   // ctest SKIP_RETURN_CODE: device-free, but a context needs a model
+    }
 
     llama_backend_init();
     llama_model_params mp = llama_model_default_params();

@@ -16,7 +16,11 @@
 // the NPU work stays under its own hold), then the decoder is asked the same question.
 //
 // bf16 on both sides: the writer moves 16-bit pieces with no conversion, so the cache must BE bf16 or this measures a
-// reinterpretation rather than the array's arithmetic (docs/npu-dx-kvwrite.md). Needs `/dev/udmabuf`.
+// reinterpretation rather than the array's arithmetic (docs/npu-dx-kvwrite.md).
+//
+// NOT a ctest gate, and deliberately: it needs (a) a real model, (b) `/dev/udmabuf`, (c) a dump from an NPU prefill, and
+// (d) the private writer, which runs under an `npu-hold` ticket. `kvshare-layout-roundtrip` is the part of this seam that
+// does fit a suite (device-free, model-dependent, skips without one); this one is the semantic end-to-end, run by hand.
 #include "llama.h"
 #include "llama-ext.h"
 
