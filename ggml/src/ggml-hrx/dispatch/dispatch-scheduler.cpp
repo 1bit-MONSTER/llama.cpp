@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <sstream>
+#include <cstring>
 #include <string>
 #include <utility>
 
@@ -107,8 +108,23 @@ static std::string unsupported_node_message(const Graph & graph, size_t index, c
         // is_layout_alias_node() is this predicate exactly (graph/graph.cpp): a message that restates the scheduler's rule
         // is a message that will describe a scheduler that no longer exists. Same reasoning as rope-claim-params.h sharing
         // its predicates with the matchers in #257.
-        stream << " alias=" << (is_layout_alias_node(graph, node) ? "same_storage" : "not_aliasing_input")
-               << " inputs=" << node.inputs.size();
+        const char * relation = is_layout_alias_node(graph, node) ? "same_storage" : "not_aliasing_input";
+        // WHICH lookup missed, not just that one did. A view can fail to alias for two very different reasons and they
+        // lead to different repairs: the tensor its view_src points at was never registered as a value in this graph
+        // (register it, or resolve by storage range), or it WAS registered and the map still gave the view a storage of
+        // its own (that would be a bug in the assignment itself). engine #1467's text tower hits one of these and the
+        // field above could not say which.
+        const char * why = "";
+        const Value * out = graph.values().find(node.output);
+        if (out != nullptr && out->tensor != nullptr) {
+            const ggml_tensor * src = out->tensor->view_src;
+            if (relation != nullptr && std::strcmp(relation, "not_aliasing_input") == 0) {
+                why = (src != nullptr && graph.values().find_tensor(src) != nullptr)
+                          ? "(view_src_registered_but_storage_differs)"
+                          : "(view_src_unregistered)";
+            }
+        }
+        stream << " alias=" << relation << why << " inputs=" << node.inputs.size();
     }
     return stream.str();
 }
