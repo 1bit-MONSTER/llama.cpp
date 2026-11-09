@@ -122,7 +122,8 @@ class HostWeightCache {
     HostWeightAcquireResult acquire(hrx_device_t             device,
                                     hrx_stream_t             stream,
                                     HostTransferManager &    transfers,
-                                    const HostWeightSource & source);
+                                    const HostWeightSource & source,
+                                    size_t                   pool_budget = 0);
     HostWeightCacheStats    stats() const;
     void                    clear();
 
@@ -187,6 +188,9 @@ class HostWeightCache {
     // buffer. The arena grows by doubling up to the residency limit, and a growth drops every entry (the stream
     // is synchronized first), so the peak stays at the working set rather than at the knob.
     hrx_buffer_t                           arena_          = nullptr;
+    // Bytes this cache holds against the pool ledger (engine#1711). Tracked separately from arena_capacity_ so clear()
+    // returns exactly what was charged, including the case where a grow released a superseded arena.
+    size_t                                 charged_bytes_  = 0;
     size_t                                 arena_capacity_ = 0;
     size_t                                 arena_free_bytes_ = 0;
     std::vector<std::pair<size_t, size_t>> arena_free_;
@@ -194,6 +198,7 @@ class HostWeightCache {
     bool        arena_reserve(hrx_device_t device,
                               hrx_stream_t stream,
                               size_t       size,
+                              size_t       pool_budget,
                               hrx_buffer_t & buffer,
                               size_t &     offset,
                               size_t &     slot);

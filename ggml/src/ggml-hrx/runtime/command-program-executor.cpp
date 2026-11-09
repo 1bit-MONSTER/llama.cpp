@@ -711,7 +711,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
                 continue;
             }
             HostWeightAcquireResult resident =
-                context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source);
+                context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source, context.pool_budget);
             if (!resident.valid()) {
                 // engine #1618: this line and the HSA error behind it carried no pool figure,
                 // so an 89 GB model materialized against a 66.6 GiB budget read as a
@@ -1019,7 +1019,8 @@ static Status rebind_prepared_host_weights(const CommandProgramExecutionContext 
         // Evicted since this program was prepared (the cache is bounded, see HostWeightCache::limit): put it back and
         // point the prepared bindings at the new buffer. The old one is gone, so nothing else may still reference it.
         HostWeightAcquireResult materialized =
-            context.host_weights->acquire(context.device, context.stream, *context.host_transfers, resident.source);
+            context.host_weights->acquire(context.device, context.stream, *context.host_transfers, resident.source,
+                                          context.pool_budget);
         if (!materialized.valid()) {
             status.append(materialized.status);
             status.log("re-materialize resident host weight value %d failed", resident.value.value);

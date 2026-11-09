@@ -63,6 +63,20 @@ int main() {
     got = plan_arena_charge(1u << 20, 8u << 20, true);
     check(got.reserve_bytes == 0 && got.release_bytes == 0, "a smaller request charges nothing", got, {0, 0});
 
+    // 6. The host-weight arena reuses this same decision (`retires_old = false`): it grows straight to its budget, so
+    //    the first growth charges the whole arena and a later regrow to the same budget charges nothing. Getting this
+    //    wrong double-charges a cache that keeps the same arena across many weights, which is the common case.
+    got = plan_arena_charge(4096u << 20, 0, false);
+    check(got.reserve_bytes == (4096u << 20) && got.release_bytes == 0, "host-weight arena: first growth charges the whole arena", got,
+          {4096u << 20, 0});
+    got = plan_arena_charge(4096u << 20, 4096u << 20, false);
+    check(got.reserve_bytes == 0 && got.release_bytes == 0, "host-weight arena: a regrow to the same budget charges nothing", got,
+          {0, 0});
+    // and a grow past the budget releases the superseded arena's charge in the same step (the old buffer is freed there)
+    got = plan_arena_charge(8192u << 20, 4096u << 20, false);
+    check(got.reserve_bytes == (4096u << 20) && got.release_bytes == (4096u << 20), "host-weight arena: growing past the budget swaps charge for charge", got,
+          {4096u << 20, 4096u << 20});
+
     if (failures != 0) {
         std::printf("%d arm(s) failed\n", failures);
         return 1;
