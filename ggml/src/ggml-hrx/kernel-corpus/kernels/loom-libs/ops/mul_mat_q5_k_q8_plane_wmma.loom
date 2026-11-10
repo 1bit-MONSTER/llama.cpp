@@ -466,9 +466,35 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
       %q8_scale_dst0_0 = index.add %q8_scale_tile2, %q8_token_vector : index
       %q8_scale_dst1_0 = index.add %q8_scale_dst0_0, %c16 : index
       %q8_d0 = scalar.extf %q8_d0_f16 : f16 to f32
-      %q8_scaled_sum0 = scalar.extf %q8_s0_f16 : f16 to f32
+      %q8_stored_sum0 = scalar.extf %q8_s0_f16 : f16 to f32
       %q8_d1 = scalar.extf %q8_d1_f16 : f16 to f32
-      %q8_scaled_sum1 = scalar.extf %q8_s1_f16 : f16 to f32
+      %q8_stored_sum1 = scalar.extf %q8_s1_f16 : f16 to f32
+      // engine #1962: the block's scaled sum (scale times the sum of its 32 codes) is stored as f16, and it leaves the
+      // f16 range as soon as one activation in the block does, although the scale itself still fits up to 8.3e6. A
+      // stored sum that is not finite is rebuilt here from the codes this lane already holds; a finite one is used as
+      // stored, so ordinary data takes the path it always took.
+      %q8_f16_max = scalar.constant 65504.0 : f32
+      %q8_sum_zero = scalar.constant 0.0 : f32
+      %q8_stored_abs0 = scalar.absf %q8_stored_sum0 : f32
+      %q8_stored_abs1 = scalar.absf %q8_stored_sum1 : f32
+      %q8_sum_fits0 = scalar.cmpf ole, %q8_stored_abs0, %q8_f16_max : f32
+      %q8_sum_fits1 = scalar.cmpf ole, %q8_stored_abs1, %q8_f16_max : f32
+      %q8_scaled_sum0 = scf.if %q8_sum_fits0 -> (f32) {
+        scf.yield %q8_stored_sum0 : f32
+      } else {
+        %q8_codes0 = vector.sitofp %q8_values0 : vector<32xi8> to vector<32xf32>
+        %q8_code_sum0 = vector.reduce<addf> %q8_codes0, %q8_sum_zero : vector<32xf32>, f32
+        %q8_rebuilt0 = scalar.mulf %q8_code_sum0, %q8_d0 : f32
+        scf.yield %q8_rebuilt0 : f32
+      }
+      %q8_scaled_sum1 = scf.if %q8_sum_fits1 -> (f32) {
+        scf.yield %q8_stored_sum1 : f32
+      } else {
+        %q8_codes1 = vector.sitofp %q8_values1 : vector<32xi8> to vector<32xf32>
+        %q8_code_sum1 = vector.reduce<addf> %q8_codes1, %q8_sum_zero : vector<32xf32>, f32
+        %q8_rebuilt1 = scalar.mulf %q8_code_sum1, %q8_d1 : f32
+        scf.yield %q8_rebuilt1 : f32
+      }
       func.call @ggml_q5_plane_dense_q8_wmmai8_stage_metadata(%token256, %scratch, %as_off, %asum_off, %q8_scale_dst0_0, %q8_scale_dst1_0, %q8_d0, %q8_d1, %q8_scaled_sum0, %q8_scaled_sum1) : (i1, buffer, offset, offset, index, index, f32, f32, f32, f32)
     }
     // One lane decodes two adjacent Q5_K groups; each selects its bits from the shared 32-byte fifth-bit plane.

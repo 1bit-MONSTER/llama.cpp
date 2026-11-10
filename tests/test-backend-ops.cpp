@@ -9528,11 +9528,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q5_K, 2048, 512, 4096));
     // engine #1962: the two small-batch Q6_K kernels with activations of the magnitude measured in flint-40b, and the
     // lower edge (the smallest dense-input column maximum measured on four models). The 512-token prefill kernels for
-    // Q4_K, Q5_K and Q6_K still overflow above 65504 and are not listed until they pass.
+    // Q4_K and Q6_K still overflow above 65504 and are not listed until they pass.
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 8, 4096, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 4096, 8,  512, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 8, 4096, 2.4e-2f));
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 4096, 8,  512, 2.4e-2f));
+    // engine #1962: the Q5_K prefill reads the activations as 8-bit blocks (block_q8_1_x4). Each block carries its scale
+    // and its sum; a sum stored already multiplied by the scale left the f16 range as soon as one activation did.
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 6.6e4f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 1.0e6f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 2.4e-2f));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
