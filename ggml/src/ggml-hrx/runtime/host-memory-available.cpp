@@ -26,40 +26,51 @@ constexpr size_t kMeminfoBytes = 16 * 1024;
 
 }  // namespace
 
-size_t mem_available_from_meminfo(const char * meminfo) {
+bool mem_available_from_meminfo(const char * meminfo, size_t & out) {
     if (meminfo == nullptr) {
-        return 0;
+        return false;
     }
     for (const char * line = meminfo; *line != '\0';) {
         if (std::strncmp(line, "MemAvailable:", sizeof("MemAvailable:") - 1) == 0) {
             unsigned long long kib = 0;
             if (std::sscanf(line + sizeof("MemAvailable:") - 1, " %llu", &kib) != 1) {
-                return 0;
+                return false;   // the field is there but unreadable: unknown, not zero
             }
             if (kib > std::numeric_limits<size_t>::max() / 1024) {
-                return 0;
+                return false;
             }
-            return static_cast<size_t>(kib) * 1024;
+            out = static_cast<size_t>(kib) * 1024;
+            return true;        // "MemAvailable: 0 kB" is a reading, not an unknown
         }
         const char * next = std::strchr(line, '\n');
         if (next == nullptr) {
-            return 0;
+            return false;
         }
         line = next + 1;
     }
-    return 0;
+    return false;
 }
 
-size_t host_memory_available_bytes() {
+size_t mem_available_from_meminfo(const char * meminfo) {
+    size_t out = 0;
+    return mem_available_from_meminfo(meminfo, out) ? out : 0;
+}
+
+bool host_memory_available_bytes(size_t & out) {
     FILE * file = std::fopen("/proc/meminfo", "rb");
     if (file == nullptr) {
-        return 0;
+        return false;
     }
     char   body[kMeminfoBytes] = {};
     const size_t read  = std::fread(body, 1, sizeof(body) - 1, file);
     std::fclose(file);
     body[read]         = '\0';
-    return mem_available_from_meminfo(body);
+    return mem_available_from_meminfo(body, out);
+}
+
+size_t host_memory_available_bytes() {
+    size_t out = 0;
+    return host_memory_available_bytes(out) ? out : 0;
 }
 
 }  // namespace ggml::hrx

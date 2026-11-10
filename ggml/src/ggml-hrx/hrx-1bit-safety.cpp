@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include "hrx-1bit-safety.h"
+#include "runtime/host-memory-available.h"   // MemAvailable for the live check's host term (engine #1502)
 
 #include "ggml-impl.h"
 
@@ -83,26 +84,50 @@ bool gtt_counters(size_t & total, size_t & used) {
     return false;
 }
 
+size_t pool_host_term(size_t raw, bool readable) {
+    return readable ? raw : kHostUnknown;
+}
+
 bool pool_budget_is_fixed_limit() {
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     return env != nullptr && std::atoll(env) > 0;
 }
 
-size_t pool_budget(size_t memory_total, size_t memory_free) {
+pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, size_t memory_available) {
+    pool_budget_terms_t t;
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     if (env != nullptr) {
         const long long mb = std::atoll(env);
         if (mb > 0) {
-            return static_cast<size_t>(mb) * kMiB;
+            // An operator-set limit is the budget outright, not a min() of terms; keeping it distinguishable is what
+            // pool_budget_is_fixed_limit() reports so a caller can word the line correctly (llama.cpp #255).
+            t.host_available = memory_available;
+            t.gtt_term       = static_cast<size_t>(mb) * kMiB;
+            t.budget         = t.gtt_term;
+            return t;
         }
     }
     if (memory_total == 0) {
-        return 0;  // unknown device size: keep the unfettered behaviour
+        return t;  // unknown device size: keep the unfettered behaviour
     }
     const size_t reserve = pool_reserve_bytes();
     const size_t ceiling = memory_total > reserve ? memory_total - reserve : 0;
     const size_t in_use  = memory_total > memory_free ? memory_total - memory_free : 0;
-    return ceiling > in_use ? ceiling - in_use : 0;
+    t.gtt_term       = ceiling > in_use ? ceiling - in_use : 0;
+    t.host_available = memory_available;
+    // engine #1502: on an APU the GTT counter is not the allocator's ceiling, so the budget is the smaller of the two terms -
+    // the same model the engine's own admission check has always used (app/mem_admit.h).
+    if (memory_available != kHostUnknown && memory_available < t.gtt_term) {
+        t.budget     = memory_available;
+        t.host_bound = true;
+    } else {
+        t.budget = t.gtt_term;
+    }
+    return t;
+}
+
+size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available) {
+    return pool_budget_terms(memory_total, memory_free, memory_available).budget;
 }
 
 // engine #1417: the budget above is a snapshot taken at device open, and the ledger is per-process, so another process
@@ -199,14 +224,15 @@ pool_budget_state_t pool_budget_note_refusal(pool_budget_state_t state, size_t s
     return state;
 }
 
-pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state) {
+pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, size_t allocated, pool_budget_state_t state,
+                                        size_t memory_available) {
     if (state.cap == 0) {
         return state;  // no cap in force: the registration-time budget stands
     }
     if (free_bytes > state.cap_free) {
         // The pool has grown past the figure the refusal saw, so the cap's evidence no longer holds: a transient refusal must not
         // become a permanent ceiling (engine #1502 review). Recompute from the current figures and drop the cap.
-        const size_t uncapped = pool_budget(memory_total, free_bytes + allocated);
+        const size_t uncapped = pool_budget(memory_total, free_bytes + allocated, memory_available);
         GGML_LOG_INFO("%s: the pool grew from %.1f MiB to %.1f MiB free since the last refusal; lifting the %.1f MiB cap to "
                       "%.1f MiB\n",
                       __func__, state.cap_free / (double) kMiB, free_bytes / (double) kMiB, state.cap / (double) kMiB,
@@ -218,7 +244,7 @@ pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, 
     }
     // The pool is no larger than it was at the refusal: keep the cap AND its evidence, and bound only this call's budget by it.
     // Clearing it here would freeze the low reading for the rest of the process (engine #1502 review).
-    const size_t capped = pool_budget(memory_total, free_bytes + allocated);
+    const size_t capped = pool_budget(memory_total, free_bytes + allocated, memory_available);
     state.budget = state.cap < capped ? state.cap : capped;
     return state;
 }
@@ -226,9 +252,15 @@ pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, 
 // Does |size| fit the live pool with |margin| of headroom? Pure, so the test drives it: the numbers come from the driver's
 // counters, and the arithmetic that matters is the underflow guard (|used| can exceed |total| transiently) and the margin
 // saturation (|margin| is an operator input and may be absurd).
-bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin) {
-    const size_t live_free = used >= total ? 0 : total - used;
-    const size_t wanted    = size + (margin > SIZE_MAX - size ? SIZE_MAX - size : margin);
+bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin, size_t memory_available) {
+    size_t live_free = used >= total ? 0 : total - used;
+    // engine #1502: the GTT counter alone over-promises on this APU, because the pool allocation is served from host RAM.
+    // Without this term the live check admits a request the open-time budget would have refused -- the reported shape was
+    // a 15.35 GiB request, a GTT counter showing room, and ~15 GiB of host memory available.
+    if (memory_available != kHostUnknown && memory_available < live_free) {
+        live_free = memory_available;
+    }
+    const size_t wanted = size + (margin > SIZE_MAX - size ? SIZE_MAX - size : margin);
     return wanted <= live_free;
 }
 
@@ -239,7 +271,9 @@ bool pool_reserve(size_t budget, size_t size, const char * what) {
         size_t in_use = 0;
         if (pool_live_counters(total, in_use)) {
             const size_t margin = pool_live_margin_bytes();
-            if (!pool_live_fits(size, total, in_use, margin)) {
+            size_t       host_raw     = 0;
+            const size_t host_available = pool_host_term(host_raw, host_memory_available_bytes(host_raw));
+            if (!pool_live_fits(size, total, in_use, margin, host_available)) {
                 const size_t live_free = in_use >= total ? 0 : total - in_use;
                 GGML_LOG_ERROR("%s: HRX pool limit: %s of %.1f MiB does not fit the live device budget "
                                "(%.1f MiB free - %.1f MiB margin of %.1f MiB); this is the live check, on by default since "

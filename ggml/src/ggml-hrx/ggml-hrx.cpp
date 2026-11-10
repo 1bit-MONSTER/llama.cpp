@@ -2,6 +2,8 @@
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
 #include "hrx-1bit-safety.h"
+#include "runtime/failure-status.h"
+#include "runtime/host-memory-available.h"
 #include "ggml-hrx-dmabuf.h"
 
 #include "backend-buffer-binding.h"
@@ -825,12 +827,36 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
     auto *                                context  = static_cast<ggml_backend_hrx_context *>(backend->context);
     const ggml::hrx::GraphExecutor        executor = ggml::hrx::GraphExecutor(*context);
     const ggml::hrx::GraphExecutionResult result   = executor.execute(*graph);
+    // engine #1618: a resource failure must not leave this backend as a generic failure. llama.cpp maps ALLOC_FAILED to
+    // its own -2 and FAILED to -3, and the server prints one sentence for "out of memory" and another for "Compute error"
+    // - so without this classification a host-memory allocation the pool could not serve reads to the client as a kernel
+    // fault, which is what made #1618 look like a flash-attention defect for a day.
+    enum ggml_status code = result.success() ? GGML_STATUS_SUCCESS
+                                             : ggml::hrx::failure_status(result.status.errors(), result.code);
     if (!result.success()) {
         // Print the LAST reason: a matcher that declined also logs why, and those lines come first, so
         // errors().front() named a matcher while the graph failed on the node left without a dispatch
         // (2026-10-20 census: a q8_0 KV cache printed the qwen postprocess refusal for a graph that broke
         // on another node). The earlier reasons follow, bounded, for context.
         const std::vector<std::string> & reasons = result.status.errors();
+        // The classification above reads the WHOLE set, while the headline below prints the last reason. When the two differ,
+        // a resource failure would return ALLOC_FAILED while the log's first sentence points at a dispatch decision - the
+        // same "the log knew, the client did not" split in miniature (engine #1618 review), so print the classifying message
+        // as the headline and keep the rest as context.
+        if (const std::string * suspicious = ggml::hrx::failure_unmatched_allocation(reasons)) {
+            GGML_LOG_WARN("%s: an allocation-looking failure did not match the resource needles, so it is reported as a "
+                          "compute failure: %s (extend kResourceNeedles if this is an out-of-memory status)\n", __func__,
+                          suspicious->c_str());
+        }
+        const std::string * classifying = nullptr;
+        for (const std::string & reason : reasons) {
+            if (ggml::hrx::failure_looks_like_allocation({ reason })) {
+                classifying = &reason;
+            }
+        }
+        if (classifying != nullptr && !reasons.empty() && classifying != &reasons.back()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, classifying->c_str());
+        }
         if (reasons.empty()) {
             GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(result.status));
         } else {
@@ -844,7 +870,7 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
             }
         }
     }
-    return result.code;
+    return code;
 }
 
 static const ggml_backend_i backend_i = {
@@ -1564,7 +1590,16 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
     } else if (hrx_status_code(status) == HRX_STATUS_ALREADY_EXISTS) {
         hrx_status_ignore(status);
     } else {
-        hrx_status_ignore(status);
+        // NOT silent (engine #1766): a failed init registers zero devices, and then every downstream symptom points at
+        // something else -- `llama-bench --list-devices` prints "(none)", and `--device HRX0` is rejected as "invalid
+        // device: HRX0", a complaint about the CLI argument rather than about a runtime that never initialised. The
+        // status goes through hrx_check() so the line reads like every other HRX failure in this file (same
+        // file:line:expression prefix, same status consumption); the first attempt found the cause to be a ROCr whose
+        // libhsa-runtime64 does not export hsa_amd_queue_create, which that message names by symbol.
+        hrx_check(status, "hrx_gpu_initialize(0)", __FILE__, __LINE__);
+        GGML_LOG_ERROR("ggml_hrx: the HRX runtime did not initialise, so this backend registers no devices: "
+                       "--list-devices will print none and --device HRX0 will be rejected as an invalid device. "
+                       "The line above is the reason (engine #1766)\n");
         return context;
     }
     int count = 0;
@@ -1608,7 +1643,14 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         size_t device_free            = device_ctx->memory_total;
         size_t device_total           = device_ctx->memory_total;
         device_free_total(device_ctx.get(), device_free, device_total);
-        device_ctx->memory_budget = ggml::hrx::onebit::pool_budget(device_ctx->memory_total, device_free);
+        // A failed /proc read is "unknown", not "zero bytes left": kHostUnknown disables the term, while a measured zero must
+        // refuse - a host with nothing left is the worst moment to admit a launch (engine #1502).
+        size_t       host_raw       = 0;
+        const size_t host_available =
+            ggml::hrx::onebit::pool_host_term(host_raw, ggml::hrx::host_memory_available_bytes(host_raw));
+        const ggml::hrx::onebit::pool_budget_terms_t terms =
+            ggml::hrx::onebit::pool_budget_terms(device_ctx->memory_total, device_free, host_available);
+        device_ctx->memory_budget = terms.budget;
         if (device_ctx->memory_budget == 0 && device_ctx->memory_total != 0) {
             // Nothing fits under the ceiling: refuse the device here, loudly, instead of planning a launch that can
             // reach the fault line (#680). Report only, do not try to be clever about it.
@@ -1625,13 +1667,16 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         if (device_ctx->memory_budget != 0) {
             const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
             GGML_LOG_WARN("ggml_hrx: %s guardrail: GTT total %.1f GiB, in use %.1f GiB, ceiling %.1f GiB "
-                          "(reserve %.1f GiB), pool budget %.1f GiB - a launch that needs more is refused here "
-                          "rather than faulting the device (engine #680)\n",
+                          "(reserve %.1f GiB), pool budget %.1f GiB (GTT term %.1f GiB, host MemAvailable %.1f GiB) - a launch that needs more is refused here "
+                          "rather than faulting the device (engine #680; bound by %s)\n",
                           device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
                           (device_total > device_free ? device_total - device_free : 0) / (1024.0 * 1024.0 * 1024.0),
                           (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0),
                           reserve / (1024.0 * 1024.0 * 1024.0),
-                          device_ctx->memory_budget / (1024.0 * 1024.0 * 1024.0));
+                          terms.budget / (1024.0 * 1024.0 * 1024.0),
+                          terms.gtt_term / (1024.0 * 1024.0 * 1024.0),
+                          host_raw == 0 ? -1.0 : terms.host_available / (1024.0 * 1024.0 * 1024.0),
+                          terms.host_bound ? "the host" : (host_raw == 0 ? "the GTT counter (host unreadable)" : "the GTT counter"));
         }
         device_ctx->description       = *name + " (" + *architecture + ")";
         device_ctx->architecture      = *architecture;

@@ -367,6 +367,7 @@ ggml_add_backend_library(ggml-hrx
     runtime/host-memory.cpp
     runtime/host-memory.h
     runtime/host-memory-available.cpp
+    runtime/failure-status.cpp
     runtime/host-memory-available.h
     runtime/host-memory-ternary.cpp
     runtime/host-memory-ternary.h

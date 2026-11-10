@@ -47,6 +47,19 @@ inline bool operator!=(ValueStorageId lhs, ValueStorageId rhs) {
     return !(lhs == rhs);
 }
 
+// Recorded when get_or_add_tensor_value() creates a storage rather than aliasing (review of #262).
+// How the alias source was (or was not) found, recorded when the storage is chosen. The two "found" cases are the
+// interesting ones: with an alias source the view joins *that* value's storage, which need not be the storage of the
+// node's own input - and that is what makes is_layout_alias_node() false while an alias source exists at all
+// (review of #262: the earlier ViewSrcRegisteredStorageDiffers label was unreachable, because a registered view_src is
+// an early return in find_alias_source()).
+enum class AliasMiss : uint8_t {
+    None,            // not a view, so there is nothing to alias
+    NoAliasSource,   // view_src unregistered and no value shares its storage root: a storage of its own
+    ExactViewSrc,    // the alias source was the view_src value itself
+    RangeFallback,   // the alias source was found by the storage-root fallback, not by identity
+};
+
 enum class ValueKind : uint8_t {
     External,
     Transient,
@@ -82,6 +95,11 @@ struct Value {
     size_t                             byte_count    = 0;
     bool                               contiguous    = false;
     const ggml_tensor *                tensor        = nullptr;
+    // Why this value was given a storage of its own instead of aliasing its input, recorded AT ASSIGNMENT TIME.
+    // A diagnostic that asks the map later gets a different answer: values added between the assignment and the
+    // message make `find_tensor(view_src)` succeed where it failed then, and the message would then name the wrong
+    // repair (review of #262).
+    AliasMiss                          alias_miss    = AliasMiss::None;
     std::optional<ValueBufferBinding>  buffer;
 };
 

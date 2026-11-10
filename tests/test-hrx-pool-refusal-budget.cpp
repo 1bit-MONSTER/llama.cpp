@@ -43,6 +43,9 @@ static void expect_eq(const char * what, size_t got, size_t want) {
 
 int main() {
     using ggml::hrx::onebit::pool_budget_after_refusal;
+    using ggml::hrx::onebit::pool_budget;
+    using ggml::hrx::onebit::pool_budget_terms;
+    using ggml::hrx::onebit::kHostUnknown;
 
     // The issue's own case: the guardrail admitted 15.35 GiB out of 29.2 GiB and the pool refused it.
     const size_t budget   = 29 * GiB + 205 * MiB;   // 29.2 GiB
@@ -121,6 +124,18 @@ int main() {
 
     expect_true("a 15.35 GiB buffer fits 45 GiB free with the default margin",
                 pool_live_fits(refused, gtt, gtt - 45 * GiB, margin_256));
+
+    // The host term (engine #1502): the GTT counters alone admit a request the host cannot serve. These arms are the
+    // reported shape -- a large request, a GTT counter showing room, and little MemAvailable left.
+    expect_true("live: the request the issue reports is refused once the host term is known",
+               !pool_live_fits(16 * GiB, gtt, gtt - 45 * GiB, margin_256, /*memory_available=*/2 * GiB));
+    expect_true("live: the same request passes on the GTT figure alone (the over-promise being fixed)",
+               pool_live_fits(16 * GiB, gtt, gtt - 45 * GiB, margin_256, kHostUnknown));
+    expect_true("live: an unreadable MemAvailable (kHostUnknown) never refuses on its own",
+               pool_live_fits(16 * GiB, gtt, gtt - 45 * GiB, margin_256, kHostUnknown) ==
+               pool_live_fits(16 * GiB, gtt, gtt - 45 * GiB, margin_256));
+    expect_true("live: a host figure LARGER than GTT free does not lift the GTT term",
+               !pool_live_fits(16 * GiB, gtt, gtt - 16 * GiB, margin_256, 200 * GiB));
     // The case the live check exists for, built from the report's own numbers: the open-time budget was
     // 104 - 74.8 = 29.2 GiB, so a 20 GiB buffer is ADMITTED by the snapshot. If a neighbour then grew the box to
     // 105 GiB in use (15 GiB free), the snapshot still admits it and the failure lands in the allocator; the live
@@ -144,6 +159,40 @@ int main() {
     expect_true("an absurd margin saturates instead of wrapping",
                 !pool_live_fits(1 * MiB, gtt, 0, SIZE_MAX));
     expect_true("a zero-size request with room passes", pool_live_fits(0, gtt, gtt - 1 * GiB, margin_256));
+
+    // ---- the host term (this lane's half of #1502) ---------------------------------------------------------------
+    // `total` already declared above by the refusal section
+    const size_t issue_free = total - 74 * GiB - 819 * MiB;                      // in use 74.8 GiB, as the issue measured
+    const size_t issue_budget = 29 * GiB + 205 * MiB;                            // 29.2 GiB, as the guardrail printed
+    expect_eq("the GTT arithmetic reproduces the issue's 29.2 GiB budget",
+              pool_budget(total, issue_free, kHostUnknown), issue_budget);
+    const size_t host_tight = 15 * GiB;
+    expect_eq("a tight host replaces the GTT term", pool_budget(total, issue_free, host_tight), host_tight);
+    expect_true("so the refused 15.35 GiB is no longer admissible",
+                pool_budget(total, issue_free, host_tight) < 15 * GiB + 359 * MiB);
+    expect_true("while the GTT-only arithmetic still called it admissible",
+                pool_budget(total, issue_free, kHostUnknown) > 15 * GiB + 359 * MiB);
+    expect_eq("a roomy host leaves the GTT term alone (no behaviour change)",
+              pool_budget(total, issue_free, 80 * GiB), issue_budget);
+    expect_eq("a host figure larger than the GTT term never inflates the budget",
+              pool_budget(total, issue_free, 900 * GiB), issue_budget);
+    expect_eq("host unknown keeps the GTT arithmetic", pool_budget(total, issue_free, kHostUnknown), issue_budget);
+    expect_eq("a measured zero host refuses", pool_budget(total, issue_free, 0), 0);
+    expect_true("and the terms say the host bound it", pool_budget_terms(total, issue_free, 0).host_bound);
+    expect_eq("unknown device stays unfettered", pool_budget(0, 0, host_tight), 0);
+
+    // ---- the host term's ENCODING (review of fork #259) ----------------------------------------------------------
+    // Both call sites used to write `raw == 0 ? kHostUnknown : raw`, which cannot tell an unreadable /proc from a host
+    // with nothing left - and the second is the case where admitting is worst, as the comment above them says.
+    // pool_host_term() takes the reader's own answer instead.
+    using ggml::hrx::onebit::pool_host_term;
+    expect_eq("a measured host figure passes through", pool_host_term(64 * GiB, true), 64 * GiB);
+    expect_eq("a MEASURED ZERO stays zero, so the term refuses", pool_host_term(0, true), 0);
+    expect_eq("an unreadable /proc becomes unknown, so the term is dropped", pool_host_term(0, false), kHostUnknown);
+    expect_true("a measured zero refuses through the live check",
+                !pool_live_fits(1 * MiB, gtt, gtt - 45 * GiB, margin_256, pool_host_term(0, true)));
+    expect_true("an unreadable /proc still admits on the GTT term alone",
+                pool_live_fits(1 * MiB, gtt, gtt - 45 * GiB, margin_256, pool_host_term(0, false)));
 
     printf(failures == 0 ? "test-hrx-pool-refusal-budget: all requirements passed\n"
                          : "test-hrx-pool-refusal-budget: %d FAILED\n", failures);
