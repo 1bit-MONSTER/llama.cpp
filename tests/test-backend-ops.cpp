@@ -4592,6 +4592,41 @@ struct test_mul_mat_id : public test_case {
     }
 };
 
+// GGML_OP_MUL_MAT_ID whose activations exceed the f16 range (engine #1539).
+// An expert's down-projection reads the SwiGLU output, which nothing normalises: flint-40b's layer 46 reaches +-9.1e4 on
+// an ordinary 22-token prompt. A backend that narrows the activations to f16 for the multiply turns anything above 65504
+// into inf, and the sum over the routes into NaN - finite on the CPU, non-finite on the device, and invisible to every
+// other MUL_MAT_ID case here because init_tensor_uniform() stays inside [-1, 1]. One activation in 64 of every fourth
+// token is set to +-magnitude; the rest keep their order-1 values, as in the model.
+struct test_mul_mat_id_large_activation : public test_mul_mat_id {
+    const float magnitude;
+
+    std::string vars() override {
+        return test_mul_mat_id::vars() + ",magnitude=" + var_to_str(magnitude);
+    }
+
+    test_mul_mat_id_large_activation(ggml_type type_a, int n_mats, int n_used, int64_t m, int64_t n, int64_t k, float magnitude)
+        : test_mul_mat_id(type_a, GGML_TYPE_F32, n_mats, n_used, false, m, n, k), magnitude(magnitude) {}
+
+    void initialize_tensors(ggml_context * ctx) override {
+        init_mul_mat_id_tensors(ctx, n_mats);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") != 0) {
+                continue;
+            }
+            std::vector<float> data(ggml_nelements(t));
+            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+            const int64_t per_token = t->ne[0] * t->ne[1];
+            for (int64_t token = 0; token < t->ne[2]; token += 4) {
+                for (int64_t i = 0; i < per_token; i += 64) {
+                    data[token * per_token + i] = ((i / 64 + token / 4) % 2 == 0) ? magnitude : -magnitude;
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+        }
+    }
+};
+
 // GGML_OP_MUL_MAT_ID + GGML_OP_ADD or GGML_OP_MUL
 struct test_mul_mat_id_fusion : public test_case {
     const ggml_type type_a;
@@ -9320,6 +9355,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_row_padded_activation(GGML_TYPE_BF16, GGML_TYPE_F32, 2944,   8,  92, 264));
     test_cases.emplace_back(new test_mul_mat_row_padded_activation(GGML_TYPE_BF16, GGML_TYPE_F32, 3712, 512, 232, 264));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8, 1480));
+
+    // engine #1539: flint-40b's expert down-projection (256 experts, 6 used, 512 -> 2048, q5_K) at the 22-token batch
+    // that produced inf, with activations of the measured magnitude; then one decode-sized batch of the same contraction.
+    test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048, 22, 512, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048,  1, 512, 9.1e4f));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
