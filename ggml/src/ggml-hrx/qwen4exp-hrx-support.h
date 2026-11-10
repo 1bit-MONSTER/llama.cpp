@@ -81,6 +81,25 @@ inline int rope_kernel_mode(const RopeParams & params) {
     return params.mode == GGML_ROPE_TYPE_IMROPE ? GGML_ROPE_TYPE_NEOX : params.mode;
 }
 
+// Mode 3 of the generic rope_f32 / rope_set_rows_f32 kernels: an IMROPE whose sections leave some pairs on the fourth
+// position component (Qwen3-VL), so it does not collapse to NEOX. Each rotated pair reads the position section its index
+// selects; the pairing is NEOX's (engine #1467).
+constexpr int kRopeKernelModeSectioned = 3;
+
+inline bool rope_mode_is_sectioned_imrope(const RopeParams & params) {
+    if (params.mode != GGML_ROPE_TYPE_IMROPE || rope_mode_is_collapsible_imrope(params)) {
+        return false;
+    }
+    const int64_t sect_dims = static_cast<int64_t>(params.sections[0]) + params.sections[1] + params.sections[2] + params.sections[3];
+    return params.sections[0] >= 0 && params.sections[1] >= 0 && params.sections[2] >= 0 && params.sections[3] >= 0 &&
+           sect_dims >= 1 && sect_dims <= 1024 && sect_dims <= params.n_dims;
+}
+
+// The mode for the two generic kernels, which have the sectioned path; the fused kernels keep rope_kernel_mode().
+inline int rope_generic_kernel_mode(const RopeParams & params) {
+    return rope_mode_is_sectioned_imrope(params) ? kRopeKernelModeSectioned : rope_kernel_mode(params);
+}
+
 // Routed-expert weight types that the HRX MUL_MAT_ID kernels cannot execute
 // correctly, so the scheduler must keep the expert GEMM on CPU:
 //   * IQ4_NL  -- the shared f16 dequantizer mis-applies the 4-bit XOR-12 nibble
