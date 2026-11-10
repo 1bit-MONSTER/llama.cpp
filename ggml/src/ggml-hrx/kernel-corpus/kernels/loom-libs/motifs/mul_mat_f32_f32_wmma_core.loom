@@ -60,6 +60,11 @@ func.def inline @ggml_mul_mat_f32_f32_wmma_tiled(%weight_format: index, %token_c
   %result_stage_bytes = index.constant 2048 : offset
   %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
   %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  // engine #1962 (the dense form of #1539): the activations go through f16 for the matrix multiply and f16 ends at
+  // 65504, so an unnormalised activation above that became inf and the product NaN. Narrow at 2^-6 and scale the f32
+  // accumulator back by 2^6 on publish: exact while the scaled value is a normal f16, window [3.9e-3, 4.19e6].
+  %activation_prescale = vector.constant 0.015625 : vector<4xf32>
+  %result_unscale = vector.constant 64.0 : vector<4xf32>
   %zero_accumulator = vector.constant 0.0 : vector<4xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
@@ -136,7 +141,8 @@ func.def inline @ggml_mul_mat_f32_f32_wmma_tiled(%weight_format: index, %token_c
             %bounded_token, %input_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
             %mask = vector.mask.range [%input_k to %bounded_input_size step %c1] : index -> vector<4xi1>
             %loaded = vector.load.mask %input_view[%bounded_token, %input_k], %mask, %c0_f32x4 : view<[%bounded_token_count]x[%bounded_input_size]xf32>, vector<4xi1>, vector<4xf32>
-            %converted = vector.fptrunc %loaded : vector<4xf32> to vector<4xf16>
+            %prescaled = vector.mulf %loaded, %activation_prescale : vector<4xf32>
+            %converted = vector.fptrunc %prescaled : vector<4xf32> to vector<4xf16>
             scf.yield %converted : vector<4xf16>
           } else {
             scf.yield %c0_f16x4 : vector<4xf16>
@@ -184,28 +190,32 @@ func.def inline @ggml_mul_mat_f32_f32_wmma_tiled(%weight_format: index, %token_c
   vector.fragment.store<result> %result00, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32, %result_fragment_layout>
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   scf.if %writes00 {
-    %values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
+    %scaled_values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
+    %values = vector.mulf %scaled_values, %result_unscale : vector<4xf32>
     template.apply<@ggml.mul_mat_f32_f32_wmma.publish_vector4>(%writes00, %token0, %channel0, %bounded_token_count, %bounded_output_size, %output_accumulation, %output_unary_op, %values, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   }
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   vector.fragment.store<result> %result01, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32, %result_fragment_layout>
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   scf.if %writes01 {
-    %values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
+    %scaled_values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
+    %values = vector.mulf %scaled_values, %result_unscale : vector<4xf32>
     template.apply<@ggml.mul_mat_f32_f32_wmma.publish_vector4>(%writes01, %token1, %channel0, %bounded_token_count, %bounded_output_size, %output_accumulation, %output_unary_op, %values, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   }
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   vector.fragment.store<result> %result10, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32, %result_fragment_layout>
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   scf.if %writes10 {
-    %values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
+    %scaled_values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
+    %values = vector.mulf %scaled_values, %result_unscale : vector<4xf32>
     template.apply<@ggml.mul_mat_f32_f32_wmma.publish_vector4>(%writes10, %token0, %channel1, %bounded_token_count, %bounded_output_size, %output_accumulation, %output_unary_op, %values, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   }
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   vector.fragment.store<result> %result11, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<4xf32>, view<16x16xf32, %result_fragment_layout>
   kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   scf.if %writes11 {
-    %values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
+    %scaled_values = vector.load %result_physical_view[%publish_token, %publish_channel_add] : view<16x16xf32> -> vector<4xf32>
+    %values = vector.mulf %scaled_values, %result_unscale : vector<4xf32>
     template.apply<@ggml.mul_mat_f32_f32_wmma.publish_vector4>(%writes11, %token1, %channel1, %bounded_token_count, %bounded_output_size, %output_accumulation, %output_unary_op, %values, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   }
   template.apply<@ggml.mul_mat_f32_f32_wmma.finish_tile>(%bounded_token_count, %bounded_output_size, %output_tile_count, %token_tile_count, %output_accumulation, %output_unary_op, %epsilon, %channel_tile, %token_tile, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
