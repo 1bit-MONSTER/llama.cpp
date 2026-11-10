@@ -5,6 +5,7 @@
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 #include "hrx-1bit-safety.h"            // engine#1711: pool_reserve/pool_release
+#include "runtime/failure-status.h"     // engine#1618: kPoolRefusalToken, so a pool refusal is not a "Compute error."
 #include "transient-arena-charge.h"     // engine#1711: the same charge decision as the transient arena
 #include "runtime/host-memory-available.h"
 #include "runtime/host-memory-ternary.h"
@@ -2021,8 +2022,8 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         // pool that cannot hold it is a refusal naming the weight rather than an over-commit that faults later.
         if (pool_budget > 0 && materialized_length > 0) {
             if (!ggml::hrx::onebit::pool_reserve(pool_budget, materialized_length, "a materialized host weight")) {
-                result.status.log("refused: a %.1f MiB host weight does not fit the pool",
-                                  materialized_length / (1024.0 * 1024.0));
+                result.status.log("refused: a %.1f MiB host weight does not fit the pool (%s)",
+                                  materialized_length / (1024.0 * 1024.0), kPoolRefusalToken);
                 return result;
             }
             entry->charged_bytes_ = materialized_length;
@@ -2174,7 +2175,7 @@ Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagin
     if (size > 0 && pool_budget > 0) {
         if (!ggml::hrx::onebit::pool_reserve(pool_budget, size, "a host staging buffer")) {
             Status refused;
-            refused.log("refused: a %zu-byte host staging buffer does not fit the pool", size);
+            refused.log("refused: a %zu-byte host staging buffer does not fit the pool (%s)", size, kPoolRefusalToken);
             return refused;
         }
         charge_taken = true;

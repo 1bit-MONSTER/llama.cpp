@@ -51,6 +51,28 @@ int main() {
     REQUIRE(failure_looks_like_allocation({ "materialize host weight value 3 failed: HSA_STATUS_ERROR_OUT_OF_RESOURCES" }));
     REQUIRE(failure_status({ "x: RESOURCE_EXHAUSTED" }) == GGML_STATUS_ALLOC_FAILED);
 
+    // The pool LEDGER's own refusals (engine #1711/#1823) are the same condition one layer up, and they are this backend's
+    // prose rather than an iree or HSA name. Before kPoolRefusalToken all three were GGML_STATUS_FAILED, i.e. "Compute
+    // error." for the client -- #1618's defect again, on the path that replaced the allocator failure. The sentences are
+    // the three refusal sites' (host-memory.cpp twice, transient-arena.cpp), with the token each now appends.
+    using ggml::hrx::kPoolRefusalToken;
+    const std::string token = kPoolRefusalToken;
+    for (const std::string & refusal : {
+             "refused: a 121.7 MiB host weight does not fit the pool (" + token + ")",
+             "refused: a 8388608-byte host staging buffer does not fit the pool (" + token + ")",
+             "refused: the transient arena needs 67108864 more bytes and the pool has no room (" + token + ")",
+         }) {
+        REQUIRE(failure_looks_like_allocation({ refusal }));
+        REQUIRE(failure_status({ refusal }) == GGML_STATUS_ALLOC_FAILED);
+        REQUIRE(ggml::hrx::failure_unmatched_allocation({ refusal }) == nullptr);
+    }
+    // The token decides, not the sentence: the old wording without it stays a compute failure (so a refusal site that
+    // forgets the token is the bug, and rewording one cannot change a status) -- but it is NAMED by the warning, because
+    // "pool" is an allocation hint.
+    const std::vector<std::string> untagged = { "refused: a 121.7 MiB host weight does not fit the pool" };
+    REQUIRE(failure_status(untagged) == GGML_STATUS_FAILED);
+    REQUIRE(ggml::hrx::failure_unmatched_allocation(untagged) != nullptr);
+
     // A real compute failure must stay a compute failure: this is the direction that would be a regression, because a
     // kernel error reported as "out of memory" sends the reader to free memory that was never the problem.
     const std::vector<std::string> kernel_fault = {
