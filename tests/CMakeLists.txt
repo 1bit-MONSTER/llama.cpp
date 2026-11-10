@@ -472,6 +472,13 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-decode-stride PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-decode-stride COMMAND test-hrx-decode-stride)
 
+    # prefill FLASH_ATTN_EXT through the transposed V at 256+ query tokens: values against the CPU and the launch plan
+    # (engine #1989); skips without HRX0
+    add_executable(test-hrx-fa-transposed-value test-hrx-fa-transposed-value.cpp)
+    target_link_libraries(test-hrx-fa-transposed-value PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-fa-transposed-value PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-fa-transposed-value COMMAND test-hrx-fa-transposed-value)
+
     # the fused Q projection at one token on head sizes that are not a power of two (engine #1926); skips without HRX0
     add_executable(test-hrx-attention-q-decode-head-size test-hrx-attention-q-decode-head-size.cpp)
     target_link_libraries(test-hrx-attention-q-decode-head-size PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
