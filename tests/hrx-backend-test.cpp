@@ -8375,7 +8375,7 @@ static void run_alias_value_import_checks() {
         value_map
             .add_snapshot_value({ ggml::hrx::ValueId(0), ggml::hrx::ValueKind::External, ggml::hrx::ValueStorageId(0),
                                   ggml::hrx::ValueId(0), ggml::hrx::ValueId(), 0, 8 * sizeof(float), GGML_TYPE_F32, ne,
-                                  nb, 8, 8 * sizeof(float), true, nullptr, std::nullopt })
+                                  nb, 8, 8 * sizeof(float), true, nullptr, ggml::hrx::AliasMiss::None, std::nullopt })
             .success());
     REQUIRE(value_map.add_snapshot_storage({ ggml::hrx::ValueStorageId(1), ggml::hrx::ValueId(1), 8 * sizeof(float) })
                 .success());
@@ -8383,7 +8383,7 @@ static void run_alias_value_import_checks() {
         value_map
             .add_snapshot_value({ ggml::hrx::ValueId(1), ggml::hrx::ValueKind::Transient, ggml::hrx::ValueStorageId(1),
                                   ggml::hrx::ValueId(1), ggml::hrx::ValueId(), 0, 8 * sizeof(float), GGML_TYPE_F32, ne,
-                                  nb, 8, 8 * sizeof(float), true, nullptr, std::nullopt })
+                                  nb, 8, 8 * sizeof(float), true, nullptr, ggml::hrx::AliasMiss::None, std::nullopt })
             .success());
     REQUIRE(value_map.alias_storage(ggml::hrx::ValueId(1), ggml::hrx::ValueId(0)).success());
     const ggml::hrx::Value * aliased_value = value_map.find(ggml::hrx::ValueId(1));
