@@ -381,6 +381,12 @@ if (TARGET ggml-hrx)
     add_executable(test-hrx-transient-arena-charge test-hrx-transient-arena-charge.cpp)
     target_include_directories(test-hrx-transient-arena-charge PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-transient-arena-charge COMMAND test-hrx-transient-arena-charge)
+    # the host staging buffer's charge: the ledger is the only thing under test, no device and no libhrx (engine #1711)
+    add_executable(test-hrx-staging-ledger test-hrx-staging-ledger.cpp
+                   ../ggml/src/ggml-hrx/hrx-1bit-safety.cpp)
+    target_include_directories(test-hrx-staging-ledger PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    target_link_libraries(test-hrx-staging-ledger PRIVATE ggml)
+    add_test(NAME test-hrx-staging-ledger COMMAND test-hrx-staging-ledger)
 
     # MemAvailable parsing for the unbounded-residency warning: pure, no device and no /proc (engine #669)
     add_executable(test-hrx-host-memory-available test-hrx-host-memory-available.cpp

@@ -43,9 +43,15 @@ inline ArenaChargePlan plan_arena_charge(std::size_t required, std::size_t capac
     if (required <= capacity) {
         return plan;  // no growth, nothing to charge and nothing to give back
     }
-    plan.reserve_bytes = required - capacity;
+    // REPLACE, not transfer: charge the whole new allocation and give back the superseded one. The delta form --
+    // `reserve(required - capacity)` together with `release(capacity)` -- subtracts the old capacity TWICE, so the
+    // ledger settles at `required - capacity` instead of `required`, under-counting by exactly the arena it is meant to
+    // account for; the guardrail then over-admits. The invariant every caller relies on is "after a growth the ledger
+    // equals the arena's live capacity", which is what clear() releases.
+    plan.reserve_bytes = required;
     // A first allocation has nothing to release; a growth releases the superseded buffer's charge only when that
-    // buffer is actually freed. Reserved-and-retired bytes stay charged (see this file's header).
+    // buffer is actually freed. A RETIRED buffer stays resident, so its charge stays too: under the replace model the
+    // ledger then ends at old + new, which is exactly the memory the arena holds in that mode.
     plan.release_bytes = (!retires_old && capacity > 0) ? capacity : 0;
     return plan;
 }

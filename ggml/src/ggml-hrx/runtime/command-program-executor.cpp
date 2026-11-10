@@ -757,7 +757,8 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         }
 
         HostStagingBuffer staging;
-        Status            allocation_status = allocate_host_staging_buffer(context.device, binding.length, staging);
+        Status            allocation_status = allocate_host_staging_buffer(context.device, binding.length, staging,
+                                                         context.pool_budget);
         if (!allocation_status.success()) {
             status.log("allocate host staging for value %d failed", binding.value.value);
             status.append(allocation_status);
