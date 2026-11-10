@@ -91,8 +91,11 @@ inline bool rope_mode_is_sectioned_imrope(const RopeParams & params) {
         return false;
     }
     const int64_t sect_dims = static_cast<int64_t>(params.sections[0]) + params.sections[1] + params.sections[2] + params.sections[3];
+    // Claimed only where it is measured: section sums from one per rotated pair (Qwen3-VL: 24 + 20 + 20 = 64 pairs of
+    // n_dims 128) up to n_dims (test-backend-ops: 3 x n_dims / 3). A sum below the pair count makes the sector wrap; the
+    // kernel takes the same remainder ggml does, but no case here runs that shape, so it stays on the CPU.
     return params.sections[0] >= 0 && params.sections[1] >= 0 && params.sections[2] >= 0 && params.sections[3] >= 0 &&
-           sect_dims >= 1 && sect_dims <= 1024 && sect_dims <= params.n_dims;
+           sect_dims >= 1 && sect_dims <= 1024 && sect_dims >= params.n_dims / 2 && sect_dims <= params.n_dims;
 }
 
 // The mode for the two generic kernels, which have the sectioned path; the fused kernels keep rope_kernel_mode().
