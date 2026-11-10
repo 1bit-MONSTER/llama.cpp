@@ -1590,7 +1590,16 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
     } else if (hrx_status_code(status) == HRX_STATUS_ALREADY_EXISTS) {
         hrx_status_ignore(status);
     } else {
-        hrx_status_ignore(status);
+        // NOT silent (engine #1766): a failed init registers zero devices, and then every downstream symptom points at
+        // something else -- `llama-bench --list-devices` prints "(none)", and `--device HRX0` is rejected as "invalid
+        // device: HRX0", a complaint about the CLI argument rather than about a runtime that never initialised. The
+        // status goes through hrx_check() so the line reads like every other HRX failure in this file (same
+        // file:line:expression prefix, same status consumption); the first attempt found the cause to be a ROCr whose
+        // libhsa-runtime64 does not export hsa_amd_queue_create, which that message names by symbol.
+        hrx_check(status, "hrx_gpu_initialize(0)", __FILE__, __LINE__);
+        GGML_LOG_ERROR("ggml_hrx: the HRX runtime did not initialise, so this backend registers no devices: "
+                       "--list-devices will print none and --device HRX0 will be rejected as an invalid device. "
+                       "The line above is the reason (engine #1766)\n");
         return context;
     }
     int count = 0;
