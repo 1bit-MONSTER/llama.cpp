@@ -10,12 +10,14 @@ namespace {
 // iree's status name for a pool that cannot serve the request, and HSA's for the same condition one layer down. Both appear
 // verbatim in the failures this exists for:
 //   al...: RESOURCE_EXHAUSTED; [hsa_amd_memory_pool_allocate] HSA_STATUS_ERROR_OUT_OF_RESOURCES
-constexpr const char * kResourceNeedles[] = { "RESOURCE_EXHAUSTED", "OUT_OF_RESOURCES" };
+// kPoolRefusalToken is the same condition one layer UP: the pool ledger refused before the allocator was asked.
+constexpr const char * kResourceNeedles[] = { "RESOURCE_EXHAUSTED", "OUT_OF_RESOURCES", kPoolRefusalToken };
 
 // Case-insensitive on purpose: the *classification* needles are exact because they are identifiers as iree and HSA render
 // them, but the *hint* exists to catch spellings we have not seen -- `hipErrorOutOfMemory` is real hip and mixed case, and a
 // case-sensitive match would have missed exactly the case this probe was added for (the test caught that).
-constexpr const char * kAllocationHints[] = { "memory", "alloc" };
+// "pool" is here for our own refusals: one written without kPoolRefusalToken is then at least named in the log.
+constexpr const char * kAllocationHints[] = { "memory", "alloc", "pool" };
 
 bool contains_any_of_ci(const std::string & message, const char * const * needles, size_t count) {
     std::string lowered;

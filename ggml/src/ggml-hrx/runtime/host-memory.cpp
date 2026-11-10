@@ -5,6 +5,7 @@
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 #include "hrx-1bit-safety.h"            // engine#1711: pool_reserve/pool_release
+#include "runtime/failure-status.h"     // engine#1618: kPoolRefusalToken, so a pool refusal is not a "Compute error."
 #include "transient-arena-charge.h"     // engine#1711: the same charge decision as the transient arena
 #include "runtime/host-memory-available.h"
 #include "runtime/host-memory-ternary.h"
@@ -1388,10 +1389,7 @@ struct HostWeightLease::Entry {
         // allocated uncharged and freed with nothing to release, so the DEFAULT mode (`GGML_HRX_HOST_WEIGHT_LIMIT_MB=0`
         // = per-weight residency) pierced the guardrail by however much the materialised weights held. Released here
         // because Entry owns exactly one buffer.
-        if (charged_bytes_ > 0) {
-            ggml::hrx::onebit::pool_release(charged_bytes_);
-            charged_bytes_ = 0;
-        }
+        pool_tally::release(charged_bytes_);
     }
     bool owns_buffer = false;
     size_t charged_bytes_ = 0;   // engine#1823
@@ -2019,20 +2017,14 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         // engine#1823: this is the DEFAULT mode (no GGML_HRX_HOST_WEIGHT_LIMIT_MB), and until now it was the one
         // path that allocated device memory without asking the pool. Charge the weight before the allocation, so a
         // pool that cannot hold it is a refusal naming the weight rather than an over-commit that faults later.
-        if (pool_budget > 0 && materialized_length > 0) {
-            if (!ggml::hrx::onebit::pool_reserve(pool_budget, materialized_length, "a materialized host weight")) {
-                result.status.log("refused: a %.1f MiB host weight does not fit the pool",
-                                  materialized_length / (1024.0 * 1024.0));
-                return result;
-            }
-            entry->charged_bytes_ = materialized_length;
+        if (!pool_tally::charge(pool_budget, materialized_length, entry->charged_bytes_, "a materialized host weight")) {
+            result.status.log("refused: a %.1f MiB host weight does not fit the pool (%s)",
+                              materialized_length / (1024.0 * 1024.0), kPoolRefusalToken);
+            return result;
         }
         result.status = allocate_device_buffer(device, materialized_length, entry->buffer);
         if (!result.status.success()) {
-            if (entry->charged_bytes_ > 0) {
-                ggml::hrx::onebit::pool_release(entry->charged_bytes_);
-                entry->charged_bytes_ = 0;
-            }
+            pool_tally::release(entry->charged_bytes_);
             return result;
         }
         entry->owns_buffer = true;
@@ -2174,7 +2166,7 @@ Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagin
     if (size > 0 && pool_budget > 0) {
         if (!ggml::hrx::onebit::pool_reserve(pool_budget, size, "a host staging buffer")) {
             Status refused;
-            refused.log("refused: a %zu-byte host staging buffer does not fit the pool", size);
+            refused.log("refused: a %zu-byte host staging buffer does not fit the pool (%s)", size, kPoolRefusalToken);
             return refused;
         }
         charge_taken = true;
