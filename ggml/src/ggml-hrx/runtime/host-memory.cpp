@@ -1384,8 +1384,14 @@ struct HostWeightLease::Entry {
         if (owns_buffer && buffer != nullptr) {
             hrx_buffer_release(buffer);
         }
+        // engine#1823: the per-weight buffer above was charged on allocate; return exactly what was charged.
+        if (charged != 0) {
+            ggml::hrx::onebit::pool_release(charged);
+            charged = 0;
+        }
     }
-    bool owns_buffer = false;
+    bool   owns_buffer = false;
+    size_t charged     = 0;   // engine#1823: bytes this entry holds against the pool, 0 when unbounded charging is off
 
     hrx_buffer_t buffer = nullptr;
     size_t       offset = 0;
@@ -2007,8 +2013,25 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
             return result;
         }
     } else {
+        // engine#1823: this branch is the DEFAULT (GGML_HRX_HOST_WEIGHT_LIMIT_MB=0 selects per-weight residency), and a
+        // per-weight device buffer is device memory exactly like the arena's slots, so it is charged the same way. Without
+        // this the ledger ignores the mode nearly every run uses, and every budget calculation built on it is optimistic
+        // by however much this mode holds. Charged BEFORE the allocation so a refusal leaves nothing to refund, and
+        // returned in ~Entry with the SAME stored amount: a refund that recomputes its size is how a ledger drifts, and
+        // returning it twice is what the staging-buffer test exists to prevent.
+        if (pool_budget > 0) {
+            if (!ggml::hrx::onebit::pool_reserve(pool_budget, materialized_length, "a per-weight host-weight buffer")) {
+                result.status.log("a per-weight host-weight buffer of %zu bytes does not fit the pool", materialized_length);
+                return result;
+            }
+            entry->charged = materialized_length;
+        }
         result.status = allocate_device_buffer(device, materialized_length, entry->buffer);
         if (!result.status.success()) {
+            if (entry->charged != 0) {
+                ggml::hrx::onebit::pool_release(entry->charged);
+                entry->charged = 0;
+            }
             return result;
         }
         entry->owns_buffer = true;
