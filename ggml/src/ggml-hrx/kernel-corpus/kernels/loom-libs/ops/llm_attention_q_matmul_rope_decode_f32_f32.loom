@@ -30,10 +30,14 @@ template.def<@ggml.mul_mat_f32_f32_decode.publish_pair2> device priority(20) @ll
   %c0_f32 = scalar.constant 0.0 : f32
   %publish = scalar.andi %publish_pair, %row1_valid : i1
   %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
-  %head = index.div %channel, %head_size : index
-  %head_channel = index.rem %channel, %head_size : index
-  %theta_channel = index.div %head_channel, %c2 : index
+  // %channel is the even row of a rotation pair, so index by pair: the remainder is then bounded by
+  // head_size / 2 and the two-wide store below is in bounds for every head size, not only for a
+  // power of two (engine #1926: 48, 96 and 160 did not compile).
   %half_head_size = index.div %head_size, %c2 : index
+  %pair_channel = index.div %channel, %c2 : index
+  %head = index.div %pair_channel, %half_head_size : index
+  %theta_channel = index.rem %pair_channel, %half_head_size : index
+  %head_channel = index.mul %theta_channel, %c2 : index
   %positions_noalias, %theta_noalias, %freq_factors_noalias, %output_noalias = buffer.assume.noalias %positions, %theta, %freq_factors, %output : buffer, buffer, buffer, buffer
   scf.if %publish {
     %positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<[%launch_token_count]xi32>
