@@ -1,3 +1,5 @@
+#include <cinttypes>
+#include <cstdio>
 #include "dispatch-scheduler.h"
 
 #include "ggml.h"
@@ -126,7 +128,22 @@ static std::string unsupported_node_message(const Graph & graph, size_t index, c
                 case AliasMiss::None:          break;
             }
         }
-        stream << " alias=" << relation << why << " inputs=" << node.inputs.size();
+        // THE FACTS, on top of the recorded reason: six hypotheses died on this node, so the message also carries the two
+        // ValueStorageIds and what layout the view describes (engine #1467). `why` above is the assignment-time reason
+        // (AliasMiss), which the pin's version computes and which must not be re-asked of the map here.
+        std::string facts;
+        if (!aliasing && out != nullptr && out->tensor != nullptr && node.inputs.size() == 1) {
+            const Value * in_v = graph.values().find(node.inputs[0]);
+            if (in_v != nullptr) {
+                char buf[192];
+                const ggml_tensor * t = out->tensor;
+                std::snprintf(buf, sizeof buf, " storages=out%d/in%d nb=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] offs=%zu",
+                              out->storage.value, in_v->storage.value, t->nb[0], t->nb[1], t->nb[2], t->nb[3],
+                              t->view_offs);
+                facts = buf;
+            }
+        }
+        stream << " alias=" << relation << why << facts << " inputs=" << node.inputs.size();
     }
     return stream.str();
 }
