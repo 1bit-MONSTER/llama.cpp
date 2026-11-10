@@ -465,6 +465,12 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-decode-stride PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-decode-stride COMMAND test-hrx-decode-stride)
 
+    # the fused Q projection at one token on head sizes that are not a power of two (engine #1926); skips without HRX0
+    add_executable(test-hrx-attention-q-decode-head-size test-hrx-attention-q-decode-head-size.cpp)
+    target_link_libraries(test-hrx-attention-q-decode-head-size PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-attention-q-decode-head-size PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-attention-q-decode-head-size COMMAND test-hrx-attention-q-decode-head-size)
+
     add_executable(test-hrx-mul-mat-id-k32 test-hrx-mul-mat-id-k32.cpp)
     target_link_libraries(test-hrx-mul-mat-id-k32 PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-mul-mat-id-k32 PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
