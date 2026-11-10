@@ -9535,6 +9535,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 4096, 8,  512, 2.4e-2f));
     // engine #1962: the Q5_K prefill reads the activations as 8-bit blocks (block_q8_1_x4). Each block carries its scale
     // and its sum; a sum stored already multiplied by the scale left the f16 range as soon as one activation did.
+    // 6.5e4 is the last step of the ladder where the stored sum is still finite (the stored path); 6.6e4 is the first
+    // where it is not (the rebuilt path).
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 6.5e4f));
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 6.6e4f));
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 1.0e6f));

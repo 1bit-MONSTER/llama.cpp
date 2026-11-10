@@ -473,6 +473,8 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
       // f16 range as soon as one activation in the block does, although the scale itself still fits up to 8.3e6. A
       // stored sum that is not finite is rebuilt here from the codes this lane already holds; a finite one is used as
       // stored, so ordinary data takes the path it always took.
+      // The rebuilt value cannot overflow: |sum of 32 codes| <= 32 * 127 = 4064 and the scale is an f16 (<= 65504), so
+      // the product is at most 2.7e8 in f32. The compare is false for inf and for NaN, so both are rebuilt.
       %q8_f16_max = scalar.constant 65504.0 : f32
       %q8_sum_zero = scalar.constant 0.0 : f32
       %q8_stored_abs0 = scalar.absf %q8_stored_sum0 : f32
