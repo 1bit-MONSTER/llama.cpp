@@ -4611,6 +4611,14 @@ struct test_mul_mat_large_activation : public test_mul_mat {
             }
             std::vector<float> data(ggml_nelements(t));
             ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+            if (magnitude < 1.0f) {
+                // the lower edge of the same window: every activation scaled down (see the MUL_MAT_ID case below)
+                for (float & value : data) {
+                    value *= magnitude;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+                continue;
+            }
             for (int64_t token = 0; token < t->ne[1]; token += 4) {
                 for (int64_t i = 0; i < t->ne[0]; i += 64) {
                     data[token * t->ne[0] + i] = ((i / 64 + token / 4) % 2 == 0) ? magnitude : -magnitude;
@@ -9419,6 +9427,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_large_activation(GGML_TYPE_Q6_K, 2048, 22, 4096, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_large_activation(GGML_TYPE_Q6_K, 2048, 22,  512, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_large_activation(GGML_TYPE_Q6_K, 2048,  8,  512, 9.1e4f));
+    // and the lower edge: every activation at 2.4e-2, the smallest column maximum measured on the dense matmul inputs of
+    // Qwen3-0.6B, Qwen3-4B, ZAYA1-8B and flint-40b (26k columns; an all-zero column is exact at any scale and is not counted).
+    for (ggml_type type_a : { GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_BF16 }) {
+        test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, 22, 4096, 2.4e-2f));
+    }
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
