@@ -4598,6 +4598,9 @@ struct test_mul_mat_id : public test_case {
 // into inf, and the sum over the routes into NaN - finite on the CPU, non-finite on the device, and invisible to every
 // other MUL_MAT_ID case here because init_tensor_uniform() stays inside [-1, 1]. One activation in 64 of every fourth
 // token is set to +-magnitude; the rest keep their order-1 values, as in the model.
+// A magnitude below 1 is the other end of the same window: every activation is scaled by it, so a narrowing that
+// trades the top of the f16 range for the bottom has a case pulling back. 3.2e-2 is the smallest column maximum
+// measured on flint's expert down-projections (37278 columns over 141 layer executions; median 4.1).
 struct test_mul_mat_id_large_activation : public test_mul_mat_id {
     const float magnitude;
 
@@ -4617,6 +4620,13 @@ struct test_mul_mat_id_large_activation : public test_mul_mat_id {
             std::vector<float> data(ggml_nelements(t));
             ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
             const int64_t per_token = t->ne[0] * t->ne[1];
+            if (magnitude < 1.0f) {
+                for (float & value : data) {
+                    value *= magnitude;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+                continue;
+            }
             for (int64_t token = 0; token < t->ne[2]; token += 4) {
                 for (int64_t i = 0; i < per_token; i += 64) {
                     data[token * per_token + i] = ((i / 64 + token / 4) % 2 == 0) ? magnitude : -magnitude;
@@ -9360,6 +9370,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // that produced inf, with activations of the measured magnitude; then one decode-sized batch of the same contraction.
     test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048, 22, 512, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048,  1, 512, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048, 22, 512, 3.2e-2f));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
