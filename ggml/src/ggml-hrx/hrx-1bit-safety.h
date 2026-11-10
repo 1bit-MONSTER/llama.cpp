@@ -56,6 +56,18 @@ bool   pool_budget_is_fixed_limit();
 // `raw == 0 ? kHostUnknown : raw` collapsed those two cases - see tests/test-hrx-pool-refusal-budget.cpp.
 size_t pool_host_term(size_t raw, bool readable);
 
+// The same term, READ AND CLASSIFIED IN ONE SEQUENCED STEP (engine #1942). Both call sites used to write
+//     pool_host_term(raw, host_memory_available_bytes(raw))
+// which hands `raw` to the callee BY VALUE while a sibling argument fills it. C++ leaves the order in which a call's
+// arguments are evaluated unspecified, and clang evaluates them left to right: the by-value `raw` is copied (still 0)
+// before the reader runs, so the term arrives as (0, readable = true) - a "measured zero" - on a host with tens of
+// GiB available. The open-time guardrail then refused the device outright ("leaves nothing under the ceiling", no
+// device registered, `--device HRX0` invalid) and the live check refused every allocation. g++ evaluates right to
+// left, so the same line was correct there and the fault only showed on the pinned toolchain's own compiler.
+// |reader| is host_memory_available_bytes in production; a parameter so the test can drive the three cases without
+// a live /proc. |raw| receives the figure the reader took (0 when it took none), for the caller's log line.
+size_t pool_host_term_read(bool (*reader)(size_t &), size_t & raw);
+
 // The budget after an allocation the allocator refused, given the size it refused (engine #1502).
 //
 // The guardrail can only estimate what the pool will serve - ROCr exposes no "available" query, so pool_budget() comes from the
