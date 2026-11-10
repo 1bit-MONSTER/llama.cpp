@@ -1496,6 +1496,11 @@ struct test_case {
             }
 
             double err = ud->tc->err(f1.data(), f2.data(), f1.size());
+            // GGML_TEST_PRINT_ERR=1 prints the measured error of every compared value, pass or fail: a case with a loose
+            // bound (the fused MoE cases allow 5e-3) otherwise says OK without saying how close the backend was.
+            if (getenv("GGML_TEST_PRINT_ERR") != nullptr) {
+                printf("[%s] err = %.9g (max %.9g) ", ggml_op_desc(t1), err, ud->tc->max_err(ud->backend1));
+            }
             if (err > ud->tc->max_err(ud->backend1)) {
                 printf("[%s] ERR = %.9f > %.9f ", ggml_op_desc(t1), err, ud->tc->max_err(ud->backend1));
                 //for (int i = 0; i < (int) f1.size(); i++) {
@@ -10072,6 +10077,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     }
                 }
             }
+        }
+    }
+
+    // Routed gate/up + SwiGLU at the Qwen3.8-Flash-Next prefill shape (hidden 2560, expert ffn 640, 10 routes per
+    // token, one broadcast input row), for the two formats that file's expert blocks use. The IQ3_XXS case is the
+    // one the HRX workgroup-table decode exists for (engine #572): it is the only place that decode is compared
+    // against the CPU, and with GGML_HRX_IQ3S_TABLE_DECODE=0 the same case runs the select-chain decode.
+    // 16 experts rather than 512 keeps the two weight tensors at 26 M values each; 512 tokens x 10 routes is 160
+    // partitions of 32 routed rows, and 80 tokens is 25, the last one partial.
+    for (ggml_type t : {GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ4_XS}) {
+        for (int64_t tokens : {80, 512}) {
+            test_cases.emplace_back(new test_mul_mat_vec_fusion(t, GGML_GLU_OP_SWIGLU, tokens, 640, 2560,
+                true, 16, 10, true, false, true, false));
         }
     }
 

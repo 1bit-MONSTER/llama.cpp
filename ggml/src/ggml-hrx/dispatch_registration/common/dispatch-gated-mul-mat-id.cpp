@@ -1,6 +1,7 @@
 #include "dispatch-gated-mul-mat-id.h"
 
 #include "dispatch-mul-mat-id-common.h"
+#include "ggml-impl.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -20,16 +22,36 @@ static constexpr KernelCatalogRef kMulMatIdSwiGLUF32F32WmmaKernel =
 // Engine #572 item 4: the IQ3_XXS decode selects its 12-bit grid code out of 256 inlined scalar constants with a
 // ~30-deep chain, re-emitted per 4-value packet (4.04x the vector ALU of the IQ4_XS path, compile-report measured).
 // This variant fills a 256-entry workgroup table once per workgroup and indexes it (-55% vector ALU, VGPR 153->100,
-// IQ4_XS instruction mix bit-identical). Opt-in so the shipping path is unchanged until it is measured end to end.
+// IQ4_XS instruction mix bit-identical).
+//
+// It is the default for the one case it exists for - a gate or up weight in IQ3_XXS - and is never selected for any
+// other format pair, so a model without IQ3_XXS routed experts runs exactly the kernel it ran before.
+// GGML_HRX_IQ3S_TABLE_DECODE=0 puts IQ3_XXS back on the select chain (the A/B arm, and the way out if a device
+// disagrees). The test-backend-ops MUL_MAT_VEC_FUSION cases at the routed prefill shape run both.
 static constexpr KernelCatalogRef kMulMatIdSwiGLUF32F32WmmaIq3sTableKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table");
 
-static bool iq3s_table_decode_enabled() {
-    static const bool enabled = []() {
+static bool iq3s_table_decode_disabled() {
+    static const bool disabled = []() {
         const char * env = std::getenv("GGML_HRX_IQ3S_TABLE_DECODE");
-        return env != nullptr && *env != '\0' && std::strcmp(env, "0") != 0;
+        return env != nullptr && std::strcmp(env, "0") == 0;
     }();
-    return enabled;
+    return disabled;
+}
+
+static bool iq3s_table_decode_selected(CommonMulMatWeightFormat gate_format, CommonMulMatWeightFormat up_format) {
+    const bool selected = !iq3s_table_decode_disabled() && (gate_format == CommonMulMatWeightFormat::IQ3_XXS ||
+                                                            up_format == CommonMulMatWeightFormat::IQ3_XXS);
+    // A dispatch log names the registration, and both kernels live under one registration, so the choice is stated
+    // once here: without it nothing in a log can tell which decode a run used.
+    if (gate_format == CommonMulMatWeightFormat::IQ3_XXS || up_format == CommonMulMatWeightFormat::IQ3_XXS) {
+        static std::once_flag logged;
+        std::call_once(logged, [selected]() {
+            GGML_LOG_INFO("ggml_hrx: IQ3_XXS routed gate/up decode: %s\n",
+                          selected ? "workgroup table" : "select chain (GGML_HRX_IQ3S_TABLE_DECODE=0)");
+        });
+    }
+    return selected;
 }
 
 struct MulMatIdSwiGLUMatch {
@@ -179,7 +201,7 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(iq3s_table_decode_enabled()
+    dispatch.kernel = make_kernel_specialization(iq3s_table_decode_selected(match.gate_format, match.up_format)
                                                      ? kMulMatIdSwiGLUF32F32WmmaIq3sTableKernel
                                                      : kMulMatIdSwiGLUF32F32WmmaKernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
