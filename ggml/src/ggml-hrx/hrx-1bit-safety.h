@@ -50,6 +50,12 @@ size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_availa
 // remainder, so a caller that prints the figure has to word it differently.
 bool   pool_budget_is_fixed_limit();
 
+// engine #1502/#259: the host term as the pool arithmetic wants it. `readable` says whether the figure was actually
+// taken; a *measured* zero is passed through as 0 (a host with nothing left must refuse), while an unreadable one
+// becomes kHostUnknown so the term is dropped rather than refusing everything. The two call sites that used
+// `raw == 0 ? kHostUnknown : raw` collapsed those two cases - see tests/test-hrx-pool-refusal-budget.cpp.
+size_t pool_host_term(size_t raw, bool readable);
+
 // The budget after an allocation the allocator refused, given the size it refused (engine #1502).
 //
 // The guardrail can only estimate what the pool will serve - ROCr exposes no "available" query, so pool_budget() comes from the

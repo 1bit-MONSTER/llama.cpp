@@ -1645,8 +1645,9 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         device_free_total(device_ctx.get(), device_free, device_total);
         // A failed /proc read is "unknown", not "zero bytes left": kHostUnknown disables the term, while a measured zero must
         // refuse - a host with nothing left is the worst moment to admit a launch (engine #1502).
-        const size_t host_raw       = ggml::hrx::host_memory_available_bytes();
-        const size_t host_available = host_raw == 0 ? ggml::hrx::onebit::kHostUnknown : host_raw;
+        size_t       host_raw       = 0;
+        const size_t host_available =
+            ggml::hrx::onebit::pool_host_term(host_raw, ggml::hrx::host_memory_available_bytes(host_raw));
         const ggml::hrx::onebit::pool_budget_terms_t terms =
             ggml::hrx::onebit::pool_budget_terms(device_ctx->memory_total, device_free, host_available);
         device_ctx->memory_budget = terms.budget;
