@@ -181,6 +181,19 @@ int main() {
     expect_true("and the terms say the host bound it", pool_budget_terms(total, issue_free, 0).host_bound);
     expect_eq("unknown device stays unfettered", pool_budget(0, 0, host_tight), 0);
 
+    // ---- the host term's ENCODING (review of fork #259) ----------------------------------------------------------
+    // Both call sites used to write `raw == 0 ? kHostUnknown : raw`, which cannot tell an unreadable /proc from a host
+    // with nothing left - and the second is the case where admitting is worst, as the comment above them says.
+    // pool_host_term() takes the reader's own answer instead.
+    using ggml::hrx::onebit::pool_host_term;
+    expect_eq("a measured host figure passes through", pool_host_term(64 * GiB, true), 64 * GiB);
+    expect_eq("a MEASURED ZERO stays zero, so the term refuses", pool_host_term(0, true), 0);
+    expect_eq("an unreadable /proc becomes unknown, so the term is dropped", pool_host_term(0, false), kHostUnknown);
+    expect_true("a measured zero refuses through the live check",
+                !pool_live_fits(1 * MiB, gtt, gtt - 45 * GiB, margin_256, pool_host_term(0, true)));
+    expect_true("an unreadable /proc still admits on the GTT term alone",
+                pool_live_fits(1 * MiB, gtt, gtt - 45 * GiB, margin_256, pool_host_term(0, false)));
+
     printf(failures == 0 ? "test-hrx-pool-refusal-budget: all requirements passed\n"
                          : "test-hrx-pool-refusal-budget: %d FAILED\n", failures);
     return failures == 0 ? 0 : 1;
