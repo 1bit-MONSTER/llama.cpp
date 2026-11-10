@@ -9872,10 +9872,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // engine#1539: a query row that can attend to no key, with a learned sink - the sink is the only thing that keeps
     // the row finite, so this is the case a post-hoc sink implementation fails on. Included with the flint head shape
     // (128) and with a single query row and a single KV column, where the masked row is the whole problem.
+    // flint's own shape is 32 query heads over 4 KV heads (8:1 GQA) at head dim 128, so the case is registered that way
+    // first: a non-GQA shape ({1,1}) is "not supported" on HRX and skips instead of testing anything.
     for (int64_t nb_ : { 1, 2, 8 }) {
-        test_cases.emplace_back(new test_flash_attn_ext_all_masked(128, 128, 4, {1, 1}, 64, nb_, 0));
+        test_cases.emplace_back(new test_flash_attn_ext_all_masked(128, 128, 4, {8, 1}, 64, nb_, 0));
     }
-    test_cases.emplace_back(new test_flash_attn_ext_all_masked(128, 128, 4, {1, 1}, 64, 8, 3));
+    test_cases.emplace_back(new test_flash_attn_ext_all_masked(128, 128, 4, {8, 1}, 64, 8, 3));
+    test_cases.emplace_back(new test_flash_attn_ext_all_masked(128, 128, 32, {1, 1}, 64, 8, 0));
     test_cases.emplace_back(new test_flash_attn_ext_all_masked(64, 64, 2, {1, 1}, 32, 4, 1));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(72, 72, 4, {1, 1}, 96, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0));
