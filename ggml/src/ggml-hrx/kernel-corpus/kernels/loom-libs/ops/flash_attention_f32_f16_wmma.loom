@@ -31,6 +31,8 @@ config.decl @ggml.flash_attention.value_stride : %value: index where [range(%val
 config.decl @ggml.flash_attention.attention_scale : f32
 
 config.def @ggml.flash_attention.value_layout = 0 : index
+// With value_layout 1: elements between two channels of the transposed V; 0 means the key count (packed).
+config.def @ggml.flash_attention.value_transposed_pitch = 0 : index
 
 config.decl @ggml.flash_attention.apply_gate : %value: index where [range(%value, 0, 1)]
 
@@ -325,7 +327,10 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %value_stride0 = config.get @ggml.flash_attention.value_stride : index
   %value_stride = index.assume %value_stride0 [range(%value_stride0, 16, 36864), multiple_of(%value_stride0, 16)] : index
   %value_row_stride = scf.select %transposed_value, %c1, %value_stride : index
-  %value_column_stride = scf.select %transposed_value, %bounded_key_value_token_count, %c1 : index
+  %value_transposed_pitch0 = config.get @ggml.flash_attention.value_transposed_pitch : index
+  %packed_transposed_value = index.cmp eq, %value_transposed_pitch0, %c0 : index
+  %value_transposed_pitch = scf.select %packed_transposed_value, %bounded_key_value_token_count, %value_transposed_pitch0 : index
+  %value_column_stride = scf.select %transposed_value, %value_transposed_pitch, %c1 : index
   %value_layout = encoding.layout.strided [%value_row_stride, %value_column_stride] : encoding<layout>
   %value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout>
   %mask_view = buffer.view %mask_aligned[%c0_offset] : buffer -> view<[%query_token_count]x[%bounded_key_value_token_count]xf16>
