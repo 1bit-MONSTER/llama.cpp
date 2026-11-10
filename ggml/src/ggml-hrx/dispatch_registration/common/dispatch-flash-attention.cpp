@@ -498,15 +498,15 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
     // 2 x keys bytes apart, and when that is a multiple of the page size the channels of a key block share cache sets:
     // at 256 query tokens the dispatch took 8.3 ms at 16,384 keys against 5.7 ms at 16,128 and at 16,640 (engine #1989).
     // The buffer is private to this dispatch, so a key count that is a multiple of 64 gets a pitch of keys + 32 (an odd
-    // multiple of 64 bytes): 6.1 ms at 16,384. GGML_HRX_FA_VALUE_PITCH=<pad> forces keys + pad (diagnostic; 0 = packed).
-    static const int64_t forced_pad = [] {
+    // multiple of 64 bytes): 6.1 ms at 16,384. The attention kernel derives the same pitch from its key count
+    // (value_layout 2), so the pitch is not one of its compile parameters. GGML_HRX_FA_VALUE_PITCH=0 keeps the packed
+    // layout (diagnostic).
+    static const bool spread_pitch = [] {
         const char * text = std::getenv("GGML_HRX_FA_VALUE_PITCH");
-        const int64_t pad = text == nullptr || text[0] == '\0' ? int64_t{ -1 } : static_cast<int64_t>(std::atoll(text));
-        return pad >= 0 && pad % 32 == 0 && pad <= 4096 ? pad : int64_t{ -1 };
+        return text == nullptr || text[0] == '\0' || std::atoi(text) != 0;
     }();
-    const int64_t pitch = forced_pad >= 0 ? match.key_value_token_count + forced_pad :
-                          match.key_value_token_count % 64 == 0 ? match.key_value_token_count + 32 :
-                                                                  match.key_value_token_count;
+    const int64_t pitch = spread_pitch && match.key_value_token_count % 64 == 0 ? match.key_value_token_count + 32 :
+                                                                                 match.key_value_token_count;
     const size_t source_bytes = static_cast<size_t>(match.key_value_token_count * columns) * sizeof(ggml_fp16_t);
     const size_t bytes        = static_cast<size_t>(pitch * columns) * sizeof(ggml_fp16_t);
     const ValueId transposed = match_value(context, dispatch_match, 0);
@@ -520,8 +520,7 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
     copy.bindings.push_back({ match.value->id, 0, source_bytes });
     copy.bindings.push_back({ transposed, 0, bytes });
     dispatch_match.dispatches.push_back(std::move(copy));
-    attention.compile_parameters.emplace("ggml.flash_attention.value_layout", "1");
-    attention.compile_parameters.emplace("ggml.flash_attention.value_transposed_pitch", to_config_value(pitch));
+    attention.compile_parameters.emplace("ggml.flash_attention.value_layout", spread_pitch ? "2" : "1");
     return { transposed, 0, bytes };
 }
 
