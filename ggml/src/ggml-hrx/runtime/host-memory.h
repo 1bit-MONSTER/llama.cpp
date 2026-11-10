@@ -3,6 +3,7 @@
 #include "dispatch/dispatch.h"
 #include "ggml.h"
 #include "runtime/host-buffer-registry.h"
+#include "hrx-1bit-safety.h"   // pool_tally (engine #1711/#1823)
 #include "runtime/host-memory-refusal.h"
 #include "status.h"
 
@@ -76,6 +77,36 @@ struct HostWeightCacheStats {
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
 };
+
+// The pairing every pooled allocation in this file needs (engine #1711/#1823): charge before the allocation, return
+// exactly what was charged when the object dies. Kept as a free pair rather than repeated inline so the contract can be
+// tested with no device -- a tally that is not zeroed on release gives the bytes back twice, and that is the failure the
+// #270 review found in a move-assignment before this existed.
+namespace pool_tally {
+
+// Returns false when the pool refuses; leaves both the ledger and `charged` untouched in that case.
+inline bool charge(std::size_t budget, std::size_t bytes, std::size_t & charged, const char * what) {
+    if (budget == 0 || bytes == 0) {
+        return true;   // uncharged mode (device size unknown): nothing to reserve and nothing to release
+    }
+    if (!onebit::pool_reserve(budget, bytes, what)) {
+        return false;
+    }
+    charged = bytes;
+    return true;
+}
+
+// Releases what was charged and zeroes the tally, so a second call (a destructor reached twice by a move, say) is a no-op
+// rather than an underflow of somebody else's bytes.
+inline void release(std::size_t & charged) {
+    if (charged == 0) {
+        return;
+    }
+    onebit::pool_release(charged);
+    charged = 0;
+}
+
+}  // namespace pool_tally
 
 class HostWeightLease {
   public:
