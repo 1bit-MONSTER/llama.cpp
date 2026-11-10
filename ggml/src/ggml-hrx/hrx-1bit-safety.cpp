@@ -88,6 +88,16 @@ size_t pool_host_term(size_t raw, bool readable) {
     return readable ? raw : kHostUnknown;
 }
 
+size_t pool_host_term_read(bool (*reader)(size_t &), size_t & raw) {
+    raw = 0;
+    // A full expression of its own: the read is complete before `raw` is looked at (see the header).
+    const bool readable = reader != nullptr && reader(raw);
+    if (!readable) {
+        raw = 0;  // a reader that failed may have written to its out parameter; that is not a reading
+    }
+    return pool_host_term(raw, readable);
+}
+
 bool pool_budget_is_fixed_limit() {
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     return env != nullptr && std::atoll(env) > 0;
@@ -272,7 +282,7 @@ bool pool_reserve(size_t budget, size_t size, const char * what) {
         if (pool_live_counters(total, in_use)) {
             const size_t margin = pool_live_margin_bytes();
             size_t       host_raw     = 0;
-            const size_t host_available = pool_host_term(host_raw, host_memory_available_bytes(host_raw));
+            const size_t host_available = pool_host_term_read(host_memory_available_bytes, host_raw);
             if (!pool_live_fits(size, total, in_use, margin, host_available)) {
                 const size_t live_free = in_use >= total ? 0 : total - in_use;
                 GGML_LOG_ERROR("%s: HRX pool limit: %s of %.1f MiB does not fit the live device budget "

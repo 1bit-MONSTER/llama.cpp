@@ -1647,7 +1647,7 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         // refuse - a host with nothing left is the worst moment to admit a launch (engine #1502).
         size_t       host_raw       = 0;
         const size_t host_available =
-            ggml::hrx::onebit::pool_host_term(host_raw, ggml::hrx::host_memory_available_bytes(host_raw));
+            ggml::hrx::onebit::pool_host_term_read(ggml::hrx::host_memory_available_bytes, host_raw);
         const ggml::hrx::onebit::pool_budget_terms_t terms =
             ggml::hrx::onebit::pool_budget_terms(device_ctx->memory_total, device_free, host_available);
         device_ctx->memory_budget = terms.budget;

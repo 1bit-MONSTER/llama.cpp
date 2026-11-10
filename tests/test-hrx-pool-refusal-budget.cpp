@@ -32,6 +32,20 @@ static void expect_true(const char * what, bool cond) {
     failures++;
 }
 
+// Readers for pool_host_term_read(): what /proc/meminfo can say, without a live /proc.
+static bool fake_reader_64gib(size_t & out) {
+    out = static_cast<size_t>(64) * 1024 * 1024 * 1024;
+    return true;
+}
+static bool fake_reader_zero(size_t & out) {
+    out = 0;
+    return true;
+}
+static bool fake_reader_unreadable(size_t & out) {
+    out = 777;   // a reader that failed may have scribbled on its out parameter; the figure must not be trusted
+    return false;
+}
+
 static void expect_eq(const char * what, size_t got, size_t want) {
     if (got == want) {
         printf("  PASS  %-58s %zu\n", what, got);
@@ -193,6 +207,30 @@ int main() {
                 !pool_live_fits(1 * MiB, gtt, gtt - 45 * GiB, margin_256, pool_host_term(0, true)));
     expect_true("an unreadable /proc still admits on the GTT term alone",
                 pool_live_fits(1 * MiB, gtt, gtt - 45 * GiB, margin_256, pool_host_term(0, false)));
+
+    // ---- the host term is READ BEFORE it is classified (engine #1942) ---------------------------------------------
+    // Both call sites wrote pool_host_term(raw, reader(raw)): `raw` goes in by value while a sibling argument fills
+    // it, and the order of argument evaluation is unspecified. clang (the pinned toolchain's compiler) copies `raw`
+    // first, so a host with 64 GiB available arrived as (0, readable) - a measured zero - and the guardrail refused
+    // the device with "leaves nothing under the ceiling" while the live check refused every allocation.
+    // pool_host_term_read() sequences the read; these arms fail on the old expression under clang and pass under g++,
+    // which is exactly why a g++ run of this suite never saw it.
+    using ggml::hrx::onebit::pool_host_term_read;
+    size_t raw = 12345;
+    expect_eq("a readable host figure reaches the term (not a measured zero)",
+              pool_host_term_read(fake_reader_64gib, raw), 64 * GiB);
+    expect_eq("and the caller's log figure is the one that was read", raw, 64 * GiB);
+    expect_true("so a roomy host does not zero the open-time budget",
+                pool_budget(total, issue_free, pool_host_term_read(fake_reader_64gib, raw)) == issue_budget);
+    expect_true("nor refuse a 1 MiB allocation through the live check",
+                pool_live_fits(1 * MiB, gtt, gtt - 45 * GiB, margin_256, pool_host_term_read(fake_reader_64gib, raw)));
+    raw = 12345;
+    expect_eq("a MEASURED zero still refuses", pool_host_term_read(fake_reader_zero, raw), 0);
+    expect_eq("with a zero log figure", raw, 0);
+    raw = 12345;
+    expect_eq("an unreadable /proc is unknown", pool_host_term_read(fake_reader_unreadable, raw), kHostUnknown);
+    expect_eq("and a stale caller value is not reported as a reading", raw, 0);
+    expect_eq("no reader at all is unknown too", pool_host_term_read(nullptr, raw), kHostUnknown);
 
     printf(failures == 0 ? "test-hrx-pool-refusal-budget: all requirements passed\n"
                          : "test-hrx-pool-refusal-budget: %d FAILED\n", failures);
