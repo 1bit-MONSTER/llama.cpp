@@ -2235,8 +2235,17 @@ bool ggml_backend_compare_graph_backend(ggml_backend_t backend1, ggml_backend_t 
     if (num_test_nodes != 0) {
         GGML_ASSERT(test_nodes);
         // Compute the whole graph and only test the output for specific tensors
-        ggml_backend_graph_compute(backend1, g1);
-        ggml_backend_graph_compute(backend2, g2);
+        // engine #1997: a backend that refuses or fails the graph leaves its outputs unwritten, and comparing those
+        // against the other backend reports a refusal as a numerical error (an HRX program refused for an unflagged
+        // weight scored "ERR = k/3 + 1" against whatever the output tensor happened to hold). Say which backend failed.
+        const enum ggml_status status1 = ggml_backend_graph_compute(backend1, g1);
+        const enum ggml_status status2 = ggml_backend_graph_compute(backend2, g2);
+        if (status1 != GGML_STATUS_SUCCESS || status2 != GGML_STATUS_SUCCESS) {
+            GGML_LOG_ERROR("%s: graph compute failed (%s: status %d, %s: status %d); nothing was compared\n", __func__,
+                           ggml_backend_name(backend1), (int) status1, ggml_backend_name(backend2), (int) status2);
+            ggml_backend_graph_copy_free(copy);
+            return false;
+        }
 
         bool verified = false;
         for (int i = 0; i < g1->n_nodes; i++) {
@@ -2258,8 +2267,16 @@ bool ggml_backend_compare_graph_backend(ggml_backend_t backend1, ggml_backend_t 
             struct ggml_cgraph g1v = ggml_graph_view(g1, i, i + 1);
             struct ggml_cgraph g2v = ggml_graph_view(g2, i, i + 1);
 
-            ggml_backend_graph_compute(backend1, &g1v);
-            ggml_backend_graph_compute(backend2, &g2v);
+            const enum ggml_status status1 = ggml_backend_graph_compute(backend1, &g1v);
+            const enum ggml_status status2 = ggml_backend_graph_compute(backend2, &g2v);
+            if (status1 != GGML_STATUS_SUCCESS || status2 != GGML_STATUS_SUCCESS) {
+                // engine #1997: see above - an unwritten output is not a result to compare
+                GGML_LOG_ERROR("%s: graph compute failed at node %d (%s) (%s: status %d, %s: status %d); nothing was "
+                               "compared\n", __func__, i, ggml_op_name(t1->op), ggml_backend_name(backend1), (int) status1,
+                               ggml_backend_name(backend2), (int) status2);
+                ggml_backend_graph_copy_free(copy);
+                return false;
+            }
 
             if (ggml_is_view_op(t1->op)) {
                 continue;
