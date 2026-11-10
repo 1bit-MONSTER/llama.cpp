@@ -4119,8 +4119,15 @@ static void schedule_flash_attention_command(ggml_context * ctx,
         REQUIRE(copy.bindings.size() == 2);
         REQUIRE(copy.bindings[1].value == dispatch.bindings[2].value);
         REQUIRE(copy.bindings[0].value != copy.bindings[1].value);
-        REQUIRE(copy.bindings[1].length == static_cast<size_t>(key_value_token_count * key_value_head_count * value_head_size) * sizeof(ggml_fp16_t));
-        require_compile_parameter(dispatch, "ggml.flash_attention.value_layout", "1");
+        // engine #1989: the transposed V has the spread pitch - keys + 32 when the key count is a multiple of 64 - which
+        // the transpose kernel is told and the attention kernel derives from its key count (value_layout 2). The source
+        // binding stays the packed V.
+        const int64_t transposed_pitch = key_value_token_count % 64 == 0 ? key_value_token_count + 32 : key_value_token_count;
+        REQUIRE(copy.bindings[0].length == static_cast<size_t>(key_value_token_count * key_value_head_count * value_head_size) * sizeof(ggml_fp16_t));
+        REQUIRE(copy.bindings[1].length == static_cast<size_t>(transposed_pitch * key_value_head_count * value_head_size) * sizeof(ggml_fp16_t));
+        require_compile_parameter(copy, "ggml.copy_transpose_f16.output_pitch", std::to_string(transposed_pitch));
+        require_compile_parameter(dispatch, "ggml.flash_attention.value_layout", "2");
+        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.flash_attention.value_transposed_pitch") == 0);
     } else {
         REQUIRE(dispatch.kernel.compile_parameters.count("ggml.flash_attention.value_layout") == 0);
     }
