@@ -191,6 +191,14 @@ class HostWeightCache {
     // Bytes this cache holds against the pool ledger (engine#1711). Tracked separately from arena_capacity_ so clear()
     // returns exactly what was charged, including the case where a grow released a superseded arena.
     size_t                                 charged_bytes_  = 0;
+  public:
+    // engine#1856: the ledger figure a test has to see and set. `tests/test-hrx-arena-ledger.cpp` simulates a charge the
+    // way `test-hrx-staging-ledger.cpp` simulates the staging buffer's -- reserve against the pool, record the tally, then
+    // exercise the paths that must return it -- because what is under test is conservation in the ledger, not the
+    // allocation. The staging object gets this for free by being a struct; the arena needs the seam named.
+    size_t held_bytes_for_test() const { return charged_bytes_; }
+    void   set_held_bytes_for_test(size_t bytes) { charged_bytes_ = bytes; }
+  private:
     size_t                                 arena_capacity_ = 0;
     size_t                                 arena_free_bytes_ = 0;
     std::vector<std::pair<size_t, size_t>> arena_free_;
