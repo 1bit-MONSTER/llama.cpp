@@ -388,6 +388,15 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-staging-ledger PRIVATE ggml)
     add_test(NAME test-hrx-staging-ledger COMMAND test-hrx-staging-ledger)
 
+    # engine#1856: the same conservation for the HOST-WEIGHT arena's charge, which had no ledger arm while the staging
+    # buffer has had one since #270. Device-free for the same reason: the charge is simulated on the object and the paths
+    # that must return it are exercised directly.
+    add_executable(test-hrx-arena-ledger test-hrx-arena-ledger.cpp
+                   ../ggml/src/ggml-hrx/hrx-1bit-safety.cpp)
+    target_include_directories(test-hrx-arena-ledger PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    target_link_libraries(test-hrx-arena-ledger PRIVATE ggml)
+    add_test(NAME test-hrx-arena-ledger COMMAND test-hrx-arena-ledger)
+
     # MemAvailable parsing for the unbounded-residency warning: pure, no device and no /proc (engine #669)
     add_executable(test-hrx-host-memory-available test-hrx-host-memory-available.cpp
         ../ggml/src/ggml-hrx/runtime/host-memory-available.cpp)
