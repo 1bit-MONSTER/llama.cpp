@@ -24,6 +24,7 @@
 #include "runtime/host-memory.h"
 
 #include <cstdio>
+#include <utility>
 
 using ggml::hrx::HostStagingBuffer;
 
@@ -71,6 +72,26 @@ int main() {
         held.clear();
         check(pool_allocated() == base, "a second clear() does not release it again", pool_allocated(), base);
         (void) pool_release;  // the release under test happens inside clear()
+    }
+
+    // 3. The MOVE path carries the tally (the defect review of #270 found): the destination ends up holding the
+    //    buffer, so it must hold the charge; the source ends up owning nothing, so it must hold no tally. Dropping
+    //    either half leaves a ledger that disagrees with the memory in both objects at once.
+    {
+        HostStagingBuffer from, to;
+        const size_t     bytes = 4u << 20;
+        const bool       reserved = pool_reserve(1ull << 40, bytes, "a host staging buffer");
+        check(reserved, "the pool accepts a 4 MiB staging request for the move arm", 0, 0);
+        from.charged_bytes_ = bytes;
+        const size_t before = pool_allocated();
+        to = std::move(from);
+        check(pool_allocated() == before, "a move does not touch the ledger", pool_allocated(), before);
+        check(to.charged_bytes_ == bytes, "the destination carries the charge", to.charged_bytes_, bytes);
+        check(from.charged_bytes_ == 0, "the source keeps no tally for a buffer it no longer owns", from.charged_bytes_, 0);
+        to.clear();
+        check(pool_allocated() == base, "clearing the destination returns the bytes exactly once", pool_allocated(), base);
+        from.clear();                                     // must be a no-op: it holds nothing and is charged nothing
+        check(pool_allocated() == base, "clearing the moved-from source does not release again", pool_allocated(), base);
     }
 
     if (failures != 0) {

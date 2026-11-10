@@ -2108,6 +2108,11 @@ HostStagingBuffer & HostStagingBuffer::operator=(HostStagingBuffer && other) noe
     length          = other.length;
     upload          = other.upload;
     download        = other.download;
+    // engine#1711: the charge travels with the buffer. Dropping it leaves the destination holding bytes it is not
+    // charged for (its clear() returns nothing) while the source keeps a tally for a buffer it no longer owns (its
+    // destructor releases bytes it does not hold) -- a ledger that disagrees with the memory in both objects at once.
+    charged_bytes_  = other.charged_bytes_;
+    other.charged_bytes_ = 0;
     other.buffer    = nullptr;
     other.host_data = nullptr;
     other.value     = -1;
