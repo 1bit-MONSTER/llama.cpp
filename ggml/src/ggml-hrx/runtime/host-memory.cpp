@@ -1384,8 +1384,17 @@ struct HostWeightLease::Entry {
         if (owns_buffer && buffer != nullptr) {
             hrx_buffer_release(buffer);
         }
+        // engine#1823: the unbounded branch's per-weight buffer is device memory like any other. Before this it was
+        // allocated uncharged and freed with nothing to release, so the DEFAULT mode (`GGML_HRX_HOST_WEIGHT_LIMIT_MB=0`
+        // = per-weight residency) pierced the guardrail by however much the materialised weights held. Released here
+        // because Entry owns exactly one buffer.
+        if (charged_bytes_ > 0) {
+            ggml::hrx::onebit::pool_release(charged_bytes_);
+            charged_bytes_ = 0;
+        }
     }
     bool owns_buffer = false;
+    size_t charged_bytes_ = 0;   // engine#1823
 
     hrx_buffer_t buffer = nullptr;
     size_t       offset = 0;
@@ -2007,8 +2016,23 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
             return result;
         }
     } else {
+        // engine#1823: this is the DEFAULT mode (no GGML_HRX_HOST_WEIGHT_LIMIT_MB), and until now it was the one
+        // path that allocated device memory without asking the pool. Charge the weight before the allocation, so a
+        // pool that cannot hold it is a refusal naming the weight rather than an over-commit that faults later.
+        if (pool_budget > 0 && materialized_length > 0) {
+            if (!ggml::hrx::onebit::pool_reserve(pool_budget, materialized_length, "a materialized host weight")) {
+                result.status.log("refused: a %.1f MiB host weight does not fit the pool",
+                                  materialized_length / (1024.0 * 1024.0));
+                return result;
+            }
+            entry->charged_bytes_ = materialized_length;
+        }
         result.status = allocate_device_buffer(device, materialized_length, entry->buffer);
         if (!result.status.success()) {
+            if (entry->charged_bytes_ > 0) {
+                ggml::hrx::onebit::pool_release(entry->charged_bytes_);
+                entry->charged_bytes_ = 0;
+            }
             return result;
         }
         entry->owns_buffer = true;
