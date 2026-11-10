@@ -4592,6 +4592,53 @@ struct test_mul_mat_id : public test_case {
     }
 };
 
+// GGML_OP_MUL_MAT whose weight is a resident model weight (engine #1997).
+// Several HRX MUL_MAT registrations read the weight in a packed layout that the backend only materialises for a tensor
+// in a buffer flagged GGML_BACKEND_BUFFER_USAGE_WEIGHTS. test_mul_mat keeps its weight in the ordinary buffer, so a case
+// that reaches one of them is refused at execution ("... is read in the packed weight layout ... but its buffer is not
+// flagged as weights") and those kernels never had a known-answer case. Here the weight goes through the weight context,
+// as a model's does.
+struct test_mul_mat_resident_weight : public test_case {
+    const ggml_type type_a;
+    const int64_t   m;
+    const int64_t   n;
+    const int64_t   k;
+
+    std::string vars() override {
+        return VARS_TO_STR4(type_a, m, n, k) + ",weight=resident";
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2 * m * k * n;
+    }
+
+    bool use_weight_context() override { return true; }
+
+    test_mul_mat_resident_weight(ggml_type type_a, int64_t m, int64_t n, int64_t k)
+        : type_a(type_a), m(m), n(n), k(k) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_UNUSED(ctx);
+        GGML_ABORT("test_mul_mat_resident_weight needs the weight context");
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        GGML_ASSERT(ctx_weights);
+        ggml_tensor * a = ggml_new_tensor_2d(ctx_weights, type_a, k, m);
+        ggml_set_name(a, "a");
+        ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_set_name(b, "b");
+        ggml_tensor * out = ggml_mul_mat(ctx, a, b);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_MUL_MAT whose activations exceed the f16 range: the dense form of the engine #1539 case below.
 struct test_mul_mat_large_activation : public test_mul_mat {
     const float magnitude;
@@ -9432,6 +9479,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (ggml_type type_a : { GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_BF16 }) {
         test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, 22, 4096, 2.4e-2f));
     }
+
+    // engine #1997: the registrations that read a packed weight layout, each reached with a resident weight.
+    // q4_K at 512 tokens (packed prefill), q6_K at 512 (prefill), 8 (i8 prepacked; the skinny form at k = 512, m = 4096)
+    // and 1 token (final projection); q5_K at 512 reads the native layout and is the control.
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2048, 512, 4096));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, 512, 4096));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048,   8, 4096));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 4096,   8,  512));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048,   1, 4096));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q5_K, 2048, 512, 4096));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
