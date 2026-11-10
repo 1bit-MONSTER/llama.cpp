@@ -431,6 +431,13 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-view-alias-elision PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-view-alias-elision COMMAND test-hrx-view-alias-elision)
 
+    # a view into storage the graph does not hold (the deepstack window of Qwen3-VL, engine #1467): the plan on the
+    # host, the values on HRX0 when there is one
+    add_executable(test-hrx-external-window-view test-hrx-external-window-view.cpp)
+    target_link_libraries(test-hrx-external-window-view PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-external-window-view PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-external-window-view COMMAND test-hrx-external-window-view)
+
     add_executable(test-hrx-ops test-hrx-ops.cpp)
     target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-ops PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)

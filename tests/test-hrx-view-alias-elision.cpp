@@ -151,9 +151,10 @@ int main() {
     // the safe outcome it is today: the plan is refused, not silently computed through a wrong layout. If a consumer
     // ever accepts a strided alias, THIS assertion is where it should become visible.
     REQUIRE(!strided);
-    // Documented CURRENT behaviour, and it is the defect: the projector's wide-window view is refused because it aliases
-    // bytes the graph never registered, and nothing can dispatch a layout-alias op. The densify dispatch that fixes this
-    // flips this assertion to REQUIRE(wide) - when that lands, this line is where the change is visible.
+    // This fixture registers the wide-window view as a TRANSIENT, a value the graph must fill, and nothing can fill it:
+    // no registration takes a layout-alias op. So it stays refused. The importer never builds this combination: a view
+    // whose storage root is not a node of the graph is External there, and the scheduler now skips that node because
+    // its bytes exist before the graph runs (engine #1467; test-hrx-external-window-view.cpp runs the imported form).
     REQUIRE(!wide);
     return 0;
 }
