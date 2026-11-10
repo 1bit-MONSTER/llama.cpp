@@ -1052,7 +1052,21 @@ static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & val
         for (const auto & device : dev_names) {
             auto * dev = ggml_backend_dev_by_name(device.c_str());
             if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
-                throw std::invalid_argument(string_format("invalid device: %s", device.c_str()));
+                // engine#1766: a backend whose runtime failed to initialise registers itself and then contributes no
+                // devices, so its name resolves to nothing and the argument looks invalid. Name the registries that
+                // contributed none -- the backend has already logged why (for HRX: "the HRX runtime did not
+                // initialise"), and without this line the user only sees a message about the argument.
+                std::string empty_registries;
+                for (size_t i = 0; i < ggml_backend_reg_count(); ++i) {
+                    ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+                    if (reg != nullptr && ggml_backend_reg_dev_count(reg) == 0) {
+                        empty_registries += string_format(
+                            "\n  %s registered no device - if its runtime failed to initialise, the log line above this names why",
+                            ggml_backend_reg_name(reg));
+                    }
+                }
+                throw std::invalid_argument(string_format("invalid device: %s%s", device.c_str(),
+                                                          empty_registries.c_str()));
             }
             devices.push_back(dev);
         }
