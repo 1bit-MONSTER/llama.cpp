@@ -4639,6 +4639,43 @@ struct test_mul_mat_resident_weight : public test_case {
     }
 };
 
+// The two together (engine #1962): a resident weight, so the packed-layout registrations are reached, and activations
+// outside [-1, 1]. A magnitude of 1 or more sets one activation in 64 of every fourth token to +-magnitude; a magnitude
+// below 1 scales every activation by it (the lower edge of the same f16 window).
+struct test_mul_mat_resident_weight_large_activation : public test_mul_mat_resident_weight {
+    const float magnitude;
+
+    std::string vars() override {
+        return test_mul_mat_resident_weight::vars() + ",magnitude=" + var_to_str(magnitude);
+    }
+
+    test_mul_mat_resident_weight_large_activation(ggml_type type_a, int64_t m, int64_t n, int64_t k, float magnitude)
+        : test_mul_mat_resident_weight(type_a, m, n, k), magnitude(magnitude) {}
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") != 0) {
+                continue;
+            }
+            std::vector<float> data(ggml_nelements(t));
+            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+            if (magnitude < 1.0f) {
+                for (float & value : data) {
+                    value *= magnitude;
+                }
+            } else {
+                for (int64_t token = 0; token < t->ne[1]; token += 4) {
+                    for (int64_t i = 0; i < t->ne[0]; i += 64) {
+                        data[token * t->ne[0] + i] = ((i / 64 + token / 4) % 2 == 0) ? magnitude : -magnitude;
+                    }
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+        }
+    }
+};
+
 // GGML_OP_MUL_MAT whose activations exceed the f16 range: the dense form of the engine #1539 case below.
 struct test_mul_mat_large_activation : public test_mul_mat {
     const float magnitude;
@@ -9489,6 +9526,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 4096,   8,  512));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048,   1, 4096));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q5_K, 2048, 512, 4096));
+    // engine #1962: the two small-batch Q6_K kernels with activations of the magnitude measured in flint-40b, and the
+    // lower edge (the smallest dense-input column maximum measured on four models). The 512-token prefill kernels for
+    // Q4_K, Q5_K and Q6_K still overflow above 65504 and are not listed until they pass.
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 8, 4096, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 4096, 8,  512, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 8, 4096, 2.4e-2f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 4096, 8,  512, 2.4e-2f));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
