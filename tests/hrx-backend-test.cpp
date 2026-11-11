@@ -3396,6 +3396,32 @@ static bool matmul_graph_is_supported(ggml_context * ctx, ggml_tensor * output) 
 // stored layout on the device, so it stays stored (4 / 6) and the packed copy is not added.
 // GGML_HRX_Q4K_PACKED_TAIL / GGML_HRX_Q6K_PACKED_ROWS force one or the other; the row is about the default, so it does
 // nothing when either is set.
+// engine #2137: a stored-copy entry belongs to one mapping. A model mapped over the same addresses later (a reload in
+// the same process) starts with none, so a weight there is not taken to have a copy it never had.
+static void run_stored_copy_entries_forgotten_on_remap() {
+    ggml_backend_hrx_device_context device_context = {};
+    device_context.name                            = "HRX0";
+    ggml::hrx::model_buffer_from_mmap_init_type(&device_context);
+    std::vector<uint8_t> storage(64 * 1024 + 64);
+    uint8_t *            bytes = storage.data() + (64 - reinterpret_cast<uintptr_t>(storage.data()) % 64) % 64;
+    const size_t         size  = 64 * 1024;
+
+    ggml_backend_buffer_t first = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, size);
+    REQUIRE(first != nullptr);
+    ggml::hrx::note_stored_device_copy(bytes + 4096);
+    ggml::hrx::note_stored_device_copy(bytes + size + 0);  // outside the mapping: must survive the remap
+    REQUIRE(ggml::hrx::has_stored_device_copy(bytes + 4096));
+    ggml_backend_buffer_free(first);
+
+    ggml_backend_buffer_t second = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, size);
+    REQUIRE(second != nullptr);
+    REQUIRE(!ggml::hrx::has_stored_device_copy(bytes + 4096));
+    REQUIRE(ggml::hrx::has_stored_device_copy(bytes + size));
+    ggml::hrx::forget_stored_device_copies(bytes + size, 1);
+    REQUIRE(!ggml::hrx::has_stored_device_copy(bytes + size));
+    ggml_backend_buffer_free(second);
+}
+
 // engine #2137: the 256-aligned Q4_K prefill. For a file-mapped weight with no stored device copy it is the f16 kernel
 // over the packed rows; for one that already has a stored copy it is the 8-bit-block kernel over the stored layout
 // (weight format 4), so prefill shares decode's copy.
@@ -3426,7 +3452,7 @@ static void schedule_q4k_aligned_prefill_layout(bool stored_copy_exists) {
     ggml_tallocr allocator = ggml_tallocr_new(buffer);
     REQUIRE(ggml_tallocr_alloc(&allocator, weight) == GGML_STATUS_SUCCESS);
     if (stored_copy_exists) {
-        ggml::hrx::note_stored_device_copy(weight->data);
+        ggml::hrx::note_stored_device_copy(ggml::hrx::stored_copy_key(weight));
     }
     ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
     ggml_cgraph * graph  = ggml_new_graph(ctx);
@@ -3498,8 +3524,8 @@ static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool fi
     REQUIRE(ggml_tallocr_alloc(&allocator, weight) == GGML_STATUS_SUCCESS);
     if (stored_copy_exists) {
         // engine #2137: a decode kernel already made a stored-layout device copy of this weight
-        ggml::hrx::note_stored_device_copy(weight->data);
-        REQUIRE(ggml::hrx::has_stored_device_copy(weight->data));
+        ggml::hrx::note_stored_device_copy(ggml::hrx::stored_copy_key(weight));
+        REQUIRE(ggml::hrx::has_stored_device_copy(ggml::hrx::stored_copy_key(weight)));
     }
 
     ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
@@ -12024,6 +12050,7 @@ int main(int argc, char ** argv) {
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, false, 12); } },
         // engine #2137: a file-mapped weight that already has a stored device copy (a decode kernel read it stored) is
         // read stored by prefill too, so it is not copied a second time; and not in the i8 layout at 6 to 16 tokens
+        { "stored_copy_entries_forgotten_on_remap", [] { run_stored_copy_entries_forgotten_on_remap(); } },
         { "q4k_aligned_prefill_layout.packed", [] { schedule_q4k_aligned_prefill_layout(false); } },
         { "q4k_aligned_prefill_layout.stored_copy", [] { schedule_q4k_aligned_prefill_layout(true); } },
         { "packed_layout_follows_weight.q4_k.file_mapped.stored_copy",

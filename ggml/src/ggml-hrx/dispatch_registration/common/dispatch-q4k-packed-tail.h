@@ -76,7 +76,7 @@ inline bool decode_reads_stored(const Value & weight) {
     if (tensor == nullptr || !prefill_follows_decode_enabled()) {
         return false;
     }
-    return has_stored_device_copy(tensor->view_src != nullptr ? tensor->view_src->data : tensor->data);
+    return has_stored_device_copy(stored_copy_key(tensor));
 }
 
 inline bool weight_in_file_mapping(const Value & weight) {
