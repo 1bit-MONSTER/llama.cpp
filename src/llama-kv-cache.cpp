@@ -80,11 +80,7 @@ llama_kv_cache::llama_kv_cache(
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-             const char *   name_tag) :
-=======
                const char * name_tag) :
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     model(model), hparams(hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_swa(n_swa), swa_type(swa_type),
     ctxs_bufs(no_alloc),
@@ -279,37 +275,9 @@ llama_kv_cache::llama_kv_cache(
 
     // allocate the tensors and initialize the buffers to avoid NaNs in the padding
     for (auto & [buft, ctx] : ctx_map) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        ggml_backend_buffer_t buf;
-        if (llama_kv_share_enabled() && !hparams.no_alloc) {
-            buf = share_alloc(ctx.get(), buft); // [1bit] exportable region (llama-kv-share.cpp)
-        } else if (hparams.no_alloc) {
-            buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0); // dummy buffer
-            for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
-                t->buffer = buf; // set dummy buffer for KV cache so that the backend scheduler won't try to allocate it
-            }
-        } else {
-            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft); // real buffer
-        }
-        if (!buf) {
-            throw std::runtime_error("failed to allocate buffer for kv cache");
-        }
-
-        LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
-
-        ggml_backend_buffer_clear(buf, 0);
-        // [1bit] the clear above is best-effort on some backends: verify it and repair it (engine #528)
-        if (!llama_kv_zero_fill(buf, ctx.get(), "KV cache")) {
-            throw std::runtime_error("the kv cache padding is not zero: every attention kernel masks those "
-                                     "columns with -INFINITY and a non-finite one there returns NaN logits "
-                                     "(engine #528)");
-        }
-        ctxs_bufs.emplace_back(std::move(ctx), buf);
-=======
         ggml_backend_buffer_t buf = ctxs_bufs.emplace(std::move(ctx), buft, "kv cache");
 
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     {
@@ -1172,13 +1140,9 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
                     ext.y = ubatch.pos[i + ubatch.n_tokens];
                 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                if (ubatch.token) {
-=======
                 const bool is_embd = !ubatch.token || (ubatch.is_mixed() && ubatch.type[i]);
 
                 if (!is_embd) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                     ext.tok = ubatch.token[i];
                 } else if (hparams.ple_n_heads > 0) {
                     // embd batch (multimodal input) has no token ids, need to pad it with the correct ID for PLE layers
@@ -1886,12 +1850,6 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
 
     // an embd (multimodal) ubatch can repeat one position for a whole image, so positions
     // do not encode the token order; resolve its predecessors by ubatch order instead
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    std::vector<uint32_t> ord; // index among the ubatch tokens of the same seq
-    std::unordered_map<llama_seq_id, std::vector<uint32_t>> seq_idx;
-
-    if (!ubatch.token) {
-=======
     // same for a mixed ubatch
     const bool by_order = !ubatch.token || ubatch.is_mixed();
 
@@ -1899,7 +1857,6 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
     std::unordered_map<llama_seq_id, std::vector<uint32_t>> seq_idx;
 
     if (by_order) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         ord.resize(n_tokens);
         for (uint32_t i = 0; i < n_tokens; ++i) {
             auto & v = seq_idx[ubatch.seq_id[i][0]];
@@ -1917,11 +1874,7 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
             const llama_pos d = (llama_pos) (n - j);
 
             llama_pos p;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            if (!ubatch.token) {
-=======
             if (by_order) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                 const auto & v = seq_idx[seq_id];
                 const int64_t k = (int64_t) ord[i] - d;
                 // k >= 0: an earlier token of this very ubatch; k < 0: before the chunk

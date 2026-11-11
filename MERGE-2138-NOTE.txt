@@ -204,3 +204,19 @@ by brace counting or by py_compile -- it needs a compile of the tool.
 
 Left marked deliberately. Next attempt should start from `struct cmd_params` and walk the flag through params ->
 defaults -> help -> parser -> instance -> result -> compare, adding fused_cross_device and repack together at each stop.
+
+## src/llama-kv-cache.cpp hunk 2 (LEFT MARKED): our kv-share buffer vs AMD's owning container
+AMD's refactor replaced the per-ctx allocation block with `llama_memory_bufs` (src/llama-memory.h:36), whose `emplace()`
+wraps the buffer in a `ggml_backend_buffer_ptr` -- an OWNING unique_ptr -- and whose public `bufs` vector holds
+`(context_ptr, buffer_ptr)` pairs. Our side of the conflict is the older, richer block: kv-share allocation
+(`share_alloc`), the no_alloc dummy-buffer path, the alloc-failure check, and the engine#528 zero-fill verification
+(`llama_kv_zero_fill`) that refuses a cache whose padding is not zero because every attention kernel masks those
+columns with -INFINITY.
+
+The two cannot be combined by editing text: our kv-share region is exported/aliased elsewhere (llama-kv-share.cpp) and
+must NOT be freed by the cache's container, while `emplace()` takes ownership unconditionally. Options for whoever
+resolves it: (a) give `llama_memory_bufs` a non-owning insertion for shared regions (e.g. an emplace_borrowed), (b) keep
+our block and store the shared buffer outside `bufs` with an explicit lifetime, or (c) extend emplace() with the
+kv-share branch and a flag saying the buffer is borrowed. Each changes where the free happens, so it is an ownership
+decision, not a merge decision -- and the wrong choice is a double free or a leaked GTT region, neither of which a
+compile catches.
