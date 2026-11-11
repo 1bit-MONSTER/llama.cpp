@@ -230,12 +230,9 @@ class TensorNameMap:
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             "layers.{bid}.attention_norm",    # pico_decoder
             "model.decoder.layers.{bid}.self_attn_layer_norm",    # opt
-=======
             "model.lilicorr.layers.{bid}.attn_norm",                # lilicorr
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             "gpt_neox.layers.{bid}.input_layernorm",                # gptneox
             "transformer.h.{bid}.ln_1",                             # gpt2 gpt-j refact qwen jais exaone
             "transformer.blocks.{bid}.norm_1",                      # mpt
@@ -383,13 +380,10 @@ class TensorNameMap:
 
         # Attention output
         MODEL_TENSOR.ATTN_OUT: (
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             "layers.{bid}.attention.o_proj",    # pico_decoder
             "transformer.h.{bid}.attn.attention.out_proj",    # gpt-neo
             "model.decoder.layers.{bid}.self_attn.out_proj",    # opt
-=======
             "model.lilicorr.layers.{bid}.attn.out_proj",                    # lilicorr
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             "gpt_neox.layers.{bid}.attention.dense",                        # gptneox
             "transformer.h.{bid}.attn.c_proj",                              # gpt2 refact qwen jais
             "transformer.blocks.{bid}.attn.out_proj",                       # mpt
@@ -476,14 +470,11 @@ class TensorNameMap:
 
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             "layers.{bid}.swiglu_norm",    # pico_decoder
             "transformer.h.{bid}.ln_2",    # gpt-neo
             "model.decoder.layers.{bid}.final_layer_norm",    # opt
-=======
             "model.lilicorr.layers.{bid}.mlp_norm",                          # lilicorr
             "model.lilicorr.feature_mlp.{bid}.norm",                         # lilicorr
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
             "transformer.h.{bid}.ln_2",                                      # gpt2 refact qwen jais exaone
             "h.{bid}.post_attention_layernorm",                              # bloom
@@ -593,14 +584,11 @@ class TensorNameMap:
 
         # Feed-forward up
         MODEL_TENSOR.FFN_UP: (
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             "layers.{bid}.swiglu.w_1",    # pico_decoder
             "transformer.h.{bid}.mlp.c_fc",    # gpt-neo
             "model.decoder.layers.{bid}.fc1",    # opt
-=======
             "model.lilicorr.layers.{bid}.mlp.up_proj",                # lilicorr
             "model.lilicorr.feature_mlp.{bid}.up_proj",               # lilicorr
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             "gpt_neox.layers.{bid}.mlp.dense_h_to_4h",                # gptneox
             "transformer.h.{bid}.mlp.c_fc",                           # gpt2 jais
             "transformer.blocks.{bid}.ffn.up_proj",                   # mpt
@@ -749,14 +737,11 @@ class TensorNameMap:
 
         # Feed-forward down
         MODEL_TENSOR.FFN_DOWN: (
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             "layers.{bid}.swiglu.w_2",    # pico_decoder
             "transformer.h.{bid}.mlp.c_proj",    # gpt-neo
             "model.decoder.layers.{bid}.fc2",    # opt
-=======
             "model.lilicorr.layers.{bid}.mlp.down_proj",              # lilicorr
             "model.lilicorr.feature_mlp.{bid}.down_proj",             # lilicorr
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             "gpt_neox.layers.{bid}.mlp.dense_4h_to_h",                # gptneox
             "transformer.h.{bid}.mlp.c_proj",                         # gpt2 refact qwen jais
             "transformer.blocks.{bid}.ffn.down_proj",                 # mpt
@@ -3126,7 +3111,6 @@ class TensorNameMap:
             MODEL_TENSOR.HC_HEAD_UP: (
                 "model.hyper_connection_mixer.input_mix_weight_up",
             ),
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             MODEL_TENSOR.NEXTN_HC_HEAD_NORM: (
                 "model.layers.{bid}.hyper_connection_mixer.hc_norm",
             ),
@@ -3135,17 +3119,10 @@ class TensorNameMap:
             ),
             MODEL_TENSOR.NEXTN_HC_HEAD_UP: (
                 "model.layers.{bid}.hyper_connection_mixer.input_mix_weight_up",
-=======
             # the MTP block's own mixer, renamed to its layer by the converter
-            MODEL_TENSOR.NEXTN_HC_HEAD_NORM: (
                 "model.layers.{bid}.nextn_hc_head.hc_norm",
-            ),
-            MODEL_TENSOR.NEXTN_HC_HEAD_DOWN: (
                 "model.layers.{bid}.nextn_hc_head.input_mix_weight_down",
-            ),
-            MODEL_TENSOR.NEXTN_HC_HEAD_UP: (
                 "model.layers.{bid}.nextn_hc_head.input_mix_weight_up",
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             ),
             MODEL_TENSOR.INDEXER_Q_NORM: (
                 "model.layers.{bid}.self_attn.indexer.q_layernorm",

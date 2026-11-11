@@ -222,11 +222,8 @@ class Keys:
         KV_LORA_RANK_SWA             = "{arch}.attention.kv_lora_rank_swa"
         SHARED_KV_LAYERS             = "{arch}.attention.shared_kv_layers"
         SLIDING_WINDOW_PATTERN       = "{arch}.attention.sliding_window_pattern"
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         ROPE_PATTERN                 = "{arch}.attention.rope_pattern"
-=======
         RECURRENT_LAYERS             = "{arch}.attention.recurrent_layers"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         TEMPERATURE_SCALE            = "{arch}.attention.temperature_scale"
         ROPE_PATTERN                 = "{arch}.attention.rope_pattern"
         VALUE_EXPERT_COUNT           = "{arch}.attention.value_expert_count"
@@ -701,7 +698,6 @@ class MODEL_ARCH(IntEnum):
     ARCEE            = auto()
     AFMOE            = auto()
     LAGUNA           = auto()
-    FLINT            = auto()
     ERNIE4_5         = auto()
     ERNIE4_5_MOE     = auto()
     HUNYUAN_MOE      = auto()
@@ -743,14 +739,11 @@ class MODEL_ARCH(IntEnum):
     TALKIE           = auto()
     MELLUM           = auto()
     NANBEIGE         = auto()
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     ZAYA             = auto()
-=======
     QWEN3TTS         = auto()
     POCKETTTS        = auto()
     K2HORIZON        = auto()
     KOLIBRI1         = auto()
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -878,7 +871,6 @@ class MODEL_TENSOR(IntEnum):
     SSM_BETA             = auto() # Kimi Linear qwen3.5
     SSM_G_A              = auto() # Kimi Linear
     SSM_G_B              = auto() # Kimi Linear
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     CCA_CONV_GRP         = auto() # Zaya
     CCA_K_SCALE          = auto() # Zaya
     CCA_VAL_PROJ1        = auto() # Zaya
@@ -911,7 +903,6 @@ class MODEL_TENSOR(IntEnum):
     SSM_MIX              = auto() # zamba2
     FFN_GATE_UP_ADAPTER_A = auto() # zamba2: per-layer low-rank MLP adapter, hidden -> rank
     FFN_GATE_UP_ADAPTER_B = auto() # zamba2: per-layer low-rank MLP adapter, rank -> 2*ff
-=======
     SSM_G                = auto() # Kimi K3 (full-rank KDA gate, replaces SSM_G_A/SSM_G_B)
     ATTN_RES_SCORE       = auto() # Kimi K3 (fused res_norm * res_proj, pre-attention)
     FFN_RES_SCORE        = auto() # Kimi K3 (fused res_norm * res_proj, pre-FFN)
@@ -919,7 +910,6 @@ class MODEL_TENSOR(IntEnum):
     FFN_ROUTED_DOWN      = auto() # Kimi K3 (latent MoE: hidden -> latent)
     FFN_ROUTED_UP        = auto() # Kimi K3 (latent MoE: latent -> hidden)
     FFN_ROUTED_NORM      = auto() # Kimi K3 (latent MoE: norm on expert output)
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     TIME_MIX_W0          = auto()
     TIME_MIX_W1          = auto()
     TIME_MIX_W2          = auto()
@@ -1635,14 +1625,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
     MODEL_ARCH.NANBEIGE:         "nanbeige",
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     MODEL_ARCH.ZAYA:             "zaya",
-=======
-    MODEL_ARCH.QWEN3TTS:         "qwen3tts",
-    MODEL_ARCH.POCKETTTS:        "pockettts",
-    MODEL_ARCH.K2HORIZON:        "k2-horizon",
-    MODEL_ARCH.KOLIBRI1:         "kolibri1",
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1771,7 +1754,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_BETA:                  "blk.{bid}.ssm_beta",             # Kimi Linear qwen3.5
     MODEL_TENSOR.SSM_G_A:                   "blk.{bid}.ssm_g_a",              # Kimi Linear
     MODEL_TENSOR.SSM_G_B:                   "blk.{bid}.ssm_g_b",              # Kimi Linear
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     MODEL_TENSOR.CCA_CONV_GRP:              "blk.{bid}.cca_conv_grp",         # Zaya
     MODEL_TENSOR.CCA_K_SCALE:               "blk.{bid}.cca_k_scale",          # Zaya
     MODEL_TENSOR.CCA_VAL_PROJ1:             "blk.{bid}.cca_val_proj1",        # Zaya
@@ -1801,15 +1783,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ZAYA_VLORA_UP_EXPS_B: "blk.{bid}.zaya_vlora_gate_up_exps_b", # Zaya1-VL
     MODEL_TENSOR.ZAYA_VLORA_DOWN_EXPS_A: "blk.{bid}.zaya_vlora_down_exps_a", # Zaya1-VL
     MODEL_TENSOR.ZAYA_VLORA_DOWN_EXPS_B: "blk.{bid}.zaya_vlora_down_exps_b", # Zaya1-VL
-=======
-    MODEL_TENSOR.SSM_G:                     "blk.{bid}.ssm_g",                # Kimi K3
-    MODEL_TENSOR.ATTN_RES_SCORE:            "blk.{bid}.attn_res_score",       # Kimi K3
-    MODEL_TENSOR.FFN_RES_SCORE:             "blk.{bid}.ffn_res_score",        # Kimi K3
-    MODEL_TENSOR.OUTPUT_RES_SCORE:          "output_res_score",               # Kimi K3
-    MODEL_TENSOR.FFN_ROUTED_DOWN:           "blk.{bid}.ffn_routed_down",      # Kimi K3
-    MODEL_TENSOR.FFN_ROUTED_UP:             "blk.{bid}.ffn_routed_up",        # Kimi K3
-    MODEL_TENSOR.FFN_ROUTED_NORM:           "blk.{bid}.ffn_routed_norm",      # Kimi K3
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     MODEL_TENSOR.TIME_MIX_W0:               "blk.{bid}.time_mix_w0",
     MODEL_TENSOR.TIME_MIX_W1:               "blk.{bid}.time_mix_w1",
     MODEL_TENSOR.TIME_MIX_W2:               "blk.{bid}.time_mix_w2",
@@ -6477,77 +6450,14 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     MODEL_ARCH.ZAYA: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.INPUT_HIDDEN_STATES_SCALE,
-=======
-    MODEL_ARCH.QWEN3TTS: [
-        MODEL_TENSOR.TOKEN_EMBD,
-        MODEL_TENSOR.OUTPUT_NORM,
-        MODEL_TENSOR.OUTPUT,
-        MODEL_TENSOR.ATTN_NORM,
-        MODEL_TENSOR.ATTN_Q,
-        MODEL_TENSOR.ATTN_Q_NORM,
-        MODEL_TENSOR.ATTN_K,
-        MODEL_TENSOR.ATTN_K_NORM,
-        MODEL_TENSOR.ATTN_V,
-        MODEL_TENSOR.ATTN_OUT,
-        MODEL_TENSOR.FFN_NORM,
-        MODEL_TENSOR.FFN_GATE,
-        MODEL_TENSOR.FFN_DOWN,
-        MODEL_TENSOR.FFN_UP,
-    ],
-    MODEL_ARCH.POCKETTTS: [
-        MODEL_TENSOR.TOKEN_EMBD,
-        MODEL_TENSOR.OUTPUT_NORM,
-        MODEL_TENSOR.ATTN_NORM,
-        MODEL_TENSOR.ATTN_Q,
-        MODEL_TENSOR.ATTN_K,
-        MODEL_TENSOR.ATTN_V,
-        MODEL_TENSOR.ATTN_OUT,
-        MODEL_TENSOR.FFN_NORM,
-        MODEL_TENSOR.FFN_DOWN,
-        MODEL_TENSOR.FFN_UP,
-    ],
-    MODEL_ARCH.K2HORIZON: [
-        MODEL_TENSOR.TOKEN_EMBD,
-        MODEL_TENSOR.OUTPUT_NORM,
-        MODEL_TENSOR.OUTPUT,
-        MODEL_TENSOR.ATTN_NORM,
-        MODEL_TENSOR.ATTN_Q,
-        MODEL_TENSOR.ATTN_Q_NORM,
-        MODEL_TENSOR.ATTN_K,
-        MODEL_TENSOR.ATTN_K_NORM,
-        MODEL_TENSOR.ATTN_V,
-        MODEL_TENSOR.ATTN_V_GATE,
-        MODEL_TENSOR.ATTN_V_EXP,
-        MODEL_TENSOR.ATTN_OUT,
-        MODEL_TENSOR.ATTN_GATE,
-        MODEL_TENSOR.FFN_NORM,
-        MODEL_TENSOR.FFN_GATE,
-        MODEL_TENSOR.FFN_UP,
-        MODEL_TENSOR.FFN_DOWN,
-        MODEL_TENSOR.FFN_GATE_INP,
-        MODEL_TENSOR.FFN_EXP_PROBS_B,
-        MODEL_TENSOR.FFN_GATE_EXP,
-        MODEL_TENSOR.FFN_UP_EXP,
-        MODEL_TENSOR.FFN_DOWN_EXP,
-        MODEL_TENSOR.FFN_GATE_SHEXP,
-        MODEL_TENSOR.FFN_UP_SHEXP,
-        MODEL_TENSOR.FFN_DOWN_SHEXP,
-    ],
-    MODEL_ARCH.KOLIBRI1: [
-        MODEL_TENSOR.TOKEN_EMBD,
-        MODEL_TENSOR.OUTPUT_NORM,
-        MODEL_TENSOR.OUTPUT,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_POST_NORM,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.SSM_CONV1D,
         MODEL_TENSOR.CCA_CONV_GRP,
@@ -6581,22 +6491,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ZAYA_VLORA_DOWN_EXPS_B,
         MODEL_TENSOR.FFN_GATE_UP_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
-=======
-        MODEL_TENSOR.ATTN_V,
-        MODEL_TENSOR.ATTN_OUT,
-        MODEL_TENSOR.ATTN_Q_NORM,
-        MODEL_TENSOR.ATTN_K_NORM,
-        MODEL_TENSOR.FFN_NORM,
-        MODEL_TENSOR.FFN_POST_NORM,
-        MODEL_TENSOR.FFN_GATE_INP,
-        MODEL_TENSOR.FFN_EXP_PROBS_B,
-        MODEL_TENSOR.FFN_GATE_EXP,
-        MODEL_TENSOR.FFN_UP_EXP,
-        MODEL_TENSOR.FFN_DOWN_EXP,
-        MODEL_TENSOR.FFN_GATE_SHEXP,
-        MODEL_TENSOR.FFN_UP_SHEXP,
-        MODEL_TENSOR.FFN_DOWN_SHEXP,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     ],
 }
 
