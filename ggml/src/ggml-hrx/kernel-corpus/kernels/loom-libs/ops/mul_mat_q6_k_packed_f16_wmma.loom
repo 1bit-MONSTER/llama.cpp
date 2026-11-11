@@ -10,6 +10,11 @@ config.decl @ggml.mul_mat_q6_k_packed.weight_offset : %value: index where [range
 
 config.decl @ggml.mul_mat_q6_k_packed.token_capacity : %value: index where [range(%value, 128, 2048), multiple_of(%value, 128)]
 
+// engine #2137: which resident layout the f16 prefill kernel reads the weight in. 0 = the stored Q6_K rows (default);
+// 2 = the packed row layout decode reads (q6k-packed-k256-row64-scalerow), so prefill and decode share one device copy.
+// (1 is the body's int8-tile layout, selected by the from_packed kernel, not by this parameter.)
+config.def @ggml.mul_mat_q6_k_packed.weight_layout = 0 : index
+
 // Defined (default 0) with the shared f16 prefill body in motifs/mul_mat_quantized_f16_prefill.loom.
 config.decl @ggml.f16_prefill.activation_scale_log2 : %value: index where [range(%value, 0, 6)]
 
@@ -34,6 +39,7 @@ template.decl @ggml.mul_mat_q6_k_packed.prefill_wave32.body(%input_is_f16: i1, %
 amdgpu.target<gfx11-generic> @ggml_mul_mat_q6_k_prefill_gfx11_wave32 {subgroup_size = 32}
 
 func.decl @ggml_q6k_f16_pair(%half_packet: i1, %weight: buffer, %weight_row_byte_base: offset, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
+func.decl @ggml_q6k_packed_row64_f16_pair(%half_packet: i1, %weight: buffer, %row: index, %input_size: index, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
 
 template.def<@ggml.mul_mat_q6_k_packed.publish_f16_wave32> device @ggml_mul_mat_q6_k_packed_publish_f16_wave32(%result: vector<16xf16>, %token_offset: index, %token_tile_base: index, %bounded_token_count: index, %bounded_output_size: index, %channel_tile_base: index, %subgroup_channel_add: index, %result_stage: buffer, %output_noalias: buffer, %output_accumulation: index) {
   %lane = kernel.subgroup.lane.id : index
@@ -1430,10 +1436,18 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
           %v1 = vector.fptrunc %v1f : vector<16xf32> to vector<16xf16>
           scf.yield %v0, %v1 : vector<16xf16>, vector<16xf16>
         } else {
-          %channel_byte_index = index.mul %channel, %weight_row_bytes : index
-          %row_byte_base = index.cast %channel_byte_index : index to offset
           %half_packet = scalar.constant false : i1
-          %d0, %d1 = func.call @ggml_q6k_f16_pair(%half_packet, %weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (i1, buffer, offset, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+          %c2_layout = index.constant 2 : index
+          %is_packed_rows = index.cmp eq, %weight_layout, %c2_layout : index
+          %d0, %d1 = scf.if %is_packed_rows -> (vector<16xf16>, vector<16xf16>) {
+            %p0, %p1 = func.call @ggml_q6k_packed_row64_f16_pair(%half_packet, %weight_noalias, %channel, %bounded_input_size, %quant_block, %quant_group, %load_packet) : (i1, buffer, index, index, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+            scf.yield %p0, %p1 : vector<16xf16>, vector<16xf16>
+          } else {
+            %channel_byte_index = index.mul %channel, %weight_row_bytes : index
+            %row_byte_base = index.cast %channel_byte_index : index to offset
+            %s0, %s1 = func.call @ggml_q6k_f16_pair(%half_packet, %weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (i1, buffer, offset, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+            scf.yield %s0, %s1 : vector<16xf16>, vector<16xf16>
+          }
           scf.yield %d0, %d1 : vector<16xf16>, vector<16xf16>
         }
         scf.yield %decoded0, %decoded1 : vector<16xf16>, vector<16xf16>
@@ -1674,7 +1688,12 @@ kernel.def target(@ggml_mul_mat_q6_k_prefill_gfx11_wave32) export("ggml_mul_mat_
   %c512 = index.constant 512 : index
   %wide_tile = index.cmp uge, %workgroup_size, %c512 : index
   scf.if %wide_tile {
-    %weight_format = index.constant 6 : index
+    %resident_layout = config.get @ggml.mul_mat_q6_k_packed.weight_layout : index
+    %packed_rows_layout = index.constant 2 : index
+    %reads_packed_rows = index.cmp eq, %resident_layout, %packed_rows_layout : index
+    %stored_format = index.constant 6 : index
+    %packed_rows_format = index.constant 46 : index
+    %weight_format = scf.select %reads_packed_rows, %packed_rows_format, %stored_format : index
     %paired = scalar.constant false : i1
     %prefill_binary_op = index.constant 0 : index
     func.call @ggml_mul_mat_quantized_f16_prefill_wave32(%weight_format, %prefill_binary_op, %paired, %packed_input, %paired, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %weight, %output, %output) : (index, index, i1, i1, i1, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
@@ -1682,7 +1701,7 @@ kernel.def target(@ggml_mul_mat_q6_k_prefill_gfx11_wave32) export("ggml_mul_mat_
     %input_is_f16 = scalar.constant true : i1
     // engine #856: 0 = read the loader's stored Q6_K rows (today's behaviour); 1 = read the
     // repacked int8 tiles the decode kernel already uses, so both share one resident copy.
-    %weight_layout = index.constant 0 : index
+    %weight_layout = config.get @ggml.mul_mat_q6_k_packed.weight_layout : index
     template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %weight_layout, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, index, index, index, index, index, index, buffer, buffer, buffer)
   }
   kernel.return

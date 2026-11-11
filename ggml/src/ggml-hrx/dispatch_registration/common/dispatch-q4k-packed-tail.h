@@ -53,15 +53,37 @@ inline bool q4k_packed_tail_enabled() {
 // tensor in an ordinary buffer can be rewritten between computes, and the executor refuses to read one in a packed
 // layout ("its buffer is not flagged as weights"), which would fail a graph the stored layout runs (measured on
 // test-backend-ops' q4_K large-activation cases at 22 tokens).
-inline bool q4k_packed_tail_weight_ok(const Value & weight, int64_t input_size, int64_t output_size) {
-    if (weight.type != GGML_TYPE_Q4_K || input_size % 256 != 0 || output_size % 64 != 0 ||
-        weight.alias_source.value >= 0) {
+inline bool packed_tail_weight_ok(const Value & weight, ggml_type type, int64_t input_size, int64_t output_size) {
+    if (weight.type != type || input_size % 256 != 0 || output_size % 64 != 0 || weight.alias_source.value >= 0) {
         return false;
     }
     const ggml_tensor *   tensor = weight.tensor;
     ggml_backend_buffer_t buffer =
         tensor == nullptr ? nullptr : tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
     return buffer != nullptr && ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+}
+
+inline bool q4k_packed_tail_weight_ok(const Value & weight, int64_t input_size, int64_t output_size) {
+    return packed_tail_weight_ok(weight, GGML_TYPE_Q4_K, input_size, output_size);
+}
+
+// Q6_K (GGML_HRX_Q6K_PACKED_ROWS=1): prefill reads the packed row layout decode reads, at every batch size. The tiled
+// kernels take it as weight format 46 and the 128-aligned f16 prefill kernel as weight_layout 2. Stored stays the
+// default. (GGML_HRX_Q6K_PACKED_PREFILL is an older switch on the aligned kernel alone; it binds the stored layout and
+// saves no copy.)
+inline bool q6k_packed_rows_enabled() {
+    static const bool enabled = [] {
+        const char * env = std::getenv("GGML_HRX_Q6K_PACKED_ROWS");
+        const bool   on  = env != nullptr && env[0] == '1';
+        GGML_LOG_ERROR("%s: engine #2137 q6_k prefill reads the %s layout (GGML_HRX_Q6K_PACKED_ROWS=%s)\n", __func__,
+                       on ? "PACKED" : "stored", on ? "1" : "unset");
+        return on;
+    }();
+    return enabled;
+}
+
+inline bool q6k_packed_rows_weight_ok(const Value & weight, int64_t input_size, int64_t output_size) {
+    return packed_tail_weight_ok(weight, GGML_TYPE_Q6_K, input_size, output_size);
 }
 
 }  // namespace ggml::hrx

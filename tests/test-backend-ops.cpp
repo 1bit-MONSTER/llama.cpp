@@ -9529,6 +9529,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 9728, 164, 2560));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2560, 164, 9728));
+    // and q6_K, off the 128 grid its prefill kernel takes: stored by default, packed with GGML_HRX_Q6K_PACKED_ROWS=1
+    for (int64_t n : { 22, 100, 164, 300 }) {
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, n, 4096));
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, n,  512));
+    }
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2560, 164, 2560));
+    // q6_K on its prefill kernel's 128 grid but off the 256 one (128, 384 tokens), and an output that is not a multiple
+    // of 128 at 256 tokens: the tile shapes of that kernel other than the wide one
+    for (int64_t n : { 128, 384 }) {
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, n, 4096));
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 1024, n, 2560));
+    }
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2112, 256, 2560));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, 512, 4096));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048,   8, 4096));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 4096,   8,  512));
