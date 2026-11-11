@@ -687,10 +687,24 @@ static bool match_mul_mat_conv4_dispatch(const DispatchMatchContext & context, D
     dispatch.kernel.integer_parameters.emplace("token_count", mat.token_count);
     set_compile_parameter(dispatch.kernel, "ggml.mul_mat.input_size", mat.input_size);
     set_compile_parameter(dispatch.kernel, "ggml.mul_mat.output_size", mat.output_size);
-    set_compile_parameter(dispatch.kernel, "ggml.mul_mat.weight_format", mat.weight->type == GGML_TYPE_Q4_K ? 4 : 6);
+    // engine #2137: Q6_K in the packed rows (format 46) where prefill reads this weight packed elsewhere, so the fused
+    // kernel shares that copy instead of adding a stored one. Not for a weight a GET_ROWS also reads stored.
+    bool q6_packed = mat.weight->type == GGML_TYPE_Q6_K &&
+                     q6k_packed_rows_weight_ok(*mat.weight, mat.input_size, mat.output_size) &&
+                     q6k_packed_rows_enabled(*mat.weight);
+    for (const GraphNode * consumer : context.graph.index().consumers(mat.weight->id)) {
+        if (consumer != nullptr && consumer->op == GGML_OP_GET_ROWS) {
+            q6_packed = false;
+        }
+    }
+    const int64_t weight_format = mat.weight->type == GGML_TYPE_Q4_K ? 4 : q6_packed ? 46 : 6;
+    set_compile_parameter(dispatch.kernel, "ggml.mul_mat.weight_format", weight_format);
     dispatch.bindings.push_back(activation);
     if (mat.weight->type == GGML_TYPE_Q4_K) {
         dispatch.bindings.push_back({mat.weight->id, 0, mat.weight->byte_count, kQ4KPackedK256Row64Layout,
+                                     mat.weight->type, mat.input_size, mat.output_size, mat.weight->byte_count});
+    } else if (q6_packed) {
+        dispatch.bindings.push_back({mat.weight->id, 0, mat.weight->byte_count, kQ6KPackedK256Row64ScaleRowLayout,
                                      mat.weight->type, mat.input_size, mat.output_size, mat.weight->byte_count});
     } else {
         dispatch.bindings.push_back({mat.weight->id, 0, mat.weight->byte_count});
