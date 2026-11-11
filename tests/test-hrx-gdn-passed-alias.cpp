@@ -13,25 +13,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The fused GATED_DELTA_NET pattern and a node the scheduler has already passed (engine #1925).
+// The fused GATED_DELTA_NET pattern in a graph the scheduler walks out of order (engine #1925).
 //
-// The prefill pattern is rooted at the L2_NORM of q and covers fifteen nodes, four of which only rename storage: the
-// RESHAPEs of the gate and beta chains, the RESHAPE that gives the gathered recurrent state its [128,128,heads,seqs]
-// shape, and the VIEW of the cache the new state is copied into. The scheduler visits nodes in dependency order and
-// elides a layout alias as soon as its input exists. The state RESHAPE's input is the state gather, which depends on
-// nothing else in the layer, so the RESHAPE can be visited before the L2_NORM. The matcher then found its pattern,
-// could not cover a node that was already covered, and declined; the standalone L2_NORM leaves this consumer to the
-// fused matcher, so the node had no dispatch and the graph failed:
+// Qwen3.8-Flash-Next, the first 512-token batch past 2,048 tokens of context, with the f16 mask kernels on:
 //
 //   unsupported HRX node 160: L2_NORM output=f32[128,16,512,1]<-L2_NORM inputs=[f32[128,16,512,1]<-VIEW]
 //       consumers=[174:GATED_DELTA_NET]
 //
-// (Qwen3.8-Flash-Next, the first 512-token batch past 2,048 tokens of context, with the f16 mask kernels on.)
+// The cause is the walk. The scheduler visits nodes in dependency order with MUL_MAT and the other root ops first,
+// which is what puts the gate and beta projections of a layer ahead of the L2_NORM its fused pattern is rooted at. An
+// in-place CPY (the one ggml_cast builds) lists its own output as an input; counted as a dependency, it never became
+// ready, the walk stopped at it, and every node downstream was appended in index order. The sparse path's mask chain
+// has such casts, so every later layer was walked in index order, where the L2_NORM comes before the projections:
+//
+//   fusion order: llm.gated_delta_net.f32_wmma_head128 at node 160 (L2_NORM) refused: ... alpha_raw reads value 206
+//       produced by node 164 (MUL_MAT) that is not scheduled yet
+//
+// Nodes that depend on nothing in the stalled part were still walked early, among them the RESHAPE that gives the
+// gathered recurrent state its [128,128,heads,seqs] shape. It is a layout alias, so it was elided, and the pattern
+// then could not cover a node that was already covered. That was the first refusal the model showed.
 //
 // The cases build the layer's graph at that model's head counts (16 q/k heads, 48 v heads, width 128, so one token's
-// q|k|v row is 10,240 floats) and schedule it for gfx1151 on the host. `state_first` puts the state RESHAPE ahead of
-// the L2_NORM in the graph, which is the order the scheduler reached in the model. Each such plan must exist and must
-// carry the same gated-delta-net dispatches (kernel, parameters, binding ranges) as the ordinary order.
+// q|k|v row is 10,240 floats) and schedule it for gfx1151 on the host. check_walk puts the layer behind a ggml_cast;
+// check puts the state RESHAPE ahead of the L2_NORM. Each plan must exist and must carry the same gated-delta-net
+// dispatches (kernel, parameters, binding ranges) as the same graph without the disturbance.
 
 #include "dispatch/dispatch-scheduler.h"
 #include "ggml.h"
@@ -70,7 +75,7 @@ struct Planned {
 };
 
 // state_leaf: the state gather ran in another split, so the RESHAPE's input has no producer in this graph.
-Planned plan_layer(int64_t tokens, bool state_first, bool state_leaf) {
+Planned plan_layer(int64_t tokens, bool state_first, bool state_leaf, bool model_order = false, bool cast_upstream = false) {
     ggml_init_params params = {};
     params.mem_size         = 8 * 1024 * 1024;
     params.no_alloc         = true;
@@ -82,7 +87,12 @@ Planned plan_layer(int64_t tokens, bool state_first, bool state_leaf) {
     const int64_t state_elements = width * width * heads;
     const size_t  state_bytes    = state_elements * sizeof(float);
 
-    ggml_tensor * input    = ggml_scale(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, inputs, tokens), 0.5f);
+    // cast_upstream: the layer's input comes through a ggml_cast, whose CPY writes into its own output value (the
+    // sparse path's mask chain has such casts ahead of every later layer).
+    ggml_tensor * source   = cast_upstream ?
+                                 ggml_cast(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, inputs, tokens), GGML_TYPE_F32) :
+                                 ggml_new_tensor_2d(ctx, GGML_TYPE_F32, inputs, tokens);
+    ggml_tensor * input    = ggml_scale(ctx, source, 0.5f);
     ggml_tensor * w_alpha  = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, inputs, heads);
     ggml_tensor * w_beta   = ggml_dup_tensor(ctx, w_alpha);
     ggml_tensor * alpha    = ggml_mul_mat(ctx, w_alpha, input);
@@ -93,7 +103,11 @@ Planned plan_layer(int64_t tokens, bool state_first, bool state_leaf) {
         ctx, ggml_softplus(ctx, ggml_add(ctx, ggml_reshape_3d(ctx, alpha, heads, tokens, 1), bias)), scale);
     gate               = ggml_reshape_4d(ctx, gate, 1, heads, tokens, 1);
     ggml_tensor * beta = ggml_sigmoid(ctx, ggml_reshape_4d(ctx, beta_raw, 1, heads, tokens, 1));
-    ggml_tensor * raw  = ggml_scale(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden, tokens), 0.5f);
+    // the q|k|v row: with model_order a projection of the layer input, as in the model (so the L2_NORM depends on a
+    // MUL_MAT of the same input the gate and beta projections read)
+    ggml_tensor * raw = model_order ?
+                            ggml_mul_mat(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, inputs, hidden), input) :
+                            ggml_scale(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden, tokens), 0.5f);
     const auto    view = [&](int64_t h, size_t offset) {
         return ggml_view_4d(ctx, raw, width, h, tokens, 1, width * sizeof(float), hidden * sizeof(float),
                             hidden * tokens * sizeof(float), offset);
@@ -116,9 +130,11 @@ Planned plan_layer(int64_t tokens, bool state_first, bool state_leaf) {
     ggml_tensor * target = ggml_view_3d(ctx, cache, state_elements, 1, count, state_bytes, 4 * state_bytes, 0);
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
-    ggml_build_forward_expand(graph, raw);
-    ggml_build_forward_expand(graph, alpha);
-    ggml_build_forward_expand(graph, beta_raw);
+    if (!model_order) {
+        ggml_build_forward_expand(graph, raw);
+        ggml_build_forward_expand(graph, alpha);
+        ggml_build_forward_expand(graph, beta_raw);
+    }
     ggml_build_forward_expand(graph, gathered);
     if (state_first) {
         ggml_build_forward_expand(graph, state);
@@ -172,10 +188,36 @@ void check(const char * what, int64_t tokens, bool state_leaf) {
     REQUIRE(passed.gdn == ordinary.gdn);
 }
 
+// The walk itself (engine #1925, the cause). With model_order the graph is expanded from its outputs only, as llama.cpp
+// builds it, so the L2_NORM has a lower index than the gate and beta projections the pattern reads. The scheduler's
+// dependency walk still reaches the projections first (MUL_MAT is a root op). With cast_upstream the layer's inputs
+// come through a ggml_cast: its CPY lists its own output as an input, the walk used to stop at it and append the rest
+// in index order, and the pattern at the L2_NORM was refused because the projection was "not scheduled yet".
+void check_walk(int64_t tokens) {
+    const Planned ordinary = plan_layer(tokens, false, false, true, false);
+    if (!ordinary.ok) {
+        std::printf("model order, no cast, tokens=%lld REFUSED\n  %s", (long long) tokens, ordinary.error.c_str());
+    }
+    REQUIRE(ordinary.ok);
+    REQUIRE(!ordinary.gdn.empty());
+    const Planned behind_cast = plan_layer(tokens, false, false, true, true);
+    std::printf("%-58s tokens=%-3lld : %s, %zu gated-delta-net dispatches (no cast: %zu)\n",
+                "layer behind an in-place CPY (ggml_cast)", (long long) tokens, behind_cast.ok ? "plans" : "REFUSED",
+                behind_cast.gdn.size(), ordinary.gdn.size());
+    if (!behind_cast.ok) {
+        std::printf("  %s", behind_cast.error.c_str());
+    }
+    REQUIRE(behind_cast.ok);
+    REQUIRE(behind_cast.gdn == ordinary.gdn);
+}
+
 }  // namespace
 
 int main() {
     setvbuf(stdout, nullptr, _IOLBF, 0);
+    check_walk(512);
+    check_walk(64);
+    check_walk(2);
     check("state RESHAPE ahead of the L2_NORM", 512, false);
     check("state RESHAPE ahead of the L2_NORM, gather in another split", 512, true);
     check("state RESHAPE ahead of the L2_NORM", 64, false);
