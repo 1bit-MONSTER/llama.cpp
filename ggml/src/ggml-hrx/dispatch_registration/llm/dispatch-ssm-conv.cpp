@@ -3,6 +3,7 @@
 #include "ubatch-token-limits.h"
 
 #include "../common/dispatch-mul-mat-common.h"
+#include "../common/dispatch-q4k-packed-tail.h"
 
 #include "ggml.h"
 #include "graph/graph-matcher.h"
@@ -606,6 +607,12 @@ static bool match_mul_mat_conv4_dispatch(const DispatchMatchContext & context, D
         mat.weight->alias_source.value >= 0 || mat.input_size % 256 != 0 ||
         mat.output_size % 64 != 0 || mat.output_size / 64 < 32 ||
         !common_mul_mat_uses_k16_major_f16(mat.weight_format, mat.input_size, mat.output_size, mat.token_count)) {
+        return false;
+    }
+    // engine #2137: this fused kernel reads Q4_K only in the packed rows. For a Q4_K weight that decode already holds
+    // stored, the plain matchers take the projection instead (the stored 8-bit-block prefill kernel, then the separate
+    // conv), so the weight keeps one device copy.
+    if (q4k_aligned_prefill_reads_stored(*mat.weight)) {
         return false;
     }
 
