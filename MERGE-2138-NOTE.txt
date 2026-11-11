@@ -64,3 +64,22 @@ Our block is preserved verbatim for the port in `merge-lost/llama-memory-hybrid-
 The port is not a text merge: it has to be re-expressed on AMD's structure, and the three `group_cells()` call sites
 must be matched to whatever now runs at those points. Until that is done this merge changes behaviour in the
 hybrid-indexer restore path, which is why the file is listed here rather than counted as resolved.
+
+## SILENT LOSS #1, VERIFIED AS A BREAK (and fixed): set_input_qsa
+The earlier entry guessed at "our grouping dropped". The accurate statement, from symbol counting across the tree:
+src/models/qwen4exp.cpp:1123 calls mctx->set_input_qsa(...) in our QSA graph-input class, while the merged tree has
+NO declaration and NO definition of it (every match for 'set_input_qsa' under src/ and ggml/src/ is that one call).
+A call site whose callee the other side deleted is a link error, not a design difference.
+
+AMD did not rename it: its rebase introduced kpool_layout + set_input_kpool (.h:197, .cpp:729) and its hybrid-idx
+line has no QSA path. Both graph-input classes survive in qwen4exp.cpp (QSA at 1120-1123, kpool at 1132-1134)
+because that caller block is ours and auto-merged in cleanly.
+
+FIXED in fdde1524a: restored the 317-line impl, the 12-line context forwarder and both declarations at our line's
+structural anchors. Counts match the parent exactly (.h 2, .cpp 3, caller 1); braces balanced; no markers; the body
+only needs GGML_ASSERT, ggml_backend_buffer_is_host, get_mem_idx and get_cells(seq), all present in the merge.
+
+## How to find the rest of this class (do this before the first build)
+The pattern is: a symbol that the surviving call sites name, with no definition anywhere in the tree. Cheap check
+once the markers are gone: build, and treat every undefined-reference in the link as a MERGE BUG rather than a
+missing file -- the merge is what removed the definitions, and the link is the only place that says so.
