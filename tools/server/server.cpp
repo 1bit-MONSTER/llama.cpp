@@ -101,29 +101,9 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 // shared by every role
 //
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-#ifndef _WIN32
-    // Ignore SIGPIPE so the server does not crash if an MCP child exits while we are writing to its stdin
-    signal(SIGPIPE, SIG_IGN);
-#endif
-
-    // own arguments required by this example
-    common_params params;
-
-    common_init();
-    server_device_lost::install();  // exit on a lost GPU (server-device-lost.h)
-
-    // start the stream session manager GC right after common init, before any HTTP route can
-    // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
-    server_stream_session_manager_start();
-
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
-        return 1;
-=======
 static server_role_type server_role_detect(const common_params & params, server_role & role) {
     if (role.is_managed_by_router()) {
         return role.get_role();
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
     // a server given no model is a router
     const bool has_model = !params.model.path.empty()
@@ -804,6 +784,7 @@ int llama_server(int argc, char ** argv) {
     common_params params;
 
     common_init();
+    server_device_lost::install();  // exit on a lost GPU (server-device-lost.h)
 
     // start the stream session manager GC right after common init, before any HTTP route can
     // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
