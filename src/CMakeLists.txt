@@ -46,44 +46,11 @@ set(LLAMA_CORE_SOURCES
 
 add_library(llama
             ../include/llama.h
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            llama.cpp
-            llama-adapter.cpp
-            llama-arch.cpp
-            llama-batch.cpp
-            llama-chat.cpp
-            llama-context.cpp
+            ${LLAMA_CORE_SOURCES}
             llama-zha-dump.cpp
-            llama-cparams.cpp
-            llama-grammar.cpp
-            llama-graph.cpp
             llama-hadamard.cpp
-            llama-hparams.cpp
-            llama-impl.cpp
-            llama-io.cpp
-            llama-kv-cache.cpp
             llama-kv-share.cpp
             llama-kv-zero.cpp
-            llama-kv-cache-iswa.cpp
-            llama-kv-cache-dsa.cpp
-            llama-kv-cache-dsv4.cpp
-            llama-memory.cpp
-            llama-memory-hybrid.cpp
-            llama-memory-hybrid-iswa.cpp
-            llama-memory-hybrid-idx.cpp
-            llama-memory-recurrent.cpp
-            llama-mmap.cpp
-            llama-model-loader.cpp
-            llama-model-saver.cpp
-            llama-model.cpp
-            llama-quant.cpp
-            llama-sampler.cpp
-            llama-vocab.cpp
-            unicode-data.cpp
-            unicode.cpp
-=======
-            ${LLAMA_CORE_SOURCES}
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             unicode.h
             ${LLAMA_MODELS_SOURCES}
             )
