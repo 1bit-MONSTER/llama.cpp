@@ -9521,6 +9521,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // q4_K at 512 tokens (packed prefill), q6_K at 512 (prefill), 8 (i8 prepacked; the skinny form at k = 512, m = 4096)
     // and 1 token (final projection); q5_K at 512 reads the native layout and is the control.
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2048, 512, 4096));
+    // engine #2137: q4_K at batch sizes off the 256 grid, where the generic kernel runs. It reads the stored layout by
+    // default and the packed row layout with GGML_HRX_Q4K_PACKED_TAIL=1; both must agree with the CPU.
+    for (int64_t n : { 6, 22, 164, 300 }) {
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2048, n, 4096));
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2048, n,  512));
+    }
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 9728, 164, 2560));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2560, 164, 9728));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, 512, 4096));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048,   8, 4096));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 4096,   8,  512));

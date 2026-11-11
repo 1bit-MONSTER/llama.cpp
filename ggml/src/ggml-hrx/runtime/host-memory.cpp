@@ -1929,6 +1929,18 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         }
     }
 
+    // GGML_HRX_HOST_WEIGHT_TRACE=2: one line per device copy made (a cache miss), so the copies of a run can be counted
+    // per weight and per layout (engine #2137: a weight read in two layouts shows up as two lines with one id/off).
+    // At ERROR because the CLI tools drop INFO.
+    if (const char * trace = std::getenv("GGML_HRX_HOST_WEIGHT_TRACE")) {
+        if (std::atoi(trace) >= 2) {
+            GGML_LOG_ERROR("hrx weight copy: id=%llu off=%zu len=%zu layout=%s type=%s in=%lld out=%lld bytes=%zu\n",
+                           (unsigned long long) source.identity, source.offset, source.length, source.layout.c_str(),
+                           source.source_type < GGML_TYPE_COUNT ? ggml_type_name(source.source_type) : "-",
+                           (long long) source.input_size, (long long) source.output_size, materialized_length);
+        }
+    }
+
     // Make room before materializing, so the peak is the budget plus this one weight rather than budget + weight.
     if (limit_ != 0) {
         evict_for(stream, materialized_length);

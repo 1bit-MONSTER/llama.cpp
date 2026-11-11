@@ -7,6 +7,7 @@
 #include <cstdlib>
 
 #include "dispatch-mul-mat-common.h"
+#include "dispatch-q4k-packed-tail.h"
 #include "dispatch-token-chunks.h"
 #include "dispatch-mul-mat-iq3-xxs.h"
 #include "dispatch-mul-mat-tail.h"
@@ -173,6 +174,19 @@ static bool weight_has_native_layout_reader(const Graph & graph, const Value & v
         }
     }
     return false;
+}
+
+// engine #2137 (dispatch-q4k-packed-tail.h): the tiled path (more than 5 tokens, f32 activation) reading the packed
+// row layout, when no other node of the graph reads the stored one (weight_has_native_layout_reader).
+static bool q4k_packed_tail_applies(const DispatchMatchContext & context,
+                                    const Value &                weight,
+                                    CommonMulMatWeightFormat     format,
+                                    int64_t                      token_count,
+                                    int64_t                      input_size,
+                                    int64_t                      output_size) {
+    return format == CommonMulMatWeightFormat::Q4K && token_count > 5 && token_count <= kMulMatPrefillMaxTokens &&
+           q4k_packed_tail_weight_ok(weight, input_size, output_size) &&
+           !weight_has_native_layout_reader(context.graph, weight) && q4k_packed_tail_enabled();
 }
 
 static bool has_normalized_rope_consumer(const Graph & graph, const Value & value) {
@@ -1151,6 +1165,12 @@ static bool build_mul_mat_dispatch(const DispatchMatchContext & context,
             return false;
         }
     }
+    // engine #2137: not with the split-k variant, which has not been run on the packed layout
+    if (!pack_q4 && !pack_q6 && !split_k &&
+        q4k_packed_tail_applies(context, *match.weight, match.weight_format, match.token_count, match.input_size,
+                                match.output_size)) {
+        pack_q4 = true;
+    }
     const CommonMulMatWeightFormat format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
                                            pack_q6 ? CommonMulMatWeightFormat::Q6KRow64 : match.weight_format;
     dispatch.kernel.compile_parameters.emplace(
@@ -1269,6 +1289,11 @@ static bool match_mul_mat_postops_dispatch(const DispatchMatchContext & context,
     }
     if (match.requires_q8_activation && !pack_q4 && !pack_q6) {
         return false;
+    }
+    if (!pack_q4 && !pack_q6 &&
+        q4k_packed_tail_applies(context, *match.weight, match.weight_format, match.token_count, match.input_size,
+                                match.output_size)) {
+        pack_q4 = true;  // engine #2137
     }
     const CommonMulMatWeightFormat format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
                                            pack_q6 ? CommonMulMatWeightFormat::Q6KRow64 : match.weight_format;
