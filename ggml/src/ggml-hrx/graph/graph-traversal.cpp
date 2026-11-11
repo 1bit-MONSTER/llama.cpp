@@ -164,6 +164,10 @@ GraphTraversalOrder GraphTraversalOrder::build(const Graph & graph) {
 
     for (size_t i = 0; i < nodes.size(); ++i) {
         if (!selected[i]) {
+            if (result.stalled_count_ == 0) {
+                result.first_stalled_node_ = i;
+            }
+            ++result.stalled_count_;
             result.nodes_.push_back(&nodes[i]);
         }
     }
