@@ -9,11 +9,8 @@
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 #define LLAMA_MAX_EXPERTS 1024 // deepseek41 (V4.1) needs more than Qwen3 Next's 512
-=======
 #define LLAMA_MAX_EXPERTS 1024 // Kimi K3
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #define LLAMA_MAX_PLE_NGRAM 8  // qwen4exp, deepseek41 (all hash modules)
 #define LLAMA_MAX_PLE_HEADS 64 // qwen4exp, deepseek41 (all hash modules)
 
@@ -180,15 +177,12 @@ struct llama_hparams {
 
     std::array<int, 4> rope_sections;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // Per-layer RoPE enable flags (1 = use RoPE, 0 = NoPE)
     // by default, all layers use RoPE
-=======
     enum llama_rope_section_order rope_section_order = LLAMA_ROPE_SECTION_ORDER_TYXZ;
 
     // Per-layer RoPE enable flags (1 = use RoPE, 0 = NoPE)
     // by default, all layers use RoPE (controlled by rope_finetuned)
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     std::array<uint32_t, LLAMA_MAX_LAYERS> rope_pattern;
 
     // Sliding Window Attention (SWA)
@@ -216,14 +210,11 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // zamba2: 0 or absent = the per-layer MLP adapter is baked into ffn_up; > 0 = ffn_up is the shared base and
     // each hybrid layer carries a low-rank adapter pair of this rank (engine #1036 cause 2)
     uint32_t zamba2_ffn_gate_up_adapter_rank = 0;
-=======
     // for MiniMax-Text-01 linear attention
     uint32_t n_embd_head_la = 0;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // for Kimi Linear KDA
     uint32_t n_embd_head_kda = 0;
