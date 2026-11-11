@@ -1835,8 +1835,11 @@ static void run_unmatched_graph_diagnostics_checks() {
     ggml_context * ctx      = ggml_init(params);
     REQUIRE(ctx != nullptr);
 
-    ggml_tensor * cache   = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 512, 512);
-    ggml_tensor * rows    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 512, 2);
+    // A SET_ROWS that no registration takes. The i32-index form at an ordinary row width used to be that graph; since
+    // llama.cpp #196 the standalone hip_set_rows dispatch runs it on the device. A row wider than that dispatch's 32,768
+    // limit (and with i32 indices, which the two Loom writers decline) is still refused by every matcher.
+    ggml_tensor * cache   = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 65536, 4);
+    ggml_tensor * rows    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 65536, 2);
     ggml_tensor * indices = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 2);
     REQUIRE(cache != nullptr);
     REQUIRE(rows != nullptr);
@@ -4119,8 +4122,15 @@ static void schedule_flash_attention_command(ggml_context * ctx,
         REQUIRE(copy.bindings.size() == 2);
         REQUIRE(copy.bindings[1].value == dispatch.bindings[2].value);
         REQUIRE(copy.bindings[0].value != copy.bindings[1].value);
-        REQUIRE(copy.bindings[1].length == static_cast<size_t>(key_value_token_count * key_value_head_count * value_head_size) * sizeof(ggml_fp16_t));
-        require_compile_parameter(dispatch, "ggml.flash_attention.value_layout", "1");
+        // engine #1989: the transposed V has the spread pitch - keys + 32 when the key count is a multiple of 64 - which
+        // the transpose kernel is told and the attention kernel derives from its key count (value_layout 2). The source
+        // binding stays the packed V.
+        const int64_t transposed_pitch = key_value_token_count % 64 == 0 ? key_value_token_count + 32 : key_value_token_count;
+        REQUIRE(copy.bindings[0].length == static_cast<size_t>(key_value_token_count * key_value_head_count * value_head_size) * sizeof(ggml_fp16_t));
+        REQUIRE(copy.bindings[1].length == static_cast<size_t>(transposed_pitch * key_value_head_count * value_head_size) * sizeof(ggml_fp16_t));
+        require_compile_parameter(copy, "ggml.copy_transpose_f16.output_pitch", std::to_string(transposed_pitch));
+        require_compile_parameter(dispatch, "ggml.flash_attention.value_layout", "2");
+        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.flash_attention.value_transposed_pitch") == 0);
     } else {
         REQUIRE(dispatch.kernel.compile_parameters.count("ggml.flash_attention.value_layout") == 0);
     }
@@ -6323,7 +6333,8 @@ static void run_qwen_matmul_dispatch_checks() {
         REQUIRE(input != nullptr);
         ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
         REQUIRE(output != nullptr);
-        REQUIRE(!matmul_graph_is_supported(ctx, output));
+        // llama.cpp #207: a batched dense MUL_MAT runs as one dispatch per plane; before it this graph was refused.
+        REQUIRE(matmul_graph_is_supported(ctx, output));
     }
 
     {
@@ -8375,7 +8386,7 @@ static void run_alias_value_import_checks() {
         value_map
             .add_snapshot_value({ ggml::hrx::ValueId(0), ggml::hrx::ValueKind::External, ggml::hrx::ValueStorageId(0),
                                   ggml::hrx::ValueId(0), ggml::hrx::ValueId(), 0, 8 * sizeof(float), GGML_TYPE_F32, ne,
-                                  nb, 8, 8 * sizeof(float), true, nullptr, std::nullopt })
+                                  nb, 8, 8 * sizeof(float), true, nullptr, ggml::hrx::AliasMiss::None, std::nullopt })
             .success());
     REQUIRE(value_map.add_snapshot_storage({ ggml::hrx::ValueStorageId(1), ggml::hrx::ValueId(1), 8 * sizeof(float) })
                 .success());
@@ -8383,7 +8394,7 @@ static void run_alias_value_import_checks() {
         value_map
             .add_snapshot_value({ ggml::hrx::ValueId(1), ggml::hrx::ValueKind::Transient, ggml::hrx::ValueStorageId(1),
                                   ggml::hrx::ValueId(1), ggml::hrx::ValueId(), 0, 8 * sizeof(float), GGML_TYPE_F32, ne,
-                                  nb, 8, 8 * sizeof(float), true, nullptr, std::nullopt })
+                                  nb, 8, 8 * sizeof(float), true, nullptr, ggml::hrx::AliasMiss::None, std::nullopt })
             .success());
     REQUIRE(value_map.alias_storage(ggml::hrx::ValueId(1), ggml::hrx::ValueId(0)).success());
     const ggml::hrx::Value * aliased_value = value_map.find(ggml::hrx::ValueId(1));
