@@ -86,6 +86,24 @@ static bool append_covered_node(const DispatchMatchContext & context, const Grap
     return append_covered_node_index_once(context.graph, context.covered_nodes, node, match.covered_nodes);
 }
 
+// A node of the fused pattern that only renames storage (the state RESHAPE, the cache VIEW) has nothing to execute, and
+// the scheduler may already have passed it: it visits nodes in dependency order, not index order, and elides a layout
+// alias as soon as its input exists. The state RESHAPE's input is the recurrent-state gather, which depends on no
+// other node of the layer, so in a graph where the layer's projections wait on earlier work the RESHAPE is visited
+// (and elided) before the L2_NORM this pattern is rooted at. Refusing the match for that left the L2_NORM with no
+// dispatch and failed the whole graph (engine #1925). Such a node needs no cover from this match; any other node that
+// is already covered still refuses it.
+static bool append_covered_pattern_node(const DispatchMatchContext & context,
+                                        const GraphNode *            node,
+                                        DispatchMatch &              match) {
+    size_t index = 0;
+    if (node != nullptr && context.graph.index().node_index(node, index) && index < context.covered_nodes.size() &&
+        context.covered_nodes[index] && is_layout_alias_node(context.graph, *node)) {
+        return true;
+    }
+    return append_covered_node(context, node, match);
+}
+
 struct GatedDeltaNetMatch {
     std::vector<const GraphNode *> covered;
     const Value *                  alpha_raw      = nullptr;
@@ -779,7 +797,7 @@ static bool match_gated_delta_net_dispatch(const DispatchMatchContext & context,
     }
 
     for (const GraphNode * node : match.covered) {
-        if (!append_covered_node(context, node, dispatch_match)) {
+        if (!append_covered_pattern_node(context, node, dispatch_match)) {
             return false;
         }
     }

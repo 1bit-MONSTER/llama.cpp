@@ -438,6 +438,13 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-external-window-view PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-external-window-view COMMAND test-hrx-external-window-view)
 
+    # the fused GATED_DELTA_NET pattern when the scheduler has already elided one of its layout aliases (the state
+    # RESHAPE visited before the L2_NORM root, engine #1925): host only
+    add_executable(test-hrx-gdn-passed-alias test-hrx-gdn-passed-alias.cpp)
+    target_link_libraries(test-hrx-gdn-passed-alias PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-gdn-passed-alias PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-gdn-passed-alias COMMAND test-hrx-gdn-passed-alias)
+
     add_executable(test-hrx-ops test-hrx-ops.cpp)
     target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-ops PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
