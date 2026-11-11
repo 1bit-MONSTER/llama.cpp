@@ -238,11 +238,6 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_head_in_s = nullptr;
     struct ggml_tensor * shared_head_norm      = nullptr;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    struct ggml_tensor * hc_head_norm          = nullptr;
-    struct ggml_tensor * hc_head_down          = nullptr;
-    struct ggml_tensor * hc_head_up            = nullptr;
-=======
     // qwen4exp: the MTP block collapses its hyper-connection streams with its own mixer
     struct ggml_tensor * hc_head_norm          = nullptr;
     struct ggml_tensor * hc_head_down          = nullptr;
@@ -265,7 +260,6 @@ struct llama_layer_switch_lora {
     struct ggml_tensor * b_up   = nullptr;
     struct ggml_tensor * a_down = nullptr;
     struct ggml_tensor * b_down = nullptr;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 };
 
 struct llama_layer {
@@ -377,7 +371,6 @@ struct llama_layer {
     struct ggml_tensor * ffn_latent_down = nullptr;
     struct ggml_tensor * ffn_latent_up   = nullptr;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // ZAYA CCA (Compressed Convolutional Attention)
     struct ggml_tensor * cca_conv_grp    = nullptr;
     struct ggml_tensor * cca_conv_grp_b  = nullptr;
@@ -414,7 +407,6 @@ struct llama_layer {
     struct ggml_tensor * zaya_vlora_up_exps_b   = nullptr;
     struct ggml_tensor * zaya_vlora_down_exps_a = nullptr;
     struct ggml_tensor * zaya_vlora_down_exps_b = nullptr;
-=======
     // ff MoE norms around the experts, in latent space
     struct ggml_tensor * ffn_pre_exp_norm  = nullptr;
     struct ggml_tensor * ffn_post_exp_norm = nullptr;
@@ -424,7 +416,6 @@ struct llama_layer {
     struct ggml_tensor * attn_resid_beta  = nullptr;
     struct ggml_tensor * ffn_resid_alpha  = nullptr;
     struct ggml_tensor * ffn_resid_beta   = nullptr;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
@@ -443,11 +434,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_b   = nullptr; // b3
     struct ggml_tensor * ffn_act    = nullptr;
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    struct ggml_tensor * ffn_exp_probs_b_vl = nullptr;
-=======
     struct ggml_tensor * ffn_exp_probs_b_vl = nullptr; // deepseek4 vision (bias for image tokens)
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     struct ggml_tensor * ffn_gate_tid2eid = nullptr;
 
     struct ggml_tensor * dflash_attn_conv_base = nullptr;
