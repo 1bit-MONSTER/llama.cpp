@@ -48,3 +48,19 @@ Leave the body of that conflict for a human: the two sides restructured the exec
 ours branches on use_graph_prepared and calls lookup.program->execute_with_result / prepared_programs.execute_with_result,
 AMD's uses prepared_entry() / get_or_create and passes an entry. That is a behaviour choice between our replay path
 and AMD's prepared-entry API, not text to merge.
+
+## SILENT LOSS #1: our hybrid-indexer cell grouping is absent from the merge, with no conflict marker
+`src/llama-memory-hybrid-idx.cpp` is one of 226 files both sides changed and it merges WITHOUT a marker, so nothing
+flagged it. Scan: of those 226, it is the only marker-free file where most of our added lines are gone (we added
+366, 192 absent; the file's merged diff is 616+/322- because AMD restructured it).
+
+What is actually gone, verified by name: `cell_grp`, `grp_head`, `grp_next` and the `group_cells` lambda with its
+three call sites (our lines 304-497) -- each symbol occurs 1-2 times in our parent and ZERO times in the merge result.
+AMD's file instead carries a different pool/cell structure (`strm`, `cells`, `rep_gen`, comment at merged line 332),
+so this is not our code under another name: it is a different implementation of the same job, and taking the merged
+file as-is DROPS our grouping (the indexer pool->cell mapping used by restore/regroup paths).
+
+Our block is preserved verbatim for the port in `merge-lost/llama-memory-hybrid-idx.ours-block.txt`.
+The port is not a text merge: it has to be re-expressed on AMD's structure, and the three `group_cells()` call sites
+must be matched to whatever now runs at those points. Until that is done this merge changes behaviour in the
+hybrid-indexer restore path, which is why the file is listed here rather than counted as resolved.
