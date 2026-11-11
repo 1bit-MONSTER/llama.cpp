@@ -40,7 +40,9 @@
 
 #include "dispatch/dispatch-scheduler.h"
 #include "ggml.h"
+#include "graph/graph-traversal.h"
 #include "graph/graph.h"
+#include "graph/op-params.h"
 #include "kernel-corpus/kernel-corpus.h"
 
 #include <algorithm>
@@ -211,10 +213,65 @@ void check_walk(int64_t tokens) {
     REQUIRE(behind_cast.gdn == ordinary.gdn);
 }
 
+// A walk that does stall says so. No graph llama.cpp builds does, so the graph is made by hand: two SCALE nodes that
+// read each other's output. Neither can be reached, both are taken in index order, the first is refused, and the
+// refusal carries the line that tells the reader the order was not the dependency order.
+void check_stall_report() {
+    ggml_init_params params = {};
+    params.mem_size         = 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * x = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 64);
+    ggml_tensor * a = ggml_scale(ctx, x, 0.5f);
+    ggml_tensor * b = ggml_scale(ctx, a, 0.5f);
+
+    Graph         graph;
+    const ValueId va = graph.values().get_or_add_tensor_value(a, ValueKind::Transient);
+    const ValueId vb = graph.values().get_or_add_tensor_value(b, ValueKind::Transient);
+    GraphNode &   na = graph.add_node(GGML_OP_SCALE, va, { vb });
+    na.params        = import_op_params(*a);
+    GraphNode &   nb = graph.add_node(GGML_OP_SCALE, vb, { va });
+    nb.params        = import_op_params(*b);
+    REQUIRE(graph.build_index().success());
+
+    const GraphTraversalOrder order = GraphTraversalOrder::build(graph);
+    REQUIRE(order.nodes().size() == 2);
+    REQUIRE(order.stalled_count() == 2);
+    REQUIRE(order.first_stalled_node() == 0);
+
+    DispatchScheduler scheduler;
+    REQUIRE(!scheduler.schedule_graph(graph, DispatchTarget{ "gfx1151" }));
+    std::string text;
+    for (const std::string & e : scheduler.plan().status.errors()) {
+        text += e + "\n";
+    }
+    std::printf("two nodes that read each other: refused, and the refusal says:\n  %s", text.c_str());
+    REQUIRE(text.find("dependency walk stalled: 2 of 2 nodes were not reached") != std::string::npos);
+    REQUIRE(text.find("from node 0 (SCALE)") != std::string::npos);
+    ggml_free(ctx);
+
+    // and the cast that used to stall the walk does not: nothing is left unreached behind a ggml_cast
+    ggml_context * ctx2 = ggml_init(params);
+    REQUIRE(ctx2 != nullptr);
+    ggml_tensor * cast  = ggml_cast(ctx2, ggml_new_tensor_1d(ctx2, GGML_TYPE_F32, 64), GGML_TYPE_F32);
+    ggml_tensor * after = ggml_scale(ctx2, ggml_scale(ctx2, cast, 0.5f), 0.5f);
+    ggml_cgraph * cgraph = ggml_new_graph(ctx2);
+    ggml_build_forward_expand(cgraph, after);
+    auto imported = import_ggml_graph(*cgraph);
+    REQUIRE(imported.valid());
+    const GraphTraversalOrder cast_order = GraphTraversalOrder::build(imported.graph);
+    std::printf("a ggml_cast and two nodes behind it: %zu nodes, %zu not reached\n", cast_order.nodes().size(),
+                cast_order.stalled_count());
+    REQUIRE(cast_order.stalled_count() == 0);
+    ggml_free(ctx2);
+}
+
 }  // namespace
 
 int main() {
     setvbuf(stdout, nullptr, _IOLBF, 0);
+    check_stall_report();
     check_walk(512);
     check_walk(64);
     check_walk(2);
