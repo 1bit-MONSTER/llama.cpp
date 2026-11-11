@@ -295,7 +295,26 @@ func.def inline @qwen3_moe_q4k_q8_1_dot(%q4_values: vector<16xi8>, %d_scale: f32
   %q_sum_f32 = scalar.sitofp %q_sum : i32 to f32
   %scaled_dot0 = scalar.mulf %q8_d, %d_scale : f32
   %scaled_dot = scalar.mulf %scaled_dot0, %q_sum_f32 : f32
-  %q8_half_sum = scalar.mulf %q8_s, %half_f32 : f32
+  // engine #2186: the block's scaled sum (scale times the sum of its 32 codes) is stored as f16 and leaves the f16
+  // range once a block of same-signed activations averages above 2047, although the scale itself fits up to 8.3e6.
+  // A stored sum that is not finite is replaced by this half's own share, rebuilt from the 16 codes already held;
+  // a finite one is used as stored (half of it per half-block, as before), so ordinary data takes the path it
+  // always took. The two halves of a block share one minimum scale, so their rebuilt shares add up to the block's
+  // true sum. The rebuilt value cannot overflow: |sum of 16 codes| <= 2032 and the scale is an f16 (<= 65504).
+  // The compare is false for inf and for NaN, so both are rebuilt (same rule as mul_mat_q5_k_q8_plane_wmma, #1962).
+  %q8_f16_max = scalar.constant 65504.0 : f32
+  %q8_sum_zero = scalar.constant 0.0 : f32
+  %q8_stored_abs = scalar.absf %q8_s : f32
+  %q8_sum_fits = scalar.cmpf ole, %q8_stored_abs, %q8_f16_max : f32
+  %q8_half_sum = scf.if %q8_sum_fits -> (f32) {
+    %q8_stored_half = scalar.mulf %q8_s, %half_f32 : f32
+    scf.yield %q8_stored_half : f32
+  } else {
+    %q8_codes = vector.sitofp %q8_values : vector<16xi8> to vector<16xf32>
+    %q8_code_sum = vector.reduce<addf> %q8_codes, %q8_sum_zero : vector<16xf32>, f32
+    %q8_rebuilt_half = scalar.mulf %q8_code_sum, %q8_d : f32
+    scf.yield %q8_rebuilt_half : f32
+  }
   %minimum_correction = scalar.mulf %dmin_scale, %q8_half_sum : f32
   %contribution = scalar.subf %scaled_dot, %minimum_correction : f32
   func.return %contribution : f32
