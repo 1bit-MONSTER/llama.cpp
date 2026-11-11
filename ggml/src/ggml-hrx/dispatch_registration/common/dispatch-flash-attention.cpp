@@ -502,14 +502,8 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
 }
 
 static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.plan, context.root_node);
-    if (!match.matched() || context.root_node->inputs.size() != 4 || match.output_layout == nullptr ||
-        match.output_layout->op != GGML_OP_RESHAPE) {
-=======
     const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.root_node);
     if (!match.matched() || match.output_layout == nullptr || match.output_layout->op != GGML_OP_RESHAPE) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         return false;
     }
 
