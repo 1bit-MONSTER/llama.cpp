@@ -655,6 +655,14 @@ static bool match_q6_k_i8_prepacked_dispatch(const DispatchMatchContext & contex
         (match.output_size > match.input_size / 2 && match.token_count > 5)) {
         return false;
     }
+    // engine #2137: this kernel reads the weight in a layout of its own (i8, k32), a third device copy of a weight that
+    // decode and the other prefill batches read as packed rows. Where the packed rows are the weight's layout (a weight
+    // in the file mapping by default, see dispatch-q4k-packed-tail.h), leave the 6-to-16-token batch to the tiled
+    // kernel, which reads them too.
+    if (q6k_packed_rows_weight_ok(*match.weight, match.input_size, match.output_size) &&
+        !weight_has_native_layout_reader(context.graph, *match.weight) && q6k_packed_rows_enabled(*match.weight)) {
+        return false;
+    }
 
     const size_t block_count               = static_cast<size_t>(match.input_size / ggml_blck_size(GGML_TYPE_Q6_K));
     size_t       materialized_weight_bytes = static_cast<size_t>(match.output_size) * block_count;
