@@ -950,7 +950,8 @@ struct RoutedMoeGraph {
 
 static RoutedMoeGraph build_routed_moe_graph(ggml_context * ctx,
                                              ggml_type      down_weight_type,
-                                             bool           include_next_rmsnorm) {
+                                             bool           include_next_rmsnorm,
+                                             ggml_type      gate_up_weight_type = GGML_TYPE_Q4_K) {
     RoutedMoeGraph    graph;
     constexpr int64_t token_count = 1;
     graph.logits                  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenRouterExpertCount, token_count);
@@ -962,9 +963,9 @@ static RoutedMoeGraph build_routed_moe_graph(ggml_context * ctx,
 
     graph.input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, kQwenHiddenSize, 1, token_count);
     graph.gate_weight =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_Q4_K, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
+        ggml_new_tensor_3d(ctx, gate_up_weight_type, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
     graph.up_weight =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_Q4_K, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
+        ggml_new_tensor_3d(ctx, gate_up_weight_type, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
     graph.down_weight =
         ggml_new_tensor_3d(ctx, down_weight_type, kQwenMoeIntermediate, kQwenHiddenSize, kQwenRouterExpertCount);
     graph.hidden_state = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenHiddenSize, token_count);
@@ -4721,6 +4722,128 @@ static void run_routed_moe_cpu_reference_case(ggml_type down_weight_type, bool i
     ggml_backend_free(hrx_backend);
 }
 
+// engine #2127: the routed gate/up SwiGLU with ONE input above the f16 maximum. The gate and up weights are the usual
+// pattern with their first 32 columns exactly zero, and the spike is input 5. On the reference the spike contributes
+// nothing, so the projections, the gated product and the output are those of an ordinary input; on the device a spike
+// that became inf when narrowed gives inf * 0 = NaN. So the only value out of range is the one the gate/up projection
+// kernels narrow. `spike` is that input.
+static void run_routed_moe_large_input_case(ggml_type gate_up_weight_type, float spike) {
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = 64 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * cpu_ctx  = ggml_init(params);
+    ggml_context * hrx_ctx  = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+
+    RoutedMoeGraph cpu = build_routed_moe_graph(cpu_ctx, GGML_TYPE_Q4_K, false, gate_up_weight_type);
+    RoutedMoeGraph hrx = build_routed_moe_graph(hrx_ctx, GGML_TYPE_Q4_K, false, gate_up_weight_type);
+
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    REQUIRE(cpu_graph != nullptr);
+    REQUIRE(hrx_graph != nullptr);
+    ggml_build_forward_expand(cpu_graph, cpu.output);
+    ggml_build_forward_expand(hrx_graph, hrx.output);
+
+    REQUIRE(test_sequence_has(scheduled_kernel_sequence(hrx_graph), "loom_libs:ggml_mul_mat_id_swiglu_f16_f16_wmma"));
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+
+    const std::vector<float> logits = make_router_logits(1);
+    std::vector<float>       input  = make_pattern_f32(kQwenHiddenSize, 15, 0.01f);
+    input[5]                        = 0.25f;
+    const std::vector<float> hidden = make_pattern_f32(kQwenHiddenSize, 16, 0.02f);
+    set_tensor_pair_bytes(cpu_backend, cpu.logits, hrx_backend, hrx.logits, logits.data(),
+                          logits.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.input, hrx_backend, hrx.input, input.data(), input.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.hidden_state, hrx_backend, hrx.hidden_state, hidden.data(),
+                          hidden.size() * sizeof(float));
+
+    // make_quantized_rows' pattern with the first 256 columns zero: a whole quantisation block of zeros decodes to exact
+    // zeros in every format used here (the plain-pass comparison below would show it if one did not)
+    const auto small_rows = [gate_up_weight_type](int64_t row_length, int64_t row_count, int seed) {
+        const ggml_type_traits * traits = ggml_get_type_traits(gate_up_weight_type);
+        REQUIRE(traits != nullptr);
+        REQUIRE(traits->from_float_ref != nullptr);
+        ggml_quantize_init(gate_up_weight_type);
+        const size_t         row_size = ggml_row_size(gate_up_weight_type, row_length);
+        std::vector<uint8_t> data(static_cast<size_t>(row_count) * row_size);
+        std::vector<float>   row(static_cast<size_t>(row_length));
+        for (int64_t r = 0; r < row_count; ++r) {
+            for (int64_t c = 0; c < row_length; ++c) {
+                const int value             = static_cast<int>((r * 13 + c * 7 + seed * 31) % 101) - 50;
+                row[static_cast<size_t>(c)] = c < 256 ? 0.0f : static_cast<float>(value) * 0.005f;
+            }
+            traits->from_float_ref(row.data(), data.data() + static_cast<size_t>(r) * row_size, row_length);
+        }
+        return data;
+    };
+    {
+        const std::vector<uint8_t> gate = small_rows(kQwenHiddenSize, kQwenMoeIntermediate * kQwenRouterExpertCount, 17);
+        set_tensor_pair_bytes(cpu_backend, cpu.gate_weight, hrx_backend, hrx.gate_weight, gate.data(), gate.size());
+    }
+    {
+        const std::vector<uint8_t> up = small_rows(kQwenHiddenSize, kQwenMoeIntermediate * kQwenRouterExpertCount, 18);
+        set_tensor_pair_bytes(cpu_backend, cpu.up_weight, hrx_backend, hrx.up_weight, up.data(), up.size());
+    }
+    {
+        const std::vector<uint8_t> down =
+            make_quantized_rows(GGML_TYPE_Q4_K, kQwenMoeIntermediate, kQwenHiddenSize * kQwenRouterExpertCount, 19);
+        set_tensor_pair_bytes(cpu_backend, cpu.down_weight, hrx_backend, hrx.down_weight, down.data(), down.size());
+    }
+
+    // First pass: input 5 is an ordinary value. This is the reference for the spike pass, on both backends, because
+    // the spike's weight column is exactly zero. (The CPU is not a usable reference for the spike pass: for a K-quant
+    // weight it quantises the activation to 8 bits per block, so a spike costs the rest of its block their precision.)
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    const std::vector<float> cpu_plain = get_f32_tensor(cpu_backend, cpu.output);
+    const std::vector<float> hrx_plain = get_f32_tensor(hrx_backend, hrx.output);
+    require_close(hrx_plain, cpu_plain, 2.5f, 1.0e-1f);
+
+    // Second pass on the device: the same graph with the spike.
+    input[5] = spike;
+    ggml_backend_tensor_set(hrx.input, input.data(), 0, input.size() * sizeof(float));
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(hrx_backend);
+    const std::vector<float> hrx_spike = get_f32_tensor(hrx_backend, hrx.output);
+    REQUIRE(hrx_spike.size() == hrx_plain.size());
+
+    double error      = 0.0;
+    double norm       = 0.0;
+    size_t non_finite = 0;
+    for (size_t i = 0; i < hrx_plain.size(); ++i) {
+        if (!std::isfinite(hrx_spike[i])) {
+            ++non_finite;
+            continue;
+        }
+        const double diff = static_cast<double>(hrx_spike[i]) - static_cast<double>(hrx_plain[i]);
+        error += diff * diff;
+        norm  += static_cast<double>(hrx_plain[i]) * static_cast<double>(hrx_plain[i]);
+    }
+    std::fprintf(stderr, "routed large input: spike=%g non-finite=%zu of %zu nmse(spike pass vs plain pass, device)=%g\n",
+                 static_cast<double>(spike), non_finite, hrx_plain.size(), norm > 0.0 ? error / norm : -1.0);
+    REQUIRE(non_finite == 0);
+    REQUIRE(error / norm < 1.0e-3);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bool alias_gate_input = false) {
     ggml_init_params params = {};
     params.mem_size         = 128 * 1024 * 1024;
@@ -5805,6 +5928,14 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_asymmetric_flash_attention_cpu_reference_case(); });
     add(suite, "routed_moe.q6_k",
         [=] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q6_K, false); });
+    // engine #2127: 6.0e4 is inside f16 (the control); 1.0e5 is not
+    // Q4_K and Q6_K gate/up weights reach the fused routed SwiGLU in this graph. Q5_K and IQ4_XS do not (the scheduler
+    // does not pick ggml_mul_mat_id_swiglu_f16_f16_wmma for them here), so their projection kernels have no arm.
+    for (const ggml_type gate_up_type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        const std::string name = std::string("routed_moe.") + ggml_type_name(gate_up_type) + ".large_input.";
+        add(suite, name + "60000", [=] { run_routed_moe_large_input_case(gate_up_type, 6.0e4f); });
+        add(suite, name + "100000", [=] { run_routed_moe_large_input_case(gate_up_type, 1.0e5f); });
+    }
     add(suite, "decode_attention_qkv_scheduling",
         [=] { run_decode_attention_qkv_scheduling_case(); });
     add(suite, "routed_moe_decode.q4_k",
