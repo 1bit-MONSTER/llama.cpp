@@ -10777,8 +10777,9 @@ static void run_tiled_matmul_alternate_publish_checks() {
         const size_t alternate_bytes = test.alternate_type == GGML_TYPE_F16 ?
             projection_value->byte_count / 2 :
             static_cast<size_t>(256) * ggml_row_size(GGML_TYPE_Q8_1, 2048);
-        const auto * alternate =
-            plan.metadata.find_alternate_value(projection_value->id, test.alternate_type, alternate_bytes);
+        // engine #1962: an f16 activation copy holds value * 2^-6 and is found under that scale only
+        const auto * alternate = plan.metadata.find_alternate_value(projection_value->id, test.alternate_type, alternate_bytes,
+                                                                    test.alternate_type == GGML_TYPE_F16 ? 6 : 0);
         REQUIRE(alternate != nullptr);
 
         // engine #449: neither publish producer this table named is in the corpus any more. The
@@ -10926,8 +10927,10 @@ static void run_rmsnorm_binary_f16_output_checks() {
         // and a consumer reads it - i.e. the f16 operand path is still there.
         const ggml::hrx::Value * norm_value = imported.graph.values().find_tensor(norm);
         REQUIRE(norm_value != nullptr);
+        // engine #1962: the copy holds value * 2^-6; a reader that does not ask for the scale must not find it
+        REQUIRE(plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_F16, norm_value->byte_count / 2) == nullptr);
         const auto * f16 =
-            plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_F16, norm_value->byte_count / 2);
+            plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_F16, norm_value->byte_count / 2, 6);
         REQUIRE(f16 != nullptr);
         const auto publisher = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
             return !dispatch.bindings.empty() && dispatch.bindings.back().value == f16->alternate_value &&
@@ -10979,7 +10982,7 @@ static void run_rmsnorm_binary_f16_output_checks() {
         const auto * q8 =
             plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_Q8_1, qwen_q8_1_x4_size(512, 2048));
         const auto * f16 =
-            plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_F16, norm_value->byte_count / 2);
+            plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_F16, norm_value->byte_count / 2, 6);
         REQUIRE(q8 != nullptr);
         REQUIRE(f16 != nullptr);
         for (const ggml::hrx::CommandPlanAlternateValue * publication : { q8, f16 }) {
@@ -11388,7 +11391,8 @@ static void run_packed_f16_producer_consumer_checks() {
         REQUIRE(value != nullptr);
         const auto * generated =
             plan.metadata.find_generated_resource(value->id, ggml::hrx::GeneratedResourceRole::F16K16Major);
-        const auto * alternate = plan.metadata.find_alternate_value(value->id, GGML_TYPE_F16, value->byte_count / 2);
+        // engine #1962: the gated product's f16 form is published at 2^-6
+        const auto * alternate = plan.metadata.find_alternate_value(value->id, GGML_TYPE_F16, value->byte_count / 2, 6);
         REQUIRE((generated != nullptr) == (test.packed || test.packed_copy));
         // engine #449: a row that used to get a plain f16 alternate now gets the packed k16-major form
         // (or the other way round). What the row asserts is that the producer's f16 output is published.
@@ -11406,10 +11410,14 @@ static void run_packed_f16_producer_consumer_checks() {
             const auto consumer = std::next(producer);
             REQUIRE(consumer != plan.dispatches.end());
             REQUIRE(consumer->bindings.front().value == generated->generated_value);
+            // the consumer is told the scale of the pack it reads
+            REQUIRE(generated->scale_log2 == 6);
+            require_compile_parameter(*consumer, "ggml.f16_prefill.activation_scale_log2", "6");
             if (test.type == GGML_TYPE_Q4_K) {
                 require_compile_parameter(*consumer, "ggml.mul_mat.f16_input_layout", "1");
             }
         } else if (test.packed_copy) {
+            REQUIRE(generated->scale_log2 == 6);
             const auto copy = std::next(producer);
             REQUIRE(copy != plan.dispatches.end());
             REQUIRE(kernel_name_for_id(copy->kernel.kernel_id) == "loom_libs:ggml_copy_f16_k16_major");

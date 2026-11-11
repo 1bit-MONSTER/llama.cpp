@@ -669,12 +669,14 @@ static bool match_mul_mat_conv4_dispatch(const DispatchMatchContext & context, D
     }
 
     DispatchBinding activation;
+    int             activation_scale_log2 = 0;
     if (!common_prepare_k16_major_f16_input(context, *mat.input, mat.input_size, mat.token_count,
-                                             dispatch_match, activation)) {
+                                             dispatch_match, activation, activation_scale_log2)) {
         return false;
     }
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(deferred_state ? kMulMatConv4InteriorKernel : kMulMatConv4Kernel);
+    common_set_f16_prefill_activation_scale(dispatch, activation_scale_log2);
     dispatch.kernel.integer_parameters.emplace("token_count", mat.token_count);
     set_compile_parameter(dispatch.kernel, "ggml.mul_mat.input_size", mat.input_size);
     set_compile_parameter(dispatch.kernel, "ggml.mul_mat.output_size", mat.output_size);

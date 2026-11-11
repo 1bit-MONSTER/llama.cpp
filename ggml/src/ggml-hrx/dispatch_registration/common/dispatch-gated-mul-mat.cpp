@@ -586,11 +586,12 @@ static bool match_mul_mat_swiglu_q4_q8_prefill_dispatch(const DispatchMatchConte
     const bool packed_input = match.token_count % 512 == 0 &&
                               (match.token_count / 512) * (match.output_size / 64) >= 64;
     DispatchBinding activation;
+    int             activation_scale_log2 = 0;
     const bool prepared = packed_input ?
         common_prepare_k16_major_f16_input(context, *match.input, match.input_size, match.token_count,
-                                           dispatch_match, activation) :
+                                           dispatch_match, activation, activation_scale_log2) :
         common_prepare_f16_input(context, *match.input, match.input_size, match.token_count,
-                                 dispatch_match, activation);
+                                 dispatch_match, activation, activation_scale_log2);
     if (!prepared) {
         return false;
     }
@@ -605,6 +606,7 @@ static bool match_mul_mat_swiglu_q4_q8_prefill_dispatch(const DispatchMatchConte
 
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kMulMatSwiGLUQ4Q8PrefillKernel);
+    common_set_f16_prefill_activation_scale(dispatch, activation_scale_log2);
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.f16_output_layout", packed_output ? "1" : "0");
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.op",
                                                common_to_config_value(static_cast<int64_t>(binary_kind_config_value(match.op))));
@@ -626,12 +628,16 @@ static bool match_mul_mat_swiglu_q4_q8_prefill_dispatch(const DispatchMatchConte
     const char * f16_name = packed_output ? "common.mul_mat_swiglu.k16_major_f16" : "common.mul_mat_swiglu.f16";
     dispatch_match.transients.push_back({ f16_output, f16_name, f16_bytes, 256 });
     dispatch.bindings.push_back({ f16_output, 0, f16_bytes });
+    // The kernel publishes this f16 copy of the fused result as value * 2^-6 (the result is the next projection's
+    // activation, and a gated product is where a model leaves the f16 range: engine #1539, #1962).
     Status status;
     const bool recorded = packed_output ?
         dispatch_match.metadata.append_generated_resource(
-            { match.output->id, GeneratedResourceRole::F16K16Major, f16_output, f16_bytes, {} }, status) :
+            { match.output->id, GeneratedResourceRole::F16K16Major, f16_output, f16_bytes, {},
+              kCommonF16ActivationScaleLog2 }, status) :
         dispatch_match.metadata.append_alternate_value(
-            { match.output->id, f16_output, GGML_TYPE_F16, f16_bytes, f16_name }, status);
+            { match.output->id, f16_output, GGML_TYPE_F16, f16_bytes, f16_name, kCommonF16ActivationScaleLog2 },
+            status);
     if (!recorded) {
         dispatch_match.status.append(status);
         return false;

@@ -1,6 +1,11 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
+// The f16 activation this body reads is stored as value * 2^-activation_scale_log2 (0 or 6): a copy the dispatch
+// narrows from f32 is prescaled by 2^-6 so an activation above the f16 maximum (65504) stays finite, and the f32
+// accumulators are scaled back here. An f16 value another kernel published is read as it is (0). engine #1962.
+config.def @ggml.f16_prefill.activation_scale_log2 = 0 : index
+
 template.decl @ggml.binary_f32.apply_vector8(%op: index, %lhs: vector<8xf32>, %rhs: vector<8xf32>) -> (vector<8xf32>)
 
 func.decl @ggml_q4k_native_row64_f16_pair(%half_packet: i1, %paired: i1, %weight: buffer, %peer: buffer, %is_up: i1, %row_base: offset, %group0: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
@@ -614,7 +619,7 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
     func.call @ggml_f16_prefill_publish_weights(%weight_format, %paired, %packed_input, %short_weight_packets, %true, %bounded_input_size, %bounded_output_size, %channel_tile, %c0, %weight_noalias, %up_weight, %weight_stage, %c0_offset) : (index, i1, i1, i1, i1, index, index, index, index, buffer, buffer, buffer, offset)
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   }
-  %result00, %result01, %result02, %result03, %result10, %result11, %result12, %result13, %final_a0, %final_a1 = scf.for %weight_epoch = [%c0 to %weight_epoch_count step %c1](%block_acc00 = %init00 : vector<8xf32>, %block_acc01 = %init01 : vector<8xf32>, %block_acc02 = %init02 : vector<8xf32>, %block_acc03 = %init03 : vector<8xf32>, %block_acc10 = %init10 : vector<8xf32>, %block_acc11 = %init11 : vector<8xf32>, %block_acc12 = %init12 : vector<8xf32>, %block_acc13 = %init13 : vector<8xf32>, %block_a0 = %initial_a0 : vector<8xf16>, %block_a1 = %initial_a1 : vector<8xf16>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf16>, vector<8xf16>) {
+  %sum00, %sum01, %sum02, %sum03, %sum10, %sum11, %sum12, %sum13, %final_a0, %final_a1 = scf.for %weight_epoch = [%c0 to %weight_epoch_count step %c1](%block_acc00 = %init00 : vector<8xf32>, %block_acc01 = %init01 : vector<8xf32>, %block_acc02 = %init02 : vector<8xf32>, %block_acc03 = %init03 : vector<8xf32>, %block_acc10 = %init10 : vector<8xf32>, %block_acc11 = %init11 : vector<8xf32>, %block_acc12 = %init12 : vector<8xf32>, %block_acc13 = %init13 : vector<8xf32>, %block_a0 = %initial_a0 : vector<8xf16>, %block_a1 = %initial_a1 : vector<8xf16>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf16>, vector<8xf16>) {
     %quant_block = index.div %weight_epoch, %epochs_per_block : index
     %weight_epoch_half = index.rem %weight_epoch, %epochs_per_block : index
     %groups_per_epoch = scf.select %wide_tile, %c2, %c4 : index
@@ -651,6 +656,22 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
     }
     scf.yield %block_result00, %block_result01, %block_result02, %block_result03, %block_result10, %block_result11, %block_result12, %block_result13, %block_next_a0, %block_next_a1 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf16>, vector<8xf16>
   }
+  %activation_scale_log2 = config.get @ggml.f16_prefill.activation_scale_log2 : index
+  %activation_scaled = index.cmp ne, %activation_scale_log2, %c0 : index
+  %result00, %result01, %result02, %result03, %result10, %result11, %result12, %result13 = scf.if %activation_scaled -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+    %activation_unscale = vector.constant 64.0 : vector<8xf32>
+    %unscaled00 = vector.mulf %sum00, %activation_unscale : vector<8xf32>
+    %unscaled01 = vector.mulf %sum01, %activation_unscale : vector<8xf32>
+    %unscaled02 = vector.mulf %sum02, %activation_unscale : vector<8xf32>
+    %unscaled03 = vector.mulf %sum03, %activation_unscale : vector<8xf32>
+    %unscaled10 = vector.mulf %sum10, %activation_unscale : vector<8xf32>
+    %unscaled11 = vector.mulf %sum11, %activation_unscale : vector<8xf32>
+    %unscaled12 = vector.mulf %sum12, %activation_unscale : vector<8xf32>
+    %unscaled13 = vector.mulf %sum13, %activation_unscale : vector<8xf32>
+    scf.yield %unscaled00, %unscaled01, %unscaled02, %unscaled03, %unscaled10, %unscaled11, %unscaled12, %unscaled13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  } else {
+    scf.yield %sum00, %sum01, %sum02, %sum03, %sum10, %sum11, %sum12, %sum13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  }
   %token_subgroups = scf.select %packed_input, %c16, %c8 : index
   %token_subgroup = index.rem %subgroup, %token_subgroups : index
   %subgroup_token_add = index.mul %token_subgroup, %c32 : index
@@ -681,11 +702,15 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
     %f16_output_view0 = buffer.view %f16_output[%f16_base0] : buffer -> view<[%bounded_token_count]x[%f16_columns]xf16>
     %f16_output_view1 = buffer.view %f16_output[%f16_base1] : buffer -> view<[%bounded_token_count]x[%f16_columns]xf16>
     scf.if %paired {
+      // The f16 copy of the fused result is published as value * 2^-6, like the copies the dispatch makes: the
+      // projection that reads it scales back (activation_scale_log2 = 6). The f32 output is the plain value.
+      %f16_output_prescale = vector.constant 0.015625 : vector<8xf32>
       %out_m00 = index.add %token_tile_base, %c0 : index
       %out_n00 = index.add %channel_output_base, %c0 : index
       %fused00 = template.apply<@ggml.binary_f32.apply_vector8>(%binary_op, %result00, %result02) : (index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
       vector.fragment.store<result> %fused00, %output_view[%out_m00, %out_n00] shape [%m, %n] : vector<8xf32>, view<[%bounded_token_count]x[%bounded_output_size]xf32>
-      %narrow00 = vector.fptrunc %fused00 : vector<8xf32> to vector<8xf16>
+      %prescaled00 = vector.mulf %fused00, %f16_output_prescale : vector<8xf32>
+      %narrow00 = vector.fptrunc %prescaled00 : vector<8xf32> to vector<8xf16>
       %f16_n00 = scf.select %packed_output, %c0, %out_n00 : index
       vector.fragment.store<result> %narrow00, %f16_output_view0[%out_m00, %f16_n00] shape [%m, %n] : vector<8xf16>, view<[%bounded_token_count]x[%f16_columns]xf16>
       scf.schedule.fence
@@ -693,7 +718,8 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
       %out_n01 = index.add %channel_output_base, %c16 : index
       %fused01 = template.apply<@ggml.binary_f32.apply_vector8>(%binary_op, %result01, %result03) : (index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
       vector.fragment.store<result> %fused01, %output_view[%out_m01, %out_n01] shape [%m, %n] : vector<8xf32>, view<[%bounded_token_count]x[%bounded_output_size]xf32>
-      %narrow01 = vector.fptrunc %fused01 : vector<8xf32> to vector<8xf16>
+      %prescaled01 = vector.mulf %fused01, %f16_output_prescale : vector<8xf32>
+      %narrow01 = vector.fptrunc %prescaled01 : vector<8xf32> to vector<8xf16>
       %f16_n01 = scf.select %packed_output, %c0, %out_n01 : index
       vector.fragment.store<result> %narrow01, %f16_output_view1[%out_m01, %f16_n01] shape [%m, %n] : vector<8xf16>, view<[%bounded_token_count]x[%f16_columns]xf16>
       scf.schedule.fence
@@ -701,7 +727,8 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
       %out_n10 = index.add %channel_output_base, %c0 : index
       %fused10 = template.apply<@ggml.binary_f32.apply_vector8>(%binary_op, %result10, %result12) : (index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
       vector.fragment.store<result> %fused10, %output_view[%out_m10, %out_n10] shape [%m, %n] : vector<8xf32>, view<[%bounded_token_count]x[%bounded_output_size]xf32>
-      %narrow10 = vector.fptrunc %fused10 : vector<8xf32> to vector<8xf16>
+      %prescaled10 = vector.mulf %fused10, %f16_output_prescale : vector<8xf32>
+      %narrow10 = vector.fptrunc %prescaled10 : vector<8xf32> to vector<8xf16>
       %f16_n10 = scf.select %packed_output, %c0, %out_n10 : index
       vector.fragment.store<result> %narrow10, %f16_output_view0[%out_m10, %f16_n10] shape [%m, %n] : vector<8xf16>, view<[%bounded_token_count]x[%f16_columns]xf16>
       scf.schedule.fence
@@ -709,7 +736,8 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
       %out_n11 = index.add %channel_output_base, %c16 : index
       %fused11 = template.apply<@ggml.binary_f32.apply_vector8>(%binary_op, %result11, %result13) : (index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
       vector.fragment.store<result> %fused11, %output_view[%out_m11, %out_n11] shape [%m, %n] : vector<8xf32>, view<[%bounded_token_count]x[%bounded_output_size]xf32>
-      %narrow11 = vector.fptrunc %fused11 : vector<8xf32> to vector<8xf16>
+      %prescaled11 = vector.mulf %fused11, %f16_output_prescale : vector<8xf32>
+      %narrow11 = vector.fptrunc %prescaled11 : vector<8xf32> to vector<8xf16>
       %f16_n11 = scf.select %packed_output, %c0, %out_n11 : index
       vector.fragment.store<result> %narrow11, %f16_output_view1[%out_m11, %f16_n11] shape [%m, %n] : vector<8xf16>, view<[%bounded_token_count]x[%f16_columns]xf16>
       scf.schedule.fence
