@@ -3396,7 +3396,96 @@ static bool matmul_graph_is_supported(ggml_context * ctx, ggml_tensor * output) 
 // stored layout on the device, so it stays stored (4 / 6) and the packed copy is not added.
 // GGML_HRX_Q4K_PACKED_TAIL / GGML_HRX_Q6K_PACKED_ROWS force one or the other; the row is about the default, so it does
 // nothing when either is set.
-static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool file_mapped, int64_t token_count = 100) {
+// engine #2137: a stored-copy entry belongs to one mapping. A model mapped over the same addresses later (a reload in
+// the same process) starts with none, so a weight there is not taken to have a copy it never had.
+static void run_stored_copy_entries_forgotten_on_remap() {
+    ggml_backend_hrx_device_context device_context = {};
+    device_context.name                            = "HRX0";
+    ggml::hrx::model_buffer_from_mmap_init_type(&device_context);
+    std::vector<uint8_t> storage(64 * 1024 + 64);
+    uint8_t *            bytes = storage.data() + (64 - reinterpret_cast<uintptr_t>(storage.data()) % 64) % 64;
+    const size_t         size  = 64 * 1024;
+
+    ggml_backend_buffer_t first = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, size);
+    REQUIRE(first != nullptr);
+    ggml::hrx::note_stored_device_copy(bytes + 4096);
+    ggml::hrx::note_stored_device_copy(bytes + size + 0);  // outside the mapping: must survive the remap
+    REQUIRE(ggml::hrx::has_stored_device_copy(bytes + 4096));
+    ggml_backend_buffer_free(first);
+
+    ggml_backend_buffer_t second = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, size);
+    REQUIRE(second != nullptr);
+    REQUIRE(!ggml::hrx::has_stored_device_copy(bytes + 4096));
+    REQUIRE(ggml::hrx::has_stored_device_copy(bytes + size));
+    ggml::hrx::forget_stored_device_copies(bytes + size, 1);
+    REQUIRE(!ggml::hrx::has_stored_device_copy(bytes + size));
+    ggml_backend_buffer_free(second);
+}
+
+// engine #2137: the 256-aligned Q4_K prefill. For a file-mapped weight with no stored device copy it is the f16 kernel
+// over the packed rows; for one that already has a stored copy it is the 8-bit-block kernel over the stored layout
+// (weight format 4), so prefill shares decode's copy.
+static void schedule_q4k_aligned_prefill_layout(bool stored_copy_exists) {
+    if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr) {
+        std::printf("       skipped: a packed-layout switch is set in the environment\n");
+        return;
+    }
+    constexpr int64_t input_size  = 512;
+    constexpr int64_t output_size = 256;
+    constexpr int64_t token_count = 512;
+    ggml_backend_hrx_device_context device_context = {};
+    device_context.name                            = "HRX0";
+    ggml::hrx::model_buffer_from_mmap_init_type(&device_context);
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, input_size, output_size);
+    ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+    const size_t          byte_count = GGML_PAD(ggml_nbytes(weight), 64) + 64;
+    std::vector<uint8_t>  storage(byte_count + 64);
+    uint8_t *             bytes  = storage.data() + (64 - reinterpret_cast<uintptr_t>(storage.data()) % 64) % 64;
+    ggml_backend_buffer_t buffer = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, byte_count);
+    REQUIRE(buffer != nullptr);
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_tallocr allocator = ggml_tallocr_new(buffer);
+    REQUIRE(ggml_tallocr_alloc(&allocator, weight) == GGML_STATUS_SUCCESS);
+    if (stored_copy_exists) {
+        ggml::hrx::note_stored_device_copy(ggml::hrx::stored_copy_key(weight));
+    }
+    ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+    ggml_cgraph * graph  = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    size_t found = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
+        for (const auto & binding : dispatch.bindings) {
+            if (binding.value != imported.graph.nodes().front().inputs[0]) {
+                continue;
+            }
+            ++found;
+            if (stored_copy_exists) {
+                REQUIRE(name == "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256");
+                require_compile_parameter(dispatch, "ggml.mul_mat_q8_1_x4.weight_format", "4");
+                REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
+            } else {
+                REQUIRE(name == "loom_libs:ggml_mul_mat_q4_k_f16_wmma_prefill_wave32");
+                REQUIRE(binding.layout != ggml::hrx::kNativeWeightLayout);
+            }
+        }
+    }
+    REQUIRE(found == 1);
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+}
+
+static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool file_mapped, int64_t token_count = 100,
+                                                  bool stored_copy_exists = false) {
     if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr || std::getenv("GGML_HRX_Q6K_PACKED_ROWS") != nullptr) {
         std::printf("       skipped: a packed-layout switch is set in the environment\n");
         return;
@@ -3433,6 +3522,11 @@ static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool fi
     ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     ggml_tallocr allocator = ggml_tallocr_new(buffer);
     REQUIRE(ggml_tallocr_alloc(&allocator, weight) == GGML_STATUS_SUCCESS);
+    if (stored_copy_exists) {
+        // engine #2137: a decode kernel already made a stored-layout device copy of this weight
+        ggml::hrx::note_stored_device_copy(ggml::hrx::stored_copy_key(weight));
+        REQUIRE(ggml::hrx::has_stored_device_copy(ggml::hrx::stored_copy_key(weight)));
+    }
 
     ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
     REQUIRE(output != nullptr);
@@ -3447,7 +3541,7 @@ static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool fi
     REQUIRE(scheduler.plan().valid());
 
     const int         stored   = weight_type == GGML_TYPE_Q4_K ? 4 : 6;
-    const std::string expected = std::to_string(file_mapped ? stored + 40 : stored);
+    const std::string expected = std::to_string(file_mapped && !stored_copy_exists ? stored + 40 : stored);
     size_t            found    = 0;
     for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
         const auto format = dispatch.kernel.compile_parameters.find("ggml.mul_mat.weight_format");
@@ -3462,7 +3556,7 @@ static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool fi
         }
         REQUIRE(format->second == expected);
     }
-    if (weight_type == GGML_TYPE_Q6_K && !file_mapped && token_count >= 6 && token_count <= 16) {
+    if (weight_type == GGML_TYPE_Q6_K && !file_mapped && !stored_copy_exists && token_count >= 6 && token_count <= 16) {
         // an uploaded Q6_K weight keeps the i8 kernel at this batch size; it carries no weight_format
         REQUIRE(found == 0);
         REQUIRE(scheduler.plan().dispatches.size() == 1);
@@ -11954,6 +12048,17 @@ int main(int argc, char ** argv) {
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 12); } },
         { "packed_layout_follows_weight.q6_k.uploaded.tokens12",
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, false, 12); } },
+        // engine #2137: a file-mapped weight that already has a stored device copy (a decode kernel read it stored) is
+        // read stored by prefill too, so it is not copied a second time; and not in the i8 layout at 6 to 16 tokens
+        { "stored_copy_entries_forgotten_on_remap", [] { run_stored_copy_entries_forgotten_on_remap(); } },
+        { "q4k_aligned_prefill_layout.packed", [] { schedule_q4k_aligned_prefill_layout(false); } },
+        { "q4k_aligned_prefill_layout.stored_copy", [] { schedule_q4k_aligned_prefill_layout(true); } },
+        { "packed_layout_follows_weight.q4_k.file_mapped.stored_copy",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, true, 100, true); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 100, true); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy.tokens12",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 12, true); } },
         { "q6k_token1_shortlist_group_count.256", [] { schedule_q6k_token1_shortlist_group_count(256, 65536, 8); } },
         { "q6k_token1_shortlist_group_count.2560",
           [] { schedule_q6k_token1_shortlist_group_count(2560, 248320, 80); } },

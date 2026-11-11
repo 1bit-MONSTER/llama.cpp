@@ -659,8 +659,8 @@ static bool match_q6_k_i8_prepacked_dispatch(const DispatchMatchContext & contex
     // decode and the other prefill batches read as packed rows. Where the packed rows are the weight's layout (a weight
     // in the file mapping by default, see dispatch-q4k-packed-tail.h), leave the 6-to-16-token batch to the tiled
     // kernel, which reads them too.
-    if (q6k_packed_rows_weight_ok(*match.weight, match.input_size, match.output_size) &&
-        !weight_has_native_layout_reader(context.graph, *match.weight) && q6k_packed_rows_enabled(*match.weight)) {
+    if (!weight_has_native_layout_reader(context.graph, *match.weight) &&
+        q6k_i8_layout_is_extra_copy(*match.weight, match.input_size, match.output_size)) {
         return false;
     }
 
@@ -926,7 +926,11 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
         }
     }
 
-    const bool use_f16 = !split_tail && match.weight->type == GGML_TYPE_Q4_K &&
+    // engine #2137 (dispatch-q4k-packed-tail.h): a Q4_K weight that already has a stored copy is read stored, by the
+    // 8-bit-block kernel, instead of being copied into the packed rows for the f16 kernel
+    const bool stored_q4 = match.weight_format == CommonMulMatWeightFormat::Q4K &&
+                           q4k_aligned_prefill_reads_stored(*match.weight);
+    const bool use_f16 = !split_tail && !stored_q4 && match.weight->type == GGML_TYPE_Q4_K &&
                          match.weight->alias_source.value < 0 && match.output_size >= match.input_size / 4;
     DispatchBinding activation;
     int             activation_scale_log2 = 0;
@@ -964,7 +968,7 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
                                                          "ggml.mul_mat_q8_1_x4.token_capacity",
                                                common_to_config_value(q8_tokens));
     const bool pack_q4 = match.weight_format == CommonMulMatWeightFormat::Q4K &&
-                         match.weight->alias_source.value < 0;
+                         match.weight->alias_source.value < 0 && !stored_q4;
     if (use_f16) {
         dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", packed_input ? "1" : "0");
         common_set_f16_prefill_activation_scale(dispatch, activation_scale_log2);

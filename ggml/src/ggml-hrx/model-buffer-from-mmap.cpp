@@ -19,6 +19,9 @@
 #include "ggml-backend-impl.h"
 #include "runtime/host-memory.h"
 
+#include <iterator>
+#include <mutex>
+#include <unordered_set>
 #include <cstdlib>
 #include <cstring>
 
@@ -62,6 +65,51 @@ bool model_buffer_from_mmap_enabled() {
     return HostWeightCache::residency_limit() == 0;
 }
 
+namespace {
+std::mutex & stored_copy_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+std::unordered_set<const void *> & stored_copy_addresses() {
+    static std::unordered_set<const void *> addresses;
+    return addresses;
+}
+}  // namespace
+
+void note_stored_device_copy(const void * host_address) {
+    if (host_address == nullptr) {
+        return;
+    }
+    const std::lock_guard<std::mutex> lock(stored_copy_mutex());
+    stored_copy_addresses().insert(host_address);
+}
+
+const void * stored_copy_key(const ggml_tensor * tensor) {
+    return tensor == nullptr ? nullptr : tensor->data;
+}
+
+void forget_stored_device_copies(const void * begin, size_t size) {
+    if (begin == nullptr || size == 0) {
+        return;
+    }
+    const uint8_t *             first = static_cast<const uint8_t *>(begin);
+    const uint8_t *             last  = first + size;
+    const std::lock_guard<std::mutex> lock(stored_copy_mutex());
+    auto &                      addresses = stored_copy_addresses();
+    for (auto it = addresses.begin(); it != addresses.end();) {
+        const uint8_t * address = static_cast<const uint8_t *>(*it);
+        it = address >= first && address < last ? addresses.erase(it) : std::next(it);
+    }
+}
+
+bool has_stored_device_copy(const void * host_address) {
+    if (host_address == nullptr) {
+        return false;
+    }
+    const std::lock_guard<std::mutex> lock(stored_copy_mutex());
+    return stored_copy_addresses().count(host_address) != 0;
+}
+
 bool buffer_is_file_mapped(ggml_backend_buffer_t buffer) {
     return buffer != nullptr && buffer->buft != nullptr && buffer->buft->iface.get_name == mapped_type_name;
 }
@@ -81,6 +129,8 @@ ggml_backend_buffer_t model_buffer_from_mmap(ggml_backend_hrx_device_context * d
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
     if (buffer != nullptr) {
         buffer->buft = &device->mapped_buft;
+        // engine #2137: entries from a mapping that was here before describe other bytes
+        forget_stored_device_copies(ptr, size);
     }
     return buffer;
 }

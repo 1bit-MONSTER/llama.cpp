@@ -32,6 +32,24 @@ bool model_buffer_from_mmap_enabled();
 // weight in such a buffer costs a device copy for every layout the kernels read it in (engine #2137).
 bool buffer_is_file_mapped(ggml_backend_buffer_t buffer);
 
+// engine #2137: weights in the file mapping that have a device copy in the stored (GGUF) layout, recorded when the copy
+// is made. A matcher that can read a weight either stored or packed asks this before choosing, so it does not add a
+// packed copy next to a stored one that a decode kernel already made.
+//
+// The key is the host address of the bound tensor's bytes: tensor->data on the matcher side, and the binding's buffer
+// base plus its offset on the copy side, which is the same address (backend-buffer-binding.cpp computes the offset as
+// tensor->data - base). stored_copy_key() is that expression for a tensor; both sides use it.
+//
+// Lifetime: an entry describes bytes of one mapped model buffer. model_buffer_from_mmap() forgets every entry inside
+// the range it wraps, so a model mapped where an earlier one was starts with none. Within one mapping the entries stay
+// true: a file-mapped weight is never evicted (the mapping is only used when there is no host-weight limit, see
+// model_buffer_from_mmap_enabled()). A stale entry would only make a matcher choose the stored layout, whose copy is
+// then made on first use; it cannot make a kernel read bytes that were not written.
+const void * stored_copy_key(const ggml_tensor * tensor);
+void         note_stored_device_copy(const void * host_address);
+bool         has_stored_device_copy(const void * host_address);
+void         forget_stored_device_copies(const void * begin, size_t size);
+
 // The buffer type of these buffers ("<device>_Mapped"). It is host memory; only this device claims it.
 void model_buffer_from_mmap_init_type(ggml_backend_hrx_device_context * device);
 
