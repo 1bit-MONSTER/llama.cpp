@@ -122,3 +122,53 @@ Two classes, and they are not the same job:
 Corpus decision that caused part of (b), recorded in 08d3ac000: the two corpus manifests are a coupled pair with a
 closure invariant, so they take AMD's side whole -- which leaves our _q4/_q6 export variants and any registration naming
 them outside the corpus. Those registrations are the kMulMatId*SwiGLU errors above.
+
+## THE CENTRAL REMAINING QUESTION (measured, commit 75372005d + the SWIGLU refs)
+Error count on the HRX target: 11 -> 9 (dispatch.h vocabulary) -> 8 (SWIGLU refs). Eight errors remain, in three
+groups, and only ONE of them is ordinary merge work.
+
+1. corpus <-> registration consistency (kernel lane): our code registers
+   `ggml_mul_mat_id_swiglu_f32_f32_wmma`, and the corpus no longer describes it, because 08d3ac000 had to take AMD's
+   manifest pair whole (they are a coupled closure). Measured: AMD's `..._tiled_pair_input_f32_swiglu_publish_f32` and
+   `..._skinny_pair_input_f32_swiglu_publish_f32` are each in one manifest; OUR `ggml_mul_mat_id_swiglu_f32_f32_wmma`
+   is in ZERO. Our .loom files still exist in the tree (ops/mul_mat_id_swiglu_f32_f32_wmma.loom among the marker
+   files), so the fix is to add our kernels back on top of AMD's corpus WITH valid closure entries -- a kernel-corpus
+   job (private internals), not a merge judgement.
+
+2. dispatch-gated-mul-mat.cpp: still carries one conflict marker. This is a genuine three-way semantic merge -- our
+   line is -391/+114 against AMD across 17 hunks, our helper has_qualified_swiglu_q8_consumer exists only on our side
+   (AMD: 0) and AMD's common_mul_mat_swiglu_is_generic_tiled_pair_route only on theirs (ours: 0), and git interleaved
+   the two functions' bodies. Needs the dispatch owner, not a guess.
+
+3. dispatch-get-rows.cpp: same shape (our line -415/+113). AMD's match_get_rows_scale_f32_dispatch and
+   match_get_rows_rmsnorm_binary_dispatch are used by its registration table and have no definition in the merge;
+   restoring them also needs kGetRowsScaleF32Kernel, which is absent. Same owner.
+
+Cheap immediate win if someone takes group 3 without the rewrite: AMD's two functions are self-contained (24 + 66
+lines) and their only external needs are common_*_activation_publication helpers, which ARE in the tree (restored with
+the 176 files) -- only kGetRowsScaleF32Kernel has to come with them.
+
+## CORRECTION (do not trust the error-count trajectory I posted earlier)
+I reported "11 -> 9 -> 8" across three builds. That was WRONG as a measure of progress. A parallel build stops at the
+first failures, so fixing one file lets the build REACH files it never compiled before and the count can rise:
+after reverting a bad insert the count was 17 (not 8), and the current per-file picture is
+
+   20  dispatch-mul-mat.cpp                     <- carries conflict markers
+   14  kernel-corpus-catalog-verify.h           <- corpus <-> registration (our kernels absent from AMD's corpus)
+    4  dispatch-get-rows.cpp                    <- AMD matchers named by its table, no definition
+    4  dispatch-gated-mul-mat.cpp               <- carries conflict markers + interleaved functions
+    1  dispatch-mul-mat-id.cpp                  <- common_mul_mat_id_is_skinny_route not declared
+
+The honest metric is the SET of (file, error class) pairs and whether each file has been compiled at all, not a count.
+Counts only compare between builds that reach the same set of translation units.
+
+## The "cheap path" for get-rows was wrong, and here is the real closure
+I claimed restoring AMD's two matchers only needed kGetRowsScaleF32Kernel. It needs, at minimum:
+  CommonActivationPublication, CommonActivationPublicationCapabilities, ...Demand, ...Format, ...Plan,
+  common_append_activation_publication, common_reserve_activation_publication,
+  common_reserve_private_activation_output, common_select_activation_publication_plan,
+  kGetRowsRmsNormBinaryQ8_1X4F16Kernel, and <cmath> for std::isfinite
+i.e. AMD's activation-publication header set wired into the file, not a constant. Attempting it raised the error count
+8 -> 33 and was reverted. So dispatch-get-rows.cpp joins dispatch-gated-mul-mat.cpp in the 'needs the dispatch owner'
+group: both are three-way rewrites against AMD's new activation-publication / tiled-pair infrastructure, and neither
+is a merge-resolution task.
