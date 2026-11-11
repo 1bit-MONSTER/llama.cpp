@@ -175,13 +175,17 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.body> device @ggml_mul_mat_id_swigl
     vector.fragment.store<result> %gate_result, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<16xf16>, view<16x16xf16, %result_fragment_layout>
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
     %gate_values = vector.load %result_physical_view[%publish_route, %publish_channel_add] : view<16x16xf16> -> vector<8xf16>
-    %gate_wide = vector.extf %gate_values : vector<8xf16> to vector<8xf32>
+    // engine #2127: the projections narrowed the input at 2^-6, so the gate and up sums are at 2^-6 too; undo it in f32
+    %sum_rescale = vector.constant 64.0 : vector<8xf32>
+    %gate_prescaled = vector.extf %gate_values : vector<8xf16> to vector<8xf32>
+    %gate_wide = vector.mulf %gate_prescaled, %sum_rescale : vector<8xf32>
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
     vector.fragment.store<result> %up_result, %result_fragment_view[%c0, %c0] shape [%m, %n] : vector<16xf16>, view<16x16xf16, %result_fragment_layout>
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
     scf.if %writes {
       %up_values = vector.load %result_physical_view[%publish_route, %publish_channel_add] : view<16x16xf16> -> vector<8xf16>
-      %up_wide = vector.extf %up_values : vector<8xf16> to vector<8xf32>
+      %up_prescaled = vector.extf %up_values : vector<8xf16> to vector<8xf32>
+      %up_wide = vector.mulf %up_prescaled, %sum_rescale : vector<8xf32>
       %wide_values = template.apply<@ggml.mul_mat_id_swiglu_f16_f16.apply_vector8>(%gate_wide, %up_wide) : (vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
       %values = vector.fptrunc %wide_values : vector<8xf32> to vector<8xf16>
       %mask = vector.mask.range [%channel to %bounded_output_size step %c1] : index -> vector<8xi1>

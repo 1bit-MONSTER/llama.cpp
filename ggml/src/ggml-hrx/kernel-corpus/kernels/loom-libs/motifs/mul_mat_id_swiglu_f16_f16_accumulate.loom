@@ -117,7 +117,11 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.project_generic_vector16> device @g
       %token, %input_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
       %input_k = index.add %k_origin, %load_k : index
       %loaded = vector.load %input_view[%token, %input_k] : view<[%token_count]x[%input_size]xf32> -> vector<4xf32>
-      %converted = vector.fptrunc %loaded : vector<4xf32> to vector<4xf16>
+      // engine #2127: narrow the routed gate/up input at 2^-6, so an input above 65504 stays finite through the f16
+      // stage; the SwiGLU body scales the gate and up sums back by 2^6 (mul_mat_id_swiglu_f16_f16_wmma_body.loom).
+      %input_prescale = vector.constant 0.015625 : vector<4xf32>
+      %prescaled = vector.mulf %loaded, %input_prescale : vector<4xf32>
+      %converted = vector.fptrunc %prescaled : vector<4xf32> to vector<4xf16>
       scf.yield %converted : vector<4xf16>
     } else {
       scf.yield %c0_f16x4 : vector<4xf16>
