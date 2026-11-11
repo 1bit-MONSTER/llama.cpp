@@ -24,12 +24,10 @@ struct CommandProgramBinding {
     void *       host_data  = nullptr;
     bool         weight     = false;
     bool         empty_value = false;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // ggml graph input (GGML_TENSOR_FLAG_INPUT). A kernel may rewrite its device copy in place (the Qwen
     // attention metadata kernel regenerates positions, cache indices and the mask), but that copy is never
     // written back to the caller's host tensor: ggml reuses that memory for the next graph's inputs.
     bool         graph_input = false;
-=======
     // Retained host bytes are separate from the address used to bind a command.
     const void * source_host_data = nullptr;
     // Materialized bindings are selected by the requesting command, not just by ValueId.
@@ -38,7 +36,6 @@ struct CommandProgramBinding {
     int64_t      input_size = 0;
     int64_t      output_size = 0;
     size_t       source_length = 0;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     bool requires_materialization() const { return host_data != nullptr; }
 };
