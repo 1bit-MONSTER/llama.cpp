@@ -1171,8 +1171,15 @@ template.def<@ggml.mul_mat_q6_k_packed.selected_refine.body> device @ggml_mul_ma
         %input_k_next = index.add %input_k0, %activation_k_next : index
         %loaded0 = vector.load %input_view[%bounded_token, %input_k] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
         %loaded1 = vector.load %input_view[%bounded_token, %input_k_next] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
-        %narrow0 = vector.fptrunc %loaded0 : vector<4xf32> to vector<4xf16>
-        %narrow1 = vector.fptrunc %loaded1 : vector<4xf32> to vector<4xf16>
+        // engine #1962: the activation is narrowed to f16 and the logit is accumulated in f16, so an activation above
+        // 65504 became inf and so did every refined logit. Carry both at 2^-6 through the half-precision stage; the
+        // exported kernel scales the published logit back by 2^6. Both factors are powers of two, so a value that fit
+        // before is rounded as before; the usable range moves from 6.55e4 to 4.19e6 for the activation and the logit.
+        %activation_prescale = vector.constant 0.015625 : vector<4xf32>
+        %prescaled0 = vector.mulf %loaded0, %activation_prescale : vector<4xf32>
+        %prescaled1 = vector.mulf %loaded1, %activation_prescale : vector<4xf32>
+        %narrow0 = vector.fptrunc %prescaled0 : vector<4xf32> to vector<4xf16>
+        %narrow1 = vector.fptrunc %prescaled1 : vector<4xf32> to vector<4xf16>
         scf.yield %narrow0, %narrow1 : vector<4xf16>, vector<4xf16>
       } else {
         %zeros0 = vector.constant 0.0 : vector<4xf16>
@@ -1226,7 +1233,10 @@ kernel.def export("ggml_mul_mat_q6_k_packed_selected_refine_token1") @ggml_mul_m
     %candidate1 = index.assume %candidate0 [range(%candidate0, 0, 262143)] : index
     %candidate, %bounded_output_size = index.assume %candidate1, %output_size [lt(%candidate1, %output_size)] : index, index
     %output_view = buffer.view %output_noalias[%base] : buffer -> view<[%bounded_output_size]xf32>
-    %value = view.load %exact_view[%tid] : view<64xf32> -> f32
+    // the body accumulated the logit at 2^-6 (engine #1962); undo it in f32
+    %prescaled_value = view.load %exact_view[%tid] : view<64xf32> -> f32
+    %logit_rescale = scalar.constant 64.0 : f32
+    %value = scalar.mulf %prescaled_value, %logit_rescale : f32
     view.store %value, %output_view[%candidate] : f32, view<[%bounded_output_size]xf32>
   }
   kernel.return
