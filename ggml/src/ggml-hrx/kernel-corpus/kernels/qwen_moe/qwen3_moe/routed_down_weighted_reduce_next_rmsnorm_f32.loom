@@ -44,6 +44,7 @@ kernel.def target(@qwen3_moe_routed_down_next_norm_gfx11_wave32) @qwen3_moe_rout
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
   %c0_f32x8 = vector.constant 0.0 : vector<8xf32>
+  %c64_f32x8 = vector.constant 64.0 : vector<8xf32>
   %active_token = index.cmp ult, %token0, %token_count : index
   %safe_token0 = scf.select %active_token, %token0, %c0 : index
   %token, %launch_token_count = index.assume %safe_token0, %token_count [lt(%safe_token0, %token_count)] : index, index
@@ -65,7 +66,12 @@ kernel.def target(@qwen3_moe_routed_down_next_norm_gfx11_wave32) @qwen3_moe_rout
     %weighted_sum = scf.for %route = [%c0 to %route_count step %c1](%sum = %c0_f32x8 : vector<8xf32>) -> (vector<8xf32>) unroll {
       %assignment = index.madd %token, %route_count, %route : index
       %routed_f16 = vector.load %routed_output_view[%assignment, %channel] : view<[%assignment_count]x[%output_size]xf16> -> vector<8xf16>
-      %routed = vector.extf %routed_f16 : vector<8xf16> to vector<8xf32>
+      %routed_unscaled = vector.extf %routed_f16 : vector<8xf16> to vector<8xf32>
+      // engine #1962: the routed experts' activations are narrowed to f16 with a 2^-6 prescale at their producers
+      // (mul_mat_id_{q4k,q5k,q6k}_f16_wmma_projection, mul_mat_id_swiglu_f32_f32_wmma, mul_mat_id_swiglu_f16_f16_accumulate),
+      // so every routed output here is 1/64 of its true value. This is the single place the chain widens to f32, so the
+      // matching x64 belongs here and nowhere else; exact, because both factors are powers of two.
+      %routed = vector.mulf %routed_unscaled, %c64_f32x8 : vector<8xf32>
       %route_weight = view.load %route_weights_view[%token, %route] : view<[%launch_token_count]x[%route_count]xf32> -> f32
       %route_weight_x8 = vector.splat %route_weight : vector<8xf32>
       %weighted = vector.mulf %routed, %route_weight_x8 : vector<8xf32>
