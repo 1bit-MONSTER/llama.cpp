@@ -3396,7 +3396,8 @@ static bool matmul_graph_is_supported(ggml_context * ctx, ggml_tensor * output) 
 // stored layout on the device, so it stays stored (4 / 6) and the packed copy is not added.
 // GGML_HRX_Q4K_PACKED_TAIL / GGML_HRX_Q6K_PACKED_ROWS force one or the other; the row is about the default, so it does
 // nothing when either is set.
-static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool file_mapped, int64_t token_count = 100) {
+static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool file_mapped, int64_t token_count = 100,
+                                                  bool stored_copy_exists = false) {
     if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr || std::getenv("GGML_HRX_Q6K_PACKED_ROWS") != nullptr) {
         std::printf("       skipped: a packed-layout switch is set in the environment\n");
         return;
@@ -3433,6 +3434,11 @@ static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool fi
     ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     ggml_tallocr allocator = ggml_tallocr_new(buffer);
     REQUIRE(ggml_tallocr_alloc(&allocator, weight) == GGML_STATUS_SUCCESS);
+    if (stored_copy_exists) {
+        // engine #2137: a decode kernel already made a stored-layout device copy of this weight
+        ggml::hrx::note_stored_device_copy(weight->data);
+        REQUIRE(ggml::hrx::has_stored_device_copy(weight->data));
+    }
 
     ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
     REQUIRE(output != nullptr);
@@ -3447,7 +3453,7 @@ static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool fi
     REQUIRE(scheduler.plan().valid());
 
     const int         stored   = weight_type == GGML_TYPE_Q4_K ? 4 : 6;
-    const std::string expected = std::to_string(file_mapped ? stored + 40 : stored);
+    const std::string expected = std::to_string(file_mapped && !stored_copy_exists ? stored + 40 : stored);
     size_t            found    = 0;
     for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
         const auto format = dispatch.kernel.compile_parameters.find("ggml.mul_mat.weight_format");
@@ -3462,7 +3468,7 @@ static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool fi
         }
         REQUIRE(format->second == expected);
     }
-    if (weight_type == GGML_TYPE_Q6_K && !file_mapped && token_count >= 6 && token_count <= 16) {
+    if (weight_type == GGML_TYPE_Q6_K && !file_mapped && !stored_copy_exists && token_count >= 6 && token_count <= 16) {
         // an uploaded Q6_K weight keeps the i8 kernel at this batch size; it carries no weight_format
         REQUIRE(found == 0);
         REQUIRE(scheduler.plan().dispatches.size() == 1);
@@ -11954,6 +11960,14 @@ int main(int argc, char ** argv) {
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 12); } },
         { "packed_layout_follows_weight.q6_k.uploaded.tokens12",
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, false, 12); } },
+        // engine #2137: a file-mapped weight that already has a stored device copy (a decode kernel read it stored) is
+        // read stored by prefill too, so it is not copied a second time; and not in the i8 layout at 6 to 16 tokens
+        { "packed_layout_follows_weight.q4_k.file_mapped.stored_copy",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, true, 100, true); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 100, true); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy.tokens12",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 12, true); } },
         { "q6k_token1_shortlist_group_count.256", [] { schedule_q6k_token1_shortlist_group_count(256, 65536, 8); } },
         { "q6k_token1_shortlist_group_count.2560",
           [] { schedule_q6k_token1_shortlist_group_count(2560, 248320, 80); } },
