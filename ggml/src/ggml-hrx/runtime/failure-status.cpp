@@ -1,4 +1,7 @@
 #include "runtime/failure-status.h"
+#include "hrx-1bit-safety.h"   // engine#2069: the terms the refusal is worded from
+
+#include <cstdio>
 
 #include <cctype>
 #include <cstring>
@@ -60,6 +63,33 @@ bool failure_looks_like_allocation(const std::vector<std::string> & messages) {
 
 enum ggml_status failure_status(const std::vector<std::string> & messages, enum ggml_status fallback) {
     return failure_looks_like_allocation(messages) ? GGML_STATUS_ALLOC_FAILED : fallback;
+}
+
+std::string pool_refusal_text(const char * device_name, size_t device_total, size_t device_free, size_t ceiling_bytes,
+                              const onebit::pool_budget_terms_t & terms) {
+    constexpr double GiB = 1024.0 * 1024.0 * 1024.0;
+    const char * name = device_name ? device_name : "(unnamed)";
+    char buf[1024];
+    // The host term wins when it is smaller than the GTT term, and then GTT is not what to free. The GTT figures are still
+    // printed, because they are part of why the budget is what it is, but they are labelled as the non-binding side.
+    if (terms.host_bound) {
+        // A measured zero is a symptom of its own (engine#1942: an argument-evaluation-order bug made a readable figure read as
+        // zero), so it says "measured 0.0 GiB" rather than printing a number that looks like a reading.
+        snprintf(buf, sizeof buf,
+                 "ggml_hrx: %s: refusing to use the device: host MemAvailable %.1f GiB is below the GTT term "
+                 "(GTT total %.1f GiB with %.1f GiB free, ceiling %.1f GiB), so HOST memory is what is binding here; "
+                 "free RAM%s (engine#680, engine#2069)\n",
+                 name, terms.host_available / GiB, device_total / GiB, device_free / GiB, ceiling_bytes / GiB,
+                 terms.host_available == 0 ? " - and note the host figure measured 0.0 GiB, which is a reported zero rather than a reading"
+                                           : "");
+        return std::string(buf);
+    }
+    snprintf(buf, sizeof buf,
+             "ggml_hrx: %s: refusing to use the device: GTT total %.1f GiB with %.1f GiB free leaves nothing under the "
+             "%.1f GiB ceiling (reserve GGML_HRX_GTT_RESERVE_MB, override GGML_HRX_POOL_LIMIT_MB); free GTT or lower the "
+             "reserve (engine#680)\n",
+             name, device_total / GiB, device_free / GiB, ceiling_bytes / GiB);
+    return std::string(buf);
 }
 
 }  // namespace ggml::hrx

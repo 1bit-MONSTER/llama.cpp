@@ -1655,12 +1655,13 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             // Nothing fits under the ceiling: refuse the device here, loudly, instead of planning a launch that can
             // reach the fault line (#680). Report only, do not try to be clever about it.
             const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
-            GGML_LOG_ERROR("ggml_hrx: %s: refusing to use the device: GTT total %.1f GiB with %.1f GiB free leaves "
-                           "nothing under the %.1f GiB ceiling (reserve GGML_HRX_GTT_RESERVE_MB, override "
-                           "GGML_HRX_POOL_LIMIT_MB); free GTT or lower the reserve (engine #680)\n",
-                           device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
-                           device_free / (1024.0 * 1024.0 * 1024.0),
-                           (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0));
+            // engine#2069: worded from the terms, not from the ceiling -- `budget == 0` can come from the HOST term, and
+            // then "free GTT" names the resource that was not binding. The sentence lives in failure-status.cpp so a host
+            // test can assert it (this file compiles only with GGML_HRX=ON).
+            const std::string refusal = ggml::hrx::pool_refusal_text(
+                device_ctx->name.c_str(), device_total, device_free,
+                device_total > reserve ? device_total - reserve : 0, terms);
+            GGML_LOG_ERROR("%s", refusal.c_str());
             hrx_device_release(hrx_device);
             continue;
         }

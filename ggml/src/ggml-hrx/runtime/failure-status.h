@@ -41,4 +41,25 @@ const std::string * failure_unmatched_allocation(const std::vector<std::string> 
 // caller with nothing better to say gets, and it is what the test exercises for the preserved-code case.
 enum ggml_status failure_status(const std::vector<std::string> & messages, enum ggml_status fallback = GGML_STATUS_FAILED);
 
+// The sentence a device refusal prints when nothing fits under the pool ceiling (engine#2069).
+//
+// The refusal used to word itself from the ceiling alone: "GTT total X with Y free leaves nothing under the Z ceiling ...
+// free GTT or lower the reserve". But `budget == 0` can come from the HOST term -- pool_budget_terms() takes the smaller of
+// the GTT term and MemAvailable, and sets `host_bound` when the host one wins -- and then the advice names the wrong
+// resource and the numbers printed are the ones that were NOT binding. Measured: a self-built HRX configuration refused with
+// "GTT total 120.0 GiB with 78.0 GiB free leaves nothing under the 104.0 GiB ceiling", which cannot explain anything (78 free
+// against a 104 ceiling leaves ~62 GiB), while the real cause was the host figure reading as 0 (engine#1942's
+// argument-evaluation-order bug, fixed by #1960).
+//
+// Lives here rather than inline in ggml-hrx.cpp for the same reason kPoolRefusalToken does: ggml-hrx.cpp compiles only with
+// GGML_HRX=ON, so a sentence written there cannot be asserted by a host test. Keeping the wording in a header lets the arms below
+// run everywhere, and leaves the call site a single line.
+namespace onebit {
+struct pool_budget_terms_t;   // defined in hrx-1bit-safety.h, which ggml-hrx.cpp includes; the wording needs only the type
+}  // namespace onebit
+
+std::string pool_refusal_text(const char * device_name, size_t device_total, size_t device_free, size_t ceiling_bytes,
+                              const onebit::pool_budget_terms_t & terms);
+
+
 }  // namespace ggml::hrx
