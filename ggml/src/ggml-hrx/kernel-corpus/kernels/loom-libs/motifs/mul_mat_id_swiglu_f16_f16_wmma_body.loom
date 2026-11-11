@@ -187,7 +187,14 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.body> device @ggml_mul_mat_id_swigl
       %up_prescaled = vector.extf %up_values : vector<8xf16> to vector<8xf32>
       %up_wide = vector.mulf %up_prescaled, %sum_rescale : vector<8xf32>
       %wide_values = template.apply<@ggml.mul_mat_id_swiglu_f16_f16.apply_vector8>(%gate_wide, %up_wide) : (vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
-      %values = vector.fptrunc %wide_values : vector<8xf32> to vector<8xf16>
+      // engine #2186: the product goes to an f16 plane, and the routed down projection that reads it accumulates and
+      // publishes in f16 as well, so the product and every partial down sum had to stay under 65504 (measured: with
+      // products up to 2.6e4 the down sums already overflowed and 770 of 2048 outputs were inf). The plane is
+      // published at 2^-6; the down projection is linear and carries the factor; the weighted reduce, which widens to
+      // f32, multiplies it back. The plan records the factor on both planes (scale_log2).
+      %product_prescale = vector.constant 0.015625 : vector<8xf32>
+      %scaled_values = vector.mulf %wide_values, %product_prescale : vector<8xf32>
+      %values = vector.fptrunc %scaled_values : vector<8xf32> to vector<8xf16>
       %mask = vector.mask.range [%channel to %bounded_output_size step %c1] : index -> vector<8xi1>
       vector.store.mask %values, %output_view[%bounded_assignment, %channel], %mask : vector<8xf16>, view<[%output_row_count]x[%bounded_output_size]xf16>, vector<8xi1>
     }

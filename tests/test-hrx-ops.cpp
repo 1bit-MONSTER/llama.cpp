@@ -946,6 +946,7 @@ struct RoutedMoeGraph {
     ggml_tensor * hidden_state = nullptr;
     ggml_tensor * norm_weight  = nullptr;
     ggml_tensor * output       = nullptr;
+    ggml_tensor * glu          = nullptr;  // the SwiGLU output, readable on a backend that keeps intermediates
 };
 
 static RoutedMoeGraph build_routed_moe_graph(ggml_context * ctx,
@@ -981,6 +982,7 @@ static RoutedMoeGraph build_routed_moe_graph(ggml_context * ctx,
     REQUIRE(up != nullptr);
     ggml_tensor * glu = ggml_glu_split(ctx, gate, up, GGML_GLU_OP_SWIGLU);
     REQUIRE(glu != nullptr);
+    graph.glu          = glu;
     ggml_tensor * down = ggml_mul_mat_id(ctx, graph.down_weight, glu, route_ids);
     REQUIRE(down != nullptr);
     ggml_tensor * weighted = ggml_mul(ctx, down, route_weights);
@@ -4844,6 +4846,121 @@ static void run_routed_moe_large_input_case(ggml_type gate_up_weight_type, float
     ggml_backend_free(hrx_backend);
 }
 
+// engine #2186: the fused routed feed-forward keeps the SwiGLU product and the routed down sums in f16. With every
+// input scaled by `scale` the gate and up sums grow with it and the product with its square, so above some scale they
+// leave the f16 range (65504) while the result stays far inside single precision.
+// The reference is the CPU on the same weights held as f32 (the quantised rows, dequantised): with K-quant weights the
+// CPU quantises the activation to 8 bits per block, which costs it more precision than the device's f16 does.
+static void run_routed_moe_large_product_case(ggml_type gate_up_weight_type, float scale) {
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = 64 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * cpu_ctx  = ggml_init(params);
+    ggml_context * hrx_ctx  = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+
+    RoutedMoeGraph cpu = build_routed_moe_graph(cpu_ctx, GGML_TYPE_F32, false, GGML_TYPE_F32);
+    RoutedMoeGraph hrx = build_routed_moe_graph(hrx_ctx, GGML_TYPE_Q4_K, false, gate_up_weight_type);
+
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    REQUIRE(cpu_graph != nullptr);
+    REQUIRE(hrx_graph != nullptr);
+    ggml_build_forward_expand(cpu_graph, cpu.output);
+    ggml_build_forward_expand(hrx_graph, hrx.output);
+
+    REQUIRE(test_sequence_has(scheduled_kernel_sequence(hrx_graph), "loom_libs:ggml_mul_mat_id_swiglu_f16_f16_wmma"));
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+
+    // distinct router logits: make_router_logits() repeats eight values across the 128 experts, and with ties the CPU
+    // and the device may each pick a different valid top eight, which is a different graph, not an error
+    std::vector<float> logits(static_cast<size_t>(kQwenRouterExpertCount));
+    for (int64_t expert = 0; expert < kQwenRouterExpertCount; ++expert) {
+        logits[static_cast<size_t>(expert)] = 0.05f * static_cast<float>((expert * 37) % kQwenRouterExpertCount);
+    }
+    std::vector<float>       input  = make_pattern_f32(kQwenHiddenSize, 15, 0.01f);
+    for (float & value : input) {
+        value *= scale;
+    }
+    const std::vector<float> hidden = make_pattern_f32(kQwenHiddenSize, 16, 0.02f);
+    set_tensor_pair_bytes(cpu_backend, cpu.logits, hrx_backend, hrx.logits, logits.data(),
+                          logits.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.input, hrx_backend, hrx.input, input.data(), input.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.hidden_state, hrx_backend, hrx.hidden_state, hidden.data(),
+                          hidden.size() * sizeof(float));
+    // the device gets the quantised rows, the CPU the same rows dequantised to f32
+    const auto set_weight_pair = [&](ggml_tensor * cpu_weight, ggml_tensor * hrx_weight, ggml_type type,
+                                     int64_t row_length, int64_t row_count, int seed) {
+        const std::vector<uint8_t> rows   = make_quantized_rows(type, row_length, row_count, seed);
+        const ggml_type_traits *   traits = ggml_get_type_traits(type);
+        REQUIRE(traits != nullptr);
+        REQUIRE(traits->to_float != nullptr);
+        std::vector<float> wide(static_cast<size_t>(row_length * row_count));
+        const size_t       row_size = ggml_row_size(type, row_length);
+        for (int64_t r = 0; r < row_count; ++r) {
+            traits->to_float(rows.data() + static_cast<size_t>(r) * row_size,
+                             wide.data() + static_cast<size_t>(r * row_length), row_length);
+        }
+        ggml_backend_tensor_set(hrx_weight, rows.data(), 0, rows.size());
+        ggml_backend_tensor_set(cpu_weight, wide.data(), 0, wide.size() * sizeof(float));
+    };
+    set_weight_pair(cpu.gate_weight, hrx.gate_weight, gate_up_weight_type, kQwenHiddenSize,
+                    kQwenMoeIntermediate * kQwenRouterExpertCount, 17);
+    set_weight_pair(cpu.up_weight, hrx.up_weight, gate_up_weight_type, kQwenHiddenSize,
+                    kQwenMoeIntermediate * kQwenRouterExpertCount, 18);
+    set_weight_pair(cpu.down_weight, hrx.down_weight, GGML_TYPE_Q4_K, kQwenMoeIntermediate,
+                    kQwenHiddenSize * kQwenRouterExpertCount, 19);
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    const std::vector<float> cpu_out = get_f32_tensor(cpu_backend, cpu.output);
+    const std::vector<float> hrx_out = get_f32_tensor(hrx_backend, hrx.output);
+    const std::vector<float> cpu_glu = get_f32_tensor(cpu_backend, cpu.glu);
+    REQUIRE(cpu_out.size() == hrx_out.size());
+
+    float glu_max = 0.0f;
+    for (float value : cpu_glu) {
+        REQUIRE(std::isfinite(value));
+        glu_max = std::max(glu_max, std::fabs(value));
+    }
+    double error      = 0.0;
+    double norm       = 0.0;
+    size_t non_finite = 0;
+    for (size_t i = 0; i < cpu_out.size(); ++i) {
+        REQUIRE(std::isfinite(cpu_out[i]));
+        if (!std::isfinite(hrx_out[i])) {
+            ++non_finite;
+            continue;
+        }
+        const double diff = static_cast<double>(hrx_out[i]) - static_cast<double>(cpu_out[i]);
+        error += diff * diff;
+        norm  += static_cast<double>(cpu_out[i]) * static_cast<double>(cpu_out[i]);
+    }
+    std::fprintf(stderr, "routed large product: scale=%g max|silu(gate)*up| (cpu)=%g non-finite=%zu of %zu nmse(device vs cpu)=%g\n",
+                 static_cast<double>(scale), static_cast<double>(glu_max), non_finite, cpu_out.size(),
+                 norm > 0.0 ? error / norm : -1.0);
+    REQUIRE(non_finite == 0);
+    REQUIRE(error / norm < 1.0e-3);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bool alias_gate_input = false) {
     ggml_init_params params = {};
     params.mem_size         = 128 * 1024 * 1024;
@@ -6112,6 +6229,11 @@ static void add_cases(test_runner::Suite & suite) {
     }
     add(suite, "decode_attention_qkv_scheduling",
         [=] { run_decode_attention_qkv_scheduling_case(); });
+    // engine #2186: the gate/up product, at the ordinary scale and at scales that take it past the f16 range
+    for (float scale : { 1.0f, 30.0f, 100.0f, 300.0f, 1000.0f }) {
+        add(suite, std::string("routed_moe.q4_K.large_product.") + std::to_string(static_cast<int>(scale)),
+            [=] { run_routed_moe_large_product_case(GGML_TYPE_Q4_K, scale); });
+    }
     add(suite, "routed_moe_decode.q4_k",
         [=] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q4_K); });
     add(suite, "routed_moe_decode.q6_k",

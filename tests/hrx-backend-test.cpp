@@ -7151,10 +7151,16 @@ static void append_qwen_routed_down_for_graph(ggml::hrx::Graph &              gr
     REQUIRE(output_value != nullptr);
     const ggml::hrx::CommandPlanMoeRoutingBundle * routing_bundle =
         plan.metadata.find_moe_routing_bundle(route_ids_value->id);
+    // engine #2186: both f16 planes of the fused routed feed-forward are stored at 2^-6, and the plan says so: a reader
+    // that does not ask for that scale must not find them.
     const ggml::hrx::CommandPlanAlternateValue * gate_up_alternate = plan.metadata.find_alternate_value(
-        glu_value->id, GGML_TYPE_F16, qwen_routed_gate_up_f16_output_size(tensors.output->ne[2]));
+        glu_value->id, GGML_TYPE_F16, qwen_routed_gate_up_f16_output_size(tensors.output->ne[2]), 6);
     const ggml::hrx::CommandPlanAlternateValue * routed_down_alternate = plan.metadata.find_alternate_value(
-        output_value->id, GGML_TYPE_F16, qwen_routed_down_f16_output_size(tensors.output->ne[2]));
+        output_value->id, GGML_TYPE_F16, qwen_routed_down_f16_output_size(tensors.output->ne[2]), 6);
+    REQUIRE(plan.metadata.find_alternate_value(glu_value->id, GGML_TYPE_F16,
+                                               qwen_routed_gate_up_f16_output_size(tensors.output->ne[2])) == nullptr);
+    REQUIRE(plan.metadata.find_alternate_value(output_value->id, GGML_TYPE_F16,
+                                               qwen_routed_down_f16_output_size(tensors.output->ne[2])) == nullptr);
     REQUIRE(routing_bundle != nullptr);
     REQUIRE(gate_up_alternate != nullptr);
     REQUIRE(routed_down_alternate != nullptr);
@@ -8275,6 +8281,8 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         // the f32 GLU output the down projection reads.
         REQUIRE(plan.metadata.find_alternate_value(imported.graph.values().find_tensor(tensors.glu)->id, GGML_TYPE_F16,
                                                    qwen_routed_gate_up_f16_output_size(4)) == nullptr);
+        REQUIRE(plan.metadata.find_alternate_value(imported.graph.values().find_tensor(tensors.glu)->id, GGML_TYPE_F16,
+                                                   qwen_routed_gate_up_f16_output_size(4), 6) == nullptr);
         const size_t             down_index = producer_index_for_tensor(imported.graph, tensors.output);
         ggml::hrx::DispatchMatch down_match;
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, down_index, down_match));

@@ -592,7 +592,10 @@ kernel.def target(@qwen3_moe_routed_down_gfx11_wave64) @qwen3_moe_routed_down_we
     %weighted_sum = scf.for %route = [%c0 to %bounded_route_count step %c1](%sum = %c0_f32x4 : vector<4xf32>) -> (vector<4xf32>) unroll {
       %assignment = index.madd %token, %bounded_route_count, %route : index
       %routed = vector.load.mask %routed_output_view[%assignment, %channel], %mask, %c0_f16x4 : view<[%assignment_count]x[%bounded_output_size]xf16>, vector<4xi1>, vector<4xf16>
-      %wide = vector.extf %routed : vector<4xf16> to vector<4xf32>
+      // engine #2186: the routed down plane is stored at 2^-6 (see mul_mat_id_swiglu_f16_f16_wmma_body.loom)
+      %stored = vector.extf %routed : vector<4xf16> to vector<4xf32>
+      %plane_unscale = vector.constant 64.0 : vector<4xf32>
+      %wide = vector.mulf %stored, %plane_unscale : vector<4xf32>
       %route_weight = view.load %route_weight_view[%token, %route] : view<[%token_count]x[%bounded_route_count]xf32> -> f32
       %route_weight_x4 = vector.splat %route_weight : vector<4xf32>
       %weighted = vector.mulf %wide, %route_weight_x4 : vector<4xf32>
