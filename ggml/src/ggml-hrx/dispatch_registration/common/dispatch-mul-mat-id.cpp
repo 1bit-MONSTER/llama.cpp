@@ -14,31 +14,20 @@
 namespace ggml::hrx {
 namespace {
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 static constexpr KernelCatalogRef kMulMatIdF32F32WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_f32_f32_wmma");
 static constexpr KernelCatalogRef kMulMatIdPostOpsF32F32WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_postops_f32_f32_wmma");
 static constexpr KernelCatalogRef kMulMatIdPostOpsNextRmsNormF32F32WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_postops_next_rmsnorm_f32_f32_wmma");
-=======
-static constexpr KernelCatalogRef kMulMatIdTiledF32F32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_publish_f32");
-static constexpr KernelCatalogRef kMulMatIdSkinnyF32F32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_publish_f32");
+
+// AMD's rebase also declared the tiled/skinny post-ops refs; their matchers do not survive into this merge
+// (those matcher bodies in this file resolve to our side), so only the refs something still names are kept --
+// an unreferenced static constexpr here is -Wunused-const-variable under -Werror. They come back with the matchers.
 static constexpr KernelCatalogRef kMulMatIdTiledScaledF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32");
 static constexpr KernelCatalogRef kMulMatIdSkinnyScaledF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32");
-static constexpr KernelCatalogRef kMulMatIdTiledPostOpsF32F32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_postops_publish_f32");
-static constexpr KernelCatalogRef kMulMatIdSkinnyPostOpsF32F32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_postops_publish_f32");
-static constexpr KernelCatalogRef kMulMatIdTiledPostOpsNextRmsNormF32F32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_postops_next_rmsnorm_publish_f32");
-static constexpr KernelCatalogRef kMulMatIdSkinnyPostOpsNextRmsNormF32F32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_postops_next_rmsnorm_publish_f32");
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
 static bool requires_unsupported_routed_codebook(CommonMulMatWeightFormat format) {
     switch (format) {
