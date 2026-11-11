@@ -3580,8 +3580,14 @@ static void run_ffn_prefill_large_activation_case(int64_t token_count, float inp
     ggml_build_forward_expand(hrx_graph, hrx.output);
 
     const std::vector<std::string> sequence = scheduled_kernel_sequence(hrx_graph);
-    REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32"));
-    REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_q4_k_f16_wmma_prefill_wave32"));
+    if (token_count >= 256) {
+        REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32"));
+        REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_q4_k_f16_wmma_prefill_wave32"));
+    }
+    // below 256 tokens the decode and small-batch kernels run: the case states which ones
+    for (const std::string & kernel : sequence) {
+        std::fprintf(stderr, "ffn tokens=%lld kernel %s\n", static_cast<long long>(token_count), kernel.c_str());
+    }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -5297,8 +5303,9 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_q6_k_token1_shortlist_case(8000.0f, ShortlistArm::Spike); });
     add(suite, "mul_mat.q6_k.token1_shortlist.large_activation",
         [=] { run_q6_k_token1_shortlist_case(8000.0f, ShortlistArm::Large); });
-    for (const int64_t tokens : { 256, 512 }) {
-        // an input scale of 640 gives a gated maximum of 4.0e5
+    // decode (1 to 8), small batch (16 to 128) and prefill (256, 512) token counts
+    for (const int64_t tokens : { 1, 2, 4, 5, 8, 16, 64, 128, 256, 512 }) {
+        // an input scale of 640 gives a gated maximum of 3.0e5 to 4.0e5
         add(suite, "ffn.q4_k.prefill.large_activation." + std::to_string(tokens),
             [=] { run_ffn_prefill_large_activation_case(tokens, 640.0f); });
     }
