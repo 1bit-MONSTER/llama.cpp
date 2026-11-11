@@ -13,7 +13,7 @@
 
 #include <cstdint>
 #include <string>
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
+#include <unordered_set>
 
 bool llama_model_saver_supports_arch(llm_arch arch) {
     switch (arch) {
@@ -38,9 +38,6 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
             return true;
     }
 }
-=======
-#include <unordered_set>
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
 llama_model_saver::llama_model_saver(const struct llama_model * model) :
         gguf_ctx(gguf_init_empty()), model(model), llm_kv(model->arch) {
@@ -372,13 +369,8 @@ void llama_model_saver::add_kv_from_model() {
             add_kv(LLM_KV_ATTENTION_INDEXER_CANDIDATE_BLOCK_SIZE,   hparams.dsv41_cand_block_size);
         }
         if (hparams.ple_n_heads > 0) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             add_kv(LLM_KV_ENGRAM_PAD_TOKEN_ID, m41->engram_pad_id);
             add_kv(LLM_KV_ENGRAM_TOKEN_MAP,    m41->engram_token_map);
-=======
-            add_kv(LLM_KV_ENGRAM_PAD_TOKEN_ID, hparams.engram_pad_id);
-            add_kv(LLM_KV_ENGRAM_TOKEN_MAP,    model->engram_token_map);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         }
     }
 
@@ -549,16 +541,13 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->cls_out);
     add_tensor(model->cls_out_b);
     add_tensor(model->cls_norm);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     add_tensor(model->zaya_input_hs_scale);
     add_tensor(model->zaya_input_hs_bias);
     add_tensor(model->zaya_res_scale_hs);
     add_tensor(model->zaya_res_scale_hs_b);
     add_tensor(model->zaya_res_scale_res);
     add_tensor(model->zaya_res_scale_res_b);
-=======
     add_tensor(model->hrm_z_l_init);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     add_tensor(model->hc_head_fn);
     add_tensor(model->hc_head_base);
     add_tensor(model->hc_head_scale);
