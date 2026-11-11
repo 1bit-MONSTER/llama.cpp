@@ -72,9 +72,7 @@
       "path": "ops/mul_mat_id_postops_f32_f32_wmma.loom"
     },
     {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-      "path": "ops/mul_mat_id_postops_next_rmsnorm_f32_f32_wmma.loom"
-=======
+      "path": "ops/mul_mat_id_postops_next_rmsnorm_f32_f32_wmma.loom",
       "path": "ops/matmul_id/mul_mat_id_f16_f16_wmma.loom"
     },
     {
@@ -201,9 +199,7 @@
       "path": "motifs/matmul_id/tiled_postprocess_f32.loom"
     },
     {
-      "path": "motifs/matmul_id/skinny_postprocess_f32.loom"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
-    },
+      "path": "motifs/matmul_id/skinny_postprocess_f32.loom"    },
     {
       "path": "ops/moe_routing_tables.loom"
     },
@@ -256,18 +252,14 @@
       "path": "ops/get_rows_f32.loom"
     },
     {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-      "path": "ops/gated_delta_net_f32_wmma.loom"
-=======
+      "path": "ops/gated_delta_net_f32_wmma.loom",
       "path": "ops/rows/get_rows_scalar_3d_f32.loom"
     },
     {
       "path": "ops/rows/repeat_scalar_3d_f32.loom"
     },
     {
-      "path": "ops/rows/get_rows_scale_f32.loom"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
-    },
+      "path": "ops/rows/get_rows_scale_f32.loom"    },
     {
       "path": "ops/ssm_conv_f32.loom"
     },
@@ -401,15 +393,11 @@
       "path": "ops/swiglu_oai_f32.loom"
     },
     {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-      "path": "ops/attention_sink_f32.loom"
-=======
+      "path": "ops/attention_sink_f32.loom",
       "path": "motifs/matmul/tiled_pair_postprocess_f32.loom"
     },
     {
-      "path": "ops/reduction/amax_scale_f32.loom"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
-    }
+      "path": "ops/reduction/amax_scale_f32.loom"    }
   ],
   "exports": [
     {
@@ -2498,10 +2486,8 @@
     {
       "name": "ggml_mul_mat_id_postops_f32_f32_wmma",
       "family": "loom_libs",
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
       "symbol": "ggml_mul_mat_id_postops_f32_f32_wmma",
       "source": "ops/mul_mat_id_postops_f32_f32_wmma.loom",
-=======
       "symbol": "ggml_mul_mat_id_tiled_input_f32_publish_f32",
       "source": "ops/matmul_id/tiled_input_f32_publish_f32.loom",
       "workload_parameters": [
@@ -2755,9 +2741,7 @@
       "name": "ggml_mul_mat_id_tiled_input_f32_postops_publish_f32",
       "family": "loom_libs",
       "symbol": "ggml_mul_mat_id_tiled_input_f32_postops_publish_f32",
-      "source": "ops/matmul_id/tiled_input_f32_postops_publish_f32.loom",
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
-      "workload_parameters": [
+      "source": "ops/matmul_id/tiled_input_f32_postops_publish_f32.loom",      "workload_parameters": [
         {
           "name": "token_count",
           "type": "index"
@@ -7136,10 +7120,8 @@
         ]
       },
       "compile_dependencies": [
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         "motifs/rmsnorm_f32.loom",
         "motifs/unary_f32_apply.loom",
-=======
         "motifs/gated_delta_net/projection_epilogue.loom",
         "motifs/gated_delta_net/publish_f32.loom"
       ]
@@ -8477,9 +8459,7 @@
         "motifs/flash_attention/decode_reduce.loom",
         "motifs/flash_attention/publish_f32.loom",
         "motifs/flash_attention/publish_q8.loom",
-        "motifs/flash_attention/completion_counter_reduce.loom",
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
-        "motifs/quantize_q8_1_x4.loom"
+        "motifs/flash_attention/completion_counter_reduce.loom",        "motifs/quantize_q8_1_x4.loom"
       ]
     },
     {

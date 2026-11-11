@@ -3,9 +3,7 @@
   "upstream_revision": "local",
   "files": [
     {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-      "path": "ggml/linear_q6k_f32.loom"
-=======
+      "path": "ggml/linear_q6k_f32.loom",
       "path": "../loom-libs/motifs/q6_k_f16.loom"
     },
     {
@@ -48,9 +46,7 @@
       "path": "../loom-libs/motifs/quantize_q8_1_x4.loom"
     },
     {
-      "path": "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
-    },
+      "path": "../loom-libs/motifs/quantize_q8_1_x4_group.loom"    },
     {
       "path": "ggml/linear_q6k_q8_1_x4.loom"
     },
@@ -562,13 +558,6 @@
           "qwen3_moe/attention_postprocess_f32_f16.loom"
         ],
         "library_sources": [
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-          "qwen3_moe/model_config.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "qwen3_moe/model_config.loom"
-=======
           "qwen3_moe/model_config.loom",
           "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
           "../loom-libs/motifs/rope/rope_f32.loom"
@@ -578,7 +567,6 @@
         "qwen3_moe/model_config.loom",
         "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
         "../loom-libs/motifs/rope/rope_f32.loom"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
       ]
     },
     {
