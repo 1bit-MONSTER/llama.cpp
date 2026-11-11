@@ -9532,6 +9532,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 4096, 8,  512, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 8, 4096, 2.4e-2f));
     test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 4096, 8,  512, 2.4e-2f));
+    // engine #1962: the f16 boundary. 65504 is the largest finite f16, but the value that actually becomes infinity is
+    // the first one that rounds UP to it: the next representable half is 65536, so the midpoint is 65520 and anything
+    // above that rounds to inf (round-to-nearest). 65505-65520 therefore round DOWN to 65504 and stay finite, which is
+    // why a pair at 65504/65505 both pass and proves nothing. The discriminating pair is 65519 (rounds to 65504) and
+    // 65521 (rounds to inf): if a narrowing path loses its 2^-6 prescale, the first passes and the second fails.
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 8, 4096, 65519.0f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 8, 4096, 65521.0f));
     // engine #1962: the Q5_K prefill reads the activations as 8-bit blocks (block_q8_1_x4). Each block carries its scale
     // and its sum; a sum stored already multiplied by the scale left the f16 range as soon as one activation did.
     // 6.5e4 is the last step of the ladder where the stored sum is still finite (the stored path); 6.6e4 is the first
