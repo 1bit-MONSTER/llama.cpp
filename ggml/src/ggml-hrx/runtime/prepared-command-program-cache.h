@@ -110,14 +110,10 @@ class PreparedCommandProgramCache {
     void record_hit();
 
     mutable std::mutex                                       mutex_;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    std::unordered_map<Key, std::shared_ptr<Entry>, KeyHash> programs_;
-    // Bytes retained per graph program, maintained at build time so that retained_bytes() never has to reach into
+    std::unordered_map<Key, std::shared_ptr<PreparedCommandProgramCacheEntry>, KeyHash> programs_;
+    // Bytes retained per graph program, maintained at build time so that retained_bytes() never has to read
     // an Entry under its own mutex while another thread is preparing a program in it.
     std::unordered_map<uint64_t, size_t>                     retained_by_graph_;
-=======
-    std::unordered_map<Key, std::shared_ptr<PreparedCommandProgramCacheEntry>, KeyHash> programs_;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     PreparedCommandProgramCacheStats                         stats_;
 };
 

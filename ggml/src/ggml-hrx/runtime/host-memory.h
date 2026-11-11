@@ -72,11 +72,8 @@ struct HostWeightSource {
 struct HostWeightCacheStats {
     uint64_t hits             = 0;
     uint64_t misses           = 0;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     uint64_t evictions        = 0;
-=======
     size_t   materialized_bytes = 0;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
     uint64_t duplicate_warnings = 0;
@@ -211,7 +208,6 @@ class HostWeightCache {
     std::unordered_map<SourceKey, std::shared_ptr<HostWeightLease::Entry>, SourceKeyHash> entries_;
     std::unordered_map<SourceKey, uint64_t, SourceKeyHash>                                last_use_;
     HostWeightCacheStats                                                                  stats_;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     size_t                                                                                limit_          = 0;
     size_t                                                                                resident_bytes_ = 0;
     uint64_t                                                                              use_clock_      = 0;
@@ -294,9 +290,7 @@ class HostWeightExecutionScope {
 
   private:
     HostWeightCache * cache_ = nullptr;
-=======
     size_t fail_cold_after_ = SIZE_MAX;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 };
 
 struct HostStagingBuffer {
