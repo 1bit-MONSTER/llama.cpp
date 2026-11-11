@@ -45,7 +45,6 @@ struct GraphReplayStreamState {
 
     void mark_stream_synchronized();
     void add_host_writeback(void * host_destination, const void * mapped_source, size_t size, hrx_buffer_t buffer);
-    bool has_pending_host_writebacks() const;
     void clear();
 
     // True while a host download staged by an earlier replay has not been

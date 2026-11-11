@@ -33,7 +33,6 @@ struct DispatchMatchContext {
     const std::vector<bool> & covered_nodes;
     const CommandPlan &       plan;
     ValueId                   next_plan_value;
-    const DispatchRegistry *  registry = nullptr;
 };
 
 // Non-native weight bindings require bytes that remain available after graph import.
