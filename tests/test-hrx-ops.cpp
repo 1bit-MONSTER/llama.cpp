@@ -3350,9 +3350,13 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
 // Arms: Ordinary (everything inside f16); Spike (ONE activation above the f16 maximum, logits inside it, so the only
 // value out of range is the one the refine kernel narrows); Large (every activation scaled up, so the activations and
 // the logits are both above 65504 and inside the prescaled window).
-enum class ShortlistArm { Ordinary, Spike, Large };
+enum class ShortlistArm { Ordinary, Spike, Large, Duplicates, NearTies };
 static void run_q6_k_token1_shortlist_case(float branch_scale, ShortlistArm arm) {
-    const bool require_large_activation = arm != ShortlistArm::Ordinary;
+    // The f16-range assertion belongs to the arms that deliberately cross 65504 (Spike, Large). Duplicates and
+    // NearTies keep ordinary scale and stress the top-k BOUNDARY instead, so listing them here rather than saying
+    // "not Ordinary" keeps a new arm from silently inheriting an assertion that is about something else.
+    const bool require_large_activation =
+        arm == ShortlistArm::Spike || arm == ShortlistArm::Large;
     constexpr int64_t hidden_size = 256;
     constexpr int64_t vocab_size  = 65536;
     constexpr int64_t table_rows  = 8;
@@ -3437,7 +3441,25 @@ static void run_q6_k_token1_shortlist_case(float branch_scale, ShortlistArm arm)
             projection[i] *= 1.0e-4f;
         }
     }
-    const std::vector<uint8_t> head_weight = make_matmul_weight_bytes(GGML_TYPE_Q6_K, hidden_size, vocab_size, 23);
+    std::vector<uint8_t> head_weight = make_matmul_weight_bytes(GGML_TYPE_Q6_K, hidden_size, vocab_size, 23);
+    if (arm == ShortlistArm::Duplicates || arm == ShortlistArm::NearTies) {
+        // Q6_K row bytes for hidden_size 256: one 256-value super-block = 210 bytes (128 ql + 64 qh + 16 scales + 2 d).
+        const size_t row_bytes = 210;
+        REQUIRE(head_weight.size() == row_bytes * static_cast<size_t>(vocab_size));
+        // Every odd row becomes a copy of the even row before it: two logits per pair are then bit-identical, so the
+        // 128th/129th ranks are decided by tie ORDER rather than by arithmetic. NearTies then flips one nibble of the
+        // copy's ql region, so the pair differs by one 4-bit weight step -- the form engine#238 measured to fire
+        // 33 %/run against 0.16 % for exact ties. Both arms are for engine#2150 (one refined logit came back 1543.49
+        // where the CPU has 29.1483, once in ~50 runs), whose chain is scan -> partitions -> reduce -> refine, so a
+        // candidate paired with a neighbouring id would show at exactly this boundary.
+        for (int64_t row = 0; row + 1 < vocab_size; row += 2) {
+            std::memcpy(head_weight.data() + row_bytes * static_cast<size_t>(row + 1),
+                        head_weight.data() + row_bytes * static_cast<size_t>(row), row_bytes);
+            if (arm == ShortlistArm::NearTies) {
+                head_weight[row_bytes * static_cast<size_t>(row + 1) + 3] ^= 0x01;
+            }
+        }
+    }
     const int32_t              id          = 3;
     set_tensor_pair_bytes(cpu_backend, cpu.table, hrx_backend, hrx.table, table.data(), table.size() * sizeof(float));
     set_tensor_pair_bytes(cpu_backend, cpu.ids, hrx_backend, hrx.ids, &id, sizeof(id));
@@ -5717,6 +5739,10 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_q6_k_token1_shortlist_case(8000.0f, ShortlistArm::Spike); });
     add(suite, "mul_mat.q6_k.token1_shortlist.large_activation",
         [=] { run_q6_k_token1_shortlist_case(8000.0f, ShortlistArm::Large); });
+    add(suite, "mul_mat.q6_k.token1_shortlist.duplicate_rows",
+        [=] { run_q6_k_token1_shortlist_case(1.0f, ShortlistArm::Duplicates); });
+    add(suite, "mul_mat.q6_k.token1_shortlist.near_tie_rows",
+        [=] { run_q6_k_token1_shortlist_case(1.0f, ShortlistArm::NearTies); });
     // decode (1 to 8), small batch (16 to 128) and prefill (256, 512) token counts
     for (const int64_t tokens : { 1, 2, 4, 5, 8, 16, 64, 128, 256, 512 }) {
         // an input scale of 640 gives a gated maximum of 3.0e5 to 4.0e5
