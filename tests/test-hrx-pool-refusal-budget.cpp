@@ -232,6 +232,34 @@ int main() {
     expect_eq("and a stale caller value is not reported as a reading", raw, 0);
     expect_eq("no reader at all is unknown too", pool_host_term_read(nullptr, raw), kHostUnknown);
 
+    // ---- the refusal WORDING names the term that bound it (engine #2069) -------------------------------------------
+    //
+    // The budget is 0 in two situations with opposite remedies, and the old line printed GTT numbers for both: "free GTT or
+    // lower the reserve" when the HOST term was the smaller one sends the operator to the wrong resource. Both wordings are
+    // pure, so this is device-free -- and the line is the whole product of a guardrail.
+    {
+        const size_t total = 120 * GiB;
+        const size_t free_ = 78 * GiB;                      // 62 GiB of GTT headroom cannot explain a refusal
+        const auto   host0 = pool_budget_terms(total, free_, 0);   // a MEASURED zero refuses by design
+        const std::string note0 = pool_refusal_note(host0, total, free_, "HRX0");
+        expect_true("a measured-zero host refusal says HOST, not the GTT ceiling", note0.find("HOST term") != std::string::npos);
+        expect_true("and it does not send the operator to GTT", note0.find("free GTT or lower the reserve") == std::string::npos);
+        expect_true("and it names the measured zero and its likely cause", note0.find("measured zero refuses by design") != std::string::npos);
+
+        const auto        host_tight = pool_budget_terms(total, free_, 1 * GiB);
+        const std::string note1 = pool_refusal_note(host_tight, total, free_, "HRX0");
+        expect_true("a tight-host refusal also says HOST", note1.find("HOST term") != std::string::npos);
+        expect_true("and does NOT claim a measured zero", note1.find("measured zero") == std::string::npos);
+
+        // A GTT refusal keeps its familiar advice: there the ceiling and the reserve really are the knobs.
+        const size_t in_use = 100 * GiB;
+        const auto   gtt = pool_budget_terms(total, total - in_use, kHostUnknown);
+        const std::string note2 = pool_refusal_note(gtt, total, total - in_use, "HRX0");
+        expect_true("a GTT-bound refusal still names the ceiling and the reserve",
+                    note2.find("free GTT or lower the reserve") != std::string::npos);
+        expect_true("and does not claim the host bound it", note2.find("HOST term") == std::string::npos);
+    }
+
     printf(failures == 0 ? "test-hrx-pool-refusal-budget: all requirements passed\n"
                          : "test-hrx-pool-refusal-budget: %d FAILED\n", failures);
     return failures == 0 ? 0 : 1;

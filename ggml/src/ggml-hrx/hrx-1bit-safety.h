@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <string>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -46,6 +48,12 @@ inline constexpr size_t kHostUnknown = static_cast<size_t>(-1);
 
 pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, size_t memory_available = kHostUnknown);
 size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available = kHostUnknown);
+// The refusal line, as text (engine #2069, llama.cpp #259's review). A budget of 0 means "nothing fits", and WHICH term made
+// it zero decides what the operator should free: the GTT ceiling leaves GTT and the reserve as the knobs, while a host-bound
+// budget leaves host memory, and "free GTT" would send them to the wrong one. Pure, so the two wordings are pinned by
+// test-hrx-pool-refusal-budget.cpp without a device -- the whole product of a guardrail is this line.
+std::string pool_refusal_note(const pool_budget_terms_t & terms, size_t memory_total, size_t memory_free, const char * device_name);
+
 // true when GGML_HRX_POOL_LIMIT_MB is in force: pool_budget() then returns that fixed limit rather than a
 // remainder, so a caller that prints the figure has to word it differently.
 bool   pool_budget_is_fixed_limit();
