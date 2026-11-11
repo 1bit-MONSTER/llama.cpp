@@ -184,3 +184,23 @@ Renderer (ggml): ggml/src/ggml-vulkan/ggml-vulkan.cpp (616L vs 2L) — AMD restr
 Everything else in this worktree is resolved by rule, and each rule was earned by a failure first (see the sections
 above): coupled manifests take one side whole, decorators stay adjacent to their class, our deltas go onto the
 surviving structure when our side is a duplicate, and every additive union is checked for duplicates PER CONTAINER.
+
+## WHY llama-bench.cpp's 11 hunks are NOT a mechanical union (measured, not assumed)
+Our flag is `fused_cross_device`, AMD's is `repack`, and both are threaded through eleven places -- but they are not
+the same KIND of field at each of them, and the same name appears in THREE structs in AMD's file:
+
+    cmd_params                repack is std::vector<bool>   (line 367)  -- one entry per run/device
+    cmd_params_instance       repack is bool                (line 1238) -- consumed by mparams.use_extra_bufts = repack
+    (result struct)           repack is bool                (line 1505) -- the column that gets printed
+
+So in hunk 6 `mparams.use_extra_bufts = repack;` is legal because that `repack` is the instance's bool, while in hunk 1
+`std::vector<bool> repack;` is the params member, and in hunk 9 `std::to_string(repack)` is the result's bool. A per-hunk
+diff shows none of this: every hunk simply reads "ours' flag line vs theirs' flag line".
+
+The union therefore has to place each flag in THREE structs (params, instance, result), in a consistent order within
+each, with the default initialiser (positional!) matching the params struct order and the to_string order matching the
+result struct order. That is one coordinated edit across four views of the same two flags, and it cannot be validated
+by brace counting or by py_compile -- it needs a compile of the tool.
+
+Left marked deliberately. Next attempt should start from `struct cmd_params` and walk the flag through params ->
+defaults -> help -> parser -> instance -> result -> compare, adding fused_cross_device and repack together at each stop.
