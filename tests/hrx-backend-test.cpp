@@ -3396,14 +3396,15 @@ static bool matmul_graph_is_supported(ggml_context * ctx, ggml_tensor * output) 
 // stored layout on the device, so it stays stored (4 / 6) and the packed copy is not added.
 // GGML_HRX_Q4K_PACKED_TAIL / GGML_HRX_Q6K_PACKED_ROWS force one or the other; the row is about the default, so it does
 // nothing when either is set.
-static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool file_mapped) {
+static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool file_mapped, int64_t token_count = 100) {
     if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr || std::getenv("GGML_HRX_Q6K_PACKED_ROWS") != nullptr) {
         std::printf("       skipped: a packed-layout switch is set in the environment\n");
         return;
     }
     constexpr int64_t input_size  = 512;
     constexpr int64_t output_size = 256;
-    constexpr int64_t token_count = 100;  // off the 256 (Q4_K) and 128 (Q6_K) grids of the aligned prefill kernels
+    // token_count: 100 is off the 256 (Q4_K) and 128 (Q6_K) grids of the aligned prefill kernels; 12 is the batch size
+    // the Q6_K i8 kernel takes, which reads a layout of its own
 
     ggml_backend_hrx_device_context device_context = {};
     device_context.name                            = "HRX0";
@@ -3461,8 +3462,16 @@ static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool fi
         }
         REQUIRE(format->second == expected);
     }
-    // the case must reach a kernel that takes the format, or it asserts nothing
-    REQUIRE(found == 1);
+    if (weight_type == GGML_TYPE_Q6_K && !file_mapped && token_count >= 6 && token_count <= 16) {
+        // an uploaded Q6_K weight keeps the i8 kernel at this batch size; it carries no weight_format
+        REQUIRE(found == 0);
+        REQUIRE(scheduler.plan().dispatches.size() == 1);
+        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches.front().kernel.kernel_id) ==
+                "loom_libs:ggml_mul_mat_q6_k_i8_prepacked_f16_wmma");
+    } else {
+        // the case must reach a kernel that takes the format, or it asserts nothing
+        REQUIRE(found == 1);
+    }
 
     ggml_backend_buffer_free(buffer);
     ggml_free(ctx);
@@ -11933,6 +11942,10 @@ int main(int argc, char ** argv) {
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true); } },
         { "packed_layout_follows_weight.q6_k.uploaded",
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, false); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped.tokens12",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 12); } },
+        { "packed_layout_follows_weight.q6_k.uploaded.tokens12",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, false, 12); } },
         { "q6k_token1_shortlist_group_count.256", [] { schedule_q6k_token1_shortlist_group_count(256, 65536, 8); } },
         { "q6k_token1_shortlist_group_count.2560",
           [] { schedule_q6k_token1_shortlist_group_count(2560, 248320, 80); } },
