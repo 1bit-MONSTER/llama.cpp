@@ -1646,9 +1646,6 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur,
           ggml_tensor * w_s) const {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    ggml_tensor * res = ggml_mul_mat(ctx0, w, hadamard ? hadamard->forward(ctx0, w, cur, hadamard_memo) : cur);
-=======
     // a Hadamard-folded weight reads the transformed input; a LoRA delta lives in the primal basis and reads `cur`
     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
@@ -1660,7 +1657,6 @@ ggml_tensor * llm_graph_context::build_lora_mm(
     if (w->type == GGML_TYPE_NVFP4) {
         ggml_prec_set_acc(res, GGML_PREC_BF16);
     }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     if (w_s) {
         res = ggml_mul(ctx0, res, w_s);
@@ -1728,10 +1724,6 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w,   // ggml_tensor * as
           ggml_tensor * cur, // ggml_tensor * b
           ggml_tensor * ids,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-          ggml_tensor * w_s) const {
-    ggml_tensor * res = ggml_mul_mat_id(ctx0, w, hadamard ? hadamard->forward(ctx0, w, cur, hadamard_memo) : cur, ids);
-=======
           ggml_tensor * w_s,
           ggml_tensor * slots) const {
     // as in build_lora_mm: the folded weight reads the transformed input, the LoRA delta reads `cur`
@@ -1748,7 +1740,6 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     if (w->type == GGML_TYPE_NVFP4) {
         ggml_prec_set_acc(res, GGML_PREC_BF16);
     }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     if (w_s) {
         const int64_t n_expert = w_s->ne[0];
