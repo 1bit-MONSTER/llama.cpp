@@ -11080,6 +11080,92 @@ func.def inline @ggml_q6k_f32_vector4(%weight: buffer, %weight_row_byte_base: of
   func.return %values : vector<4xf32>
 }
 
+// The same four values from HRX's packed row layout of Q6_K (q6k-packed-k256-row64-scalerow, host-memory.cpp
+// materialize_q6_k_packed_k256_row64_scalerow): rows in groups of 64, and per group and 256-value block one 13,440-byte
+// tile = 64 d (f16) | 64 x 2 x 8 scales (i8, index (lane*2 + s%2)*8 + s/2 for stored scale s) | per half three planes
+// ql[0..32), ql[32..64), qh, each 64 rows x 32 bytes. Byte-identical codes, so the result equals ggml_q6k_f32_vector4.
+// engine #2137: lets the tiled kernels share the copy decode reads.
+func.def inline @ggml_q6k_packed_row64_f32_vector4(%weight: buffer, %row: index, %input_size: index, %q6_block: index, %q6_group: index, %packet: index) -> (vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %tile_bytes = index.constant 13440 : offset
+  %d_bytes = index.constant 2 : offset
+  %scale_plane_offset = index.constant 128 : offset
+  %raw_plane_offset = index.constant 1152 : offset
+  %byte = index.constant 1 : offset
+  %field_row_bytes = index.constant 32 : offset
+  %c4_i32v = vector.constant 4 : vector<1xi32>
+  %nibble_mask = vector.constant 252645135 : vector<1xi32>
+  %high_mask = vector.constant 50529027 : vector<1xi32>
+  %c32_f32v = vector.constant 32.0 : vector<4xf32>
+  %bounded_group = index.assume %q6_group [range(%q6_group, 0, 7)] : index
+  %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
+  %blocks = index.div %input_size, %c256 : index
+  %row_group = index.div %row, %c64 : index
+  %lane = index.rem %row, %c64 : index
+  %tile_index = index.madd %row_group, %blocks, %q6_block : index
+  %tile_base = index.scale %tile_index, %tile_bytes : index, offset -> offset
+  %group_in_half = index.rem %bounded_group, %c4 : index
+  %half = index.div %bounded_group, %c4 : index
+  %ql_side = index.rem %group_in_half, %c2 : index
+  %nibble = index.div %group_in_half, %c2 : index
+  %nibble_shift_index = index.mul %nibble, %c4 : index
+  %nibble_shift_i32 = index.cast %nibble_shift_index : index to i32
+  %nibble_shift = vector.splat %nibble_shift_i32 : vector<1xi32>
+  %qh_shift_index = index.mul %group_in_half, %c2 : index
+  %qh_shift_i32 = index.cast %qh_shift_index : index to i32
+  %qh_shift = vector.splat %qh_shift_i32 : vector<1xi32>
+  // d
+  %d_add = index.scale %lane, %d_bytes : index, offset -> offset
+  %d_byte_base = index.add %tile_base, %d_add : offset
+  %d_view = buffer.view %weight[%d_byte_base] : buffer -> view<1xf16>
+  // scale: stored index s = group*2 + packet/4, kept at (lane*2 + s%2)*8 + s/2
+  %scale_half = index.div %bounded_packet, %c4 : index
+  %scale_lane = index.madd %lane, %c2, %scale_half : index
+  %scale_index = index.madd %scale_lane, %c8, %bounded_group : index
+  %scale_add = index.scale %scale_index, %byte : index, offset -> offset
+  %scale_plane_base = index.add %tile_base, %scale_plane_offset : offset
+  %scale_byte_base = index.add %scale_plane_base, %scale_add : offset
+  %scale_view = buffer.view %weight[%scale_byte_base] : buffer -> view<1xi8>
+  // codes: plane (half*3 + field), field 0/1 = the two ql halves, 2 = qh; then the row, then the packet's 4 bytes
+  %raw_base = index.add %tile_base, %raw_plane_offset : offset
+  %half_planes = index.mul %half, %c3 : index
+  %ql_plane = index.add %half_planes, %ql_side : index
+  %qh_plane = index.add %half_planes, %c2 : index
+  %ql_row = index.madd %ql_plane, %c64, %lane : index
+  %qh_row = index.madd %qh_plane, %c64, %lane : index
+  %ql_row_add = index.scale %ql_row, %field_row_bytes : index, offset -> offset
+  %qh_row_add = index.scale %qh_row, %field_row_bytes : index, offset -> offset
+  %ql_row_base = index.add %raw_base, %ql_row_add : offset
+  %qh_row_base = index.add %raw_base, %qh_row_add : offset
+  %ql_view = buffer.view %weight[%ql_row_base] : buffer -> view<8xi32>
+  %qh_view = buffer.view %weight[%qh_row_base] : buffer -> view<8xi32>
+  %ql_word = vector.load %ql_view[%bounded_packet] : view<8xi32> -> vector<1xi32>
+  %qh_word = vector.load %qh_view[%bounded_packet] : view<8xi32> -> vector<1xi32>
+  %ql_shifted = vector.shrui %ql_word, %nibble_shift : vector<1xi32>
+  %ql = vector.andi %ql_shifted, %nibble_mask : vector<1xi32>
+  %qh_shifted = vector.shrui %qh_word, %qh_shift : vector<1xi32>
+  %qh_low = vector.andi %qh_shifted, %high_mask : vector<1xi32>
+  %qh = vector.shli %qh_low, %c4_i32v : vector<1xi32>
+  %code = vector.ori %ql, %qh : vector<1xi32>
+  %code_i8 = vector.bitcast %code : vector<1xi32> to vector<4xi8>
+  %code_f32 = vector.uitofp %code_i8 : vector<4xi8> to vector<4xf32>
+  %centered = vector.subf %code_f32, %c32_f32v : vector<4xf32>
+  %scale_i8 = view.load %scale_view[%c0] : view<1xi8> -> i8
+  %d_f16 = view.load %d_view[%c0] : view<1xf16> -> f16
+  %scale = scalar.sitofp %scale_i8 : i8 to f32
+  %d = scalar.extf %d_f16 : f16 to f32
+  %combined_scale = scalar.mulf %scale, %d : f32
+  %combined_scale_vector = vector.splat %combined_scale : vector<4xf32>
+  %values = vector.mulf %centered, %combined_scale_vector : vector<4xf32>
+  func.return %values : vector<4xf32>
+}
+
 func.def inline @ggml_q8_0_f32_vector4(%weight: buffer, %row_byte_base: offset, %q8_block: index, %packet: index) -> (vector<4xf32>) {
   %c0 = index.constant 0 : index
   %c4 = index.constant 4 : index

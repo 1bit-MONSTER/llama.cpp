@@ -189,6 +189,17 @@ static bool q4k_packed_tail_applies(const DispatchMatchContext & context,
            !weight_has_native_layout_reader(context.graph, weight) && q4k_packed_tail_enabled();
 }
 
+static bool q6k_packed_tail_applies(const DispatchMatchContext & context,
+                                    const Value &                weight,
+                                    CommonMulMatWeightFormat     format,
+                                    int64_t                      token_count,
+                                    int64_t                      input_size,
+                                    int64_t                      output_size) {
+    return format == CommonMulMatWeightFormat::Q6K && token_count > 5 && token_count <= kMulMatPrefillMaxTokens &&
+           q6k_packed_rows_weight_ok(weight, input_size, output_size) &&
+           !weight_has_native_layout_reader(context.graph, weight) && q6k_packed_rows_enabled();
+}
+
 static bool has_normalized_rope_consumer(const Graph & graph, const Value & value) {
     if (!graph.has_index()) {
         return false;
@@ -676,9 +687,14 @@ static bool build_q6_k_prefill_wave32_dispatch(const CommonMulMatMatch & match,
                                                int                       input_scale_log2,
                                                KernelCatalogRef          kernel,
                                                size_t                    root_index,
-                                               DispatchMatch &           dispatch_match) {
+                                               DispatchMatch &           dispatch_match,
+                                               bool                      packed_rows = false) {
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kernel);
+    if (packed_rows) {
+        // engine #2137: the kernel reads the packed row layout decode reads (dispatch-q4k-packed-tail.h)
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_q6_k_packed.weight_layout", "2");
+    }
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_q6_k_packed.input_size",
                                                common_to_config_value(match.input_size));
@@ -689,7 +705,13 @@ static bool build_q6_k_prefill_wave32_dispatch(const CommonMulMatMatch & match,
                                                common_to_config_value(match.token_count));
     common_set_f16_prefill_activation_scale(dispatch, input_scale_log2);
     dispatch.bindings.push_back({ input, 0, input_bytes });
-    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    if (packed_rows) {
+        dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count, kQ6KPackedK256Row64ScaleRowLayout,
+                                      match.weight->type, match.input_size, match.output_size,
+                                      match.weight->byte_count });
+    } else {
+        dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    }
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
     dispatch_match.covered_nodes.push_back(root_index);
@@ -719,11 +741,23 @@ static bool match_q6_k_prefill_wave32_dispatch(const DispatchMatchContext & cont
     if (!prepared) {
         return false;
     }
+    // engine #2137: with GGML_HRX_Q6K_PACKED_ROWS=1 the f16 kernel reads the packed rows decode reads. It takes
+    // precedence over the older GGML_HRX_Q6K_PACKED_PREFILL, whose kernel is bound to the stored layout.
+    // The from_packed kernel reads the stored rows on its wide tile (tokens a multiple of 256, outputs of 128) and
+    // 17,536-byte int8 tiles on every other tile, while this dispatch binds the stored layout. Off the wide tile it
+    // read past the weight: test-backend-ops MUL_MAT(q6_K, m=2048, n=128, k=4096, weight=resident) with
+    // GGML_HRX_Q6K_PACKED_PREFILL=1 ended in "HRX buffer download failed" and a bus error. So the switch selects that
+    // kernel only where it reads what is bound.
+    const bool from_packed = q6k_packed_prefill_enabled() && match.token_count % 256 == 0 &&
+                             match.output_size % 128 == 0;
+    const bool packed_rows = q6k_packed_rows_weight_ok(*match.weight, match.input_size, match.output_size) &&
+                             !weight_has_native_layout_reader(context.graph, *match.weight) && q6k_packed_rows_enabled();
     return build_q6_k_prefill_wave32_dispatch(match, activation.value, activation.length, activation_scale_log2,
-                                              q6k_packed_prefill_enabled() ? kMulMatQ6KF16WmmaPrefillFromPackedKernel
-                                                                           : kMulMatQ6KF16WmmaPrefillWave32Kernel,
+                                              packed_rows ? kMulMatQ6KF16WmmaPrefillWave32Kernel :
+                                              from_packed ? kMulMatQ6KF16WmmaPrefillFromPackedKernel
+                                                          : kMulMatQ6KF16WmmaPrefillWave32Kernel,
                                               context.root_index,
-                                              dispatch_match);
+                                              dispatch_match, packed_rows);
 }
 
 static bool match_symmetric_i4_prefill_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
@@ -1171,6 +1205,11 @@ static bool build_mul_mat_dispatch(const DispatchMatchContext & context,
                                 match.output_size)) {
         pack_q4 = true;
     }
+    if (!pack_q4 && !pack_q6 && !split_k &&
+        q6k_packed_tail_applies(context, *match.weight, match.weight_format, match.token_count, match.input_size,
+                                match.output_size)) {
+        pack_q6 = true;
+    }
     const CommonMulMatWeightFormat format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
                                            pack_q6 ? CommonMulMatWeightFormat::Q6KRow64 : match.weight_format;
     dispatch.kernel.compile_parameters.emplace(
@@ -1294,6 +1333,11 @@ static bool match_mul_mat_postops_dispatch(const DispatchMatchContext & context,
         q4k_packed_tail_applies(context, *match.weight, match.weight_format, match.token_count, match.input_size,
                                 match.output_size)) {
         pack_q4 = true;  // engine #2137
+    }
+    if (!pack_q4 && !pack_q6 &&
+        q6k_packed_tail_applies(context, *match.weight, match.weight_format, match.token_count, match.input_size,
+                                match.output_size)) {
+        pack_q6 = true;  // engine #2137
     }
     const CommonMulMatWeightFormat format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
                                            pack_q6 ? CommonMulMatWeightFormat::Q6KRow64 : match.weight_format;

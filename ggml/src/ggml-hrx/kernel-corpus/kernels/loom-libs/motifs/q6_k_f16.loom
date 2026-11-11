@@ -180,3 +180,133 @@ func.def public inline @ggml_q6k_f16_pair(%half_packet: i1, %weight: buffer, %we
   %values1 = vector.fptrunc %values_f32_1 : vector<16xf32> to vector<16xf16>
   func.return %values0, %values1 : vector<16xf16>, vector<16xf16>
 }
+
+// The same pair from HRX's packed row layout of Q6_K (q6k-packed-k256-row64-scalerow, the copy decode reads; layout in
+// host-memory.cpp materialize_q6_k_packed_k256_row64_scalerow and ggml_q6k_packed_row64_f32_vector4). Byte-identical
+// codes, so the values equal ggml_q6k_f16_pair's. engine #2137: lets aligned prefill share that copy.
+func.def public inline @ggml_q6k_packed_row64_f16_pair(%half_packet: i1, %weight: buffer, %row: index, %input_size: index, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>) {
+  %padding = vector.constant 0 : vector<2xi32>
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c4_i32v = vector.constant 4 : vector<4xi32>
+  %nibble_mask = vector.constant 252645135 : vector<4xi32>
+  %high_mask = vector.constant 50529027 : vector<4xi32>
+  %c32_f32v = vector.constant 32.0 : vector<16xf32>
+  %bounded_group = index.assume %q6_group [range(%q6_group, 0, 6), multiple_of(%q6_group, 2)] : index
+  %bounded_packet = index.assume %packet [range(%packet, 0, 6), multiple_of(%packet, 2)] : index
+  %c3 = index.constant 3 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %tile_bytes = index.constant 13440 : offset
+  %d_bytes = index.constant 2 : offset
+  %byte = index.constant 1 : offset
+  %scale_plane_offset = index.constant 128 : offset
+  %raw_plane_offset = index.constant 1152 : offset
+  %field_row_bytes = index.constant 32 : offset
+  %group_in_half = index.rem %bounded_group, %c4 : index
+  %half = index.div %bounded_group, %c4 : index
+  %blocks = index.div %input_size, %c256 : index
+  %row_group = index.div %row, %c64 : index
+  %lane = index.rem %row, %c64 : index
+  %tile_index = index.madd %row_group, %blocks, %q6_block : index
+  %tile_base = index.scale %tile_index, %tile_bytes : index, offset -> offset
+  %d_add = index.scale %lane, %d_bytes : index, offset -> offset
+  %d_byte_base = index.add %tile_base, %d_add : offset
+  %d_view = buffer.view %weight[%d_byte_base] : buffer -> view<1xf16>
+  // codes: plane (half*3 + field) of 64 rows x 32 bytes, field 0/1 = the two ql halves (this group and the next), 2 = qh
+  %raw_base = index.add %tile_base, %raw_plane_offset : offset
+  %half_planes = index.mul %half, %c3 : index
+  %ql_plane1 = index.add %half_planes, %c1 : index
+  %qh_plane = index.add %half_planes, %c2 : index
+  %ql_row0 = index.madd %half_planes, %c64, %lane : index
+  %ql_row1 = index.madd %ql_plane1, %c64, %lane : index
+  %qh_row = index.madd %qh_plane, %c64, %lane : index
+  %ql_row_add0 = index.scale %ql_row0, %field_row_bytes : index, offset -> offset
+  %ql_row_add1 = index.scale %ql_row1, %field_row_bytes : index, offset -> offset
+  %qh_row_add = index.scale %qh_row, %field_row_bytes : index, offset -> offset
+  %ql_row_base0 = index.add %raw_base, %ql_row_add0 : offset
+  %ql_row_base1 = index.add %raw_base, %ql_row_add1 : offset
+  %qh_row_base = index.add %raw_base, %qh_row_add : offset
+  %ql_view0 = buffer.view %weight[%ql_row_base0] : buffer -> view<8xi32>
+  %ql_view1 = buffer.view %weight[%ql_row_base1] : buffer -> view<8xi32>
+  %qh_view = buffer.view %weight[%qh_row_base] : buffer -> view<8xi32>
+  %nibble = index.div %group_in_half, %c2 : index
+  %nibble_shift_index = index.mul %nibble, %c4 : index
+  %nibble_shift_i32 = index.cast %nibble_shift_index : index to i32
+  %nibble_shift = vector.splat %nibble_shift_i32 : vector<4xi32>
+  %qh_shift_index0 = index.mul %group_in_half, %c2 : index
+  %qh_shift_index1 = index.add %qh_shift_index0, %c2 : index
+  %qh_shift_i32_0 = index.cast %qh_shift_index0 : index to i32
+  %qh_shift_i32_1 = index.cast %qh_shift_index1 : index to i32
+  %qh_shift0 = vector.splat %qh_shift_i32_0 : vector<4xi32>
+  %qh_shift1 = vector.splat %qh_shift_i32_1 : vector<4xi32>
+  // scales: stored index s = group*2 + packet/4 sits at (lane*2 + s%2)*8 + s/2, so this group and the next are adjacent bytes
+  %scale_packet_half = index.div %bounded_packet, %c4 : index
+  %scale_lane = index.madd %lane, %c2, %scale_packet_half : index
+  %scale_index = index.madd %scale_lane, %c8, %bounded_group : index
+  %scale_add = index.scale %scale_index, %byte : index, offset -> offset
+  %scale_plane_base = index.add %tile_base, %scale_plane_offset : offset
+  %scale_byte_base = index.add %scale_plane_base, %scale_add : offset
+  %scale_view = buffer.view %weight[%scale_byte_base] : buffer -> view<2xi8>
+  %ql_word0 = scf.if %half_packet -> (vector<4xi32>) {
+    %words = vector.load %ql_view0[%bounded_packet] : view<8xi32> -> vector<2xi32>
+    %padded = vector.concat<0> %words, %padding : vector<2xi32>, vector<2xi32> -> vector<4xi32>
+    scf.yield %padded : vector<4xi32>
+  } else {
+    %words = vector.load %ql_view0[%bounded_packet] : view<8xi32> -> vector<4xi32>
+    scf.yield %words : vector<4xi32>
+  }
+  %ql_word1 = scf.if %half_packet -> (vector<4xi32>) {
+    %words = vector.load %ql_view1[%bounded_packet] : view<8xi32> -> vector<2xi32>
+    %padded = vector.concat<0> %words, %padding : vector<2xi32>, vector<2xi32> -> vector<4xi32>
+    scf.yield %padded : vector<4xi32>
+  } else {
+    %words = vector.load %ql_view1[%bounded_packet] : view<8xi32> -> vector<4xi32>
+    scf.yield %words : vector<4xi32>
+  }
+  %qh_word = scf.if %half_packet -> (vector<4xi32>) {
+    %words = vector.load %qh_view[%bounded_packet] : view<8xi32> -> vector<2xi32>
+    %padded = vector.concat<0> %words, %padding : vector<2xi32>, vector<2xi32> -> vector<4xi32>
+    scf.yield %padded : vector<4xi32>
+  } else {
+    %words = vector.load %qh_view[%bounded_packet] : view<8xi32> -> vector<4xi32>
+    scf.yield %words : vector<4xi32>
+  }
+  %scale_i8_0 = view.load %scale_view[%c0] : view<2xi8> -> i8
+  %scale_i8_1 = view.load %scale_view[%c1] : view<2xi8> -> i8
+  %d_f16 = view.load %d_view[%c0] : view<1xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %ql_shifted0 = vector.shrui %ql_word0, %nibble_shift : vector<4xi32>
+  %ql0 = vector.andi %ql_shifted0, %nibble_mask : vector<4xi32>
+  %qh_shifted0 = vector.shrui %qh_word, %qh_shift0 : vector<4xi32>
+  %qh_low0 = vector.andi %qh_shifted0, %high_mask : vector<4xi32>
+  %qh0 = vector.shli %qh_low0, %c4_i32v : vector<4xi32>
+  %code0 = vector.ori %ql0, %qh0 : vector<4xi32>
+  %code_i8_0 = vector.bitcast %code0 : vector<4xi32> to vector<16xi8>
+  %code_f32_0 = vector.uitofp %code_i8_0 : vector<16xi8> to vector<16xf32>
+  %centered0 = vector.subf %code_f32_0, %c32_f32v : vector<16xf32>
+  %scale0 = scalar.sitofp %scale_i8_0 : i8 to f32
+  %combined_scale0 = scalar.mulf %scale0, %d : f32
+  %combined_scale_vector0 = vector.splat %combined_scale0 : vector<16xf32>
+  %values_f32_0 = vector.mulf %centered0, %combined_scale_vector0 : vector<16xf32>
+  %values0 = vector.fptrunc %values_f32_0 : vector<16xf32> to vector<16xf16>
+  %ql_shifted1 = vector.shrui %ql_word1, %nibble_shift : vector<4xi32>
+  %ql1 = vector.andi %ql_shifted1, %nibble_mask : vector<4xi32>
+  %qh_shifted1 = vector.shrui %qh_word, %qh_shift1 : vector<4xi32>
+  %qh_low1 = vector.andi %qh_shifted1, %high_mask : vector<4xi32>
+  %qh1 = vector.shli %qh_low1, %c4_i32v : vector<4xi32>
+  %code1 = vector.ori %ql1, %qh1 : vector<4xi32>
+  %code_i8_1 = vector.bitcast %code1 : vector<4xi32> to vector<16xi8>
+  %code_f32_1 = vector.uitofp %code_i8_1 : vector<16xi8> to vector<16xf32>
+  %centered1 = vector.subf %code_f32_1, %c32_f32v : vector<16xf32>
+  %scale1 = scalar.sitofp %scale_i8_1 : i8 to f32
+  %combined_scale1 = scalar.mulf %scale1, %d : f32
+  %combined_scale_vector1 = vector.splat %combined_scale1 : vector<16xf32>
+  %values_f32_1 = vector.mulf %centered1, %combined_scale_vector1 : vector<16xf32>
+  %values1 = vector.fptrunc %values_f32_1 : vector<16xf32> to vector<16xf16>
+  func.return %values0, %values1 : vector<16xf16>, vector<16xf16>
+}
