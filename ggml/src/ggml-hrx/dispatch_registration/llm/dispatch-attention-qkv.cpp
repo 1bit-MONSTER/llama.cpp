@@ -108,16 +108,7 @@ static std::string to_config_value(int64_t value) {
 // The condition itself lives in ggml/src/ggml-hrx/rope-claim-params.h, because the claim in
 // fused-context-claim.h has to assert exactly what this matcher accepts (engine #1467).
 static bool is_supported_attention_rope_params(const RopeParams & params, int64_t head_size) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     return rope_params_supported_by_attention_fusion(params, head_size);
-=======
-    if (params.n_offs != 0) {
-        return false;
-    }
-    return params.n_dims == head_size && params.mode == GGML_ROPE_TYPE_NORMAL && std::isfinite(params.freq_base) &&
-           params.freq_base > 0.0f && std::isfinite(params.freq_scale) && params.freq_scale > 0.0f &&
-           params.ext_factor == 0.0f && params.attn_factor == 1.0f;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 
 static bool build_rope_theta_table(const GraphNode & rope, int64_t head_size, std::vector<uint8_t> & data) {
