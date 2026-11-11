@@ -1,0 +1,26 @@
+# engine#2138 merge — state of this worktree (read before building on it)
+
+Branches: local only (`1bit/2138-merge-wip` at cef4e648b, on top of cl-flm's WIP merge f9319d7).
+Parents: ours 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196, AMD 9bf5871310a8d7de74f4cb0c57009835fbf91c27, merge base 43b0ec2c41cc.
+
+## What was done
+136 conflict hunks resolved mechanically, 319 left carrying markers in 87 files (from 102 marker files).
+The rule per hunk, against the merge base:
+  theirs unchanged from the base        -> keep ours
+  ours unchanged from the base          -> take theirs
+  one side empty, other side's text new -> keep the non-empty side
+  both sides edited the same lines      -> KEEP THE MARKERS (needs a human)
+
+## This tree is NOT verified, and the heuristic is known to be imperfect
+The base-comparison is a text-containment test, so it is whitespace/comment sensitive. Spot check that
+caught it: `dispatch-registration/dispatch-registry.h` has 0 markers but DOES contain
+`const DispatchRegistry *  registry`, which the base had and **our line removed** — so that hunk was
+resolved to AMD's side when the intent was to keep our deletion. Consequences can be a resurrected member,
+or a duplicate if our line moved it elsewhere; only a compile tells you which.
+
+Two things to do before anyone builds or opens a PR from this branch:
+  1. compile the HRX target and treat every error in a resolved file as a resolution bug, not a merge bug;
+  2. review the 136 mechanical hunks by area, starting with `ggml/src/ggml-hrx/**` — the same containment
+     test applied to our own refactors is where a wrong choice is silent rather than loud.
+(An earlier pass of mine resolved 452 hunks by treating "our side empty" as "take theirs" and was reverted:
+in the merge-base sense an empty side usually means we deleted, so it resurrected deletions en bloc.)
