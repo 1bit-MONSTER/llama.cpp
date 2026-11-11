@@ -422,7 +422,11 @@ static void append_match_to_plan(ggml::hrx::CommandPlan &   plan,
     for (ggml::hrx::CommandPlanCompletionCounterRequest & request : match.completion_counter_requests) {
         plan.completion_counter_requests.push_back(std::move(request));
     }
-    REQUIRE(plan.metadata.append(std::move(match.metadata), plan.status));
+    const bool metadata_appended = plan.metadata.append(std::move(match.metadata), plan.status);
+    for (const std::string & error : plan.status.errors()) {
+        std::fprintf(stderr, "plan status: %s\n", error.c_str());
+    }
+    REQUIRE(metadata_appended);
     plan.status.append(match.status);
     for (size_t covered_node : match.covered_nodes) {
         REQUIRE(covered_node < covered_nodes.size());
@@ -3336,6 +3340,111 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     ggml_backend_free(hrx_backend);
 }
 
+// engine #1962: down(swiglu(gate(x), up(x))) at prefill, with a gated product above the f16 maximum.
+// The gate/up kernel hands the f16 form of its result to the down-projection.
+static void run_ffn_prefill_large_activation_case(int64_t token_count, float input_scale) {
+    constexpr int64_t input_size = 1024;
+    constexpr int64_t ff_size    = 4096;
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = static_cast<size_t>(48 * 1024 * 1024);
+    params.no_alloc         = true;
+    ggml_context * cpu_ctx  = ggml_init(params);
+    ggml_context * hrx_ctx  = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+
+    struct Graph {
+        ggml_tensor * gate_weight;
+        ggml_tensor * up_weight;
+        ggml_tensor * down_weight;
+        ggml_tensor * input;
+        ggml_tensor * gated;
+        ggml_tensor * output;
+    };
+    auto build = [&](ggml_context * ctx) {
+        Graph g;
+        g.gate_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, input_size, ff_size);
+        g.up_weight   = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, input_size, ff_size);
+        g.down_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, ff_size, input_size);
+        g.input       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+        g.gated = ggml_glu_split(ctx, ggml_mul_mat(ctx, g.gate_weight, g.input), ggml_mul_mat(ctx, g.up_weight, g.input),
+                                 GGML_GLU_OP_SWIGLU);
+        g.output = ggml_mul_mat(ctx, g.down_weight, g.gated);
+        return g;
+    };
+    const Graph cpu = build(cpu_ctx);
+    const Graph hrx = build(hrx_ctx);
+
+    auto hrx_gate_buffer = allocate_test_weight(hrx_backend, hrx.gate_weight);
+    auto hrx_up_buffer   = allocate_test_weight(hrx_backend, hrx.up_weight);
+    auto hrx_down_buffer = allocate_test_weight(hrx_backend, hrx.down_weight);
+
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    ggml_build_forward_expand(cpu_graph, cpu.output);
+    ggml_build_forward_expand(hrx_graph, hrx.output);
+
+    const std::vector<std::string> sequence = scheduled_kernel_sequence(hrx_graph);
+    REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32"));
+    REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_q4_k_f16_wmma_prefill_wave32"));
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+
+    const std::vector<uint8_t> gate_weight = make_matmul_weight_bytes(GGML_TYPE_Q4_K, input_size, ff_size, 6);
+    const std::vector<uint8_t> up_weight   = make_matmul_weight_bytes(GGML_TYPE_Q4_K, input_size, ff_size, 11);
+    const std::vector<uint8_t> down_weight = make_matmul_weight_bytes(GGML_TYPE_Q4_K, ff_size, input_size, 17);
+    std::vector<float>         input(static_cast<size_t>(input_size * token_count));
+    for (size_t i = 0; i < input.size(); ++i) {
+        input[i] = input_scale * (static_cast<float>((i * 37) % 17) - 8.0f) / 8.0f;
+    }
+    set_tensor_pair_bytes(cpu_backend, cpu.gate_weight, hrx_backend, hrx.gate_weight, gate_weight.data(), gate_weight.size());
+    set_tensor_pair_bytes(cpu_backend, cpu.up_weight, hrx_backend, hrx.up_weight, up_weight.data(), up_weight.size());
+    set_tensor_pair_bytes(cpu_backend, cpu.down_weight, hrx_backend, hrx.down_weight, down_weight.data(), down_weight.size());
+    set_tensor_pair_bytes(cpu_backend, cpu.input, hrx_backend, hrx.input, input.data(), input.size() * sizeof(float));
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+
+    // the case must put the gated product past the f16 maximum and inside the prescaled window
+    float gated_max = 0.0f;
+    for (const float value : get_f32_tensor(cpu_backend, cpu.gated)) {
+        gated_max = std::max(gated_max, std::fabs(value));
+    }
+    const std::vector<float> expected = get_f32_tensor(cpu_backend, cpu.output);
+    const std::vector<float> actual   = get_f32_tensor(hrx_backend, hrx.output);
+    double error = 0.0;
+    double norm  = 0.0;
+    size_t non_finite = 0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        non_finite += std::isfinite(actual[i]) ? 0 : 1;
+        const double diff = static_cast<double>(actual[i]) - static_cast<double>(expected[i]);
+        error += diff * diff;
+        norm  += static_cast<double>(expected[i]) * static_cast<double>(expected[i]);
+    }
+    std::fprintf(stderr, "ffn prefill: tokens=%lld gated max=%g non-finite=%zu nmse=%g\n",
+                 static_cast<long long>(token_count), static_cast<double>(gated_max), non_finite, error / norm);
+    REQUIRE(gated_max > 2.0f * 65504.0f);
+    REQUIRE(gated_max < 2.0e6f);
+    REQUIRE(non_finite == 0);
+    REQUIRE(error / norm < 1.0e-3);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_dense_matmul_packed_glu_cpu_reference_case(ggml_type    weight_type,
                                                            const char * expected_kernel,
                                                            int64_t      token_count,
@@ -4991,6 +5100,11 @@ static void add_cases(test_runner::Suite & suite) {
                                    4,
                                    4096,
                                    GGML_GLU_OP_SWIGLU); });
+    for (const int64_t tokens : { 256, 512 }) {
+        // an input scale of 640 gives a gated maximum of 4.0e5
+        add(suite, "ffn.q4_k.prefill.large_activation." + std::to_string(tokens),
+            [=] { run_ffn_prefill_large_activation_case(tokens, 640.0f); });
+    }
     add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.128.swiglu",
         [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
                                    GGML_TYPE_Q4_K,

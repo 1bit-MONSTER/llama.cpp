@@ -51,8 +51,9 @@ inline const CommandPlanAlternateValue * find_alternate_value(const CommandPlan 
 inline const CommandPlanAlternateValue * find_alternate_value(const CommandPlan & plan,
                                                               ValueId             graph_value,
                                                               ggml_type           type,
-                                                              size_t              byte_count) {
-    return plan.metadata.find_alternate_value(graph_value, type, byte_count);
+                                                              size_t              byte_count,
+                                                              int                 scale_log2 = 0) {
+    return plan.metadata.find_alternate_value(graph_value, type, byte_count, scale_log2);
 }
 
 inline bool same_full_value_range(const Value & lhs, const Value & rhs) {
@@ -63,8 +64,9 @@ inline const CommandPlanAlternateValue * find_alternate_value(const Graph &     
                                                               const CommandPlan & plan,
                                                               ValueId             graph_value,
                                                               ggml_type           type,
-                                                              size_t              byte_count) {
-    const CommandPlanAlternateValue * exact = find_alternate_value(plan, graph_value, type, byte_count);
+                                                              size_t              byte_count,
+                                                              int                 scale_log2 = 0) {
+    const CommandPlanAlternateValue * exact = find_alternate_value(plan, graph_value, type, byte_count, scale_log2);
     if (exact != nullptr) {
         return exact;
     }
@@ -79,7 +81,7 @@ inline const CommandPlanAlternateValue * find_alternate_value(const Graph &     
         if (candidate == nullptr || !same_full_value_range(*value, *candidate)) {
             return nullptr;
         }
-        return find_alternate_value(plan, candidate_id, type, byte_count);
+        return find_alternate_value(plan, candidate_id, type, byte_count, scale_log2);
     };
 
     ValueId alias = value->alias_source;
