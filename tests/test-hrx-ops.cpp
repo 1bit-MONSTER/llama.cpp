@@ -3350,7 +3350,11 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
 // the logits are both above 65504 and inside the prescaled window).
 enum class ShortlistArm { Ordinary, Spike, Large, Duplicates, NearTies };
 static void run_q6_k_token1_shortlist_case(float branch_scale, ShortlistArm arm) {
-    const bool require_large_activation = arm != ShortlistArm::Ordinary;
+    // The f16-range assertion belongs to the arms that deliberately cross 65504 (Spike, Large). Duplicates and
+    // NearTies keep ordinary scale and stress the top-k BOUNDARY instead, so listing them here rather than saying
+    // "not Ordinary" keeps a new arm from silently inheriting an assertion that is about something else.
+    const bool require_large_activation =
+        arm == ShortlistArm::Spike || arm == ShortlistArm::Large;
     constexpr int64_t hidden_size = 256;
     constexpr int64_t vocab_size  = 65536;
     constexpr int64_t table_rows  = 8;
