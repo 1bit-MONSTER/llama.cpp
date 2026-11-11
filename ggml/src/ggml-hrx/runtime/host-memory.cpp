@@ -1,5 +1,7 @@
 #include "host-memory.h"
 
+#include "model-buffer-from-mmap.h"
+
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "hrx-interop-utils.h"
@@ -1927,6 +1929,12 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
                               materialized_length / (1024 * 1024), limit_ / (1024 * 1024));
             return result;
         }
+    }
+
+    // engine #2137: a device copy in the stored layout is about to be made of a host weight; matchers that can read
+    // the weight either way ask for this before adding a packed copy (model-buffer-from-mmap.h).
+    if (source.host_data != nullptr && source.layout == kNativeWeightLayout) {
+        note_stored_device_copy(static_cast<const uint8_t *>(source.host_data) + source.offset);
     }
 
     // GGML_HRX_HOST_WEIGHT_TRACE=2: one line per device copy made (a cache miss), so the copies of a run can be counted

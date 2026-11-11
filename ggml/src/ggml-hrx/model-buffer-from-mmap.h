@@ -32,6 +32,13 @@ bool model_buffer_from_mmap_enabled();
 // weight in such a buffer costs a device copy for every layout the kernels read it in (engine #2137).
 bool buffer_is_file_mapped(ggml_backend_buffer_t buffer);
 
+// engine #2137: host addresses of weights that have a device copy in the stored (GGUF) layout, recorded when the copy
+// is made. A matcher that can read a weight either stored or packed asks this before choosing, so it does not add a
+// packed copy next to a stored one that a decode kernel already made. Keyed by the weight's host address, which is
+// where both the matcher (tensor->data) and the copy (buffer base + offset) can see it.
+void note_stored_device_copy(const void * host_address);
+bool has_stored_device_copy(const void * host_address);
+
 // The buffer type of these buffers ("<device>_Mapped"). It is host memory; only this device claims it.
 void model_buffer_from_mmap_init_type(ggml_backend_hrx_device_context * device);
 

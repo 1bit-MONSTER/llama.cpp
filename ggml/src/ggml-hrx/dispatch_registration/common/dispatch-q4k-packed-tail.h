@@ -56,14 +56,41 @@ inline PackedLayoutSwitch packed_layout_switch(const char * name, const char * w
     return value;
 }
 
-// The weight's own buffer decides the default (see the header comment).
+// engine #2137: a weight that already has a device copy in the stored layout. On a mixed-quant dense model
+// (Qwen3.8-27B UD-Q4_K_XL) the one-token decode goes through the kquant family, which reads the GGUF block layout, so
+// a prefill kernel that reads the same weight in the packed rows makes a second device copy of it. Where the prefill
+// kernel has a stored form, it keeps the stored layout for such a weight. The copy is recorded when it is made
+// (model-buffer-from-mmap.h), so this follows what ran, not what a matcher was asked about. A weight is known once a
+// decode has run, which the tools' warm-up does before the first prompt.
+// GGML_HRX_PREFILL_FOLLOWS_DECODE=0 turns the lookup off.
+inline bool prefill_follows_decode_enabled() {
+    static const bool enabled = [] {
+        const char * env = std::getenv("GGML_HRX_PREFILL_FOLLOWS_DECODE");
+        return env == nullptr || env[0] != '0';
+    }();
+    return enabled;
+}
+
+inline bool decode_reads_stored(const Value & weight) {
+    const ggml_tensor * tensor = weight.tensor;
+    if (tensor == nullptr || !prefill_follows_decode_enabled()) {
+        return false;
+    }
+    return has_stored_device_copy(tensor->view_src != nullptr ? tensor->view_src->data : tensor->data);
+}
+
+inline bool weight_in_file_mapping(const Value & weight) {
+    const ggml_tensor * tensor = weight.tensor;
+    return tensor != nullptr &&
+           buffer_is_file_mapped(tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer);
+}
+
+// The weight's own buffer decides the default (see the header comment), unless decode reads the weight stored.
 inline bool packed_layout_wanted(PackedLayoutSwitch value, const Value & weight) {
     if (value != PackedLayoutSwitch::FollowWeight) {
         return value == PackedLayoutSwitch::Packed;
     }
-    const ggml_tensor * tensor = weight.tensor;
-    return tensor != nullptr &&
-           buffer_is_file_mapped(tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer);
+    return weight_in_file_mapping(weight) && !decode_reads_stored(weight);
 }
 
 inline bool q4k_packed_tail_enabled(const Value & weight) {
@@ -102,6 +129,16 @@ inline bool q6k_packed_rows_enabled(const Value & weight) {
 
 inline bool q6k_packed_rows_weight_ok(const Value & weight, int64_t input_size, int64_t output_size) {
     return packed_tail_weight_ok(weight, GGML_TYPE_Q6_K, input_size, output_size);
+}
+
+// The 6-to-16-token Q6_K kernel reads an i8 layout of its own. That is an extra device copy of a weight in the file
+// mapping whichever of the other two layouts the weight is read in elsewhere, so the kernel is left out for such a
+// weight unless the stored layout is forced for every weight (the previous behaviour).
+inline bool q6k_i8_layout_is_extra_copy(const Value & weight, int64_t input_size, int64_t output_size) {
+    if (!q6k_packed_rows_weight_ok(weight, input_size, output_size)) {
+        return false;
+    }
+    return q6k_packed_rows_enabled(weight) || (weight_in_file_mapping(weight) && decode_reads_stored(weight));
 }
 
 }  // namespace ggml::hrx

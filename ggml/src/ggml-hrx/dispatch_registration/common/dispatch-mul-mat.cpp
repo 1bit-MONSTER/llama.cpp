@@ -659,8 +659,8 @@ static bool match_q6_k_i8_prepacked_dispatch(const DispatchMatchContext & contex
     // decode and the other prefill batches read as packed rows. Where the packed rows are the weight's layout (a weight
     // in the file mapping by default, see dispatch-q4k-packed-tail.h), leave the 6-to-16-token batch to the tiled
     // kernel, which reads them too.
-    if (q6k_packed_rows_weight_ok(*match.weight, match.input_size, match.output_size) &&
-        !weight_has_native_layout_reader(context.graph, *match.weight) && q6k_packed_rows_enabled(*match.weight)) {
+    if (!weight_has_native_layout_reader(context.graph, *match.weight) &&
+        q6k_i8_layout_is_extra_copy(*match.weight, match.input_size, match.output_size)) {
         return false;
     }
 

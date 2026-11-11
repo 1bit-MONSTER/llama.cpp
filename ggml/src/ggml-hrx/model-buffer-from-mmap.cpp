@@ -19,6 +19,8 @@
 #include "ggml-backend-impl.h"
 #include "runtime/host-memory.h"
 
+#include <mutex>
+#include <unordered_set>
 #include <cstdlib>
 #include <cstring>
 
@@ -60,6 +62,33 @@ bool model_buffer_from_mmap_enabled() {
     // Under GGML_HRX_HOST_WEIGHT_LIMIT_MB a host weight over the budget runs on the CPU. Keep the upload there, so a
     // limit does not move device weights off the device.
     return HostWeightCache::residency_limit() == 0;
+}
+
+namespace {
+std::mutex & stored_copy_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+std::unordered_set<const void *> & stored_copy_addresses() {
+    static std::unordered_set<const void *> addresses;
+    return addresses;
+}
+}  // namespace
+
+void note_stored_device_copy(const void * host_address) {
+    if (host_address == nullptr) {
+        return;
+    }
+    const std::lock_guard<std::mutex> lock(stored_copy_mutex());
+    stored_copy_addresses().insert(host_address);
+}
+
+bool has_stored_device_copy(const void * host_address) {
+    if (host_address == nullptr) {
+        return false;
+    }
+    const std::lock_guard<std::mutex> lock(stored_copy_mutex());
+    return stored_copy_addresses().count(host_address) != 0;
 }
 
 bool buffer_is_file_mapped(ggml_backend_buffer_t buffer) {
