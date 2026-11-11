@@ -72,7 +72,137 @@
       "path": "ops/mul_mat_id_postops_f32_f32_wmma.loom"
     },
     {
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
       "path": "ops/mul_mat_id_postops_next_rmsnorm_f32_f32_wmma.loom"
+=======
+      "path": "ops/matmul_id/mul_mat_id_f16_f16_wmma.loom"
+    },
+    {
+      "path": "ops/matmul_id/mul_mat_id_swiglu_f16_f16_wmma.loom"
+    },
+    {
+      "path": "motifs/matmul_id/f16_pair_schedule.loom"
+    },
+    {
+      "path": "motifs/matmul_id/f16_pair_accumulate.loom"
+    },
+    {
+      "path": "motifs/matmul_id/f16_pair_binary_publish.loom"
+    },
+    {
+      "path": "ops/matmul_id/tiled_input_f32_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/tiled_input_f32_scaled_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/skinny_input_f32_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/skinny_input_f32_scaled_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/tiled_input_f32_postops_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/skinny_input_f32_postops_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/tiled_input_f32_postops_next_rmsnorm_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/skinny_input_f32_postops_next_rmsnorm_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/tiled_pair_input_f32_swiglu_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/skinny_pair_input_f32_swiglu_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/vector_pair_binary.loom"
+    },
+    {
+      "path": "ops/matmul_id/vector_weighted.loom"
+    },
+    {
+      "path": "motifs/normalization/rmsnorm_q8_1_x4.loom"
+    },
+    {
+      "path": "motifs/matmul/q4_q8_1_x4_decode.loom"
+    },
+    {
+      "path": "motifs/matmul/q4_q8_1_x4_dense.loom"
+    },
+    {
+      "path": "motifs/matmul/q4_q6_q8_1_x4_qkv.loom"
+    },
+    {
+      "path": "motifs/matmul/q6_f32_decode.loom"
+    },
+    {
+      "path": "motifs/matmul/q6_q8_1_x4_decode.loom"
+    },
+    {
+      "path": "motifs/matmul/q1_0_q8_1_x4_decode.loom"
+    },
+    {
+      "path": "ops/matmul/q1_0_q8_1_x4_packed_test.loom"
+    },
+    {
+      "path": "ops/matmul/vector_q1_0_q8_1_x4_f32.loom"
+    },
+    {
+      "path": "ops/matmul/swiglu_q1_0_q8_1_x4_f32.loom"
+    },
+    {
+      "path": "ops/matmul/q1_0_vector_schedule_test.loom"
+    },
+    {
+      "path": "motifs/routing/router_projection_storage.loom"
+    },
+    {
+      "path": "motifs/routing/router_topk_row.loom"
+    },
+    {
+      "path": "motifs/routing/router_projection_fused.loom"
+    },
+    {
+      "path": "motifs/routing/weighted_reduce_f16_f32.loom"
+    },
+    {
+      "path": "motifs/routing/weighted_reduce_next_rmsnorm_f32.loom"
+    },
+    {
+      "path": "motifs/attention/rmsnorm_neox_cache_f16.loom"
+    },
+    {
+      "path": "motifs/matmul_id/pair_input_f32_dequant_accumulate_f32.loom"
+    },
+    {
+      "path": "motifs/matmul_id/pair_swiglu_publish_f32.loom"
+    },
+    {
+      "path": "motifs/matmul_id/vector_q4k_q8.loom"
+    },
+    {
+      "path": "motifs/matmul_id/vector_pair.loom"
+    },
+    {
+      "path": "motifs/matmul_id/vector_weighted.loom"
+    },
+    {
+      "path": "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom"
+    },
+    {
+      "path": "motifs/matmul_id/skinny_input_f32_dequant_accumulate_f32.loom"
+    },
+    {
+      "path": "motifs/matmul_id/tiled_postprocess_f32.loom"
+    },
+    {
+      "path": "motifs/matmul_id/skinny_postprocess_f32.loom"
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     },
     {
       "path": "ops/moe_routing_tables.loom"
@@ -126,7 +256,17 @@
       "path": "ops/get_rows_f32.loom"
     },
     {
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
       "path": "ops/gated_delta_net_f32_wmma.loom"
+=======
+      "path": "ops/rows/get_rows_scalar_3d_f32.loom"
+    },
+    {
+      "path": "ops/rows/repeat_scalar_3d_f32.loom"
+    },
+    {
+      "path": "ops/rows/get_rows_scale_f32.loom"
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     },
     {
       "path": "ops/ssm_conv_f32.loom"
@@ -261,7 +401,14 @@
       "path": "ops/swiglu_oai_f32.loom"
     },
     {
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
       "path": "ops/attention_sink_f32.loom"
+=======
+      "path": "motifs/matmul/tiled_pair_postprocess_f32.loom"
+    },
+    {
+      "path": "ops/reduction/amax_scale_f32.loom"
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
   ],
   "exports": [
@@ -2351,8 +2498,265 @@
     {
       "name": "ggml_mul_mat_id_postops_f32_f32_wmma",
       "family": "loom_libs",
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
       "symbol": "ggml_mul_mat_id_postops_f32_f32_wmma",
       "source": "ops/mul_mat_id_postops_f32_f32_wmma.loom",
+=======
+      "symbol": "ggml_mul_mat_id_tiled_input_f32_publish_f32",
+      "source": "ops/matmul_id/tiled_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "expert_table",
+        "partition_table",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/tiled_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32",
+      "source": "ops/matmul_id/tiled_input_f32_scaled_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "expert_table",
+        "partition_table",
+        "weight",
+        "scales",
+        "route_ids",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/tiled_input_f32_scaled_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_skinny_input_f32_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_skinny_input_f32_publish_f32",
+      "source": "ops/matmul_id/skinny_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "expert_table",
+        "partition_table",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/skinny_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/skinny_input_f32_dequant_accumulate_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/skinny_input_f32_dequant_accumulate_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32",
+      "source": "ops/matmul_id/skinny_input_f32_scaled_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "expert_table",
+        "partition_table",
+        "weight",
+        "scales",
+        "route_ids",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/skinny_input_f32_scaled_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/skinny_input_f32_dequant_accumulate_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/skinny_input_f32_dequant_accumulate_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_tiled_input_f32_postops_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_tiled_input_f32_postops_publish_f32",
+      "source": "ops/matmul_id/tiled_input_f32_postops_publish_f32.loom",
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2497,6 +2901,576 @@
       ]
     },
     {
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
+=======
+      "name": "ggml_mul_mat_id_skinny_input_f32_postops_next_rmsnorm_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_skinny_input_f32_postops_next_rmsnorm_publish_f32",
+      "source": "ops/matmul_id/skinny_input_f32_postops_next_rmsnorm_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "expert_table",
+        "partition_table",
+        "weight",
+        "bias",
+        "residual_input",
+        "residual_output",
+        "norm_weight",
+        "normalized_output",
+        "completion_counters"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/skinny_input_f32_postops_next_rmsnorm_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/skinny_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul_id/skinny_postprocess_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/skinny_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul_id/skinny_postprocess_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32",
+      "source": "ops/matmul_id/tiled_pair_input_f32_swiglu_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "expert_table",
+        "partition_table",
+        "gate_weight",
+        "up_weight",
+        "output",
+        "iq3_xxs_grid"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/tiled_pair_input_f32_swiglu_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/pair_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul_id/pair_swiglu_publish_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/pair_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul_id/pair_swiglu_publish_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32",
+      "source": "ops/matmul_id/skinny_pair_input_f32_swiglu_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "expert_table",
+        "partition_table",
+        "gate_weight",
+        "up_weight",
+        "output",
+        "iq3_xxs_grid"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/skinny_pair_input_f32_swiglu_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/pair_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul_id/pair_swiglu_publish_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/pair_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul_id/pair_swiglu_publish_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_vector_pair_binary_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_vector_pair_binary_publish_f32",
+      "source": "ops/matmul_id/vector_pair_binary.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "q8_input",
+        "route_ids",
+        "gate_weight",
+        "up_weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/vector_pair_binary.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/vector_pair.loom",
+          "motifs/matmul_id/vector_q4k_q8.loom",
+          "motifs/elementwise/binary_apply.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/vector_pair.loom",
+        "motifs/matmul_id/vector_q4k_q8.loom",
+        "motifs/elementwise/binary_apply.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_vector_pair_binary_publish_q8",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_vector_pair_binary_publish_q8",
+      "source": "ops/matmul_id/vector_pair_binary.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "q8_input",
+        "route_ids",
+        "gate_weight",
+        "up_weight",
+        "output",
+        "completion_counters",
+        "next_q8_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read_write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/vector_pair_binary.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/vector_pair.loom",
+          "motifs/matmul_id/vector_q4k_q8.loom",
+          "motifs/elementwise/binary_apply.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/vector_pair.loom",
+        "motifs/matmul_id/vector_q4k_q8.loom",
+        "motifs/elementwise/binary_apply.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_vector_weighted_wave32_publish_q8",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_vector_weighted_wave32_publish_q8",
+      "source": "ops/matmul_id/vector_weighted.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_id_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_id_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "q8_input",
+        "route_ids",
+        "route_weights",
+        "weight",
+        "output",
+        "norm_weight",
+        "completion_counter",
+        "next_q8_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/vector_weighted.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/vector_weighted.loom",
+          "motifs/matmul_id/vector_q4k_q8.loom",
+          "motifs/matmul/q6_f32_decode.loom",
+          "motifs/normalization/rmsnorm_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/vector_weighted.loom",
+        "motifs/matmul_id/vector_q4k_q8.loom",
+        "motifs/matmul/q6_f32_decode.loom",
+        "motifs/normalization/rmsnorm_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_vector_weighted_wave64_publish_q8",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_vector_weighted_wave64_publish_q8",
+      "source": "ops/matmul_id/vector_weighted.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_id_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_id_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "route_ids",
+        "route_weights",
+        "weight",
+        "output",
+        "norm_weight",
+        "completion_counter",
+        "next_q8_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/vector_weighted.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/vector_weighted.loom",
+          "motifs/matmul_id/vector_q4k_q8.loom",
+          "motifs/matmul/q6_f32_decode.loom",
+          "motifs/normalization/rmsnorm_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/vector_weighted.loom",
+        "motifs/matmul_id/vector_q4k_q8.loom",
+        "motifs/matmul/q6_f32_decode.loom",
+        "motifs/normalization/rmsnorm_q8_1_x4.loom"
+      ]
+    },
+    {
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
       "name": "ggml_moe_build_expert_table",
       "family": "loom_libs",
       "symbol": "ggml_moe_build_expert_table",
@@ -5026,6 +6000,86 @@
       ]
     },
     {
+      "name": "ggml_get_rows_scalar_3d_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_get_rows_scalar_3d_f32",
+      "source": "ops/rows/get_rows_scalar_3d_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "route_ids",
+        "scales",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/rows/get_rows_scalar_3d_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_repeat_scalar_3d_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_repeat_scalar_3d_f32",
+      "source": "ops/rows/repeat_scalar_3d_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "scales",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/rows/repeat_scalar_3d_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
       "name": "ggml_get_rows_f32",
       "family": "loom_libs",
       "symbol": "ggml_get_rows_f32",
@@ -6085,8 +7139,1349 @@
         ]
       },
       "compile_dependencies": [
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         "motifs/rmsnorm_f32.loom",
         "motifs/unary_f32_apply.loom",
+=======
+        "motifs/gated_delta_net/projection_epilogue.loom",
+        "motifs/gated_delta_net/publish_f32.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_skinny_input_f32_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_skinny_input_f32_publish_f32",
+      "source": "ops/matmul/skinny_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/skinny_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/skinny_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/skinny_postprocess_f32.loom",
+          "motifs/matmul/skinny_publish_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/skinny_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/skinny_postprocess_f32.loom",
+        "motifs/matmul/skinny_publish_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
+      "source": "ops/matmul/skinny_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "bias",
+        "residual_input",
+        "residual_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/skinny_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/skinny_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/skinny_postprocess_f32.loom",
+          "motifs/matmul/skinny_publish_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/skinny_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/skinny_postprocess_f32.loom",
+        "motifs/matmul/skinny_publish_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_input_f32_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_input_f32_publish_f32",
+      "source": "ops/matmul/tiled_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_input_f32_publish_f32_aligned",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_input_f32_publish_f32_aligned",
+      "source": "ops/matmul/tiled_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_input_f32_publish_f32_token64_aligned",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_input_f32_publish_f32_token64_aligned",
+      "source": "ops/matmul/tiled_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_input_f32_publish_f32_f16_alternate",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_input_f32_publish_f32_f16_alternate",
+      "source": "ops/matmul/tiled_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output",
+        "f16_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+      "source": "ops/matmul/tiled_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "bias",
+        "residual_input",
+        "residual_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32_aligned",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32_aligned",
+      "source": "ops/matmul/tiled_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "bias",
+        "residual_input",
+        "residual_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_input_f32_dequant_accumulate_f32_token64.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_k16",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_k16",
+      "source": "ops/matmul/tiled_pair_input_f32_binary_publish_f32_k16.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "gate_weight",
+        "up_weight",
+        "output",
+        "f16_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_pair_input_f32_binary_publish_f32_k16.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_pair_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_pair_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/normalization/publish_f16.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_pair_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_pair_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/normalization/publish_f16.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
+      "source": "ops/matmul/tiled_pair_input_f32_binary_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "gate_weight",
+        "up_weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_pair_input_f32_binary_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_pair_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_pair_postprocess_f32.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_pair_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_pair_postprocess_f32.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_aligned",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_aligned",
+      "source": "ops/matmul/tiled_pair_input_f32_binary_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "gate_weight",
+        "up_weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_pair_input_f32_binary_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_pair_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_pair_postprocess_f32.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_pair_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_pair_postprocess_f32.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_pair_input_f32_binary_bias_residual_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_pair_input_f32_binary_bias_residual_publish_f32",
+      "source": "ops/matmul/tiled_pair_input_f32_binary_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "gate_weight",
+        "up_weight",
+        "bias",
+        "residual_input",
+        "residual_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_pair_input_f32_binary_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_pair_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_pair_postprocess_f32.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_pair_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_pair_postprocess_f32.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_pair_input_f32_binary_bias_residual_publish_f32_aligned",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_pair_input_f32_binary_bias_residual_publish_f32_aligned",
+      "source": "ops/matmul/tiled_pair_input_f32_binary_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "gate_weight",
+        "up_weight",
+        "bias",
+        "residual_input",
+        "residual_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_pair_input_f32_binary_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_pair_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_pair_postprocess_f32.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_pair_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_pair_postprocess_f32.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_vector_iq3_xxs_f32_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_vector_iq3_xxs_f32_f32",
+      "source": "ops/matmul/vector_codebook_f32_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "iq3_xxs_grid",
+        "output",
+        "next_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/vector_codebook_f32_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/vector_codebook_activation.loom",
+          "motifs/matmul/vector_codebook_decode_pair.loom",
+          "motifs/matmul/vector_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/vector_codebook_activation.loom",
+        "motifs/matmul/vector_codebook_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_input_f32_iq3_xxs_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_input_f32_iq3_xxs_publish_f32",
+      "source": "ops/matmul/tiled_input_f32_codebook_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "iq3_xxs_grid",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_input_f32_codebook_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_input_f32_codebook_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_input_f32_codebook_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_vector_iq1_s_f32_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_vector_iq1_s_f32_f32",
+      "source": "ops/matmul/vector_codebook_f32_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "iq1_grid",
+        "output",
+        "next_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/vector_codebook_f32_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/vector_codebook_activation.loom",
+          "motifs/matmul/vector_codebook_decode_pair.loom",
+          "motifs/matmul/vector_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/vector_codebook_activation.loom",
+        "motifs/matmul/vector_codebook_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_vector_iq1_m_f32_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_vector_iq1_m_f32_f32",
+      "source": "ops/matmul/vector_codebook_f32_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "iq1_grid",
+        "output",
+        "next_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/vector_codebook_f32_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/vector_codebook_activation.loom",
+          "motifs/matmul/vector_codebook_decode_pair.loom",
+          "motifs/matmul/vector_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/vector_codebook_activation.loom",
+        "motifs/matmul/vector_codebook_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_input_f32_iq1_s_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_input_f32_iq1_s_publish_f32",
+      "source": "ops/matmul/tiled_input_f32_codebook_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "iq1_grid",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_input_f32_codebook_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_input_f32_codebook_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_input_f32_codebook_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_tiled_input_f32_iq1_m_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_tiled_input_f32_iq1_m_publish_f32",
+      "source": "ops/matmul/tiled_input_f32_codebook_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "iq1_grid",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/tiled_input_f32_codebook_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/tiled_input_f32_codebook_dequant_accumulate_f32.loom",
+          "motifs/matmul/tiled_postprocess_f32.loom",
+          "motifs/matmul/tiled_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/tiled_input_f32_codebook_dequant_accumulate_f32.loom",
+        "motifs/matmul/tiled_postprocess_f32.loom",
+        "motifs/matmul/tiled_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_amax_scale_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_amax_scale_f32",
+      "source": "ops/reduction/amax_scale_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "row_width",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "row_width",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output",
+        "scale"
+      ],
+      "binding_access": [
+        "read",
+        "write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/reduction/amax_scale_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/elementwise/unary_apply.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/elementwise/unary_apply.loom"
+      ]
+    }
+  ],
+  "link_modules": [
+    {
+      "name": "flash_attention_decode_split_next_q8_test_linked",
+      "srcs": [
+        "ops/flash_attention/decode_split_next_q8_test.loom"
+      ],
+      "libraries": [
+        "ops/flash_attention/decode_split_f32_f16_wmma_next_q8.loom",
+        "motifs/flash_attention/decode_partials.loom",
+        "motifs/flash_attention/decode_reduce.loom",
+        "motifs/flash_attention/publish_f32.loom",
+        "motifs/flash_attention/publish_q8.loom",
+        "motifs/flash_attention/completion_counter_reduce.loom",
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         "motifs/quantize_q8_1_x4.loom"
       ]
     },

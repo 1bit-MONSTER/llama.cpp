@@ -10,7 +10,12 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf, logger
 
 
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("GPT2LMHeadModel", "GPT2Model", "GPT2")
+=======
+@ModelBase.register("GPT2LMHeadModel")
+@ModelBase.example("openai-community/gpt2")
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
 
@@ -38,6 +43,7 @@ class GPT2Model(TextModel):
 
 
 @ModelBase.register("RuGPT3XLForCausalLM")
+@ModelBase.example("evilfreelancer/ruGPT3XL")
 class RuGPT3XLModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
 

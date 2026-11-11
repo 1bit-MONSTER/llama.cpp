@@ -207,7 +207,10 @@ static hrx_status_t submit_copy_buffer(hrx_stream_t stream, void * user_data) {
 
 static void buffer_free(ggml_backend_buffer_t buffer) {
     auto * context = buffer_context(buffer);
-    if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
+    const bool owned_buffer = !context->imported;
+    const bool host_backed = context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
+    const bool registered_host_buffer = owned_buffer && host_backed;
+    if (registered_host_buffer) {
         context->device->host_buffers.remove(context->buffer);
     }
     if (context->buffer != nullptr) {
@@ -328,7 +331,7 @@ static void buffer_set(ggml_backend_buffer_t buffer,
     const size_t destination_offset = tensor_offset(context, tensor) + offset;
     GGML_ASSERT(destination_offset <= buffer->size && size <= buffer->size - destination_offset);
     if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
-        std::memcpy(context->base + destination_offset, data, size);
+        std::memmove(context->base + destination_offset, data, size);
         return;
     }
     if (!ordered_upload(context->device, data, size, context->buffer, destination_offset)) {
@@ -373,8 +376,29 @@ static bool buffer_copy(ggml_backend_buffer_t buffer, const ggml_tensor * source
         destination_offset > buffer->size || size > buffer->size - destination_offset) {
         return false;
     }
-    CopyBufferArgs args{ source_context->buffer, source_offset, destination_context->buffer, destination_offset, size };
-    return buffer_submit_and_wait(destination_context->device, submit_copy_buffer, &args);
+    const bool source_imported      = source_context->imported;
+    const bool destination_imported = destination_context->imported;
+    const bool both_imported = source_imported && destination_imported;
+    if (both_imported) {
+        std::memmove(destination_context->base + destination_offset, source_context->base + source_offset, size);
+    } else if (source_imported) {
+        if (!HRX_CHECK(hrx_synchronous_h2d(destination_context->device->device, source_context->base + source_offset,
+                                           destination_context->buffer, destination_offset, size))) {
+            return false;
+        }
+    } else if (destination_imported) {
+        if (!HRX_CHECK(hrx_synchronous_d2h(source_context->device->device, source_context->buffer, source_offset,
+                                           destination_context->base + destination_offset, size))) {
+            return false;
+        }
+    } else {
+        CopyBufferArgs args{ source_context->buffer, source_offset, destination_context->buffer, destination_offset,
+                             size };
+        if (!buffer_submit_and_wait(destination_context->device, submit_copy_buffer, &args)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static void buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -471,7 +495,8 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
     }
     const uint64_t generation = g_allocation_generation.fetch_add(1);
     auto *         context    = new (std::nothrow) ggml_backend_hrx_buffer_context{
-        type_context->device, allocation, base, generation, generation, direct_host_binding,
+        type_context->device, allocation, base, generation, generation, direct_host_binding, false,
+        0, 0, nullptr,
     };
     if (context == nullptr) {
         if (allocation != nullptr) {
@@ -481,7 +506,10 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         return nullptr;
     }
     if (host_visible && allocation != nullptr) {
-        type_context->device->host_buffers.add(allocation, base, size);
+        context->retained_base = base;
+        context->physical_capacity = size;
+        type_context->device->host_buffers.add(allocation, base, size, direct_host_binding,
+                                               context->identity, context->generation);
     }
     return ggml_backend_buffer_init(buft, buffer_i, context, size);
 }
@@ -498,7 +526,7 @@ static size_t buffer_max_size(ggml_backend_buffer_type_t buft) {
 }
 
 static const ggml_backend_buffer_type_i buffer_type_i = {
-    buffer_type_name, buffer_alloc, buffer_alignment, buffer_max_size, nullptr, buffer_type_is_host,
+    buffer_type_name, buffer_alloc, nullptr, buffer_alignment, buffer_max_size, nullptr, nullptr, buffer_type_is_host,
 };
 
 static const char * backend_name(ggml_backend_t backend) {
@@ -676,6 +704,15 @@ static void backend_synchronize(ggml_backend_t backend);
 static void backend_free(ggml_backend_t backend) {
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
     backend_synchronize(backend);
+    if (environment_flag_enabled("GGML_HRX_LOG_WEIGHT_STATS")) {
+        const ggml::hrx::HostWeightCacheStats weights = context->host_weights.stats();
+        const ggml::hrx::HostTransferStats transfers = context->host_transfers.stats();
+        GGML_LOG_INFO("ggml_hrx: weight_stats materializations=%" PRIu64 " reused=%" PRIu64
+                      " uploaded_bytes=%zu live_allocations=%zu live_bytes=%zu"
+                      " host_uploads=%" PRIu64 " host_upload_bytes=%zu\n",
+                      weights.misses, weights.hits, weights.materialized_bytes, weights.allocation_count,
+                      weights.resident_bytes, transfers.uploads, transfers.upload_bytes);
+    }
     context->prepared_programs.clear();
     context->graph_programs.clear();
     context->kernel_executables.clear();
@@ -748,6 +785,13 @@ static void backend_set_tensor_async(ggml_backend_t backend,
         GGML_LOG_ERROR("%s: invalid HRX tensor upload\n", __func__);
         return;
     }
+    const bool retained_host = context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
+    if (retained_host) {
+        backend_synchronize(backend);
+        buffer_set(tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer,
+                   tensor, data, offset, size);
+        return;
+    }
     ggml::hrx::HostBufferRef source = backend_context->device->host_buffers.find(data, size);
     if (source.valid()) {
         // Registered host buffers can participate directly in the stream command buffer.
@@ -771,6 +815,13 @@ static void backend_get_tensor_async(ggml_backend_t      backend,
         GGML_LOG_ERROR("%s: invalid HRX tensor download\n", __func__);
         return;
     }
+    const bool retained_host = context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
+    if (retained_host) {
+        backend_synchronize(backend);
+        buffer_get(tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer,
+                   tensor, data, offset, size);
+        return;
+    }
     ggml::hrx::HostBufferRef destination = backend_context->device->host_buffers.find(data, size);
     if (destination.valid()) {
         // Registered host buffers can participate directly in the stream command buffer.
@@ -785,7 +836,6 @@ static bool backend_copy_tensor_async(ggml_backend_t      backend_src,
                                       ggml_backend_t      backend_dst,
                                       const ggml_tensor * source,
                                       ggml_tensor *       destination) {
-    GGML_UNUSED(backend_src);
     auto * destination_backend = static_cast<ggml_backend_hrx_context *>(backend_dst->context);
     ggml_backend_hrx_buffer_context * destination_context = nullptr;
     size_t                            destination_offset  = 0;
@@ -799,11 +849,34 @@ static bool backend_copy_tensor_async(ggml_backend_t      backend_src,
         if (source_context->device != destination_context->device) {
             return false;
         }
+        const bool source_host = source_context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
+        const bool destination_host = destination_context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
+        const bool touches_retained_host = source_host || destination_host;
+        if (touches_retained_host) {
+            ggml_backend_synchronize(backend_src);
+            if (backend_dst != backend_src) {
+                ggml_backend_synchronize(backend_dst);
+            }
+            ggml_backend_buffer_t destination_buffer =
+                destination->view_src != nullptr ? destination->view_src->buffer : destination->buffer;
+            return buffer_copy(destination_buffer, source, destination);
+        }
         return HRX_CHECK(hrx_stream_copy_buffer(destination_backend->stream, source_context->buffer, source_offset,
                                                 destination_context->buffer, destination_offset, size));
     }
     ggml_backend_buffer_t source_buffer = source->view_src != nullptr ? source->view_src->buffer : source->buffer;
     if (source_buffer != nullptr && ggml_backend_buffer_is_host(source_buffer)) {
+        const bool destination_host = destination_context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
+        if (destination_host) {
+            ggml_backend_synchronize(backend_src);
+            if (backend_dst != backend_src) {
+                ggml_backend_synchronize(backend_dst);
+            }
+            ggml_backend_buffer_t destination_buffer =
+                destination->view_src != nullptr ? destination->view_src->buffer : destination->buffer;
+            buffer_set(destination_buffer, destination, source->data, 0, size);
+            return true;
+        }
         return synchronous_upload_fallback(destination_backend, source->data, destination_context->buffer,
                                            destination_offset, size);
     }
@@ -961,7 +1034,8 @@ static void device_props(ggml_backend_dev_t device, ggml_backend_dev_props * pro
     device_memory(device, &props->memory_free, &props->memory_total);
     props->type      = GGML_BACKEND_DEVICE_TYPE_GPU;
     props->device_id = nullptr;
-    props->caps      = { true, true, false, false };
+    props->caps      = { true, true, true, false };
+    props->caps.mmap_support = true;
 }
 
 static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parameters) {
@@ -984,8 +1058,11 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
         delete context;
         hrx_stream_release(stream);
     } else {
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         g_placement_observer_backend.store(backend);
         ggml_backend_sched_set_placement_observer(placement_observer, backend);
+=======
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
     return backend;
 }
@@ -996,6 +1073,46 @@ static ggml_backend_buffer_type_t device_buffer_type(ggml_backend_dev_t device) 
 
 static ggml_backend_buffer_type_t device_host_buffer_type(ggml_backend_dev_t device) {
     return &device_context(device)->host_buft;
+}
+
+static ggml_backend_buffer_t device_buffer_from_host_ptr(ggml_backend_dev_t device,
+                                                          void *             ptr,
+                                                          size_t             size,
+                                                          size_t             max_tensor_size) {
+    GGML_UNUSED(max_tensor_size);
+    const bool has_pointer = ptr != nullptr;
+    const bool has_size = size != 0;
+    const bool valid_region = has_pointer && has_size;
+    if (!valid_region) {
+        return nullptr;
+    }
+    const uint64_t generation = g_allocation_generation.fetch_add(1);
+    auto * context = new (std::nothrow) ggml_backend_hrx_buffer_context{
+        device_context(device), nullptr, static_cast<uint8_t *>(ptr), generation, generation, false, true,
+        0, 0, nullptr,
+    };
+    if (context == nullptr) {
+        return nullptr;
+    }
+    ggml::hrx::HostBufferRef known_host = device_context(device)->host_buffers.find(ptr, size);
+    const bool known_host_region = known_host.valid();
+    const bool coherent_host_region = known_host.direct_bindable();
+    const bool known_direct_host = known_host_region && coherent_host_region;
+    if (known_host_region) {
+        context->identity = known_host.identity();
+        context->generation = known_host.generation();
+        context->retained_base = static_cast<uint8_t *>(known_host.base());
+        context->physical_offset = known_host.offset();
+        context->physical_capacity = known_host.capacity();
+    }
+    if (known_direct_host) {
+        hrx_buffer_retain(known_host.buffer());
+        context->buffer = known_host.buffer();
+        context->direct_host_binding = true;
+    }
+    // The importer retains the mapped region, which may be read-only. HRX owns only this descriptor; mutation
+    // callbacks require caller-writable storage and native weight storage is materialized on demand.
+    return ggml_backend_buffer_init(&device_context(device)->buft, buffer_i, context, size);
 }
 
 static bool eager_capability_declared(enum ggml_op op) {
@@ -1382,6 +1499,23 @@ static bool supported_scale_f32_tensor(const ggml_tensor * op) {
            static_cast<uint64_t>(ggml_nelements(op)) <= std::numeric_limits<uint32_t>::max();
 }
 
+static bool supported_repeat_scalar_3d_f32_tensor(const ggml_tensor * op) {
+    const bool is_repeat = op != nullptr && op->op == GGML_OP_REPEAT;
+    const bool has_source = is_repeat && op->src[0] != nullptr;
+    if (!has_source) {
+        return false;
+    }
+
+    const ggml_tensor * source = op->src[0];
+    const bool has_types = source->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+    const bool has_source_shape = source->ne[0] == 1 && source->ne[1] == 128 &&
+                                  source->ne[2] == 1 && source->ne[3] == 1;
+    const bool has_repeat_shape = op->ne[0] == 1 && op->ne[1] == 128 && op->ne[2] >= 1 &&
+                                  op->ne[2] <= 2048 && op->ne[3] == 1;
+    const bool has_layout = ggml_is_contiguous(source) && ggml_is_contiguous(op);
+    return has_types && has_source_shape && has_repeat_shape && has_layout;
+}
+
 static bool supported_qwen_attention_projection_get_rows_tensor(const ggml_tensor * op) {
     if (op == nullptr || op->op != GGML_OP_GET_ROWS || op->src[0] == nullptr || op->src[1] == nullptr ||
         op->src[0]->op != GGML_OP_MUL_MAT || op->type != GGML_TYPE_F32 || op->src[0]->type != GGML_TYPE_F32 ||
@@ -1432,6 +1566,33 @@ static bool supported_unary_f32_tensor(const ggml_tensor * op) {
     return ggml::hrx::unary_kind_supported(unary_kind);
 }
 
+static bool supported_full_max_pool_1d_f32_tensor(const ggml_tensor * op) {
+    if (op == nullptr) {
+        return false;
+    }
+    const bool pool_op = op->op == GGML_OP_POOL_1D;
+    const bool has_input = op->src[0] != nullptr;
+    const bool pool_with_input = pool_op && has_input;
+    if (!pool_with_input) {
+        return false;
+    }
+
+    const ggml_tensor * input = op->src[0];
+    const bool f32_values = input->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+    const bool contiguous_values = ggml_is_contiguous(input) && ggml_is_contiguous(op);
+    const bool full_row = op->ne[0] == 1 && input->ne[0] == ggml_get_op_params_i32(op, 1);
+    const bool matching_rows = input->ne[1] == op->ne[1] && input->ne[2] == op->ne[2] &&
+                               input->ne[3] == op->ne[3];
+    const bool max_pool = ggml_get_op_params_i32(op, 0) == GGML_OP_POOL_MAX;
+    const bool exact_window = ggml_get_op_params_i32(op, 2) == input->ne[0] &&
+                              ggml_get_op_params_i32(op, 3) == 0;
+    const bool bounded_width = input->ne[0] > 0 && input->ne[0] <= 32768;
+    const bool bounded_rows = ggml_nelements(op) > 0 && ggml_nelements(op) <= 1048576;
+    const bool bounded_input = ggml_nelements(input) <= 134217728;
+    const bool bounded = bounded_width && bounded_rows && bounded_input;
+    return f32_values && contiguous_values && full_row && matching_rows && max_pool && exact_window && bounded;
+}
+
 static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op) {
     if (op == nullptr) {
         return false;
@@ -1470,11 +1631,35 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (zero_output_elision_supported(op)) {
         return true;
     }
+    if (op->op == GGML_OP_DUP) {
+        const ggml_tensor * source = op->src[0];
+        if (source == nullptr) {
+            return false;
+        }
+        const bool source_f32 = source->type == GGML_TYPE_F32;
+        const bool output_f32 = op->type == GGML_TYPE_F32;
+        const bool source_contiguous = ggml_is_contiguous(source);
+        const bool output_contiguous = ggml_is_contiguous(op);
+        const bool same_shape = ggml_are_same_shape(source, op);
+        const bool separate_output = op->view_src == nullptr;
+        const int64_t elements = ggml_nelements(op);
+        const bool nonempty = elements > 0;
+        const bool bounded = elements <= (int64_t{ 1 } << 30);
+        return source_f32 && output_f32 && source_contiguous && output_contiguous && same_shape &&
+               separate_output && nonempty && bounded;
+    }
     const bool supported_binary = supported_binary_f32_tensor(op);
     if (supported_binary) {
         return true;
     }
     if (supported_scale_f32_tensor(op)) {
+        return true;
+    }
+    if (supported_repeat_scalar_3d_f32_tensor(op)) {
+        return true;
+    }
+    // Admit pooling for the amax-scale fusion; graph claim validates the complete chain.
+    if (supported_full_max_pool_1d_f32_tensor(op)) {
         return true;
     }
     if (supported_qwen_attention_projection_get_rows_tensor(op)) {
@@ -1533,7 +1718,7 @@ static const ggml_backend_device_i device_i = {
     device_init,
     device_buffer_type,
     device_host_buffer_type,
-    nullptr,
+    device_buffer_from_host_ptr,
     device_supports_op,
     device_supports_buffer_type,
     nullptr,
@@ -1716,13 +1901,20 @@ bool ggml_backend_hrx_get_cache_stats(ggml_backend_t backend, ggml_backend_hrx_c
     if (!ggml_backend_is_hrx(backend) || stats == nullptr) {
         return false;
     }
-    auto *                                  context     = static_cast<ggml_backend_hrx_context *>(backend->context);
+    auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
     const ggml::hrx::GraphProgramCacheStats graph_stats = context->graph_programs.stats();
     const ggml::hrx::PreparedCommandProgramCacheStats prepared_stats = context->prepared_programs.stats();
+    const ggml::hrx::HostWeightCacheStats weight_stats = context->host_weights.stats();
     stats->graph_program_builds                                      = graph_stats.builds;
     stats->graph_program_hits                                        = graph_stats.hits;
-    stats->prepared_program_builds = graph_stats.prepared_program_builds + prepared_stats.builds;
-    stats->prepared_program_hits   = graph_stats.prepared_program_hits + prepared_stats.hits;
+    stats->prepared_program_builds = prepared_stats.builds;
+    stats->prepared_program_hits   = prepared_stats.hits;
+    stats->weight_materializations = weight_stats.misses;
+    stats->weight_reuses = weight_stats.hits;
+    stats->weight_uploaded_bytes = weight_stats.materialized_bytes;
+    stats->weight_live_allocations = weight_stats.allocation_count;
+    stats->weight_live_bytes = weight_stats.resident_bytes;
+    stats->weight_duplicate_warnings = weight_stats.duplicate_warnings;
     return true;
 }
 

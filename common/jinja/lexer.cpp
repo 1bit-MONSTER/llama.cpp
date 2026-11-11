@@ -78,7 +78,10 @@ lexer_result lexer::tokenize(const std::string & source) {
                 // add escaped char
                 char escaped_char = src[pos++];
                 if (escaped_char == 'x') {
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
                     // ported from ggml-org/llama.cpp common/jinja/lexer.cpp: `\xNN` hex escapes
+=======
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                     if (pos + 1 >= src.size()) {
                         throw lexer_exception("incomplete hexadecimal escape", source, pos);
                     }

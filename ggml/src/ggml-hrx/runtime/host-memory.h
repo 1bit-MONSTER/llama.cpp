@@ -46,7 +46,10 @@ class HostTransferManager {
                                 size_t       offset,
                                 void *       host_destination,
                                 size_t       size);
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 
+=======
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     HostTransferStats stats() const;
     void              clear();
 
@@ -57,7 +60,6 @@ class HostTransferManager {
 
 struct HostWeightSource {
     const void * host_data  = nullptr;
-    hrx_buffer_t device_buffer       = nullptr;
     uint64_t     identity   = 0;
     uint64_t     generation = 0;
     size_t       capacity   = 0;
@@ -70,12 +72,18 @@ struct HostWeightSource {
     int64_t      output_size         = 0;
 };
 
+// Residency counts cache-owned representations, not buffers retained after an explicit clear.
 struct HostWeightCacheStats {
     uint64_t hits             = 0;
     uint64_t misses           = 0;
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     uint64_t evictions        = 0;
+=======
+    size_t   materialized_bytes = 0;
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
+    uint64_t duplicate_warnings = 0;
 };
 
 // The pairing every pooled allocation in this file needs (engine #1711/#1823): charge before the allocation, return
@@ -142,6 +150,7 @@ struct HostWeightAcquireResult {
     bool valid() const { return lease.valid() && status.success(); }
 };
 
+// Owns each immutable source representation until explicit clearing or backend teardown.
 class HostWeightCache {
   public:
     HostWeightCache() = default;
@@ -156,6 +165,8 @@ class HostWeightCache {
                                     const HostWeightSource & source,
                                     size_t                   pool_budget = 0);
     HostWeightCacheStats    stats() const;
+    void fail_cold_acquire_after_for_test(size_t successful_acquires);
+    // Clears cache residency; existing leases remain valid and cumulative diagnostics are preserved.
     void                    clear();
 
     // Bytes of materialized host weights the cache may keep resident (GGML_HRX_HOST_WEIGHT_LIMIT_MB, default 0 =
@@ -198,10 +209,13 @@ class HostWeightCache {
         size_t operator()(const SourceKey & key) const;
     };
 
+    void report_new_representation(const SourceKey & key, const HostWeightLease::Entry & entry);
+
     mutable std::mutex                                                                    mutex_;
     std::unordered_map<SourceKey, std::shared_ptr<HostWeightLease::Entry>, SourceKeyHash> entries_;
     std::unordered_map<SourceKey, uint64_t, SourceKeyHash>                                last_use_;
     HostWeightCacheStats                                                                  stats_;
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     size_t                                                                                limit_          = 0;
     size_t                                                                                resident_bytes_ = 0;
     uint64_t                                                                              use_clock_      = 0;
@@ -284,6 +298,9 @@ class HostWeightExecutionScope {
 
   private:
     HostWeightCache * cache_ = nullptr;
+=======
+    size_t fail_cold_after_ = SIZE_MAX;
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 };
 
 struct HostStagingBuffer {

@@ -33,6 +33,54 @@ struct DispatchMatchContext {
     const std::vector<bool> & covered_nodes;
     const CommandPlan &       plan;
     ValueId                   next_plan_value;
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
+=======
+    const DispatchRegistry *  registry = nullptr;
+};
+
+// Non-native weight bindings require bytes that remain available after graph import.
+bool dispatch_weight_layout_eligible(const Value & value);
+
+enum DispatchActivationInputFormat : uint32_t {
+    DispatchActivationInputNone           = 0,
+    DispatchActivationInputF16Row         = 1u << 0,
+    DispatchActivationInputF16K16Major    = 1u << 1,
+    DispatchActivationInputQ8_1X4         = 1u << 2,
+    DispatchActivationInputSymmetricI4K32 = 1u << 3,
+};
+
+enum DispatchActivationProducerRequirement : uint32_t {
+    DispatchActivationProducerRequirementNone             = 0,
+    DispatchActivationProducerRequirementPackedK16Economy = 1u << 0,
+    DispatchActivationProducerRequirementFactoredTiledF16 = 1u << 1,
+};
+
+enum DispatchActivationConsumerTrait : uint32_t {
+    DispatchActivationConsumerTraitNone                   = 0,
+    DispatchActivationConsumerTraitQ8PublicationPreferred = 1u << 0,
+};
+
+enum class DispatchActivationConsumerUse {
+    BandwidthLimited,
+    Tiled,
+    Row,
+    LowRow,
+};
+
+using DispatchActivationConsumerPredicate = bool (*)(const DispatchMatchContext & context,
+                                                      const GraphNode &            consumer,
+                                                      const Value &                input);
+
+struct DispatchActivationConsumerRegistration {
+    const char *                        name = "";
+    ggml_op                             root_op = GGML_OP_NONE;
+    uint32_t                            accepted_formats = DispatchActivationInputNone;
+    DispatchActivationConsumerUse       use = DispatchActivationConsumerUse::Row;
+    uint32_t                            producer_requirements = DispatchActivationProducerRequirementNone;
+    DispatchSource                      source = DispatchSource::Common;
+    DispatchActivationConsumerPredicate accepts = nullptr;
+    uint32_t                            traits = DispatchActivationConsumerTraitNone;
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 };
 
 struct DispatchValueAliasRequest {

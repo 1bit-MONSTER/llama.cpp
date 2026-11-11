@@ -2,6 +2,7 @@
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
+#include "ggml-impl.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 #include "hrx-1bit-safety.h"            // engine#1711: pool_reserve/pool_release
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <sstream>
 #include <thread>
@@ -1888,10 +1890,14 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         result.status.log("host weight residency requires an HRX stream");
         return result;
     }
-    const bool has_host_source   = source.host_data != nullptr;
-    const bool has_device_source = source.device_buffer != nullptr;
-    if (has_host_source == has_device_source || source.identity == 0 || source.generation == 0 || source.length == 0 ||
-        source.offset > source.capacity || source.length > source.capacity - source.offset) {
+    const bool has_host_source = source.host_data != nullptr;
+    const bool has_identity = source.identity != 0;
+    const bool has_generation = source.generation != 0;
+    const bool has_length = source.length != 0;
+    const bool offset_fits = source.offset <= source.capacity;
+    const bool length_fits = offset_fits && source.length <= source.capacity - source.offset;
+    const bool valid_source = has_host_source && has_identity && has_generation && has_length && length_fits;
+    if (!valid_source) {
         result.status.log("invalid host weight source");
         return result;
     }
@@ -1907,6 +1913,7 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         return result;
     }
 
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     const SourceKey key{ source.identity,   source.generation,   source.capacity, source.offset,
                          source.length,     materialized_length, source.layout,   source.source_type,
                          source.input_size, source.output_size };
@@ -1951,12 +1958,38 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         materialization_source.device_buffer = nullptr;
         materialization_source.capacity      = canonical.size();
         materialization_source.offset        = 0;
+=======
+    // Native residency copies this byte range verbatim. Only transformed layouts interpret its type and shape.
+    const bool native_layout = source.layout == kNativeWeightLayout;
+    const SourceKey key{ source.identity, source.generation, source.capacity, source.offset,
+                         source.length, materialized_length, source.layout,
+                         native_layout ? GGML_TYPE_COUNT : source.source_type,
+                         native_layout ? 0 : source.input_size, native_layout ? 0 : source.output_size };
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = entries_.find(key);
+    if (found != entries_.end()) {
+        ++stats_.hits;
+        result.lease = HostWeightLease(found->second);
+        return result;
+    }
+    if (fail_cold_after_ == 0) {
+        fail_cold_after_ = SIZE_MAX;
+        result.status.log("injected host weight acquisition failure");
+        return result;
+    }
+    if (fail_cold_after_ != SIZE_MAX) {
+        --fail_cold_after_;
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     const void *         upload_data = nullptr;
     size_t               upload_size = 0;
     std::vector<uint8_t> transformed;
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     result.status = materialize_weight(materialization_source, upload_data, upload_size, transformed);
+=======
+    result.status = materialize_weight(source, upload_data, upload_size, transformed);
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     if (!result.status.success()) {
         return result;
     }
@@ -2040,6 +2073,7 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         return result;
     }
 
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto                  inserted = entries_.emplace(key, entry);
@@ -2074,6 +2108,15 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         }
     }
     result.lease = HostWeightLease(entry);
+=======
+    entries_.emplace(key, entry);
+    ++stats_.allocation_count;
+    stats_.resident_bytes += materialized_length;
+    report_new_representation(key, *entry);
+    ++stats_.misses;
+    stats_.materialized_bytes += materialized_length;
+    result.lease = HostWeightLease(std::move(entry));
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     return result;
 }
 
@@ -2082,9 +2125,46 @@ HostWeightCacheStats HostWeightCache::stats() const {
     return stats_;
 }
 
+void HostWeightCache::report_new_representation(const SourceKey & key, const HostWeightLease::Entry & entry) {
+    // Report representations of the same source byte range; partially overlapping ranges are independent.
+    bool distinct_layout = false;
+    size_t total_bytes = 0;
+    std::ostringstream details;
+    for (const auto & [resident_key, resident] : entries_) {
+        const bool same_identity = resident_key.identity == key.identity;
+        const bool same_generation = resident_key.generation == key.generation;
+        const bool same_capacity = resident_key.capacity == key.capacity;
+        const bool same_offset = resident_key.offset == key.offset;
+        const bool same_length = resident_key.length == key.length;
+        const bool same_region = same_identity && same_generation && same_capacity && same_offset &&
+                                 same_length;
+        if (!same_region) {
+            continue;
+        }
+        distinct_layout |= resident_key.layout != key.layout;
+        details << (total_bytes == 0 ? "" : ", ") << resident_key.layout << "=" << resident->length << "B";
+        total_bytes += resident->length;
+    }
+    if (!distinct_layout) {
+        return;
+    }
+    ++stats_.duplicate_warnings;
+    GGML_LOG_WARN("HRX weight residency: source=%llu generation=%llu region=[%zu,%zu) layouts={%s}"
+                  " new_layout=%s new_bytes=%zu resident_bytes=%zu\n",
+                  static_cast<unsigned long long>(key.identity), static_cast<unsigned long long>(key.generation),
+                  key.offset, key.offset + key.length, details.str().c_str(), key.layout.c_str(),
+                  entry.length, total_bytes);
+}
+
+void HostWeightCache::fail_cold_acquire_after_for_test(size_t successful_acquires) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fail_cold_after_ = successful_acquires;
+}
+
 void HostWeightCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.clear();
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     last_use_.clear();
     resident_bytes_ = 0;
     available_at_first_weight_ = 0;
@@ -2102,6 +2182,10 @@ void HostWeightCache::clear() {
     arena_free_bytes_ = 0;
     arena_free_.clear();
     arena_deferred_.clear();
+=======
+    stats_.allocation_count = 0;
+    stats_.resident_bytes = 0;
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 
 HostStagingBuffer::~HostStagingBuffer() {

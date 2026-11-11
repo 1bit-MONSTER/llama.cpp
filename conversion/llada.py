@@ -10,7 +10,12 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("LLaDAModelLM", "LLaDAForCausalLM")
+=======
+@ModelBase.register("LLaDAModelLM")
+@ModelBase.example("GSAI-ML/LLaDA-8B-Instruct")
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class LLaDAModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLADA
     undo_permute = True
@@ -114,6 +119,7 @@ class LLaDAModel(TextModel):
 
 
 @ModelBase.register("LLaDAMoEModel", "LLaDAMoEModelLM")
+@ModelBase.example("inclusionAI/LLaDA-MoE-7B-A1B-Instruct")
 class LLaDAMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLADA_MOE
 

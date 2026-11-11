@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace ggml::hrx {
 
@@ -19,6 +20,14 @@ uint64_t command_program_shape_hash(const std::string & command_shape);
 struct PreparedCommandProgramCacheStats {
     uint64_t builds = 0;
     uint64_t hits   = 0;
+};
+
+struct PreparedCommandProgramCacheEntry {
+    std::mutex mutex;
+    // Release recorded handles before the prepared bindings they reference.
+    PreparedCommandProgram prepared;
+    RecordedCommandGraph   recorded;
+    bool                   ready = false;
 };
 
 struct PreparedCommandProgramCacheExecutionResult {
@@ -35,6 +44,19 @@ struct PreparedCommandProgramCacheExecutionResult {
 
 class PreparedCommandProgramCache {
   public:
+    // Full physical bindings select the entry; a validated graph instance can retain it for warm execution.
+    std::shared_ptr<PreparedCommandProgramCacheEntry> get_or_create(
+        const CommandProgramExecutionContext & context,
+        uint64_t graph_uid,
+        uint64_t command_shape_hash,
+        const CommandProgramBindings & bindings);
+
+    PreparedCommandProgramCacheExecutionResult execute_with_result(
+        const CommandProgramExecutionContext & context,
+        const CommandProgram & commands,
+        const CommandProgramBindings & bindings,
+        const std::shared_ptr<PreparedCommandProgramCacheEntry> & entry);
+
     bool execute(const CommandProgramExecutionContext & context,
                  uint64_t                               graph_uid,
                  const std::string &                    command_shape,
@@ -84,21 +106,18 @@ class PreparedCommandProgramCache {
                   uint64_t                               command_shape_hash,
                   const CommandProgramBindings &         bindings) const;
 
-    struct Entry {
-        std::mutex             mutex;
-        PreparedCommandProgram program;
-        RecordedCommandGraph   recorded;
-        bool                   has_program = false;
-    };
-
     void record_build();
     void record_hit();
 
     mutable std::mutex                                       mutex_;
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     std::unordered_map<Key, std::shared_ptr<Entry>, KeyHash> programs_;
     // Bytes retained per graph program, maintained at build time so that retained_bytes() never has to reach into
     // an Entry under its own mutex while another thread is preparing a program in it.
     std::unordered_map<uint64_t, size_t>                     retained_by_graph_;
+=======
+    std::unordered_map<Key, std::shared_ptr<PreparedCommandProgramCacheEntry>, KeyHash> programs_;
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     PreparedCommandProgramCacheStats                         stats_;
 };
 

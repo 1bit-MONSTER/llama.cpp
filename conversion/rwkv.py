@@ -10,7 +10,12 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Rwkv6ForCausalLM", "RWKV6ForCausalLM")
+=======
+@ModelBase.register("Rwkv6ForCausalLM")
+@ModelBase.example("RWKV/v6-Finch-1B6-HF")
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Rwkv6Model(TextModel):
     model_arch = gguf.MODEL_ARCH.RWKV6
 
@@ -83,6 +88,7 @@ class Rwkv6Model(TextModel):
 
 
 @ModelBase.register("RWKV6Qwen2ForCausalLM")
+@ModelBase.example("recursal/QRWKV6-32B-Instruct-Preview-v0.1")
 class RWKV6Qwen2Model(Rwkv6Model):
     model_arch = gguf.MODEL_ARCH.RWKV6QWEN2
 
@@ -136,6 +142,7 @@ class RWKV6Qwen2Model(Rwkv6Model):
 
 
 @ModelBase.register("Rwkv7ForCausalLM", "RWKV7ForCausalLM")
+@ModelBase.example("fla-hub/rwkv7-1.5B-world")
 class Rwkv7Model(TextModel):
     model_arch = gguf.MODEL_ARCH.RWKV7
 
@@ -261,6 +268,7 @@ class Rwkv7Model(TextModel):
 
 
 @ModelBase.register("RwkvHybridForCausalLM")
+@ModelBase.example("RWKV-Red-Team/ARWKV-7B-Preview-0.1")
 class ARwkv7Model(Rwkv7Model):
     model_arch = gguf.MODEL_ARCH.ARWKV7
 

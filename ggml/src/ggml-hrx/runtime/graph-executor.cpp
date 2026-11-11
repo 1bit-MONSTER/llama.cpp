@@ -3,9 +3,14 @@
 #include "backend-buffer-binding.h"
 #include "hrx-interop-utils.h"
 #include "ggml-impl.h"
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 #include "runtime/graph-program-cache-limit.h"
 #include "runtime/graph-replay.h"
 #include "runtime/host-gap-profile.h"
+=======
+#include "hrx-interop-utils.h"
+#include "hrx_runtime.h"
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
@@ -55,9 +60,8 @@ CommandProgramBindings GraphExecutor::bind_external_value_buffers(const GraphPro
     bindings.reserve(match.external_bindings.size());
     for (const GraphProgramExternalBinding & external : match.external_bindings) {
         ValueBufferBinding    value_binding;
-        CommandProgramBinding binding;
-        binding.value = external.value;
         if (ggml_backend_hrx_resolve_value_buffer(external.tensor, value_binding)) {
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             binding.buffer     = value_binding.buffer;
             binding.host_data  = value_binding.host_data;
             binding.offset     = value_binding.offset;
@@ -70,18 +74,23 @@ CommandProgramBindings GraphExecutor::bind_external_value_buffers(const GraphPro
             binding.graph_input = (external.tensor->flags & GGML_TENSOR_FLAG_INPUT) != 0 ||
                                   (external.tensor->view_src != nullptr &&
                                    (external.tensor->view_src->flags & GGML_TENSOR_FLAG_INPUT) != 0);
+=======
+            bindings.push_back(make_command_program_binding(external.value, value_binding,
+                                                            ggml_nbytes(external.tensor) == 0));
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         } else {
             status.log("external value %d is not bound", external.value.value);
         }
-        bindings.push_back(binding);
     }
     return CommandProgramBindings::from_bindings(std::move(bindings), status);
 }
 
 GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     GraphExecutionResult result;
+    CompileTraceExecution trace(context_.kernel_executables.trace_id(), graph.uid);
     if (graph.n_nodes == 0) {
         result.code = GGML_STATUS_SUCCESS;
+        trace.success = true;
         return result;
     }
     result.status = context_valid_for_execution();
@@ -111,8 +120,11 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         return result;
     }
 
-    const bool        use_graph_prepared = lookup.program->can_use_prepared_fast_path(graph);
+    const bool reusable_owner = lookup.program->can_use_prepared_fast_path(graph);
+    const bool mutable_sources_current = reusable_owner && lookup.program->mutable_sources_current();
+    const bool trusted_weights = reusable_owner && mutable_sources_current;
     GraphProgramMatch binding_match = std::move(lookup.match);
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     if (use_graph_prepared && lookup.program->has_prepared_program()) {
         binding_match = lookup.program->match_host_staging_graph(graph);
         if (!binding_match.valid()) {
@@ -122,6 +134,15 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
             }
             return result;
         }
+=======
+    if (reusable_owner) {
+        binding_match = trusted_weights ? lookup.program->match_host_staging_graph(graph) :
+                                          lookup.program->match_trusted_graph(graph, true);
+    }
+    if (!binding_match.valid()) {
+        result.status.append(binding_match.status);
+        return result;
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     CommandProgramBindings bindings;
@@ -147,6 +168,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         &context_.host_weights,
         &context_.device->host_buffers,
         &context_.graph_replay_state,
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         context_.device->memory_budget,
     };
     PreparedCommandProgramCacheExecutionResult execution;
@@ -159,6 +181,22 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     }
     host_gap_end_graph(hrx_graph_replay_now_ns() - graph_start_ns, execution.graph_replay_build_ns,
                        execution.graph_replay_launch_ns, execution.graph_replay_dispatches);
+=======
+        trace.ids.cache_id != 0 ? &trace : nullptr,
+    };
+    std::shared_ptr<PreparedCommandProgramCacheEntry> entry;
+    if (trusted_weights) {
+        entry = lookup.program->prepared_entry();
+    } else if (graph.uid != 0) {
+        entry = context_.prepared_programs.get_or_create(execution_context, lookup.program->uid(),
+                                                        lookup.program->command_shape_hash(), bindings);
+    }
+    const PreparedCommandProgramCacheExecutionResult execution = entry != nullptr ?
+        context_.prepared_programs.execute_with_result(execution_context, lookup.program->commands(), bindings, entry) :
+        context_.prepared_programs.execute_with_result(execution_context, 0, lookup.program->command_shape_hash(),
+                                                       lookup.program->commands(), bindings);
+    result.graph_replay_event = execution.graph_replay_event;
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     if (!execution.success) {
         result.status.append(execution.status);
         if (result.status.success()) {
@@ -167,7 +205,13 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         return result;
     }
 
+    const bool validated_entry = entry != nullptr && !trusted_weights;
+    if (validated_entry) {
+        lookup.program->bind_prepared_graph(graph, binding_match, bindings, std::move(entry));
+    }
+
     result.code = GGML_STATUS_SUCCESS;
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 
     // engine #1251: a download this program staged is only a *queued* memcpy until mark_stream_synchronized() runs
     // (GraphReplayStreamState::add_host_writeback defers the publish to the next backend synchronize). ggml's
@@ -184,6 +228,9 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         }
         context_.graph_replay_state.mark_stream_synchronized();
     }
+=======
+    trace.success = true;
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     return result;
 }
 

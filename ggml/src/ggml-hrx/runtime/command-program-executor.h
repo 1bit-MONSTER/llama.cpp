@@ -24,6 +24,7 @@ struct ggml_hrx_loom_jit_amdgpu;
 namespace ggml::hrx {
 
 class KernelExecutableCache;
+struct CompileTraceExecution;
 struct KernelExecutable;
 class TransientArena;
 class HostBufferRegistry;
@@ -44,6 +45,7 @@ struct GraphReplayStreamState {
 
     void mark_stream_synchronized();
     void add_host_writeback(void * host_destination, const void * mapped_source, size_t size, hrx_buffer_t buffer);
+    bool has_pending_host_writebacks() const;
     void clear();
 
     // True while a host download staged by an earlier replay has not been
@@ -65,11 +67,31 @@ struct CommandProgramExecutionContext {
     HostWeightCache *       host_weights       = nullptr;
     HostBufferRegistry *    host_buffers       = nullptr;
     GraphReplayStreamState * graph_replay_state = nullptr;
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // engine#1711: the device's pool budget, so the transient arena can be charged before it grows. 0 means the device
     // size is unknown, in which case the arena keeps the old uncharged behaviour (and pool_reserve() would not have
     // added to the ledger either, so a paired release would unbalance it).
     size_t                  pool_budget        = 0;
+=======
+    CompileTraceExecution * compile_trace = nullptr;
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 };
+
+struct CommandProgramWeightDemand {
+    CommandBinding   request;
+    HostWeightSource source;
+    bool             requires_materialization = false;
+};
+
+struct CommandProgramWeightDemands {
+    std::vector<CommandProgramWeightDemand> weights;
+    Status                                  status;
+
+    bool valid() const { return status.success(); }
+};
+
+CommandProgramWeightDemands collect_command_program_weight_demands(const CommandProgram &         commands,
+                                                                  const CommandProgramBindings & bindings);
 
 struct PreparedCommandBinding {
     CommandBinding    binding;

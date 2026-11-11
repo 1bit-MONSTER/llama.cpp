@@ -48,6 +48,13 @@ struct ClampParams {
     float max = 0.0f;
 };
 
+struct Pool1DParams {
+    ggml_op_pool op = GGML_OP_POOL_MAX;
+    int32_t      kernel = 0;
+    int32_t      stride = 0;
+    int32_t      padding = 0;
+};
+
 struct GluParams {
     ggml_glu_op op = GGML_GLU_OP_REGLU;
     bool        swapped = false;
@@ -128,6 +135,7 @@ struct RopeParams {
     float beta_fast   = 0.0f;
     float beta_slow   = 0.0f;
     std::array<int, GGML_MROPE_SECTIONS> sections    = {};
+    int n_offs = 0;
 };
 
 // clang-format off
@@ -140,6 +148,7 @@ using OpParams = std::variant<
     FillParams,
     ArgsortParams,
     ClampParams,
+    Pool1DParams,
     GluParams,
     ScaleParams,
     BinaryParams,

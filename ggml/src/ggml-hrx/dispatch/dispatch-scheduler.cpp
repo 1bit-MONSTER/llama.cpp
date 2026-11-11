@@ -249,6 +249,9 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
         return false;
     }
     std::vector<bool>         covered_nodes(nodes.size(), false);
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        covered_nodes[i] = !nodes[i].compute;
+    }
     Status                    pending_diagnostics;
     const GraphTraversalOrder traversal = GraphTraversalOrder::build(graph);
     for (const GraphNode * node : traversal.nodes()) {
@@ -378,6 +381,9 @@ bool DispatchScheduler::supports_node(const Graph & graph, const GraphNode * nod
     size_t node_index = 0;
     if (!graph.index().node_index(node, node_index)) {
         return false;
+    }
+    if (!node->compute) {
+        return true;
     }
     const std::vector<bool> covered_nodes(graph.nodes().size(), false);
     DispatchMatch           match;

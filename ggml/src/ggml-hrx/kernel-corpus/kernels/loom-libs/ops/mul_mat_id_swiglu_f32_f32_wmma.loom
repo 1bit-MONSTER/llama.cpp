@@ -1,6 +1,7 @@
 // Routed GGML gate/up MUL_MAT_ID fused with SwiGLU for compact expert tables.
 template.decl @ggml.mul_mat_id_swiglu.apply_vector4(%gate: vector<4xf32>, %up: vector<4xf32>) -> (vector<4xf32>)
 
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops/mul_mat_id_swiglu_f32_f32_wmma.loom
 template.decl @ggml.mul_mat_id_swiglu.body(%gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %channel_tile: index, %partition_ordinal: index, %iq3s_table_mode: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_id_swiglu_gfx11_wave64 {subgroup_size = 64}
@@ -20,6 +21,9 @@ config.decl @ggml.mul_mat_id_swiglu.gate_weight_format : %value: index where [ra
 config.decl @ggml.mul_mat_id_swiglu.up_weight_format : %value: index where [range(%value, 4, 81)]
 
 config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+=======
+template.decl @ggml.matmul_id.pair_f32_swiglu.body(%gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %channel_tile: index, %partition_ordinal: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer, %iq3_xxs_grid: buffer)
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/motifs/matmul_id/pair_input_f32_dequant_accumulate_f32.loom
 
 func.decl @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_size: index) -> (offset)
 
@@ -33,6 +37,7 @@ func.decl @ggml_iq3xxs_grid_code_i32(%grid_index: i32) -> (i32)
 func.decl @ggml_iq3xxs_f16_vector4_table(%weight: buffer, %row_byte_base: offset, %iq3_block: index, %iq3_group: index, %packet: index, %table: view<256xi32>) -> (vector<4xf16>)
 
 func.decl @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf16>)
+func.decl @ggml_codebook_f16_vector4(%weight_format: index, %codebook: buffer, %weight: buffer, %row_byte_base: offset, %quant_block: index, %quant_group: index, %packet: index) -> (vector<4xf16>)
 
 func.def inline @ggml_moe_unpack_expert_partition_descriptor(%descriptor: i32) -> (index, index, index) {
   %c1_i32 = scalar.constant 1 : i32
@@ -58,6 +63,7 @@ func.def inline @ggml_moe_unpack_expert_partition_descriptor(%descriptor: i32) -
   func.return %expert, %route_tile_base, %partition_row_count : index, index, index
 }
 
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops/mul_mat_id_swiglu_f32_f32_wmma.loom
 template.def<@ggml.mul_mat_id_swiglu.apply_vector4> device @ggml_mul_mat_id_swiglu_apply_vector4(%gate: vector<4xf32>, %up: vector<4xf32>) -> (vector<4xf32>) {
   %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
   %c1_f32x4 = vector.constant 1.0 : vector<4xf32>
@@ -71,6 +77,9 @@ template.def<@ggml.mul_mat_id_swiglu.apply_vector4> device @ggml_mul_mat_id_swig
 }
 
 template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f32_wmma_body(%gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %channel_tile: index, %partition_ordinal: index, %iq3s_table_mode: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) {
+=======
+template.def<@ggml.matmul_id.pair_f32_swiglu.body> device @ggml_mul_mat_id_pair_f32_swiglu_f32_f32_wmma_body(%gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %channel_tile: index, %partition_ordinal: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer, %iq3_xxs_grid: buffer) {
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/motifs/matmul_id/pair_input_f32_dequant_accumulate_f32.loom
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 32)] : index
   %bounded_route_count = index.assume %route_count [range(%route_count, 1, 32)] : index
@@ -93,6 +102,7 @@ template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f3
   %c64 = index.constant 64 : index
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
+  %iq3_xxs_format = index.constant 18 : index
   %c0_offset = index.constant 0 : offset
   %c4_bytes = index.constant 4 : offset
   %weight_stage_bytes = index.constant 5120 : offset
@@ -124,6 +134,8 @@ template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f3
   %up_weight_row_bytes = func.call @ggml_dequant_weight_row_bytes(%up_weight_format, %bounded_input_size) : (index, index) -> (offset)
   %gate_weight_expert_bytes = index.scale %bounded_output_size, %gate_weight_row_bytes : index, offset -> offset
   %up_weight_expert_bytes = index.scale %bounded_output_size, %up_weight_row_bytes : index, offset -> offset
+  %gate_uses_iq3_xxs = index.cmp eq, %gate_weight_format, %iq3_xxs_format : index
+  %up_uses_iq3_xxs = index.cmp eq, %up_weight_format, %iq3_xxs_format : index
   %input_noalias, %expert_table_noalias, %partition_table_noalias, %gate_weight_noalias, %up_weight_noalias, %output_noalias = buffer.assume.noalias %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output : buffer, buffer, buffer, buffer, buffer, buffer
   %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_input_route_count]x[%bounded_input_size]xf32>
   %assignment_view = buffer.view %expert_table_noalias[%assignment_table_byte_base] : buffer -> view<[%bounded_expert_count]x[%bounded_token_count]xi32>
@@ -247,12 +259,21 @@ template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f3
           %gate_weight_values = scf.if %valid_weight -> (vector<4xf16>) {
             %channel_byte_add = index.scale %channel, %gate_weight_row_bytes : index, offset -> offset
             %row_byte_base = index.add %gate_expert_byte_base, %channel_byte_add : offset
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops/mul_mat_id_swiglu_f32_f32_wmma.loom
             %decoded_sel = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %gate_weight_format, %gate_weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
             %decoded = scf.if %gate_table -> (vector<4xf16>) {
               %decoded_tbl = func.call @ggml_iq3xxs_f16_vector4_table(%gate_weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet, %iq3s_table_view) : (buffer, offset, index, index, index, view<256xi32>) -> (vector<4xf16>)
               scf.yield %decoded_tbl : vector<4xf16>
             } else {
               scf.yield %decoded_sel : vector<4xf16>
+=======
+            %decoded = scf.if %gate_uses_iq3_xxs -> (vector<4xf16>) {
+              %codebook_decoded = func.call @ggml_codebook_f16_vector4(%gate_weight_format, %iq3_xxs_grid, %gate_weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (index, buffer, buffer, offset, index, index, index) -> (vector<4xf16>)
+              scf.yield %codebook_decoded : vector<4xf16>
+            } else {
+              %generic_decoded = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %gate_weight_format, %gate_weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+              scf.yield %generic_decoded : vector<4xf16>
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/motifs/matmul_id/pair_input_f32_dequant_accumulate_f32.loom
             }
             scf.yield %decoded : vector<4xf16>
           } else {
@@ -261,12 +282,21 @@ template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f3
           %up_weight_values = scf.if %valid_weight -> (vector<4xf16>) {
             %channel_byte_add = index.scale %channel, %up_weight_row_bytes : index, offset -> offset
             %row_byte_base = index.add %up_expert_byte_base, %channel_byte_add : offset
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops/mul_mat_id_swiglu_f32_f32_wmma.loom
             %decoded_sel = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %up_weight_format, %up_weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
             %decoded = scf.if %up_table -> (vector<4xf16>) {
               %decoded_tbl = func.call @ggml_iq3xxs_f16_vector4_table(%up_weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet, %iq3s_table_view) : (buffer, offset, index, index, index, view<256xi32>) -> (vector<4xf16>)
               scf.yield %decoded_tbl : vector<4xf16>
             } else {
               scf.yield %decoded_sel : vector<4xf16>
+=======
+            %decoded = scf.if %up_uses_iq3_xxs -> (vector<4xf16>) {
+              %codebook_decoded = func.call @ggml_codebook_f16_vector4(%up_weight_format, %iq3_xxs_grid, %up_weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (index, buffer, buffer, offset, index, index, index) -> (vector<4xf16>)
+              scf.yield %codebook_decoded : vector<4xf16>
+            } else {
+              %generic_decoded = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %up_weight_format, %up_weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+              scf.yield %generic_decoded : vector<4xf16>
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/motifs/matmul_id/pair_input_f32_dequant_accumulate_f32.loom
             }
             scf.yield %decoded : vector<4xf16>
           } else {

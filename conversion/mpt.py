@@ -8,7 +8,12 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("MPTForCausalLM", "MptForCausalLM")
+=======
+@ModelBase.register("MPTForCausalLM")
+@ModelBase.example("anas-awadalla/mpt-7b")
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class MPTModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MPT
 

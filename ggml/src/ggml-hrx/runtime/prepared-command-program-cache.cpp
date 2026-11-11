@@ -1,9 +1,14 @@
 #include "prepared-command-program-cache.h"
 
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 #include "runtime/host-gap-profile.h"
 
+=======
+#include <algorithm>
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <utility>
 
@@ -100,14 +105,19 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     if (graph_uid == 0 || !commands.valid() || !bindings.valid()) {
         result.graph_replay_event             = HrxGraphReplayEvent::Ineligible;
         result.graph_replay_ineligible_reason = "uncached_graph";
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         PreparedCommandProgram prepared = [&] {
             const HostGapScope scope("prep.prepare");
             return prepare_command_program(context, commands, bindings);
         }();
+=======
+        auto prepared = prepare_command_program(context, commands, bindings);
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         if (!prepared.valid()) {
             result.status.append(prepared.status);
             return result;
         }
+        // HRX command buffers retain queued buffers and executables even after this uncached owner is released.
         result.success = bind_and_execute_prepared_command_program(context, commands, bindings, prepared);
         if (!result.success) {
             result.status.log("execute uncached HRX command program failed");
@@ -115,6 +125,7 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         return result;
     }
 
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     Key                    key;
     {
         const HostGapScope scope("cache.key");
@@ -133,42 +144,83 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
             entry = found->second;
         }
     }
+=======
+    return execute_with_result(context, commands, bindings,
+                               get_or_create(context, graph_uid, command_shape_hash, bindings));
+}
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
+std::shared_ptr<PreparedCommandProgramCacheEntry> PreparedCommandProgramCache::get_or_create(
+    const CommandProgramExecutionContext & context,
+    uint64_t graph_uid,
+    uint64_t command_shape_hash,
+    const CommandProgramBindings & bindings) {
+    const Key key = cache_key(graph_uid, context, command_shape_hash, bindings);
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto found = programs_.find(key);
+    if (found != programs_.end()) {
+        return found->second;
+    }
+    auto entry = std::make_shared<PreparedCommandProgramCacheEntry>();
+    programs_.emplace(key, entry);
+    return entry;
+}
+
+PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_with_result(
+    const CommandProgramExecutionContext & context,
+    const CommandProgram & commands,
+    const CommandProgramBindings & bindings,
+    const std::shared_ptr<PreparedCommandProgramCacheEntry> & entry) {
+    PreparedCommandProgramCacheExecutionResult result;
     std::lock_guard<std::mutex> entry_lock(entry->mutex);
-    if (entry->has_program && entry->program.valid()) {
-        record_hit();
-        if (debug_serial_command_execution_enabled()) {
-            result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
-            result.graph_replay_ineligible_reason = "debug_serial_execution";
-            result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->program);
-            if (!result.success) {
-                result.status.log("execute cached HRX command program failed");
-            }
+    const bool replay_disabled = graph_replay_disabled_by_environment();
+    const bool serial_execution = debug_serial_command_execution_enabled();
+    const bool execute_directly = replay_disabled || serial_execution;
+    if (!entry->ready) {
+        auto prepared = prepare_command_program(context, commands, bindings);
+        if (!prepared.valid()) {
+            result.status.append(prepared.status);
             return result;
         }
+        entry->prepared = std::move(prepared);
+        entry->ready = true;
+        record_build();
+    } else {
+        record_hit();
+    }
+
+    if (execute_directly) {
+        result.graph_replay_event = HrxGraphReplayEvent::Disabled;
+        result.graph_replay_ineligible_reason = serial_execution ? "debug_serial_execution" :
+                                                                  "disabled_by_environment";
+        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->prepared);
+    } else {
+        const char * rebuild_setting = std::getenv("GGML_HRX_REBUILD_GRAPH_REPLAY");
+        const bool rebuild_requested = rebuild_setting != nullptr && rebuild_setting[0] != '\0';
+        const bool rebuild_enabled = rebuild_requested && rebuild_setting[0] != '0';
+        if (rebuild_enabled) {
+            entry->recorded = {};
+        }
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         RecordedCommandGraphExecutionResult replay;
         {
             const HostGapScope scope("cache.replay");
             replay = bind_and_launch_recorded_command_graph(context, commands, bindings, entry->program, entry->recorded);
         }
+=======
+        const auto replay = bind_and_launch_recorded_command_graph(
+            context, commands, bindings, entry->prepared, entry->recorded);
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         apply_graph_replay_result(result, replay);
-        if (replay.success) {
-            result.success = true;
-            return result;
-        }
-        if (!graph_replay_should_fallback(replay.event)) {
+        result.success = replay.success;
+        const bool fallback = !replay.success && graph_replay_should_fallback(replay.event);
+        if (fallback) {
+            result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->prepared);
+        } else if (!replay.success) {
             result.status.append(replay.status);
-            if (result.status.success()) {
-                result.status.log("execute cached HRX graph replay failed");
-            }
-            return result;
         }
-        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->program);
-        if (!result.success) {
-            result.status.log("execute cached HRX command program failed");
-        }
-        return result;
     }
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 
     PreparedCommandProgram prepared = [&] {
         const HostGapScope scope("prep.prepare");
@@ -222,6 +274,10 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     }
     result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->program);
     if (!result.success) {
+=======
+    const bool missing_error = !result.success && result.status.success();
+    if (missing_error) {
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         result.status.log("execute prepared HRX command program failed");
     }
     return result;
