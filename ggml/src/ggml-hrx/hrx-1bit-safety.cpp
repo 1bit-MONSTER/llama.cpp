@@ -136,6 +136,36 @@ pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, s
     return t;
 }
 
+// engine #2069 (llama.cpp #259's review): the refusal has to name the term that bound it. `budget == 0` is reached two ways
+// that look identical and have opposite remedies -- the GTT ceiling leaving nothing under the reserve, or the host figure
+// being the smaller term (a measured zero refuses by design since #1942/#259, and a tiny MemAvailable does the same). The
+// numbers printed are the ones the decision used, not the ones that happen to be nearby.
+std::string pool_refusal_note(const pool_budget_terms_t & terms, size_t memory_total, size_t memory_free,
+                              const char * device_name) {
+    char line[512];
+    const double gib = 1024.0 * 1024.0 * 1024.0;
+    if (terms.host_bound) {
+        // The host term was the smaller one and it is what made the budget zero.
+        std::snprintf(line, sizeof line,
+                      "ggml_hrx: %s: refusing to use the device: the HOST term bound the pool - host MemAvailable %.1f GiB "
+                      "against a GTT term of %.1f GiB (GTT total %.1f GiB with %.1f GiB free). This is not the GTT ceiling: "
+                      "freeing GTT will not help while host memory is the smaller term%s (engine #1502, #2069)",
+                      device_name != nullptr ? device_name : "HRX", terms.host_available / gib, terms.gtt_term / gib,
+                      memory_total / gib, memory_free / gib,
+                      terms.host_available == 0 ? " -- a measured zero refuses by design, so check that /proc/meminfo is readable (#1942)"
+                                                : "");
+        return std::string(line);
+    }
+    const size_t reserve = pool_reserve_bytes();
+    std::snprintf(line, sizeof line,
+                  "ggml_hrx: %s: refusing to use the device: GTT total %.1f GiB with %.1f GiB free leaves nothing under the "
+                  "%.1f GiB ceiling (reserve GGML_HRX_GTT_RESERVE_MB, override GGML_HRX_POOL_LIMIT_MB); free GTT or lower the "
+                  "reserve (engine #680)",
+                  device_name != nullptr ? device_name : "HRX", memory_total / gib, memory_free / gib,
+                  (memory_total > reserve ? memory_total - reserve : 0) / gib);
+    return std::string(line);
+}
+
 size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available) {
     return pool_budget_terms(memory_total, memory_free, memory_available).budget;
 }
