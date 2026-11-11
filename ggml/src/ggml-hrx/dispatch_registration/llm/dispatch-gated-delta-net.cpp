@@ -215,9 +215,15 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
         raw_k->storage_offset != static_cast<size_t>(width * q_head_count) * sizeof(float) ||
         v->storage_offset != static_cast<size_t>(2 * width * q_head_count) * sizeof(float) ||
         raw_q->nb[0] != sizeof(float) || raw_q->nb[1] != static_cast<size_t>(width) * sizeof(float) ||
-        raw_q->nb[2] != static_cast<size_t>(hidden_size) * sizeof(float) || raw_k->nb != raw_q->nb ||
+        // engine#1925: the dim-2 step may be STRIDED -- a q/k norm fed by a view whose token step is wider than
+        // nb[1]*ne[1] (measured: nb[2]=40960 against 8192, 5x) -- so the token stride is bounded below and required
+        // to stay float-aligned instead of being required to be packed. This is the proof the decode matcher below
+        // already uses for v (see the `v->nb[2] < ... || v->nb[2] % sizeof(float)` term): nothing else in this guard
+        // relaxes, so nb[0]/nb[1], the shared storage, the three offsets and raw_k->nb == raw_q->nb all still hold.
+        raw_q->nb[2] < static_cast<size_t>(hidden_size) * sizeof(float) || raw_q->nb[2] % sizeof(float) != 0 ||
+        raw_k->nb != raw_q->nb ||
         v->nb[0] != sizeof(float) || v->nb[1] != static_cast<size_t>(width) * sizeof(float) ||
-        v->nb[2] != static_cast<size_t>(hidden_size) * sizeof(float)) {
+        v->nb[2] < static_cast<size_t>(hidden_size) * sizeof(float) || v->nb[2] % sizeof(float) != 0) {
         return {};
     }
 
