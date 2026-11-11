@@ -4500,7 +4500,7 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
-static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
+static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float activation_scale = 1.0f) {
     std::random_device rd;
     std::default_random_engine rng(rd());
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
@@ -4515,6 +4515,17 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
                 std::shuffle(data.begin(), data.end(), rng);
                 ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
             }
+        } else if (activation_scale != 1.0f && t->type == GGML_TYPE_F32) {
+            // engine#2127: the routed gate/up motifs narrow the f32 activation to f16 with NO prescale, so an
+            // activation outside f16's range is where that shows. The default fill is uniform in [-1, 1], which
+            // cannot reach it (f16 carries ~11 mantissa bits, so values <= 1 lose ~1e-4 relative and both arms
+            // narrow identically) -- hence a per-case scale rather than a wider default: widening the default
+            // would change every op's fixtures at once.
+            const size_t ne = (size_t) ggml_nelements(t);
+            std::vector<float> data(ne);
+            std::uniform_real_distribution<float> gen(-activation_scale, activation_scale);
+            for (size_t i = 0; i < ne; i++) { data[i] = gen(rng); }
+            ggml_backend_tensor_set(t, data.data(), 0, ne * sizeof(float));
         } else {
             init_tensor_uniform(t);
         }
@@ -4531,9 +4542,10 @@ struct test_mul_mat_id : public test_case {
     const int64_t m;
     const int64_t n;
     const int64_t k;
+    const float   activation_scale;   // engine#2127: >1 to reach the f16 narrowing, 1.0f for every pre-existing case
 
     std::string vars() override {
-        return VARS_TO_STR8(type_a, type_b, n_mats, n_used, b, m, n, k);
+        return VARS_TO_STR9(type_a, type_b, n_mats, n_used, b, m, n, k, activation_scale);
     }
 
     double max_nmse_err() override {
@@ -4555,9 +4567,9 @@ struct test_mul_mat_id : public test_case {
 
     test_mul_mat_id(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
-            int64_t m = 32, int64_t n = 32, int64_t k = 32)
+            int64_t m = 32, int64_t n = 32, int64_t k = 32, float activation_scale = 1.0f)
         : type_a(type_a), type_b(type_b), n_mats(n_mats), n_used(n_used), b(b),
-            m(m), n(n), k(k) {
+            m(m), n(n), k(k), activation_scale(activation_scale) {
             GGML_ASSERT(n_used <= n_mats);
         }
 
@@ -4583,7 +4595,7 @@ struct test_mul_mat_id : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        init_mul_mat_id_tensors(ctx, n_mats);
+        init_mul_mat_id_tensors(ctx, n_mats, activation_scale);
     }
 };
 
@@ -9309,6 +9321,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // element-wise expert below or off that contract must stay refused rather than reach a kernel that rejects it.
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8, 1472));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8,   92));
+    // engine#2127: the routed gate/up motifs narrow the f32 activation to f16 unscaled, so a fixture whose activation is
+    // bounded to ±1 cannot express the failure (f16 carries ~11 mantissa bits, so a value ≤ 1 loses ~1e-4 relative and
+    // both arms narrow identically). Two scales, both compared against the CPU arm through the case's own NMSE bound:
+    //   1e4  activations to 10,000 stay inside f16's 65504 and must be correct -- this row is the working range.
+    // 1e5 (beyond 65504) is MEASURED BAD today: HRX0 returns -nan where the CPU arm returns -165957.6875
+    // (engine#2127, 857/858 with `Backend HRX0: FAIL`). That row is deliberately NOT here: a test that fails by
+    // design lands with the kernel fix in mul_mat_id_*_f16_wmma_projection.loom, or as expected-fail -- the harness
+    // has no xfail hook, so adding it now would only red the suite. What this row pins is the range that works, so
+    // the fix cannot buy the large case by breaking the ordinary one.
+    // The SHAPE matters as much as the scale: the first version of these rows used m=256,n=2,k=32 and both came back
+    // "not supported [HRX0]", which proves nothing about the narrowing (the backend never claimed them). These reuse a
+    // shape the same sweep already reports OK -- bf16 x f32, 4 mats, m=512, n=32, k=256 -- so the ONLY difference from
+    // the passing rows above is the activation magnitude.
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 4, 2, false, 512, 32, 256, 1e4f));
     // Row-padded activation against a dense weight: the model's dt_proj at the prefill token count, and the same contraction
     // at a small token count so a regression at either end is visible.
     test_cases.emplace_back(new test_mul_mat_row_padded_activation(GGML_TYPE_BF16, GGML_TYPE_F32, 2944, 512,  92, 264));
