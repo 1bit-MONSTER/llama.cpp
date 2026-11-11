@@ -67,14 +67,11 @@ struct CommandProgramExecutionContext {
     HostWeightCache *       host_weights       = nullptr;
     HostBufferRegistry *    host_buffers       = nullptr;
     GraphReplayStreamState * graph_replay_state = nullptr;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // engine#1711: the device's pool budget, so the transient arena can be charged before it grows. 0 means the device
     // size is unknown, in which case the arena keeps the old uncharged behaviour (and pool_reserve() would not have
     // added to the ledger either, so a paired release would unbalance it).
     size_t                  pool_budget        = 0;
-=======
     CompileTraceExecution * compile_trace = nullptr;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 };
 
 struct CommandProgramWeightDemand {

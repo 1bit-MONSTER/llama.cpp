@@ -24,3 +24,27 @@ Two things to do before anyone builds or opens a PR from this branch:
      test applied to our own refactors is where a wrong choice is silent rather than loud.
 (An earlier pass of mine resolved 452 hunks by treating "our side empty" as "take theirs" and was reverted:
 in the merge-base sense an empty side usually means we deleted, so it resurrected deletions en bloc.)
+
+## ORDERING HAZARD introduced by the two header unions (read before resolving graph-executor.cpp)
+`runtime/command-program-executor.h` and `runtime/graph-program-cache.h` were additive and are now unions:
+  CommandProgramExecutionContext  = { device, stream, architecture, corpus, kernel_executables, transient_arena,
+                                      host_transfers, host_weights, host_buffers, graph_replay_state,
+                                      pool_budget,        <-- ours, engine#1711
+                                      compile_trace };    <-- AMD's rebase
+  graph-program-cache.h includes both runtime/graph-program-budget.h and runtime/command-program-executor.h.
+
+That struct is POSITIONALLY aggregate-initialized at exactly one place, `runtime/graph-executor.cpp:160`, and that
+initializer is inside the still-marked conflict block. Ours ends `..., &context_.graph_replay_state, context_.device->memory_budget,`
+and AMD's ends `..., &context_.graph_replay_state, trace.ids.cache_id != 0 ? &trace : nullptr,`. With the union above,
+the call site must become:
+    ..., &context_.graph_replay_state,
+    context_.device->memory_budget,                       // pool_budget
+    trace.ids.cache_id != 0 ? &trace : nullptr,           // compile_trace
+If the conflict there is resolved by taking EITHER side verbatim, the two pointer/size_t values land in each other's
+slots (or one is left defaulted) and the pool budget silently becomes a pointer -- the kind of mistake a compile
+does not always catch on a same-size type and a device run then charges the wrong ledger.
+
+Leave the body of that conflict for a human: the two sides restructured the execute path, not the same lines --
+ours branches on use_graph_prepared and calls lookup.program->execute_with_result / prepared_programs.execute_with_result,
+AMD's uses prepared_entry() / get_or_create and passes an entry. That is a behaviour choice between our replay path
+and AMD's prepared-entry API, not text to merge.
