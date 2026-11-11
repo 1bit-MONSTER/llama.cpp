@@ -7,6 +7,10 @@
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
+#include <cstdio>
+#include <mutex>
+#include <set>
+#include <cstdlib>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -142,6 +146,32 @@ struct GatedDeltaNetProjectionPairMatch {
     }
 };
 
+
+// ---- GDN_WHY_INSTRUMENTED (lane cl-perf, engine #1925; diagnostic only) ----
+static bool gdn_why_enabled() {
+    static const bool enabled = [] { const char * e = std::getenv("GGML_HRX_GDN_WHY"); return e != nullptr && e[0] != '0'; }();
+    return enabled;
+}
+static void gdn_why_decline(const char * function, int line) {
+    if (gdn_why_enabled()) {
+        std::fprintf(stderr, "gdn-why: %s declined at line %d\n", function, line);
+    }
+}
+static void gdn_why_value(const char * name, const Value * v) {
+    if (v == nullptr) {
+        std::fprintf(stderr, "gdn-why:   %-10s (null)\n", name);
+        return;
+    }
+    std::fprintf(stderr,
+                 "gdn-why:   %-10s id=%d kind=%d storage=%d off=%zu ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] bytes=%zu contiguous=%d\n",
+                 name, v->id.value, static_cast<int>(v->kind), v->storage.value, v->storage_offset,
+                 static_cast<long long>(v->ne[0]), static_cast<long long>(v->ne[1]), static_cast<long long>(v->ne[2]),
+                 static_cast<long long>(v->ne[3]), v->nb[0], v->nb[1], v->nb[2], v->nb[3], v->byte_count,
+                 v->contiguous ? 1 : 0);
+}
+#define GDN_WHY_RETURN() (gdn_why_decline(__func__, __LINE__), GatedDeltaNetMatch{})
+// ---- end GDN_WHY_INSTRUMENTED ----
+
 static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const GraphNode * node) {
     GatedDeltaNetMatch match;
     if (node == nullptr || node->op != GGML_OP_L2_NORM || node->inputs.size() != 1 || !graph.has_index()) {
@@ -151,13 +181,13 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
     const Value * raw_q  = graph_value(graph, node->inputs[0]);
     const Value * q_norm = graph_value(graph, node->output);
     if (!is_f32(raw_q) || !is_f32(q_norm)) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const std::vector<const GraphNode *> & q_consumers = graph.index().consumers(q_norm->id);
     if (q_consumers.size() != 1 || q_consumers.front() == nullptr ||
         q_consumers.front()->op != GGML_OP_GATED_DELTA_NET || q_consumers.front()->inputs.size() != 6 ||
         q_consumers.front()->inputs[0] != q_norm->id) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const GraphNode * gdn = q_consumers.front();
 
@@ -173,12 +203,12 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
                                         nullptr;
     if (!is_f32(k_norm) || !is_f32(raw_k) || !is_f32(v) || !is_f32(gate) || !is_f32(beta) || !is_f32(state) ||
         !is_f32(gdn_output)) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const RmsNormParams * l2_params = op_params_as<RmsNormParams>(node->params);
     if (l2_params == nullptr || !std::isfinite(l2_params->eps) || l2_params->eps <= 0.0f ||
         !op_params_equivalent(GGML_OP_L2_NORM, node->params, k_norm_node->params)) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
     const int64_t width          = raw_q->ne[0];
@@ -188,9 +218,17 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
     const int64_t head_count     = v->ne[1];
     if (width != 128 || q_head_count <= 0 || q_head_count > 4096 || head_count <= 0 || head_count > 4096 ||
         token_count < 1 || token_count > kUbatchMaxTokens || sequence_count < 1 || sequence_count > kMaximumSequences) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const int64_t hidden_size = width * (2 * q_head_count + head_count);
+    if (gdn_why_enabled()) {
+        std::fprintf(stderr, "gdn-why: L2-rooted candidate: width=%lld q_heads=%lld heads=%lld tokens=%lld seqs=%lld hidden=%lld\n",
+                     static_cast<long long>(width), static_cast<long long>(q_head_count), static_cast<long long>(head_count),
+                     static_cast<long long>(token_count), static_cast<long long>(sequence_count), static_cast<long long>(hidden_size));
+        gdn_why_value("raw_q", raw_q); gdn_why_value("raw_k", raw_k); gdn_why_value("v", v);
+        gdn_why_value("q_norm", q_norm); gdn_why_value("k_norm", k_norm); gdn_why_value("gate", gate);
+        gdn_why_value("beta", beta); gdn_why_value("state", state); gdn_why_value("gdn_output", gdn_output);
+    }
     if (!is_shape(*raw_k, width, q_head_count, token_count, sequence_count) ||
         !is_shape(*q_norm, width, q_head_count, token_count, sequence_count) ||
         !is_shape(*k_norm, width, q_head_count, token_count, sequence_count) ||
@@ -199,16 +237,16 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
         !is_shape(*beta, 1, head_count, token_count, sequence_count) ||
         !is_shape(*state, width, width, head_count, sequence_count) || gdn_output->ne[0] != width * head_count ||
         gdn_output->ne[2] != 1 || gdn_output->ne[3] != 1) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const int64_t attention_rows = token_count * sequence_count;
     const int64_t snapshot_rows  = width * sequence_count;
     if (gdn_output->ne[1] <= attention_rows || (gdn_output->ne[1] - attention_rows) % snapshot_rows != 0) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const int64_t snapshot_count = (gdn_output->ne[1] - attention_rows) / snapshot_rows;
     if (snapshot_count < 1 || snapshot_count > kMaximumSnapshots) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     if (!q_norm->contiguous || !k_norm->contiguous || !state->contiguous || !gdn_output->contiguous ||
         raw_q->storage != raw_k->storage || raw_q->storage != v->storage || raw_q->storage_offset != 0 ||
@@ -218,7 +256,7 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
         raw_q->nb[2] != static_cast<size_t>(hidden_size) * sizeof(float) || raw_k->nb != raw_q->nb ||
         v->nb[0] != sizeof(float) || v->nb[1] != static_cast<size_t>(width) * sizeof(float) ||
         v->nb[2] != static_cast<size_t>(hidden_size) * sizeof(float)) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
     const GraphNode * gate_reshape = producer_with_op(graph, gate->id, GGML_OP_RESHAPE);
@@ -227,20 +265,20 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
                                          nullptr;
     const GraphNode * gate_mul = gate_flat != nullptr ? producer_with_op(graph, gate_flat->id, GGML_OP_MUL) : nullptr;
     if (gate_mul == nullptr || gate_mul->inputs.size() != 2) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const Value *     alpha_softplus = graph_value(graph, gate_mul->inputs[0]);
     const Value *     a_scale        = graph_value(graph, gate_mul->inputs[1]);
     const GraphNode * softplus =
         alpha_softplus != nullptr ? producer_with_op(graph, alpha_softplus->id, GGML_OP_UNARY) : nullptr;
     if (!has_unary_op(softplus, UnaryKind::SoftPlus) || softplus->inputs.size() != 1) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const Value *     alpha_biased = graph_value(graph, softplus->inputs[0]);
     const GraphNode * add_bias =
         alpha_biased != nullptr ? producer_with_op(graph, alpha_biased->id, GGML_OP_ADD) : nullptr;
     if (add_bias == nullptr || add_bias->inputs.size() != 2) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const Value *     alpha         = graph_value(graph, add_bias->inputs[0]);
     const Value *     bias          = graph_value(graph, add_bias->inputs[1]);
@@ -251,7 +289,7 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
 
     const GraphNode * sigmoid = producer_with_op(graph, beta->id, GGML_OP_UNARY);
     if (!has_unary_op(sigmoid, UnaryKind::Sigmoid) || sigmoid->inputs.size() != 1) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const Value *     beta_pre = graph_value(graph, sigmoid->inputs[0]);
     const GraphNode * beta_reshape =
@@ -266,25 +304,25 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
         !is_shape(*gate_flat, head_count, token_count, sequence_count, 1) || !is_shape(*bias, head_count, 1, 1, 1) ||
         !is_shape(*a_scale, head_count, 1, 1, 1) || !alpha_raw->contiguous || !beta_raw->contiguous ||
         !bias->contiguous || !a_scale->contiguous || !gate_flat->contiguous || !beta->contiguous) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
     const std::array<const Value *, 6> epilogue_values = { alpha_raw, beta_raw, bias, a_scale, gate_flat, beta };
     for (size_t lhs = 0; lhs < epilogue_values.size(); ++lhs) {
         for (size_t rhs = lhs + 1; rhs < epilogue_values.size(); ++rhs) {
             if (!distinct_storage(*epilogue_values[lhs], *epilogue_values[rhs])) {
-                return {};
+                return GDN_WHY_RETURN();
             }
         }
     }
 
     const GraphNode * state_reshape = producer_with_op(graph, state->id, GGML_OP_RESHAPE);
     if (state_reshape == nullptr || state_reshape->inputs.size() != 1) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const std::vector<const GraphNode *> & gdn_consumers = graph.index().consumers(gdn_output->id);
     if (gdn_consumers.size() != 2) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const GraphNode * new_state_view = nullptr;
     const GraphNode * attention_view = nullptr;
@@ -301,12 +339,12 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
                    is_shape(*output, width, head_count, token_count, sequence_count)) {
             attention_view = consumer;
         } else {
-            return {};
+            return GDN_WHY_RETURN();
         }
     }
     const Value * new_state = new_state_view != nullptr ? graph_value(graph, new_state_view->output) : nullptr;
     if (new_state == nullptr || attention_view == nullptr) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const int64_t written_snapshot_count = std::min(token_count, snapshot_count);
     const size_t  state_bytes            = static_cast<size_t>(width * width * head_count) * sizeof(float);
@@ -319,25 +357,25 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
         new_state->storage != gdn_output->storage ||
         new_state->storage_offset != gdn_output->storage_offset + attention_bytes ||
         new_state->byte_count != state_plane_bytes * static_cast<size_t>(written_snapshot_count)) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const std::vector<const GraphNode *> & state_consumers = graph.index().consumers(new_state->id);
     if (state_consumers.size() != 1 || state_consumers.front() == nullptr ||
         state_consumers.front()->op != GGML_OP_CPY || state_consumers.front()->inputs.size() != 2 ||
         state_consumers.front()->inputs[0] != new_state->id) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const GraphNode * cache_copy   = state_consumers.front();
     const Value *     cache_target = graph_value(graph, cache_copy->inputs[1]);
     const Value *     cache        = graph_value(graph, cache_copy->output);
     const GraphNode * cache_view   = cache_target != nullptr ? graph.index().producer(cache_target->id) : nullptr;
     if (!is_f32(cache_target) || !is_f32(cache) || cache_view == nullptr) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const size_t snapshot_stride_count = static_cast<size_t>(written_snapshot_count - 1);
     if (snapshot_stride_count != 0 &&
         cache->nb[2] > (std::numeric_limits<size_t>::max() - state_bytes) / snapshot_stride_count) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const size_t required_cache_bytes = state_plane_bytes + snapshot_stride_count * cache->nb[2];
     if (cache_view->op != GGML_OP_VIEW || cache_view->inputs.size() != 1 ||
@@ -346,12 +384,12 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
         cache->nb[0] != sizeof(float) || cache->nb[1] != state_bytes ||
         (written_snapshot_count > 1 && cache->nb[2] < state_plane_bytes) || cache->byte_count < required_cache_bytes ||
         !distinct_storage(*new_state, *cache)) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
     if (!distinct_storage(*gdn_output, *state) || !distinct_storage(*gdn_output, *gate_flat) ||
         !distinct_storage(*gdn_output, *beta)) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
     match.covered        = { alpha_reshape, add_bias,       softplus,   gate_mul,    gate_reshape,
@@ -512,7 +550,7 @@ static GatedDeltaNetMatch match_direct_gated_delta_net(const Graph & graph, cons
     const Value * gdn_output = graph_value(graph, gdn->output);
     if (!is_f32(q_norm) || !is_f32(k_norm) || !is_f32(v) || !is_f32(gate) || !is_f32(beta) || !is_f32(state) ||
         !is_f32(gdn_output)) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
     const int64_t width          = q_norm->ne[0];
@@ -522,9 +560,17 @@ static GatedDeltaNetMatch match_direct_gated_delta_net(const Graph & graph, cons
     const int64_t head_count     = v->ne[1];
     if (width != 128 || q_head_count <= 0 || q_head_count > 4096 || head_count <= 0 || head_count > 4096 ||
         token_count < 1 || token_count > kUbatchMaxTokens || sequence_count < 1 || sequence_count > kMaximumSequences) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
+    if (gdn_why_enabled()) {
+        std::fprintf(stderr, "gdn-why: direct candidate: width=%lld q_heads=%lld heads=%lld tokens=%lld seqs=%lld\n",
+                     static_cast<long long>(width), static_cast<long long>(q_head_count), static_cast<long long>(head_count),
+                     static_cast<long long>(token_count), static_cast<long long>(sequence_count));
+        gdn_why_value("q_norm", q_norm); gdn_why_value("k_norm", k_norm); gdn_why_value("v", v);
+        gdn_why_value("gate", gate); gdn_why_value("beta", beta); gdn_why_value("state", state);
+        gdn_why_value("gdn_output", gdn_output);
+    }
     if (!is_shape(*q_norm, width, q_head_count, token_count, sequence_count) ||
         !is_shape(*k_norm, width, q_head_count, token_count, sequence_count) ||
         !is_shape(*v, width, head_count, token_count, sequence_count) ||
@@ -538,22 +584,22 @@ static GatedDeltaNetMatch match_direct_gated_delta_net(const Graph & graph, cons
         v->nb[0] != sizeof(float) || v->nb[1] != static_cast<size_t>(width) * sizeof(float) ||
         v->nb[2] < static_cast<size_t>(width * head_count) * sizeof(float) || v->nb[2] % sizeof(float) != 0 ||
         v->nb[3] % sizeof(float) != 0) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
     const int64_t attention_rows = token_count * sequence_count;
     const int64_t snapshot_rows  = width * sequence_count;
     if (gdn_output->ne[1] <= attention_rows || (gdn_output->ne[1] - attention_rows) % snapshot_rows != 0) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const int64_t snapshot_count = (gdn_output->ne[1] - attention_rows) / snapshot_rows;
     if (snapshot_count < 1 || snapshot_count > kMaximumSnapshots) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
     const std::vector<const GraphNode *> & gdn_consumers = graph.index().consumers(gdn_output->id);
     if (gdn_consumers.size() != 2) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const GraphNode * attention_view = nullptr;
     const GraphNode * new_state_view = nullptr;
@@ -570,13 +616,13 @@ static GatedDeltaNetMatch match_direct_gated_delta_net(const Graph & graph, cons
                    output->storage_offset == gdn_output->storage_offset + attention_bytes) {
             new_state_view = consumer;
         } else {
-            return {};
+            return GDN_WHY_RETURN();
         }
     }
 
     const Value * new_state = new_state_view != nullptr ? graph_value(graph, new_state_view->output) : nullptr;
     if (attention_view == nullptr || new_state == nullptr) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const int64_t written_snapshot_count = std::min(token_count, snapshot_count);
     const size_t  state_bytes            = static_cast<size_t>(width * width * head_count) * sizeof(float);
@@ -589,14 +635,14 @@ static GatedDeltaNetMatch match_direct_gated_delta_net(const Graph & graph, cons
         new_state->storage != gdn_output->storage ||
         new_state->storage_offset != gdn_output->storage_offset + attention_bytes ||
         new_state->byte_count != state_plane_bytes * static_cast<size_t>(written_snapshot_count)) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
     const std::vector<const GraphNode *> & state_consumers = graph.index().consumers(new_state->id);
     if (state_consumers.size() != 1 || state_consumers.front() == nullptr ||
         state_consumers.front()->op != GGML_OP_CPY || state_consumers.front()->inputs.size() != 2 ||
         state_consumers.front()->inputs[0] != new_state->id) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const GraphNode * cache_copy   = state_consumers.front();
     const Value *     cache_target = graph_value(graph, cache_copy->inputs[1]);
@@ -610,16 +656,16 @@ static GatedDeltaNetMatch match_direct_gated_delta_net(const Graph & graph, cons
         (written_snapshot_count > 1 && cache->nb[2] < state_plane_bytes) || !distinct_storage(*new_state, *cache) ||
         !distinct_storage(*gdn_output, *state) || !distinct_storage(*gdn_output, *gate) ||
         !distinct_storage(*gdn_output, *beta)) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const size_t snapshot_stride_count = static_cast<size_t>(written_snapshot_count - 1);
     if (snapshot_stride_count != 0 &&
         cache->nb[2] > (std::numeric_limits<size_t>::max() - state_bytes) / snapshot_stride_count) {
-        return {};
+        return GDN_WHY_RETURN();
     }
     const size_t required_cache_bytes = state_plane_bytes + snapshot_stride_count * cache->nb[2];
     if (cache->byte_count < required_cache_bytes) {
-        return {};
+        return GDN_WHY_RETURN();
     }
 
     match.covered        = { gdn, attention_view, new_state_view, cache_copy };
@@ -759,12 +805,108 @@ static bool match_gated_delta_net_rmsnorm_gate(const DispatchMatchContext & cont
     return true;
 }
 
+static void gdn_why_chain(const Graph & graph, ValueId value, int depth) {
+    // the producer chain of one value, up to `depth` links: "<-OP(n inputs)" per link
+    for (int i = 0; i < depth; ++i) {
+        const GraphNode * producer = graph.index().producer(value);
+        if (producer == nullptr) {
+            std::fprintf(stderr, " <-(leaf)");
+            return;
+        }
+        std::fprintf(stderr, " <-%s(%zu in)", ggml_op_name(producer->op), producer->inputs.size());
+        if (producer->inputs.empty()) {
+            return;
+        }
+        value = producer->inputs[0];
+    }
+}
+static void gdn_why_consumers(const Graph & graph, ValueId value) {
+    const std::vector<const GraphNode *> & consumers = graph.index().consumers(value);
+    std::fprintf(stderr, " consumers=%zu[", consumers.size());
+    for (const GraphNode * consumer : consumers) {
+        size_t index = 0;
+        const bool known = consumer != nullptr && graph.index().node_index(consumer, index);
+        std::fprintf(stderr, "%zu:%s ", known ? index : static_cast<size_t>(-1), consumer != nullptr ? ggml_op_name(consumer->op) : "null");
+    }
+    std::fprintf(stderr, "]");
+}
+static void gdn_why_neighbourhood(const DispatchMatchContext & context, const char * why) {
+    // everything the fused pattern looks at around one L2_NORM root: the norm's consumers, then each input of the
+    // GATED_DELTA_NET it feeds (layout, producer chain, consumers), then the GDN output's consumers.
+    const Graph & graph = context.graph;
+    const GraphNode * root = context.root_node;
+    if (root == nullptr || root->op != GGML_OP_L2_NORM) {
+        return;
+    }
+    std::fprintf(stderr, "gdn-why: neighbourhood (%s) of root %zu:", why, context.root_index);
+    gdn_why_consumers(graph, root->output);
+    std::fprintf(stderr, "\n");
+    const GraphNode * gdn = nullptr;
+    for (const GraphNode * consumer : graph.index().consumers(root->output)) {
+        if (consumer != nullptr && consumer->op == GGML_OP_GATED_DELTA_NET) {
+            gdn = consumer;
+        }
+    }
+    if (gdn == nullptr) {
+        std::fprintf(stderr, "gdn-why:   no GATED_DELTA_NET consumer\n");
+        return;
+    }
+    for (size_t i = 0; i < gdn->inputs.size(); ++i) {
+        char name[16];
+        std::snprintf(name, sizeof(name), "gdn.in%zu", i);
+        gdn_why_value(name, graph_value(graph, gdn->inputs[i]));
+        std::fprintf(stderr, "gdn-why:     chain:");
+        gdn_why_chain(graph, gdn->inputs[i], 6);
+        gdn_why_consumers(graph, gdn->inputs[i]);
+        std::fprintf(stderr, "\n");
+        const GraphNode * producer = graph.index().producer(gdn->inputs[i]);
+        if (producer != nullptr && !producer->inputs.empty()) {
+            gdn_why_value("  its src", graph_value(graph, producer->inputs[0]));
+            std::fprintf(stderr, "gdn-why:     src");
+            gdn_why_consumers(graph, producer->inputs[0]);
+            std::fprintf(stderr, "\n");
+        }
+    }
+    gdn_why_value("gdn.out", graph_value(graph, gdn->output));
+    std::fprintf(stderr, "gdn-why:     out");
+    gdn_why_consumers(graph, gdn->output);
+    std::fprintf(stderr, "\n");
+}
+
+static bool gdn_why_wrapper(const DispatchMatchContext & context, int line, bool result) {
+    if (gdn_why_enabled() && context.root_node != nullptr &&
+        (context.root_node->op == GGML_OP_L2_NORM || context.root_node->op == GGML_OP_GATED_DELTA_NET)) {
+        std::fprintf(stderr, "gdn-why: wrapper root %zu %s -> %s at line %d\n", context.root_index,
+                     ggml_op_name(context.root_node->op), result ? "ACCEPTED" : "declined", line);
+        static std::mutex seen_mutex;
+        static std::set<long long> seen_accepted;
+        const Value * out = graph_value(context.graph, context.root_node->output);
+        const long long tokens = out != nullptr ? static_cast<long long>(out->ne[2]) : -1;
+        bool dump = !result;
+        if (result) {
+            std::lock_guard<std::mutex> lock(seen_mutex);
+            dump = seen_accepted.insert(tokens).second;
+        }
+        if (dump) {
+            gdn_why_neighbourhood(context, result ? "ACCEPTED, first of this token count" : "DECLINED");
+        }
+    }
+    return result;
+}
+
 static bool match_gated_delta_net_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    if (gdn_why_enabled() && context.root_node != nullptr &&
+        (context.root_node->op == GGML_OP_L2_NORM || context.root_node->op == GGML_OP_GATED_DELTA_NET)) {
+        const Value * out = graph_value(context.graph, context.root_node->output);
+        std::fprintf(stderr, "gdn-why: wrapper entry root %zu %s out=[%lld,%lld,%lld,%lld]\n", context.root_index,
+                     ggml_op_name(context.root_node->op), out ? (long long) out->ne[0] : -1LL, out ? (long long) out->ne[1] : -1LL,
+                     out ? (long long) out->ne[2] : -1LL, out ? (long long) out->ne[3] : -1LL);
+    }
     const GatedDeltaNetMatch match = context.root_node != nullptr && context.root_node->op == GGML_OP_GATED_DELTA_NET ?
                                          match_direct_gated_delta_net(context.graph, context.root_node) :
                                          match_gated_delta_net(context.graph, context.root_node);
     if (!match.matched()) {
-        return false;
+        return gdn_why_wrapper(context, __LINE__, false);
     }
 
     const bool can_fuse_projection_epilogue = match.has_projection_epilogue() && match.token_count <= 16;
@@ -780,7 +922,14 @@ static bool match_gated_delta_net_dispatch(const DispatchMatchContext & context,
 
     for (const GraphNode * node : match.covered) {
         if (!append_covered_node(context, node, dispatch_match)) {
-            return false;
+            if (gdn_why_enabled()) {
+                size_t index = 0;
+                const bool known = node != nullptr && context.graph.index().node_index(node, index);
+                std::fprintf(stderr, "gdn-why: match found (root %zu %s) but covered node %zu (%s) is already claimed or unknown\n",
+                             context.root_index, context.root_node != nullptr ? ggml_op_name(context.root_node->op) : "?",
+                             known ? index : static_cast<size_t>(-1), node != nullptr ? ggml_op_name(node->op) : "null");
+            }
+            return gdn_why_wrapper(context, __LINE__, false);
         }
     }
 
@@ -847,7 +996,7 @@ static bool match_gated_delta_net_dispatch(const DispatchMatchContext & context,
 
         dispatch_match.dispatches.push_back(std::move(gdn));
         dispatch_match.dispatches.push_back(std::move(cache_copy));
-        return true;
+        return gdn_why_wrapper(context, __LINE__, true);
     }
 
     const size_t  q_token_bytes          = static_cast<size_t>(match.width * match.q_head_count) * sizeof(float);
@@ -903,7 +1052,7 @@ static bool match_gated_delta_net_dispatch(const DispatchMatchContext & context,
                                          attention_token_bytes });
             dispatch_match.dispatches.push_back(std::move(gdn));
         }
-        return true;
+        return gdn_why_wrapper(context, __LINE__, true);
     }
 
     auto append_state_copy = [&](ValueId source, size_t source_offset, ValueId target, size_t target_offset) {
@@ -989,7 +1138,7 @@ static bool match_gated_delta_net_dispatch(const DispatchMatchContext & context,
         dispatch_match.dispatches.push_back(std::move(gdn));
     }
 
-    return true;
+    return gdn_why_wrapper(context, __LINE__, true);
 }
 static bool match_gated_delta_net_rmsnorm_q8(const DispatchMatchContext & context,
                                            const GatedDeltaNetMatch & gdn,
