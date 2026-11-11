@@ -2289,7 +2289,6 @@ static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t 
         }
         ggml::hrx::DispatchMatch projection_match;
         match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes, index, projection_match);
-        append_match_to_plan(plan, projection_match, covered_nodes);
     }
     ggml::hrx::DispatchMatch postprocess_match;
     match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes, postprocess_index, postprocess_match);
