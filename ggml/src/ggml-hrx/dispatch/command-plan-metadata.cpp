@@ -81,8 +81,10 @@ bool CommandPlanMetadata::append_alternate_value(CommandPlanAlternateValue alter
             if (alternate_value_matches(existing, alternate)) {
                 return true;
             }
-            status.log("conflicting alternate value for graph value %d type %d byte_count %zu",
-                       alternate.graph_value.value, static_cast<int>(alternate.type), alternate.byte_count);
+            status.log("conflicting alternate value for graph value %d type %d byte_count %zu: '%s' (value %d) is recorded, '%s' (value %d) was offered",
+                       alternate.graph_value.value, static_cast<int>(alternate.type), alternate.byte_count,
+                       existing.name.c_str(), existing.alternate_value.value, alternate.name.c_str(),
+                       alternate.alternate_value.value);
             return false;
         }
     }
