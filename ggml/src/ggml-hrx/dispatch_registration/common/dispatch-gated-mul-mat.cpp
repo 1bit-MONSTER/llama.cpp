@@ -2,6 +2,7 @@
 #include "dispatch-i4-prefill-opt-in.h"
 
 #include "dispatch-mul-mat-common.h"
+#include "dispatch-q4k-packed-tail.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -726,6 +727,13 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
     if (use_wmma && match.token_count < 2) {
         return false;
     }
+    // engine #2137 (dispatch-q4k-packed-tail.h): the WMMA body reading both weights in the packed row layout
+    const bool packed_tail = use_wmma && match.gate_format == CommonMulMatWeightFormat::Q4K &&
+                             match.up_format == CommonMulMatWeightFormat::Q4K &&
+                             q4k_packed_tail_weight_ok(*match.gate_weight, match.input_size, match.output_size) &&
+                             q4k_packed_tail_weight_ok(*match.up_weight, match.input_size, match.output_size) &&
+                             q4k_packed_tail_enabled();
+    const bool row_layout  = pack_q4 || packed_tail;
     dispatch.kernel = make_kernel_specialization(publish_q8 ? kMulMatSwiGLUQ4Q8OutputKernel :
         use_q8 ? kMulMatSwiGLUQ4Q8LowTokenDotKernel :
         (use_direct_dot ? kMulMatSwiGLUF32F32LowTokenDotKernel : kMulMatSwiGLUF32F32WmmaKernel));
@@ -738,16 +746,16 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
                                                common_to_config_value(match.output_size));
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_swiglu.gate_weight_format",
-        common_to_config_value(common_mul_mat_format_config_value(pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
+        common_to_config_value(common_mul_mat_format_config_value(row_layout ? CommonMulMatWeightFormat::Q4KRow64 :
                                                                            match.gate_format)));
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_swiglu.up_weight_format",
-        common_to_config_value(common_mul_mat_format_config_value(pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
+        common_to_config_value(common_mul_mat_format_config_value(row_layout ? CommonMulMatWeightFormat::Q4KRow64 :
                                                                            match.up_format)));
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.op",
                                                common_to_config_value(static_cast<int64_t>(binary_kind_config_value(match.op))));
     dispatch.bindings.push_back(activation);
-    if (pack_q4) {
+    if (row_layout) {
         for (const Value * weight : { match.gate_weight, match.up_weight }) {
             dispatch.bindings.push_back({ weight->id, 0, weight->byte_count, kQ4KPackedK256Row64Layout, weight->type,
                                           match.input_size, match.output_size, weight->byte_count });
