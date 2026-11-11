@@ -19,13 +19,10 @@ add_library(${TARGET} STATIC
     server-decision.h
     server-context.cpp
     server-context.h
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     server-prefill.cpp
     server-prefill.h
-=======
     server-realtime.cpp
     server-realtime.h
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     server-stream.cpp
     server-stream.h
     server-tools.cpp
