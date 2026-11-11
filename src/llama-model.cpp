@@ -361,13 +361,10 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen35(params);
         case LLM_ARCH_QWEN35MOE:
             return new llama_model_qwen35moe(params);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
         case LLM_ARCH_CLEF:
             return new llama_model_clef(params);
         case LLM_ARCH_VLLM_DECISION2:
             return new llama_model_vllm_decision2(params);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         case LLM_ARCH_QWEN4EXP:
             return new llama_model_qwen4exp(params);
         case LLM_ARCH_MISTRAL3:
@@ -437,10 +434,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     static const std::regex pattern_qk_norm         ("blk\\.\\d*\\.attn_(q|k)_norm\\.weight");
     static const std::regex pattern_kv_cache        ("cache_(k|v)_l\\d*");
     static const std::regex pattern_idx_cache       ("cache_idx_(k|v)_l\\d*");
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     static const std::regex pattern_dsv4_state      ("dsv4_(csa|hca|lid)_state_(kv|score)_l\\d*");
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     static const std::regex pattern_attn_sinks      ("blk\\.\\d*\\.attn_sinks.weight");
     static const std::regex pattern_attn_gate_bias  ("blk\\.\\d*\\.attn_gate\\.bias");
     static const std::regex pattern_attn_out_weight ("blk\\.\\d*\\.attn_output.weight");
@@ -528,8 +522,6 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_tensor_config = [&]() -> tensor_config {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
         if (ud->model->arch == LLM_ARCH_HRM_TEXT) {
             // aliased cache slots cannot satisfy the meta-split invariants, so replicate all tensors
             return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, tensor, 0, 0};
@@ -560,7 +552,6 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             }
         }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         // the qsa indexer has one key head and its projections are mirrored, so its cache cannot be split
         if (std::regex_match(tensor_name, pattern_idx_cache)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
@@ -2993,8 +2984,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             nullptr);
                 }
             } break;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
         case LLM_ARCH_GLM5_NEXT:
             {
                 // KDA layers are recurrent, the DSA layers use a K-only MLA cache plus an indexer cache.
@@ -3132,7 +3121,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             nullptr);
                 }
             } break;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         case LLM_ARCH_DEEPSEEK41:
         case LLM_ARCH_DEEPSEEK4:
             {
@@ -3145,10 +3133,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                     res = new llama_kv_cache_iswa(
                             *this,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
                             params.no_alloc,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                             params.type_k,
                             params.type_v,
                             !cparams.flash_attn,
@@ -3158,10 +3143,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             cparams.n_ubatch,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                            1,
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                             nullptr,
                             filter_mtp,
                             nullptr,
@@ -3169,10 +3150,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 } else {
                     res = new llama_kv_cache_dsv4(
                             *this,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
                             params.no_alloc,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                             params.type_k,
                             params.type_v,
                             !cparams.flash_attn,
@@ -3182,10 +3160,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             cparams.n_ubatch,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                            1,
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                             cparams.n_rs_seq,
                             nullptr,
                             nullptr);
@@ -3199,10 +3173,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                     res = new llama_kv_cache_iswa(
                             *this,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
                             params.no_alloc,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                             params.type_k,
                             params.type_v,
                             !cparams.flash_attn,
@@ -3212,10 +3183,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             cparams.n_ubatch,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                            1,
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                             nullptr,
                             nullptr,
                             nullptr,
@@ -3298,8 +3265,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 return il < hparams.n_layer() && !hparams.is_recr(il);
                             };
                         }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
 
                         // the MTP draft context holds the MTP block alone: its attention and indexer, no recurrent layer
                         if (arch == LLM_ARCH_QWEN4EXP && params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
@@ -3309,7 +3274,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 filter_idx = [&](uint32_t il) { return il >= hparams.n_layer(); };
                             }
                         }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                     }
 
                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
@@ -3335,7 +3299,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     } else if (needs_mem_idx) {
                         // sparse attention over a per-token indexer cache, in its own memory type
                         res = new llama_memory_hybrid_idx(
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
                             /* model             */ *this,
                             /* attn_type_k       */ params.type_k,
                             /* attn_type_v       */ params.type_v,
@@ -3356,8 +3319,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* filter_idx        */ std::move(filter_idx));
                     } else {
                         res = new llama_memory_hybrid(
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                             /* model             */ *this,
                             /* no_alloc          */ params.no_alloc,
                             /* attn_type_k       */ params.type_k,
@@ -3427,7 +3388,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         }
                     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
                     if (arch == LLM_ARCH_DEEPSEEK4) {
                         GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
 
@@ -3447,9 +3407,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 filter,
                                 reuse);
                     } else if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-=======
-                    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                         GGML_ASSERT(hparams.is_swa_any());
 
                         if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
@@ -3561,11 +3518,7 @@ llama_model_params llama_model_default_params() {
         /*.tensor_buft_overrides       =*/ nullptr,
         /*.n_gpu_layers                =*/ -1,
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        /*.load_mode                   =*/ LLAMA_LOAD_MODE_MMAP,
-=======
         /*.load_mode                   =*/ LLAMA_LOAD_MODE_AUTO,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         /*.lazy_mode                   =*/ LLAMA_LAZY_MODE_AUTO,
         /*.main_gpu                    =*/ 0,
         /*.tensor_split                =*/ nullptr,
@@ -3735,11 +3688,8 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DEEPSEEK32:
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_DEEPSEEK41:
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
         case LLM_ARCH_MUSE_GLIMMER:
         case LLM_ARCH_MUSE_SPARK:
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         case LLM_ARCH_PLM:
         case LLM_ARCH_CHATGLM:
         case LLM_ARCH_GRANITE:

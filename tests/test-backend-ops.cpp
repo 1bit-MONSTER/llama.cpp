@@ -4731,10 +4731,7 @@ struct test_dsv4_hc_post : public test_dsv4_hc {
     const int64_t n_embd;
     const int64_t n_tokens;
     const bool    identity;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     const bool    gated;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -4769,13 +4766,10 @@ struct test_dsv4_hc_post : public test_dsv4_hc {
         ggml_tensor * post = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hc, n_tokens);
         ggml_set_name(post, "post");
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
         if (gated) {
             post = ggml_scale(ctx, ggml_sigmoid(ctx, ggml_scale(ctx, post, 1.0f / (float) hc)), 2.0f);
         }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         ggml_tensor * comb = nullptr;
         if (!identity) {
             comb = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hc, hc, n_tokens);
@@ -10590,8 +10584,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dsv4_hc_post(4096, 21));
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17, true));
     test_cases.emplace_back(new test_dsv4_hc_post(4096, 21, true));
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17, true, true));
     test_cases.emplace_back(new test_dsv4_hc_post(2560, 21, true, true));
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17, false, true));
@@ -10617,7 +10609,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_top_k_mask(type, 1001, 4, 70, 16, 3, true, 7, 1, 1, false, true));
         test_cases.emplace_back(new test_top_k_mask(type, 512, 8, 16, 32, 7, true, 5, 1, 4, false, true));
     }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // glu ops
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
@@ -12534,7 +12525,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // engine #1346: a large k WITH a large row count — the Qwen4-exp QSA indexer selects indexer_top_k + r - 1
     // (2051) cells per token out of the indexer's compressed cell space, one row per ubatch token (512 in a prefill
     // ubatch). Every row above pairs a large k with rows <= 2, or a large row count with k <= 32, so this combination
@@ -12566,8 +12556,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     for (int k : {1, 2, 3, 7, 15}) {
         test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {16, 10, 10, 10}, k));
         test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {60, 10, 10, 10}, k));

@@ -800,7 +800,6 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
                 }
                 materialized.push_back(std::move(device_binding));
             }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             HostWeightSource source;
             source.host_data  = binding.host_data;
             source.device_buffer       = binding.host_data == nullptr ? binding.buffer : nullptr;
@@ -858,8 +857,6 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             device_binding.capacity              = resident.lease.length();
             materialized.push_back(device_binding);
             prepared.resident_host_weights.push_back({ binding.value, source, resident.lease });
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             continue;
         }
 

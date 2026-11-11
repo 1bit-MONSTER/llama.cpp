@@ -1,8 +1,5 @@
 #include "models.h"
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 #include "llama-dsv41-compat.h"
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #include "llama-impl.h"
 
 #include "llama-kv-cache-dsv4.h"
@@ -638,12 +635,9 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                     ggml_tensor * iqc = ggml_view_4d(ctx0, iq, iq->ne[0], iq->ne[1], nc, n_stream, iq->nb[1], iq->nb[2], iq->nb[3], t0*iq->nb[2]);
 
                     ggml_tensor * kq = ggml_mul_mat(ctx0, ik_p, ggml_permute(ctx0, iqc, 0, 2, 1, 3));
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
                     if (!ggml_is_quantized(ik->type)) {
                         dsv41_prec_src(kq, GGML_PREC_F32, 1);
                     }
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                     kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 2, 1, 0, 3));
                     score = ggml_sum_rows(ctx0, ggml_mul(ctx0, ggml_relu(ctx0, kq), rows(iw)));
                     ggml_tensor * mask  = rows(ci.kq_mask);
@@ -866,10 +860,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
 }
 
 llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_graph_params & params) :
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // helpers only: V4.1 has no hc_head (single-pass mHC), so the V4 graph body must not run here
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     llama_model_deepseek4::graph(params) {
     const auto & model = static_cast<const llama_model_deepseek41 &>(model_base);
 
@@ -1074,9 +1065,6 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 
     ggml_build_forward_expand(gf, cur);
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }

@@ -2901,8 +2901,6 @@
       ]
     },
     {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
       "name": "ggml_mul_mat_id_skinny_input_f32_postops_next_rmsnorm_publish_f32",
       "family": "loom_libs",
       "symbol": "ggml_mul_mat_id_skinny_input_f32_postops_next_rmsnorm_publish_f32",
@@ -3470,7 +3468,6 @@
       ]
     },
     {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
       "name": "ggml_moe_build_expert_table",
       "family": "loom_libs",
       "symbol": "ggml_moe_build_expert_table",

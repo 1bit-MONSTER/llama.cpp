@@ -1002,26 +1002,20 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     int32_t     block_size    = 0;
     llama_token mask_token_id = 0;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     bool    is_lilicorr    = false;
     int32_t lilicorr_top_k = 0;
     size_t lilicorr_rows = 0;
     std::vector<float> lilicorr_embd;
     std::vector<llama_pos> lilicorr_pos;
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     bool    is_dflash2     = false;
     bool    is_mrope       = false;
     int32_t selector_top_k = 0;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     // DFlash2 probabilistic drafting: one generator per sequence and the seed it was last seeded with (-1: reseed)
     std::vector<std::mt19937> dflash2_rng;
     std::vector<int64_t>      dflash2_seed;
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     // draft-dspark: the draft carries a Markov head and uses an anchor-first block layout
     const bool is_dspark;
 

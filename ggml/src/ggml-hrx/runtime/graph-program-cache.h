@@ -119,13 +119,10 @@ class GraphProgram {
 struct GraphProgramCacheStats {
     uint64_t builds                  = 0;
     uint64_t hits                    = 0;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // lifetime totals, not levels: the counts of programs this cache has already dropped are folded into the cache
     // as they are erased, so these only ever grow and a trim cannot make them go backwards (engine #841).
     uint64_t prepared_program_builds = 0;
     uint64_t prepared_program_hits   = 0;
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 };
 
 struct GraphProgramLookup {

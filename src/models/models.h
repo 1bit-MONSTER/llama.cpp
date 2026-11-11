@@ -14,13 +14,10 @@ class llama_memory_hybrid_idx_context;
 static inline ggml_tensor * build_gdn_l2_norm(ggml_context * ctx, ggml_tensor * x, float eps) {
     const float n = x->ne[0];
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // HRX rms_norm needs a materialized input; q/k here are strided views of the conv output.
     if (!ggml_is_contiguous(x)) {
         x = ggml_cont(ctx, x);
     }
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     return ggml_scale(ctx, ggml_rms_norm(ctx, x, eps/n), 1.0f/sqrtf(n));
 }
 
@@ -1432,8 +1429,6 @@ struct llama_model_deepseek32 : public llama_model_base {
 };
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
 struct llama_model_dots3note : public llama_model_base {
     llama_model_dots3note(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -1446,7 +1441,6 @@ struct llama_model_dots3note : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 // YaRN attention factor that cancels ggml's rope mscale (the DeepSeek-V4 reference applies none)
 static inline float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
     if (ext_factor == 0.0f) {
@@ -2980,10 +2974,7 @@ struct llama_model_qwen4exp : public llama_model_base {
         ggml_tensor * build_layer_attn(
               llm_graph_input_attn_kv * inp_attn,
   const llama_memory_hybrid_idx_context * mctx_hyb,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
           llm_graph_input_kpool * inp_kpool,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
                             int * sections,
@@ -3077,10 +3068,7 @@ struct llama_model_qwen4exp : public llama_model_base {
         const llama_model & model;
     };
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     // MTP draft head: one QSA block after the trunk, fed by the trunk's hc-wide residual
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     struct graph_mtp : public graph {
         graph_mtp(const llama_model & model, const llm_graph_params & params);
     };

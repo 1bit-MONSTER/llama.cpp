@@ -1058,11 +1058,8 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
         delete context;
         hrx_stream_release(stream);
     } else {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         g_placement_observer_backend.store(backend);
         ggml_backend_sched_set_placement_observer(placement_observer, backend);
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
     return backend;
 }

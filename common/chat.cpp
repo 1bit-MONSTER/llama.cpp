@@ -1149,7 +1149,6 @@ std::string common_chat_template_generation_prompt(
     return common_chat_template_generation_prompt_impl(tmpl, inputs, std::nullopt, std::nullopt, std::nullopt);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 static common_chat_params common_chat_params_init_ministral_3(const common_chat_template &    tmpl,
                                                               const autoparser::generation_params & inputs) {
     common_chat_params data;
@@ -2710,8 +2709,6 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
     return data;
 }
 
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 namespace workaround {
 
 static void map_developer_role_to_system(json & messages) {

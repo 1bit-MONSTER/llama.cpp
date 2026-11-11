@@ -190,8 +190,6 @@ static CommonMulMatIdMatch routing_match_for_swiglu(const MulMatIdSwiGLUMatch & 
     return routed;
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
 static KernelCatalogRef mul_mat_id_swiglu_f32_kernel(const MulMatIdSwiGLUMatch & match) {
     return match.token_count <= 5 ? kMulMatIdSkinnySwiGLUF32F32Kernel : kMulMatIdTiledSwiGLUF32F32Kernel;
 }
@@ -208,7 +206,6 @@ static bool requires_unsupported_routed_codebook(CommonMulMatWeightFormat format
     }
 }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const MulMatIdSwiGLUMatch match = match_mul_mat_id_swiglu(context);
     if (!match.matched()) {

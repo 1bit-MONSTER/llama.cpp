@@ -1985,11 +1985,7 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     const void *         upload_data = nullptr;
     size_t               upload_size = 0;
     std::vector<uint8_t> transformed;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    result.status = materialize_weight(materialization_source, upload_data, upload_size, transformed);
-=======
     result.status = materialize_weight(source, upload_data, upload_size, transformed);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     if (!result.status.success()) {
         return result;
     }

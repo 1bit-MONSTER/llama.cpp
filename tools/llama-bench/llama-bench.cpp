@@ -403,11 +403,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_gpu_layers         */ { -1 },
     /* n_cpu_moe            */ { 0 },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    /* load_mode            */ { LLAMA_LOAD_MODE_MMAP },
-=======
     /* load_mode            */ { LLAMA_LOAD_MODE_AUTO },
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     /* lazy_mode            */ { LLAMA_LAZY_MODE_AUTO },
     /* main_gpu             */ { 0 },
     /* no_kv_offload        */ { false },
@@ -1339,11 +1335,7 @@ struct cmd_params_instance {
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && tensor_split == other.tensor_split &&
                load_mode == other.load_mode && lazy_mode == other.lazy_mode &&
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-               devices == other.devices && no_host == other.no_host &&
-=======
                devices == other.devices && no_host == other.no_host && repack == other.repack &&
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 

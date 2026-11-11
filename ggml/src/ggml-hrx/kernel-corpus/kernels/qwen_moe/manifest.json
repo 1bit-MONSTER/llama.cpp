@@ -653,13 +653,9 @@
           "qwen3_moe/attention_qkv_postprocess_fused.loom"
         ],
         "library_sources": [
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-          "qwen3_moe/attention_postprocess_f32_f16.loom",
-=======
           "qwen3_moe/motifs/attention_qkv_postprocess_fused_decode.loom",
           "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
           "../loom-libs/motifs/rope/rope_f32.loom",
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
           "qwen3_moe/model_config.loom",
           "qwen3_moe/attention_qkv_quantized.loom",
           "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
@@ -671,13 +667,9 @@
         ]
       },
       "compile_dependencies": [
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        "qwen3_moe/attention_postprocess_f32_f16.loom",
-=======
         "qwen3_moe/motifs/attention_qkv_postprocess_fused_decode.loom",
         "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
         "../loom-libs/motifs/rope/rope_f32.loom",
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         "qwen3_moe/model_config.loom",
         "qwen3_moe/attention_qkv_quantized.loom",
         "qwen3_moe/dense_linear_quantized_f16_wmma.loom",
@@ -4620,9 +4612,6 @@
         "--config=qwen3_moe.routed_down.route_count=8",
         "--config=qwen3_moe.workload.token_capacity=512",
         "--dry-run",
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        "--output-format=jsonl"
-=======
         "--output-format=jsonl",
         "--config=ggml.moe_routing.descriptor_expert_mask=511",
         "--config=ggml.moe_routing.descriptor_partition_shift=9",
@@ -4631,7 +4620,6 @@
         "--config=ggml.moe_routing.partition_workgroup_size=128",
         "--config=ggml.moe_routing.route_count=8",
         "--config=ggml.workload.token_capacity=2048"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
       ],
       "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked"
     },
@@ -4753,9 +4741,6 @@
         "$(location :expert_table_partition_fused_linked)",
         "--benchmark=@qwen3_moe_expert_table_partition_fused_prefill_512",
         "--dry-run",
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        "--output-format=jsonl"
-=======
         "--output-format=jsonl",
         "--config=ggml.moe_routing.descriptor_expert_mask=511",
         "--config=ggml.moe_routing.descriptor_partition_shift=9",
@@ -4764,7 +4749,6 @@
         "--config=ggml.moe_routing.partition_workgroup_size=128",
         "--config=ggml.moe_routing.route_count=8",
         "--config=ggml.workload.token_capacity=2048"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
       ],
       "link_module": "expert_table_partition_fused_linked"
     },
@@ -4806,9 +4790,6 @@
         "--config=qwen3_moe.dense_quantized.output_size=512",
         "--config=qwen3_moe.workload.token_capacity=1",
         "--dry-run",
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        "--output-format=jsonl"
-=======
         "--output-format=jsonl",
         "--config=ggml.moe_routing.descriptor_expert_mask=511",
         "--config=ggml.moe_routing.descriptor_partition_shift=9",
@@ -4817,7 +4798,6 @@
         "--config=ggml.moe_routing.partition_workgroup_size=128",
         "--config=ggml.moe_routing.route_count=8",
         "--config=ggml.workload.token_capacity=2048"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
       ],
       "link_module": "dense_linear_quantized_f16_wmma_linked"
     },
@@ -4833,9 +4813,6 @@
         "--config=qwen3_moe.model.rms_epsilon=0.000001",
         "--config=qwen3_moe.workload.token_capacity=1",
         "--dry-run",
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        "--output-format=jsonl"
-=======
         "--output-format=jsonl",
         "--config=ggml.moe_routing.descriptor_expert_mask=511",
         "--config=ggml.moe_routing.descriptor_partition_shift=9",
@@ -4844,7 +4821,6 @@
         "--config=ggml.moe_routing.partition_workgroup_size=128",
         "--config=ggml.moe_routing.route_count=8",
         "--config=ggml.workload.token_capacity=2048"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
       ],
       "link_module": "dense_linear_quantized_f16_wmma_linked"
     },

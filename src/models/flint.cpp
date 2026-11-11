@@ -1,7 +1,4 @@
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 // ported from ggml-org/llama.cpp #30928
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #include "models.h"
 
 void llama_model_flint::load_arch_hparams(llama_model_loader & ml) {
@@ -203,9 +200,6 @@ llama_model_flint::graph::graph(const llama_model & model, const llm_graph_param
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 
     ggml_build_forward_expand(gf, cur);
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }

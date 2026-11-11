@@ -4985,7 +4985,6 @@ static void run_qwen_attention_postprocess_dispatch_checks() {
         const ggml::hrx::CommandProgram commands =
             ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
         REQUIRE(commands.valid());
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         REQUIRE(command_program_verifies(commands));
         REQUIRE(commands.initialization_commands.size() == 2);
         REQUIRE(commands.initialization_commands[0].bindings[0].name == "positions");
@@ -4994,16 +4993,11 @@ static void run_qwen_attention_postprocess_dispatch_checks() {
         REQUIRE(commands.initialization_commands[1].bindings[4].name == "attention_mask");
         REQUIRE(ggml::hrx::find_transient_allocation(commands.transients, context_capture.bindings[1].value) !=
                 nullptr);
-=======
-        REQUIRE(commands.initialization_commands.empty());
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     ggml_free(ctx);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
 static void run_packed_f16_producer_consumer_checks() {
     ggml_init_params params = {};
     params.mem_size = 4 * 1024 * 1024;
@@ -5511,7 +5505,6 @@ static void run_tiled_pair_matmul_postops_dispatch_checks() {
 
     ggml_free(ctx);
 }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
 static void run_swiglu_q8_output_checks() {
     const struct {
@@ -5694,8 +5687,6 @@ static void run_k16_major_preparation_reuse_checks() {
     ggml_free(ctx);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
 static void run_rmsnorm_binary_k16_output_checks() {
     const struct {
         ggml_type type;
@@ -5978,7 +5969,6 @@ static void run_rmsnorm_binary_f16_output_checks() {
         ggml_free(ctx);
     }
 }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
 static void run_rmsnorm_gate_packed_output_checks() {
     ggml_init_params params = {};
@@ -6233,9 +6223,6 @@ static void run_quantized_conv4_dispatch_checks() {
     ggml_free(ctx);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-static void run_gdn_native_projection_pair_dispatch_checks() {
-=======
 static void run_generic_ssm_conv_binary_dispatch_checks() {
     const struct {
         ggml::hrx::BinaryKind kind;
@@ -6423,7 +6410,6 @@ static void require_gdn_rms_scale_match_constraints(ggml_cgraph * graph, ggml_te
 }
 
 static void run_gdn_native_projection_pair_dispatch_checks(bool rms_scale_norm = false) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     ggml_init_params params = {};
     params.mem_size = 8 * 1024 * 1024;
     params.no_alloc = true;
@@ -11737,8 +11723,6 @@ static void run_add_f32() {
     ggml_backend_free(backend);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
 static std::vector<float> run_rope_scale_numerical_case(ggml_backend_t backend, bool per_token, int mode, int offset) {
     ggml_init_params params = {};
     params.mem_size         = 512 * 1024;
@@ -11894,7 +11878,6 @@ static void run_gather_add_rmsnorm_f32_numerics() {
     ggml_backend_free(hrx);
 }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 static void run_scale_f32() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -12872,9 +12855,6 @@ static void run_lowtoken_residual_dispatch_checks() {
     }
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-static void run_gdn_selected_rms_q8_dispatch_checks() {
-=======
 static void run_lowtoken_bias_dispatch_checks() {
     ggml_context * ctx = ggml_init({ 16 * 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
@@ -12911,7 +12891,6 @@ static void run_lowtoken_bias_dispatch_checks() {
 }
 
 static void run_gdn_selected_rms_q8_dispatch_checks(bool rms_scale_norm = false) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     ggml_init_params params = {};
     params.mem_size = 32 * 1024 * 1024;
     params.no_alloc = true;

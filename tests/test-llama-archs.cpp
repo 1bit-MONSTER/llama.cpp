@@ -464,12 +464,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         if (arch == LLM_ARCH_FLINT) {
             ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN, pattern);
         }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     } else if (arch == LLM_ARCH_LFM3) {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>({0, 0, 1}));
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,               10000.0f);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     } else {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(2));
     }
@@ -710,11 +707,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
     ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP ? 256 : 2*n_embd);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(arch == LLM_ARCH_ZAYA ? 2 : 4)); // zaya: 2-tap CCA convs
-=======
-    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
     ms.add_kv(LLM_KV_SSM_GROUP_COUNT,           arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
@@ -941,10 +934,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN4EXP:
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         case LLM_ARCH_BLACKMAMBA:
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         case LLM_ARCH_PHIMOE:
         case LLM_ARCH_DBRX:
         case LLM_ARCH_OLMOE:
@@ -1314,10 +1304,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                 std::string status_mixed     = "\033[1;33mSKIP\033[0m";
                 char nmse_str[12] = {0};
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
                 char mixed_str[12] = {0};
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
                 bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
                 bool test_executed = false;

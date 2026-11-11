@@ -2388,7 +2388,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 n_tasks = n_threads;
             } break;
         case GGML_OP_GET_ROWS:
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             {
                 // A gather over a large source is latency bound, not bandwidth bound: when the source
                 // is a page-cache-cold mmap (e.g. qwen4exp's 28.8 GB per_layer_token_embd), one thread
@@ -2400,8 +2399,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 n_tasks = nr * row >= 256*1024 ? (int) MIN((int64_t) n_threads, nr) : 1;
             } break;
         case GGML_OP_SET_ROWS:
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             {
                 // kept single threaded: unlike a gather, a scatter into a shared destination is not
                 // worth the thread overhead at the sizes it is used (concat/copy of model output)

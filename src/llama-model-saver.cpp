@@ -126,14 +126,11 @@ void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, c
         GGML_ABORT("fatal error");
     }
 }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 // instantiate for external usage:
 template void llama_model_saver::add_kv<std::vector<uint32_t>>(const enum llm_kv, const std::vector<uint32_t> &, const bool);
 template void llama_model_saver::add_kv<std::vector<float>>(const enum llm_kv, const std::vector<float> &, const bool);
 template void llama_model_saver::add_kv<std::vector<uint64_t>>(const enum llm_kv, const std::vector<uint64_t> &, const bool);
 template void llama_model_saver::add_kv<std::vector<int32_t>>(const enum llm_kv, const std::vector<int32_t> &, const bool);
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
 void llama_model_saver::add_kv(const enum llm_kv key, const std::vector<std::string> & value) {
     std::vector<const char *> tmp(value.size());
@@ -350,19 +347,13 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.dsv4_hc_mult);
     add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
     add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE,           hparams.hc_magnitude);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     add_kv(LLM_KV_HASH_LAYER_COUNT,                     hparams.dsv4_hash_layer_count);
     add_kv(LLM_KV_HYPER_CONNECTION_LOW_RANK,             hparams.hc_low_rank);
 
     if (model->arch == LLM_ARCH_DEEPSEEK41) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         const auto * m41 = dynamic_cast<const llama_model_deepseek41 *>(model);
         GGML_ASSERT(m41 != nullptr);
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         std::vector<uint32_t> kv_src;
         std::vector<uint32_t> idx_src;
         for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
@@ -575,13 +566,10 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->hc_head_norm);
     add_tensor(model->hc_head_down);
     add_tensor(model->hc_head_up);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
 
     // looped architectures alias physical tensors across cache slots; save each
     // tensor once. a different tensor with an existing name still asserts below
     std::unordered_set<const struct ggml_tensor *> seen;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     for (const struct llama_layer & layer : model->layers) {
         for (size_t i = 0; i < sizeof(layer)/sizeof(struct ggml_tensor *); ++i) {

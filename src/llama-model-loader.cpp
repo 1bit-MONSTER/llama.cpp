@@ -1120,7 +1120,6 @@ ggml_backend_buffer_type_t llama_model_loader::lazy_read::buft() {
     return ggml_backend_dev_buffer_type(cpu_dev);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 bool llama_model_loader::tensor_buft_overridden_to_device(const std::string & name) const {
     if (tensor_buft_overrides == nullptr) {
         return false;
@@ -1135,8 +1134,6 @@ bool llama_model_loader::tensor_buft_overridden_to_device(const std::string & na
     return false;
 }
 
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 bool llama_model_loader::lazy_read::add(const std::string & name, const ggml_tensor * t, const llama_tensor_weight * w) {
     if (mode == LLAMA_LAZY_MODE_OFF) {
         return false;

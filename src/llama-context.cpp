@@ -1894,12 +1894,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_vocab = vocab.n_tokens();
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // MTP batches carry the target hidden state, which is n_embd_out wide (4 * n_embd for qwen4exp)
     const bool    mtp_embd = cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && batch_inp.embd;
     const int64_t n_embd  = mtp_embd ? hparams.n_embd_out() : hparams.n_embd_inp();
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // when computing embeddings, all tokens are output
     const bool output_all   = cparams.embeddings;
@@ -2596,10 +2593,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         model.arch == LLM_ARCH_BAILINGMOE3 ||
         model.arch == LLM_ARCH_QWEN35 ||
         model.arch == LLM_ARCH_QWEN35MOE ||
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
         model.arch == LLM_ARCH_CLEF ||
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         model.arch == LLM_ARCH_QWEN4EXP ||
         model.arch == LLM_ARCH_DEEPSEEK4 ||
         model.arch == LLM_ARCH_DEEPSEEK41 ||

@@ -409,8 +409,6 @@ static bool match_get_rows_f32_next_dispatch(const DispatchMatchContext & contex
 
 void register_get_rows_dispatches(DispatchRegistryBuilder & registry) {
     registry.add({
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
         "common.repeat.scalar_3d_f32",
         GGML_OP_REPEAT,
         DispatchMatchKind::SingleOp,
@@ -443,7 +441,6 @@ void register_get_rows_dispatches(DispatchRegistryBuilder & registry) {
         match_get_rows_rmsnorm_binary_dispatch,
     });
     registry.add({
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         "common.get_rows.f32_next",
         GGML_OP_GET_ROWS,
         DispatchMatchKind::Fused,

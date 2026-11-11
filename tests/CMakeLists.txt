@@ -235,7 +235,6 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 
     # llama_build_and_test(test-double-float.cpp) # SLOW
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     llama_build_and_test(test-llama-archs.cpp)
 
     llama_build_and_test(test-lora-inplace.cpp)
@@ -262,8 +261,6 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 endif()
 
 llama_build(test-llama-archs.cpp)

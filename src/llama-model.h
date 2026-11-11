@@ -455,8 +455,6 @@ struct llama_layer {
     struct ggml_tensor * dflash_ffn_conv_base  = nullptr;
     struct ggml_tensor * dflash_ffn_conv_proj  = nullptr;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     struct ggml_tensor * lilicorr_attn_norm       = nullptr;
     struct ggml_tensor * lilicorr_mlp_norm        = nullptr;
     struct ggml_tensor * lilicorr_attn_in_proj    = nullptr;
@@ -471,7 +469,6 @@ struct llama_layer {
     struct ggml_tensor * lilicorr_mlp_2_b         = nullptr;
     struct ggml_tensor * lilicorr_mlp_2_s         = nullptr;
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     // mamba proj
     struct ggml_tensor * ssm_in  = nullptr;
     struct ggml_tensor * ssm_x   = nullptr;
@@ -681,13 +678,10 @@ struct llama_layer {
     struct ggml_tensor * hc_ffn_down    = nullptr;
     struct ggml_tensor * hc_ffn_up      = nullptr;
     struct ggml_tensor * hc_ffn_inject  = nullptr;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     struct ggml_tensor * hc_attn_down_inject = nullptr; // [hc_attn_down | hc_attn_inject] in one weight
     struct ggml_tensor * hc_ffn_down_inject  = nullptr; // [hc_ffn_down | hc_ffn_inject] in one weight
     struct ggml_tensor * wqkv_z              = nullptr; // [wqkv | wqkv_gate] in one weight
     struct ggml_tensor * ssm_beta_alpha_cat  = nullptr; // [ssm_beta | ssm_alpha] in one weight, unlike the grouped ssm_beta_alpha
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     struct ggml_tensor * ple_key        = nullptr;
     struct ggml_tensor * ple_value      = nullptr;
@@ -878,8 +872,6 @@ struct llama_model {
     struct ggml_tensor * dflash_selector_next   = nullptr;
     struct ggml_tensor * dflash_selector_hidden = nullptr;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     struct ggml_tensor * lilicorr_token_proj          = nullptr;
     struct ggml_tensor * lilicorr_token_proj_b        = nullptr;
     struct ggml_tensor * lilicorr_token_proj_s        = nullptr;
@@ -910,7 +902,6 @@ struct llama_model {
     struct ggml_tensor * lilicorr_anchor_out_head_b   = nullptr;
 
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     // unified vector to store target-model extracted layer ids in eagle3, dflash, etc.
     std::vector<int32_t> target_layer_ids;
 

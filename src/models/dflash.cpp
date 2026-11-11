@@ -34,8 +34,6 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_DFLASH_CONV_GROUP_SIZE,  hparams.dflash_conv_group_size,  false);
     ml.get_key(LLM_KV_DFLASH_SELECTOR_RANK,    hparams.dflash_selector_rank,    false);
     ml.get_key(LLM_KV_DFLASH_SELECTOR_TOP_K,   hparams.dflash_selector_top_k,   false);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     const bool has_lilicorr = ml.get_key(LLM_KV_LILICORR_HIDDEN_SIZE, hparams.lilicorr_hidden_size, false);
     ml.get_key(LLM_KV_LILICORR_CANDIDATE_TOPK, hparams.lilicorr_candidate_topk, has_lilicorr);
     ml.get_key(LLM_KV_LILICORR_NUM_HEADS,      hparams.lilicorr_num_heads,      has_lilicorr);
@@ -49,7 +47,6 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
             (uint64_t) hparams.lilicorr_candidate_topk * (hparams.lilicorr_candidate_topk + 1) > hparams.n_embd)) {
         throw std::runtime_error("invalid LiLiCorr DFlash metadata");
     }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
         throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
@@ -164,13 +161,10 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     }
 
     const struct ggml_tensor * selector_meta = ml->get_tensor_meta("selector_hidden.weight");
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     const bool conv_meta = hparams.dflash_conv_kernel_size > 0 && hparams.dflash_conv_group_size > 0;
     if (conv_meta && n_embd % hparams.dflash_conv_group_size != 0) {
         throw std::runtime_error("DFlash hidden size must be divisible by conv_group_size");
     }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     if (selector_meta) {
         const int64_t rank = hparams.dflash_selector_rank;
         if (rank <= 0 || hparams.dflash_block_size <= 0 || hparams.dflash_selector_top_k <= 0 ||
@@ -193,8 +187,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
                 hparams.dflash_selector_rank, hparams.dflash_selector_top_k);
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     if (hparams.lilicorr_layers > 0) {
         const int64_t hidden = hparams.lilicorr_hidden_size;
         const int64_t top_k  = hparams.lilicorr_candidate_topk;
@@ -255,7 +247,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         lilicorr_anchor_out_head_b      = create_tensor(tn(LLM_TENSOR_LILICORR_ANCHOR_OUT_HEAD, "bias"), { factor },           0);
     }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
     fc_s            = create_tensor(tn(LLM_TENSOR_FC,              "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
     fc_in_s         = create_tensor(tn(LLM_TENSOR_FC,              "input_scale"), { 1 }, TENSOR_NOT_REQUIRED);
@@ -264,10 +255,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
     // optional: reduced-vocab drafts ship their own lm head, full-vocab drafts can share the target's via ctx_other
     // a draft with its own embeddings + head references no target tensors and can run on devices the target does not use (e.g. -devd with a tensor-split target)
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     const int64_t n_vocab_draft = n_vocab;
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab_draft }, TENSOR_NOT_REQUIRED);
 
     if (hparams.dsv4_hc_mult > 0) {
@@ -716,8 +704,6 @@ static void build_dflash2_selector(llm_graph_context & g, const llama_model & mo
     ggml_build_forward_expand(g.gf, packed);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
 static void build_lilicorr_scores(llm_graph_context & g, const llama_model & model,
         ggml_tensor * tok_embd, ggml_tensor * anchors) {
     ggml_context * ctx0 = g.ctx0;
@@ -880,7 +866,6 @@ static void build_lilicorr_scores(llm_graph_context & g, const llama_model & mod
     ggml_build_forward_expand(g.gf, packed);
 }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 // DFlash decoder, dual-mode by batch type:
 //   * embd batch  -> fused target features: project + inject K/V into the cache.
 //   * token batch -> noise-block diffusion: attend over [committed, MASK...] to generate draft tokens
@@ -963,12 +948,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
             Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
             if (shared_kv) {
                 Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
             }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             Kcur = build_rope(Kcur, inp_pos);
             cb(Kcur, "Kcur_injected", il);
             cb(Vcur, "Vcur_injected", il);

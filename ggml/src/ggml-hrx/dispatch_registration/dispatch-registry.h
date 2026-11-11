@@ -33,8 +33,6 @@ struct DispatchMatchContext {
     const std::vector<bool> & covered_nodes;
     const CommandPlan &       plan;
     ValueId                   next_plan_value;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     const DispatchRegistry *  registry = nullptr;
 };
 
@@ -80,7 +78,6 @@ struct DispatchActivationConsumerRegistration {
     DispatchSource                      source = DispatchSource::Common;
     DispatchActivationConsumerPredicate accepts = nullptr;
     uint32_t                            traits = DispatchActivationConsumerTraitNone;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 };
 
 struct DispatchValueAliasRequest {

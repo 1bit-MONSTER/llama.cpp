@@ -198,12 +198,9 @@ public:
 
     const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     // The stream holding seq_id's cells.
     uint32_t get_stream(llama_seq_id seq_id) const;
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     // state_read, plus the cells the restored tokens were placed in
     // a cache that mirrors another one (the qwen4exp indexer) must not search for its own cells: two searches agree only by luck
     //   sinfos_out: if set, filled with the layout used; a stream with no cells leaves an empty entry
@@ -215,12 +212,9 @@ public:
           slot_info_vec_t *   sinfos_out,
     const slot_info_vec_t *   sinfos_in);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     // undo a state_read() of seq_id (-1 for the whole cache) that another memory module failed to complete
     void state_clear(llama_seq_id seq_id);
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     //
     // graph_build API
     //

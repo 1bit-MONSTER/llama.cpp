@@ -1312,10 +1312,6 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_ubatch,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                 uint32_t   n_pad,
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                  uint32_t   n_rs_seq,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse) :
@@ -1526,11 +1522,7 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     LLAMA_LOG_INFO("%s: creating DSV4 lightning-indexer compressor state\n", __func__);
 
     lid_state = std::make_unique<llama_dsv4_comp_state>(
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            model, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
-=======
             model, no_alloc, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             2*model.hparams.indexer_head_size, n_rs_seq, "lid", filter_lid);
 
     // DSV4 attention reads compressed-K / compressor-state rows that the current

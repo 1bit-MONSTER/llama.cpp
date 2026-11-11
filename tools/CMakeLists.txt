@@ -27,14 +27,11 @@ else()
         add_subdirectory(server)
     endif()
     add_subdirectory(tokenize)
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     add_subdirectory(kvshare-prefill) # [1bit] target 1: reference provider for a shared KV region
     add_subdirectory(kvshare-tensor-map) # [1bit] target 1: the tensor table a provider writes into (engine#753)
     add_subdirectory(kvshare-layout-roundtrip) # [1bit] target 1: the provider's import path with no GPU (engine#753)
     add_subdirectory(kvshare-adopt-check) # [1bit] target 1: a decoder working from NPU-written K/V (engine#753)
     add_subdirectory(parser)
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     add_subdirectory(tts)
     add_subdirectory(mtmd)
     if (GGML_RPC)

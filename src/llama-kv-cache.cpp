@@ -1289,15 +1289,12 @@ const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
     return v_cells[seq_to_stream[seq_id]];
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
 uint32_t llama_kv_cache::get_stream(llama_seq_id seq_id) const {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     return seq_to_stream[seq_id];
 }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     uint32_t result = 0;
 
@@ -2387,7 +2384,6 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
     }
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 bool llama_kv_cache::cells_adopt(uint32_t n_tokens, llama_seq_id seq_id) {
     // [1bit] target 1: an outside prefill provider wrote the prompt's K/V straight into the exported region, so
     // this cache only has to say that cells 0..n-1 now hold positions 0..n-1 of seq_id. Nothing is copied; the
@@ -2446,8 +2442,6 @@ bool llama_kv_cache::share_regions(std::vector<llama_kv_shared_region_pod> & out
     return true;
 }
 
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, slot_info & sinfo, llama_seq_id dest_seq_id, const slot_info * sinfo_in) {
     auto & cells = v_cells[strm];
     auto & head  = v_heads[strm];

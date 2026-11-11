@@ -10,8 +10,6 @@
 #include <string>
 
 void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     if (hparams.n_layer_nextn > 0) {
         const uint32_t n_layer_main = hparams.n_layer_all - hparams.n_layer_nextn;
         const std::string mtp_probe = "blk." + std::to_string(n_layer_main) + ".nextn.eh_proj.weight";
@@ -20,7 +18,6 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
         }
     }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,       hparams.n_lora_q);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);

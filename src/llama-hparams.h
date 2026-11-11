@@ -282,15 +282,12 @@ struct llama_hparams {
     uint32_t dflash_conv_group_size  = 0;
     uint32_t dflash_selector_rank    = 0;
     uint32_t dflash_selector_top_k   = 0;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     uint32_t lilicorr_hidden_size    = 0;
     uint32_t lilicorr_candidate_topk = 0;
     uint32_t lilicorr_num_heads      = 0;
     uint32_t lilicorr_layers         = 0;
     float    lilicorr_vector_eps     = 0.0f;
     float    lilicorr_logit_scale    = 0.0f;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
@@ -361,12 +358,9 @@ struct llama_hparams {
     // 0 = full rank (DeepSeek-V4)
     uint32_t hc_low_rank = 0;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     // scale of the hyper-connection post gate (DeepSeek-V4 hardcodes 2.0)
     float    hc_magnitude = 0.0f;
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     uint32_t ple_ngram_size      = 0;
     uint32_t ple_heads_per_ngram = 0;
     uint32_t ple_conv_kernel     = 0;
@@ -379,11 +373,8 @@ struct llama_hparams {
     llama_token ple_embd_token   = LLAMA_TOKEN_NULL;
     // hash constant sets, stored back to back: 1 shared by all PLE layers (qwen4exp), or 1 per PLE layer in layer order (deepseek41)
     uint32_t ple_n_modules       = 1;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
     // deepseek41 Engram: the token that pads the n-gram history, an index into llama_model::engram_token_map
     uint32_t engram_pad_id       = 0;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     // the file lists PLE layer indices, so this is never a per-layer gguf array and can hold one bit per layer
     std::bitset<LLAMA_MAX_LAYERS> is_ple_impl;
     // the hash multipliers reach ~2e13 and have to stay 64-bit

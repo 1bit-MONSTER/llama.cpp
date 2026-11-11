@@ -615,8 +615,6 @@ static Dispatch make_rope_set_rows_dispatch(const DispatchMatchContext & context
     return dispatch;
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-=======
 static Dispatch make_rope_concat_dispatch(const DispatchMatchContext & context,
                                           const RopeConcatMatch &      match,
                                           DispatchMatch &              dispatch_match) {
@@ -713,7 +711,6 @@ static bool match_rope_concat_f32_dispatch(const DispatchMatchContext & context,
     return true;
 }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 static bool find_rope_set_rows_consumer(const Graph & graph, const GraphNode & rope, RopeSetRowsMatch & match) {
     if (!graph.has_index() || !graph.index().has_single_consumer(rope.output)) {
         return false;

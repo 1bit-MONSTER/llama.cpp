@@ -46,10 +46,6 @@ class HostTransferManager {
                                 size_t       offset,
                                 void *       host_destination,
                                 size_t       size);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     HostTransferStats stats() const;
     void              clear();
 
