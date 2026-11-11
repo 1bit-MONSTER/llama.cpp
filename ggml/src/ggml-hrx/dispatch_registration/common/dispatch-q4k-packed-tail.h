@@ -23,14 +23,17 @@
 // each layout HRX reads is a device copy of its own, so a prompt with a remainder left two copies of each Q4_K weight
 // (Qwen3-4B Q4_K_M, 1,700-token prompt: 4,032.5 MiB of copies against a 2,375.9 MiB model).
 //
-// With GGML_HRX_Q4K_PACKED_TAIL=1 the tiled kernels read the packed layout too (weight format 44). Opt-in until PPL
-// and tok/s are measured against the stored path. It only saves memory when the stored layout costs a copy, that is
-// with #304's mapping; with GGML_HRX_MODEL_BUFFER_COPY=1 it adds packed copies instead.
+// The tiled kernels can read the packed layout too (weight format 44). That saves a copy exactly when the stored
+// layout costs one, which is when the weight is in #304's file mapping; for a weight that was uploaded
+// (GGML_HRX_MODEL_BUFFER_COPY=1, a host-weight limit, or a load without mmap) the stored layout is already on the
+// device and the packed one would be the extra copy. So the default follows the weight: packed for a weight in the
+// file mapping, stored otherwise. GGML_HRX_Q4K_PACKED_TAIL=1 forces packed for every weight, =0 forces stored.
 
 #include "ggml-backend.h"
 #include "ggml-impl.h"
 #include "ggml.h"
 #include "graph/value-map.h"
+#include "model-buffer-from-mmap.h"
 
 #include <cstdlib>
 
@@ -38,15 +41,35 @@ namespace ggml::hrx {
 
 // Says which path it took, once, at ERROR: the CLI's log sink drops WARN and below, and this selection changes a
 // compile parameter inside existing registrations, so GGML_HRX_LOG_DISPATCH cannot show it.
-inline bool q4k_packed_tail_enabled() {
-    static const bool enabled = [] {
-        const char * env = std::getenv("GGML_HRX_Q4K_PACKED_TAIL");
-        const bool   on  = env != nullptr && env[0] == '1';
-        GGML_LOG_ERROR("%s: engine #2137 q4_k batches off the 256 grid read the %s layout (GGML_HRX_Q4K_PACKED_TAIL=%s)\n",
-                       __func__, on ? "PACKED" : "stored", on ? "1" : "unset");
-        return on;
-    }();
-    return enabled;
+enum class PackedLayoutSwitch { FollowWeight, Stored, Packed };
+
+inline PackedLayoutSwitch packed_layout_switch(const char * name, const char * what) {
+    const char *             env   = std::getenv(name);
+    const PackedLayoutSwitch value = env == nullptr || env[0] == '\0' ? PackedLayoutSwitch::FollowWeight :
+                                     env[0] == '0'                    ? PackedLayoutSwitch::Stored :
+                                                                        PackedLayoutSwitch::Packed;
+    GGML_LOG_ERROR("%s: engine #2137 %s: %s (%s=%s)\n", __func__, what,
+                   value == PackedLayoutSwitch::Packed ? "PACKED layout for every weight" :
+                   value == PackedLayoutSwitch::Stored ? "stored layout for every weight" :
+                                                         "PACKED layout for a weight in the file mapping, stored otherwise",
+                   name, env == nullptr || env[0] == '\0' ? "unset" : env);
+    return value;
+}
+
+// The weight's own buffer decides the default (see the header comment).
+inline bool packed_layout_wanted(PackedLayoutSwitch value, const Value & weight) {
+    if (value != PackedLayoutSwitch::FollowWeight) {
+        return value == PackedLayoutSwitch::Packed;
+    }
+    const ggml_tensor * tensor = weight.tensor;
+    return tensor != nullptr &&
+           buffer_is_file_mapped(tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer);
+}
+
+inline bool q4k_packed_tail_enabled(const Value & weight) {
+    static const PackedLayoutSwitch value =
+        packed_layout_switch("GGML_HRX_Q4K_PACKED_TAIL", "q4_k batches off the 256 grid");
+    return packed_layout_wanted(value, weight);
 }
 
 // The layout's own preconditions, and a weight that may be packed at all. A packed copy is made of a weight once; a
@@ -67,19 +90,14 @@ inline bool q4k_packed_tail_weight_ok(const Value & weight, int64_t input_size, 
     return packed_tail_weight_ok(weight, GGML_TYPE_Q4_K, input_size, output_size);
 }
 
-// Q6_K (GGML_HRX_Q6K_PACKED_ROWS=1): prefill reads the packed row layout decode reads, at every batch size. The tiled
-// kernels take it as weight format 46 and the 128-aligned f16 prefill kernel as weight_layout 2. Stored stays the
-// default. (GGML_HRX_Q6K_PACKED_PREFILL is an older switch on the aligned kernel alone; it binds the stored layout and
-// saves no copy.)
-inline bool q6k_packed_rows_enabled() {
-    static const bool enabled = [] {
-        const char * env = std::getenv("GGML_HRX_Q6K_PACKED_ROWS");
-        const bool   on  = env != nullptr && env[0] == '1';
-        GGML_LOG_ERROR("%s: engine #2137 q6_k prefill reads the %s layout (GGML_HRX_Q6K_PACKED_ROWS=%s)\n", __func__,
-                       on ? "PACKED" : "stored", on ? "1" : "unset");
-        return on;
-    }();
-    return enabled;
+// Q6_K: prefill reads the packed row layout decode reads, at every batch size. The tiled kernels take it as weight
+// format 46 and the 128-aligned f16 prefill kernel as weight_layout 2. Same default as Q4_K above: packed for a weight
+// in the file mapping, stored otherwise; GGML_HRX_Q6K_PACKED_ROWS=1 forces packed, =0 forces stored.
+// (GGML_HRX_Q6K_PACKED_PREFILL is an older switch on the aligned kernel alone; it binds the stored layout and saves no
+// copy.)
+inline bool q6k_packed_rows_enabled(const Value & weight) {
+    static const PackedLayoutSwitch value = packed_layout_switch("GGML_HRX_Q6K_PACKED_ROWS", "q6_k prefill");
+    return packed_layout_wanted(value, weight);
 }
 
 inline bool q6k_packed_rows_weight_ok(const Value & weight, int64_t input_size, int64_t output_size) {

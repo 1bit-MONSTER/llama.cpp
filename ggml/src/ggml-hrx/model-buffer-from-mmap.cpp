@@ -62,6 +62,10 @@ bool model_buffer_from_mmap_enabled() {
     return HostWeightCache::residency_limit() == 0;
 }
 
+bool buffer_is_file_mapped(ggml_backend_buffer_t buffer) {
+    return buffer != nullptr && buffer->buft != nullptr && buffer->buft->iface.get_name == mapped_type_name;
+}
+
 void model_buffer_from_mmap_init_type(ggml_backend_hrx_device_context * device) {
     device->mapped_buft_context = { device, device->name + "_Mapped", true };
     device->mapped_buft         = {

@@ -734,11 +734,11 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
             return format;
         }
         if (format == CommonMulMatWeightFormat::Q4K &&
-            q4k_packed_tail_weight_ok(weight, match.input_size, match.output_size) && q4k_packed_tail_enabled()) {
+            q4k_packed_tail_weight_ok(weight, match.input_size, match.output_size) && q4k_packed_tail_enabled(weight)) {
             return CommonMulMatWeightFormat::Q4KRow64;
         }
         if (format == CommonMulMatWeightFormat::Q6K &&
-            q6k_packed_rows_weight_ok(weight, match.input_size, match.output_size) && q6k_packed_rows_enabled()) {
+            q6k_packed_rows_weight_ok(weight, match.input_size, match.output_size) && q6k_packed_rows_enabled(weight)) {
             return CommonMulMatWeightFormat::Q6KRow64;
         }
         return format;

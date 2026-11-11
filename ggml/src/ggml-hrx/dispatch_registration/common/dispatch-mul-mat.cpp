@@ -186,7 +186,7 @@ static bool q4k_packed_tail_applies(const DispatchMatchContext & context,
                                     int64_t                      output_size) {
     return format == CommonMulMatWeightFormat::Q4K && token_count > 5 && token_count <= kMulMatPrefillMaxTokens &&
            q4k_packed_tail_weight_ok(weight, input_size, output_size) &&
-           !weight_has_native_layout_reader(context.graph, weight) && q4k_packed_tail_enabled();
+           !weight_has_native_layout_reader(context.graph, weight) && q4k_packed_tail_enabled(weight);
 }
 
 static bool q6k_packed_tail_applies(const DispatchMatchContext & context,
@@ -197,7 +197,7 @@ static bool q6k_packed_tail_applies(const DispatchMatchContext & context,
                                     int64_t                      output_size) {
     return format == CommonMulMatWeightFormat::Q6K && token_count > 5 && token_count <= kMulMatPrefillMaxTokens &&
            q6k_packed_rows_weight_ok(weight, input_size, output_size) &&
-           !weight_has_native_layout_reader(context.graph, weight) && q6k_packed_rows_enabled();
+           !weight_has_native_layout_reader(context.graph, weight) && q6k_packed_rows_enabled(weight);
 }
 
 static bool has_normalized_rope_consumer(const Graph & graph, const Value & value) {
@@ -751,7 +751,8 @@ static bool match_q6_k_prefill_wave32_dispatch(const DispatchMatchContext & cont
     const bool from_packed = q6k_packed_prefill_enabled() && match.token_count % 256 == 0 &&
                              match.output_size % 128 == 0;
     const bool packed_rows = q6k_packed_rows_weight_ok(*match.weight, match.input_size, match.output_size) &&
-                             !weight_has_native_layout_reader(context.graph, *match.weight) && q6k_packed_rows_enabled();
+                             !weight_has_native_layout_reader(context.graph, *match.weight) &&
+                             q6k_packed_rows_enabled(*match.weight);
     return build_q6_k_prefill_wave32_dispatch(match, activation.value, activation.length, activation_scale_log2,
                                               packed_rows ? kMulMatQ6KF16WmmaPrefillWave32Kernel :
                                               from_packed ? kMulMatQ6KF16WmmaPrefillFromPackedKernel

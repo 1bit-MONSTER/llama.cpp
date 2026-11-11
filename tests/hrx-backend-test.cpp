@@ -18,6 +18,7 @@
 #include "graph/graph.h"
 #include "hrx-interop-utils.h"
 #include "kernel-corpus/kernel-corpus.h"
+#include "model-buffer-from-mmap.h"
 #include "runtime/command-program-executor.h"
 #include "runtime/graph-executor.h"
 #include "runtime/graph-program-cache.h"
@@ -3387,6 +3388,84 @@ static bool matmul_graph_is_supported(ggml_context * ctx, ggml_tensor * output) 
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
     REQUIRE(imported.valid());
     return ggml::hrx::DispatchScheduler::can_schedule_graph(imported.graph, test_dispatch_target());
+}
+
+// engine #2137: which layout a prefill batch off the kernel's grid reads a Q4_K / Q6_K weight in follows the weight's
+// own buffer. A weight in the loader's file mapping (llama.cpp #304) costs a device copy per layout, so it is read in
+// the packed rows decode reads (weight format 44 / 46) and holds one copy. A weight that was uploaded already has its
+// stored layout on the device, so it stays stored (4 / 6) and the packed copy is not added.
+// GGML_HRX_Q4K_PACKED_TAIL / GGML_HRX_Q6K_PACKED_ROWS force one or the other; the row is about the default, so it does
+// nothing when either is set.
+static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool file_mapped) {
+    if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr || std::getenv("GGML_HRX_Q6K_PACKED_ROWS") != nullptr) {
+        std::printf("       skipped: a packed-layout switch is set in the environment\n");
+        return;
+    }
+    constexpr int64_t input_size  = 512;
+    constexpr int64_t output_size = 256;
+    constexpr int64_t token_count = 100;  // off the 256 (Q4_K) and 128 (Q6_K) grids of the aligned prefill kernels
+
+    ggml_backend_hrx_device_context device_context = {};
+    device_context.name                            = "HRX0";
+    ggml::hrx::model_buffer_from_mmap_init_type(&device_context);
+
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, weight_type, input_size, output_size);
+    ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+    REQUIRE(weight != nullptr);
+    REQUIRE(input != nullptr);
+
+    // the weight's bytes, as the loader would hand them over: host memory, either wrapped as the file mapping or as a
+    // plain weights buffer (which is what an upload looks like to the matcher: weights, but not the mapped type)
+    // (ggml_backend_cpu_buffer_from_ptr requires the tensor alignment, which a vector's storage does not promise)
+    const size_t          byte_count = GGML_PAD(ggml_nbytes(weight), 64) + 64;
+    std::vector<uint8_t>  storage(byte_count + 64);
+    uint8_t *             bytes  = storage.data() + (64 - reinterpret_cast<uintptr_t>(storage.data()) % 64) % 64;
+    ggml_backend_buffer_t buffer = file_mapped ? ggml::hrx::model_buffer_from_mmap(&device_context, bytes, byte_count) :
+                                                 ggml_backend_cpu_buffer_from_ptr(bytes, byte_count);
+    REQUIRE(buffer != nullptr);
+    REQUIRE(ggml::hrx::buffer_is_file_mapped(buffer) == file_mapped);
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_tallocr allocator = ggml_tallocr_new(buffer);
+    REQUIRE(ggml_tallocr_alloc(&allocator, weight) == GGML_STATUS_SUCCESS);
+
+    ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+    REQUIRE(output != nullptr);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+
+    const int         stored   = weight_type == GGML_TYPE_Q4_K ? 4 : 6;
+    const std::string expected = std::to_string(file_mapped ? stored + 40 : stored);
+    size_t            found    = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        const auto format = dispatch.kernel.compile_parameters.find("ggml.mul_mat.weight_format");
+        if (format == dispatch.kernel.compile_parameters.end()) {
+            continue;
+        }
+        ++found;
+        if (format->second != expected) {
+            std::printf("       %s weight, %s buffer: weight_format=%s, expected %s (kernel %s)\n",
+                        ggml_type_name(weight_type), file_mapped ? "file-mapped" : "uploaded", format->second.c_str(),
+                        expected.c_str(), kernel_name_for_id(dispatch.kernel.kernel_id).c_str());
+        }
+        REQUIRE(format->second == expected);
+    }
+    // the case must reach a kernel that takes the format, or it asserts nothing
+    REQUIRE(found == 1);
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
 }
 
 // engine #1962: the draft head's logits step (common.mul_mat.q6_k_token1_shortlist) selects activation groups, and the
@@ -11846,6 +11925,14 @@ int main(int argc, char ** argv) {
         { "llama_attention_matmul_dispatch", [] { run_llama_attention_matmul_dispatch_checks(); } },
         { "quantized_value_projection_dispatch", [] { run_quantized_value_projection_dispatch_checks(); } },
         // widths 256 and 2560 (Qwen3.8-Flash-Next) have fewer than 96 groups; 4096 has more
+        { "packed_layout_follows_weight.q4_k.file_mapped",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, true); } },
+        { "packed_layout_follows_weight.q4_k.uploaded",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, false); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true); } },
+        { "packed_layout_follows_weight.q6_k.uploaded",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, false); } },
         { "q6k_token1_shortlist_group_count.256", [] { schedule_q6k_token1_shortlist_group_count(256, 65536, 8); } },
         { "q6k_token1_shortlist_group_count.2560",
           [] { schedule_q6k_token1_shortlist_group_count(2560, 248320, 80); } },

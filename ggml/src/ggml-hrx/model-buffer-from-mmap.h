@@ -28,6 +28,10 @@ namespace ggml::hrx {
 // restores the old upload, and so does a residency limit (GGML_HRX_HOST_WEIGHT_LIMIT_MB).
 bool model_buffer_from_mmap_enabled();
 
+// True for a buffer of the mapped type, i.e. weights that are host pages of the model file and not a device upload. A
+// weight in such a buffer costs a device copy for every layout the kernels read it in (engine #2137).
+bool buffer_is_file_mapped(ggml_backend_buffer_t buffer);
+
 // The buffer type of these buffers ("<device>_Mapped"). It is host memory; only this device claims it.
 void model_buffer_from_mmap_init_type(ggml_backend_hrx_device_context * device);
 
