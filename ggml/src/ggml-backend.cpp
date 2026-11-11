@@ -2206,6 +2206,8 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
 void ggml_backend_sched_set_placement_observer(ggml_backend_sched_placement_observer observer, void * user_data) {
     g_sched_placement_observer_user_data = user_data;
     g_sched_placement_observer.store(observer);
+}
+
 void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backend_sched_copy_callback callback, void * user_data) {
     GGML_ASSERT(sched);
     sched->callback_copy = callback;
