@@ -1588,14 +1588,21 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     // An explicit mlock mode keeps the mapping.
     if (n_gpu_layers > 0 && params.load_mode != LLAMA_LOAD_MODE_MMAP_MLOCK) {
         bool uses_hrx = false;
+        bool hrx_maps_model = true;
         for (const auto & d : devices) {
             if (!d.is_meta && d.dev != nullptr &&
                 std::strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(d.dev)), "HRX") == 0) {
                 uses_hrx = true;
-                break;
+                ggml_backend_dev_props props;
+                ggml_backend_dev_get_props(d.dev, &props);
+                hrx_maps_model = hrx_maps_model && props.caps.buffer_from_host_ptr;
             }
         }
-        if (uses_hrx) {
+        // engine #856: an HRX device that wraps the mapping as host memory (no import) packs each weight from the
+        // file pages, so the device holds one copy and the mapping stays.
+        if (uses_hrx && hrx_maps_model && ml.use_mmap) {
+            LLAMA_LOG_INFO("%s: HRX: the weights stay in the file mapping and are packed from it (engine #856)\n", __func__);
+        } else if (uses_hrx) {
             if (ml.use_mmap) {
                 LLAMA_LOG_INFO("%s: HRX: reading the weights into their buffers instead of mapping the file\n", __func__);
             }
