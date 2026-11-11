@@ -103,7 +103,8 @@ inline const CommandPlanAlternateValue * find_alternate_value(const Graph &     
     }
 
     for (const CommandPlanAlternateValue & alternate : plan.metadata.alternate_values()) {
-        if (alternate.type != type || alternate.byte_count != byte_count) {
+        // the scale is part of what a reader asks for: a copy stored at another scale is a different value (engine #2159)
+        if (alternate.type != type || alternate.byte_count != byte_count || alternate.scale_log2 != scale_log2) {
             continue;
         }
         const Value * alternate_value = graph.values().find(alternate.graph_value);
