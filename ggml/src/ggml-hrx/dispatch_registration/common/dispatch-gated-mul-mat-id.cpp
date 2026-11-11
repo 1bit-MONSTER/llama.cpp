@@ -21,6 +21,13 @@ namespace {
 static constexpr KernelCatalogRef kMulMatIdSwiGLUF32F32WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_swiglu_f32_f32_wmma");
 
+// AMD's tiled/skinny pair-input SWIGLU refs: their registrations below name them, and the merge kept the uses
+// while dropping the declarations from this file's header block.
+static constexpr KernelCatalogRef kMulMatIdTiledSwiGLUF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdSkinnySwiGLUF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32");
+
 // Engine #572 item 4: the IQ3_XXS decode selects its 12-bit grid code out of 256 inlined scalar constants with a
 // ~30-deep chain, re-emitted per 4-value packet (4.04x the vector ALU of the IQ4_XS path, compile-report measured).
 // This variant fills a 256-entry workgroup table once per workgroup and indexes it (-55% vector ALU, VGPR 153->100,
