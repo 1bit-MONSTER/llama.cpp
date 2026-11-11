@@ -67,15 +67,11 @@ test parameters:
   -nkvo, --no-kv-offload <0|1>              (default: 0)
   -fa, --flash-attn <on|off|auto>           (default: auto)
   -dev, --device <dev0/dev1/...>            (default: auto)
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-  -lzm, --lazy-mode <on|auto|off>           (default: auto)
-  -mmp, --mmap <0|1>                        (default: 1)
-  -dio, --direct-io <0|1>                   (default: 0)
-=======
   -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio>
                                             (default: auto)
   -lzm, --lazy-mode <on|auto|off>           (default: auto)
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
+  -mmp, --mmap <0|1>                        (default: 1)
+  -dio, --direct-io <0|1>                   (default: 0)
   -embd, --embeddings <0|1>                 (default: 0)
   -ts, --tensor-split <ts0/ts1/..>          (default: 0)
   -ot --override-tensor <tensor name pattern>=<buffer type>;...
