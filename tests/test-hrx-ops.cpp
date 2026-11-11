@@ -3410,8 +3410,14 @@ static void run_q6_k_token1_shortlist_case(float branch_scale, ShortlistArm arm)
     ggml_build_forward_expand(hrx_graph, hrx.logits);
 
     const std::vector<std::string> sequence = scheduled_kernel_sequence(hrx_graph);
-    REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_q6_k_symmetric_i2_scan_token1"));
-    REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_q6_k_packed_selected_refine_token1"));
+    // Which kernels SHOULD have run is only meaningful when the route is enabled. GGML_HRX_DISABLE_DISPATCH turns the
+    // shortlist registration off on purpose (engine#2150's route-vs-no-route experiment: the same case, seed and weights
+    // with the chain declined), and without this guard every disabled run aborts here instead of reaching the numeric
+    // comparison below - which is what the experiment exists to read. Declining the route is a measurement, not a fault.
+    if (std::getenv("GGML_HRX_DISABLE_DISPATCH") == nullptr) {
+        REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_q6_k_symmetric_i2_scan_token1"));
+        REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_q6_k_packed_selected_refine_token1"));
+    }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
