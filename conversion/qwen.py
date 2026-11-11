@@ -14,12 +14,8 @@ if TYPE_CHECKING:
 from .base import LazyTorchTensor, ModelBase, ModelType, TextModel, get_model_architecture, gguf, jinja_str_or_json, logger
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-@ModelBase.register("QWenLMHeadModel", "QwenForCausalLM", "QwenLMHeadModel", "QWenForCausalLM")
-=======
 @ModelBase.register("QWenLMHeadModel")
 @ModelBase.example("Qwen/Qwen-7B")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class QwenModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN
 
@@ -82,12 +78,8 @@ class Qwen2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Qwen2MoeForCausalLM", "Qwen2MoEForCausalLM")
-=======
-@ModelBase.register("Qwen2MoeForCausalLM")
 @ModelBase.example("Qwen/Qwen1.5-MoE-A2.7B")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Qwen2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
 
@@ -273,12 +265,8 @@ class Qwen3Model(Qwen2Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Qwen3MoeForCausalLM", "Qwen3MoeModel")
-=======
-@ModelBase.register("Qwen3MoeForCausalLM")
 @ModelBase.example("Qwen/Qwen3-30B-A3B")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
 
@@ -683,9 +671,9 @@ class _Qwen35MRopeMixin:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
 
-@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", "Qwen3_5TextModel")
+@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", "Qwen3_5TextModel", "Qwen3_5Model", "Qwen35ForCausalLM")
 @ModelBase.example("Qwen/Qwen3.5-9B")
-class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
+class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
     def __init__(self, dir_model, *args, **kwargs):
@@ -702,15 +690,10 @@ class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self._try_set_pooling_type()
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", "Qwen3_5Model", "Qwen35ForCausalLM")
-class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
-=======
 @ModelBase.register("MiniCPMOCRForSequenceClassification")
 class MiniCPMOCRSeqClsModel(Qwen3_5TextModel):
     # OCR consistency judge: Qwen3.5 VL trunk with a value head read at the last token
     # the class scores are [inconsistent, consistent], the softmax temperature is 1
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     model_arch = gguf.MODEL_ARCH.QWEN35
     no_mtp = True  # the checkpoint has no MTP head
 
@@ -809,14 +792,9 @@ class OpenJevModel(Qwen3_5TextModel):
         self.gguf_writer.add_decision_temperature("noul",   self._TEMPERATURE * self._TEMPERATURE_NOUL)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM", "Qwen3_5MoEForCausalLM")
-class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
-=======
-@ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
 @ModelBase.example("Qwen/Qwen3.5-35B-A3B")
-class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
+class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
 

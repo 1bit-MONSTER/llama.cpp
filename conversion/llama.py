@@ -27,7 +27,6 @@ from .base import ModelBase, TextModel, gguf, logger
     "Eagle3Speculator",
     "Eagle3DraftModel",
     "IQuestCoderForCausalLM",
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     "LlamaModel",
     "MistralModel",
     "MixtralModel",
@@ -37,11 +36,8 @@ from .base import ModelBase, TextModel, gguf, logger
     "LlaMAForCausalLM",
     "llamaForCausalLM",
     "LlamaForConditionalGeneration")
-=======
-    "LlamaModel")
 # [TAG_HF_EXAMPLE_GATED] meta-llama/Llama-3.2-1B-Instruct is gated
 @ModelBase.example("unsloth/Llama-3.2-1B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "mistralai/Mixtral-8x7B-Instruct-v0.1")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     undo_permute = True

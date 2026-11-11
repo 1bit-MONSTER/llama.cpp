@@ -73,9 +73,6 @@ class LFM2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-@ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel", "Lfm2BidirectionalForMaskedLM")
-=======
 def _is_d1_checkpoint(dir_model: Path) -> bool:
     if not (dir_model / "config.json").is_file():
         return False
@@ -142,7 +139,7 @@ class D1Model(LFM2Model):
 
 @ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel", "Lfm2BidirectionalForMaskedLM")
 @ModelBase.example("LiquidAI/LFM2.5-ColBERT-350M", "LiquidAI/LFM2.5-Embedding-350M", "LiquidAI/LFM2.5-Encoder-350M", "LiquidAI/LFM2.5-Encoder-230M")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
+@ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel", "Lfm2BidirectionalForMaskedLM")
 class LFM2ColBertModel(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
     dense_tensor_name = "dense_2"
@@ -172,9 +169,6 @@ class LFM2ColBertModel(LFM2Model):
         yield f"{self.dense_tensor_name}.weight", tensor.clone()
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-@ModelBase.register("Lfm2MoeForCausalLM", "Lfm2MoEForCausalLM")
-=======
 def _is_d1_omni_checkpoint(dir_model: Path) -> bool:
     if not (dir_model / "config.json").is_file():
         return False
@@ -292,7 +286,7 @@ class D1OmniModel(LFM2Model):
 
 @ModelBase.register("Lfm2MoeForCausalLM")
 @ModelBase.example("LiquidAI/LFM2-8B-A1B")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
+@ModelBase.register("Lfm2MoeForCausalLM", "Lfm2MoEForCausalLM")
 class LFM2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2MOE
 
