@@ -323,15 +323,6 @@ namespace GGUFMeta {
         bool type_ok = false;
         switch (arr_info.gt) {
             case GGUF_TYPE_UINT32:
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            case GGUF_TYPE_INT32:   GGML_ASSERT((std::is_same<T,     int32_t>::value) ||
-                                                (std::is_same<T,    uint32_t>::value)); break;
-            case GGUF_TYPE_FLOAT32: GGML_ASSERT((std::is_same<T,       float>::value)); break;
-            case GGUF_TYPE_STRING:  GGML_ASSERT((std::is_same<T, std::string>::value)); break;
-            case GGUF_TYPE_UINT64:  GGML_ASSERT((std::is_same<T,    uint64_t>::value)); break;
-            default:
-                throw std::runtime_error(format("%s is not a string/float32/uint32/int32/uint64 array", key.c_str()));
-=======
             case GGUF_TYPE_INT32:   type_ok = (std::is_same<T,     int32_t>::value) ||
                                               (std::is_same<T,    uint32_t>::value); break;
             case GGUF_TYPE_UINT64:  type_ok = (std::is_same<T,    uint64_t>::value); break;
@@ -342,7 +333,6 @@ namespace GGUFMeta {
         }
         if (!type_ok) {
             throw std::runtime_error(format("%s has wrong array element type %s", key.c_str(), gguf_type_name(arr_info.gt)));
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         }
 
         if constexpr (std::is_same<T, std::string>::value) {
@@ -380,15 +370,6 @@ namespace GGUFMeta {
         switch (arr_info.gt) {
             case GGUF_TYPE_BOOL:
             case GGUF_TYPE_UINT32:
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            case GGUF_TYPE_INT32:   GGML_ASSERT((std::is_same<T,     int32_t>::value) ||
-                                                (std::is_same<T,    uint32_t>::value)); break;
-            case GGUF_TYPE_FLOAT32: GGML_ASSERT((std::is_same<T,       float>::value)); break;
-            case GGUF_TYPE_STRING:  GGML_ASSERT((std::is_same<T, std::string>::value)); break;
-            case GGUF_TYPE_UINT64:  GGML_ASSERT((std::is_same<T,    uint64_t>::value)); break;
-            default:
-                throw std::runtime_error(format("%s is not a string/float32/uint32/int32/uint64 array", key.c_str()));
-=======
             case GGUF_TYPE_INT32:   type_ok = (std::is_same<T,     int32_t>::value) ||
                                               (std::is_same<T,    uint32_t>::value); break;
             case GGUF_TYPE_UINT64:  type_ok = (std::is_same<T,    uint64_t>::value); break;
@@ -399,7 +380,6 @@ namespace GGUFMeta {
         }
         if (!type_ok) {
             throw std::runtime_error(format("%s has wrong array element type %s", key.c_str(), gguf_type_name(arr_info.gt)));
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         }
 
         if (arr_info.length > N_MAX) {
@@ -1389,7 +1369,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     }
 
     if (flags & TENSOR_READ_LAZY) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         // an explicit -ot for this tensor wins over the arch's lazy hint: the user is saying where the tensor lives, and
         // a lazy tensor is host-only by construction (lazy_read::buft() is the CPU type), so honouring both is impossible.
         // Deciding here and not in buft_for_tensor() keeps the lazy ranges consistent: a tensor that will not be read
@@ -1400,22 +1379,12 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             // the decision must not depend on the load mode, or the memory-fit pass (no_alloc, no mmap)
             is_lazy = lazy.add(tn.str(), cur, no_alloc ? nullptr : &require_weight(tn.str().c_str()));
         }
-=======
-        // the decision must not depend on the load mode, or the memory-fit pass (no_alloc, no mmap)
-        is_lazy = lazy.add(tn.str(), cur, no_alloc ? nullptr : &require_weight(tn.str().c_str()));
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     ggml_tensor t_meta = *cur;
     if (flags & TENSOR_ALLOW_RESHAPE) {
         for (size_t dim = 0; dim < GGML_MAX_DIMS; dim++) {
             t_meta.ne[dim] = dim < ne.size() ? ne.begin()[dim] : 1;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            t_meta.nb[dim] = dim == 0 ? ggml_type_size(t_meta.type) : t_meta.ne[dim-1]*t_meta.nb[dim-1];
-        }
-    }
-
-=======
             if (dim == 0) {
                 t_meta.nb[dim] = ggml_type_size(t_meta.type);
             } else if (dim == 1) {
@@ -1427,8 +1396,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     }
 
     GGML_ASSERT(ggml_nbytes(&t_meta) == ggml_nbytes(cur));
-
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
     if (buft == nullptr) {
         return nullptr;
