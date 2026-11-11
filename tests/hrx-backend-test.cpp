@@ -8469,6 +8469,25 @@ static void run_alias_value_import_checks() {
     REQUIRE(aliased_binding->offset == 64);
     REQUIRE(aliased_binding->length == 8 * sizeof(float));
 
+    // engine #2159: an alternate stored at a scale is found only by a reader that asks for that scale, also through an
+    // alias. Value 1 aliases value 0; value 0 has an f16 copy stored at 2^-6.
+    {
+        ggml::hrx::Graph alias_graph;
+        alias_graph.values() = value_map;
+        ggml::hrx::CommandPlan alias_plan;
+        ggml::hrx::Status      alias_status;
+        REQUIRE(alias_plan.metadata.append_alternate_value(
+            { ggml::hrx::ValueId(0), ggml::hrx::ValueId(7), GGML_TYPE_F16, 16, "test.scaled_f16", 6 }, alias_status));
+        const auto * scaled =
+            ggml::hrx::find_alternate_value(alias_graph, alias_plan, ggml::hrx::ValueId(1), GGML_TYPE_F16, 16, 6);
+        REQUIRE(scaled != nullptr);
+        REQUIRE(scaled->scale_log2 == 6);
+        REQUIRE(ggml::hrx::find_alternate_value(alias_graph, alias_plan, ggml::hrx::ValueId(1), GGML_TYPE_F16, 16) ==
+                nullptr);
+        REQUIRE(ggml::hrx::find_alternate_value(alias_graph, alias_plan, ggml::hrx::ValueId(0), GGML_TYPE_F16, 16) ==
+                nullptr);
+    }
+
     ggml_free(ctx);
 }
 
