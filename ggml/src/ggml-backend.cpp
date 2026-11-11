@@ -20,11 +20,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 #include <atomic>
-=======
 #include <unordered_map>
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #include <vector>
 
 #ifdef __APPLE__
@@ -2206,11 +2203,9 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
     sched->callback_eval_user_data = user_data;
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 void ggml_backend_sched_set_placement_observer(ggml_backend_sched_placement_observer observer, void * user_data) {
     g_sched_placement_observer_user_data = user_data;
     g_sched_placement_observer.store(observer);
-=======
 void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backend_sched_copy_callback callback, void * user_data) {
     GGML_ASSERT(sched);
     sched->callback_copy = callback;
@@ -2221,7 +2216,6 @@ void ggml_backend_sched_set_realloc_callback(ggml_backend_sched_t sched, ggml_ba
     GGML_ASSERT(sched);
     sched->callback_realloc = callback;
     sched->callback_realloc_user_data = user_data;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {

@@ -83,3 +83,22 @@ only needs GGML_ASSERT, ggml_backend_buffer_is_host, get_mem_idx and get_cells(s
 The pattern is: a symbol that the surviving call sites name, with no definition anywhere in the tree. Cheap check
 once the markers are gone: build, and treat every undefined-reference in the link as a MERGE BUG rather than a
 missing file -- the merge is what removed the definitions, and the link is the only place that says so.
+
+## MILESTONE: configure and generate both succeed (commit a4ddff11d + the server union)
+Command that works (the HRX_SOURCE_DIR is the same one ~/wt/i1467-build uses at the pin):
+  cmake -S . -B ~/.cache/scratch-hrx/b2138 -DGGML_HRX=ON \
+        -DHRX_SOURCE_DIR=/home/bcloud/wt/hl-engine/third_party/hrx-system \
+        -DLLAMA_BUILD_TESTS=OFF -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release
+Output: "-- Configuring done (3.4s)" then "-- Generating done (1.4s)".
+
+Three defects between the first configure attempt and this, all of them MERGE defects rather than environment ones:
+  1. tools/parser missing while tools/CMakeLists.txt still did add_subdirectory(parser)  -> restored the 3 files
+  2. src/CMakeLists.txt conflict INSIDE add_library(llama ...)  -> "No SOURCES given to target: llama"; resolved as
+     AMD's ${LLAMA_CORE_SOURCES} + our four extras (llama-zha-dump, llama-hadamard, llama-kv-share, llama-kv-zero)
+  3. tools/server source list conflicted -> prefill (ours) + realtime (AMD), all four files present
+The pattern worth remembering: configure failures in this merge are merge bugs in 3 of 3 cases so far.
+
+## Next: the first compile
+Not started yet -- /home is at the 175G threshold and a full build needs headroom. When it runs, expect the compile
+and link to name the remaining silent losses: every undefined reference is a definition the merge removed while a
+caller survived (set_input_qsa was one; there are 77 files with markers left, mostly src/ models and conversion/).
