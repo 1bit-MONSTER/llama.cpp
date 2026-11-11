@@ -275,7 +275,35 @@ llama_kv_cache::llama_kv_cache(
 
     // allocate the tensors and initialize the buffers to avoid NaNs in the padding
     for (auto & [buft, ctx] : ctx_map) {
+<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
+        ggml_backend_buffer_t buf;
+        if (llama_kv_share_enabled() && !hparams.no_alloc) {
+            buf = share_alloc(ctx.get(), buft); // [1bit] exportable region (llama-kv-share.cpp)
+        } else if (hparams.no_alloc) {
+            buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0); // dummy buffer
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
+                t->buffer = buf; // set dummy buffer for KV cache so that the backend scheduler won't try to allocate it
+            }
+        } else {
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft); // real buffer
+        }
+        if (!buf) {
+            throw std::runtime_error("failed to allocate buffer for kv cache");
+        }
+
+        LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
+
+        ggml_backend_buffer_clear(buf, 0);
+        // [1bit] the clear above is best-effort on some backends: verify it and repair it (engine #528)
+        if (!llama_kv_zero_fill(buf, ctx.get(), "KV cache")) {
+            throw std::runtime_error("the kv cache padding is not zero: every attention kernel masks those "
+                                     "columns with -INFINITY and a non-finite one there returns NaN logits "
+                                     "(engine #528)");
+        }
+        ctxs_bufs.emplace_back(std::move(ctx), buf);
+=======
         ggml_backend_buffer_t buf = ctxs_bufs.emplace(std::move(ctx), buft, "kv cache");
+>>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
     }
