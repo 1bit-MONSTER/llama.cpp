@@ -4944,6 +4944,180 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
     ggml_free(ctx);
 }
 
+// engine #2186 item 2: the one-token routed feed-forward reads its input from the 8-bit activation blocks the
+// RMSNorm publishes. Each block stores its scale and its scaled sum (scale times the sum of its 32 codes) as f16; the
+// scale fits up to an activation of 8.3e6, the sum leaves the f16 range once a block of same-signed activations
+// averages above 2047. The graph below is the decode graph of run_decode_routed_moe_scheduling_case with values.
+struct DecodeRoutedMoeValueGraph {
+    ggml_tensor * hidden_state  = nullptr;
+    ggml_tensor * norm_weight   = nullptr;
+    ggml_tensor * router_weight = nullptr;
+    ggml_tensor * gate_weight   = nullptr;
+    ggml_tensor * up_weight     = nullptr;
+    ggml_tensor * down_weight   = nullptr;
+    ggml_tensor * next_weight   = nullptr;
+    ggml_tensor * output        = nullptr;
+};
+
+static DecodeRoutedMoeValueGraph build_decode_routed_moe_value_graph(ggml_context * ctx, ggml_type expert_type) {
+    DecodeRoutedMoeValueGraph g;
+    g.hidden_state = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenHiddenSize, 1);
+    g.norm_weight  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenHiddenSize);
+    REQUIRE(g.hidden_state != nullptr);
+    REQUIRE(g.norm_weight != nullptr);
+    ggml_tensor * prepared = ggml_mul(ctx, ggml_rms_norm(ctx, g.hidden_state, kQwenRmsNormEps), g.norm_weight);
+    REQUIRE(prepared != nullptr);
+    g.router_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenHiddenSize, kQwenRouterExpertCount);
+    REQUIRE(g.router_weight != nullptr);
+    ggml_tensor * logits        = ggml_mul_mat(ctx, g.router_weight, prepared);
+    ggml_tensor * route_ids     = nullptr;
+    ggml_tensor * route_weights = build_qwen_router_top8_graph(ctx, logits, &route_ids);
+    REQUIRE(route_ids != nullptr);
+    REQUIRE(route_weights != nullptr);
+    g.gate_weight = ggml_new_tensor_3d(ctx, expert_type, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
+    g.up_weight   = ggml_new_tensor_3d(ctx, expert_type, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
+    g.down_weight = ggml_new_tensor_3d(ctx, expert_type, kQwenMoeIntermediate, kQwenHiddenSize, kQwenRouterExpertCount);
+    REQUIRE(g.gate_weight != nullptr);
+    REQUIRE(g.up_weight != nullptr);
+    REQUIRE(g.down_weight != nullptr);
+    ggml_tensor * gate = ggml_mul_mat_id(ctx, g.gate_weight, prepared, route_ids);
+    ggml_tensor * up   = ggml_mul_mat_id(ctx, g.up_weight, prepared, route_ids);
+    ggml_tensor * glu  = ggml_glu_split(ctx, gate, up, GGML_GLU_OP_SWIGLU);
+    ggml_tensor * down = ggml_mul_mat_id(ctx, g.down_weight, glu, route_ids);
+    REQUIRE(down != nullptr);
+    ggml_tensor * weighted = ggml_mul(ctx, down, route_weights);
+    REQUIRE(weighted != nullptr);
+    ggml_tensor * reduced = nullptr;
+    for (int64_t route = 0; route < kQwenRouterRouteCount; ++route) {
+        ggml_tensor * view = ggml_view_2d(ctx, weighted, kQwenHiddenSize, 1, weighted->nb[2],
+                                          static_cast<size_t>(route) * weighted->nb[1]);
+        REQUIRE(view != nullptr);
+        reduced = reduced == nullptr ? view : ggml_add(ctx, reduced, view);
+    }
+    ggml_tensor * residual = ggml_add(ctx, g.hidden_state, reduced);
+    g.next_weight          = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenHiddenSize);
+    REQUIRE(g.next_weight != nullptr);
+    g.output = ggml_mul(ctx, ggml_rms_norm(ctx, residual, kQwenRmsNormEps), g.next_weight);
+    REQUIRE(g.output != nullptr);
+    return g;
+}
+
+// activation_scale is the norm weight: the hidden state is all positive with a root mean square near one, so the
+// activations the feed-forward reads average about activation_scale and a block's scaled sum about 32 times that.
+static void run_decode_routed_moe_large_activation_case(float activation_scale) {
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = 64 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * cpu_ctx  = ggml_init(params);
+    ggml_context * hrx_ctx  = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+
+    DecodeRoutedMoeValueGraph cpu = build_decode_routed_moe_value_graph(cpu_ctx, GGML_TYPE_F32);
+    DecodeRoutedMoeValueGraph hrx = build_decode_routed_moe_value_graph(hrx_ctx, GGML_TYPE_Q4_K);
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    REQUIRE(cpu_graph != nullptr);
+    REQUIRE(hrx_graph != nullptr);
+    ggml_build_forward_expand(cpu_graph, cpu.output);
+    ggml_build_forward_expand(hrx_graph, hrx.output);
+
+    const std::vector<std::string> sequence = scheduled_kernel_sequence(hrx_graph);
+    std::string                    plan;
+    for (const std::string & kernel : sequence) {
+        plan += " " + kernel;
+    }
+    std::fprintf(stderr, "decode routed large activation: plan:%s\n", plan.c_str());
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+
+    // all positive, 0.52..1.48: a block of 32 never cancels
+    std::vector<float> hidden = make_pattern_f32(kQwenHiddenSize, 21, 0.01f);
+    for (float & value : hidden) {
+        value += 1.0f;
+    }
+    const std::vector<float> norm_weight(static_cast<size_t>(kQwenHiddenSize), activation_scale);
+    const std::vector<float> next_weight(static_cast<size_t>(kQwenHiddenSize), 1.0f);
+    // distinct router rows: the logits differ by far more than the device and the CPU round differently, so both
+    // pick the same eight experts
+    std::vector<float> router(static_cast<size_t>(kQwenHiddenSize * kQwenRouterExpertCount));
+    for (int64_t expert = 0; expert < kQwenRouterExpertCount; ++expert) {
+        const float row = 0.001f * static_cast<float>((expert * 37) % kQwenRouterExpertCount);
+        for (int64_t i = 0; i < kQwenHiddenSize; ++i) {
+            router[static_cast<size_t>(expert * kQwenHiddenSize + i)] = row;
+        }
+    }
+    set_tensor_pair_bytes(cpu_backend, cpu.hidden_state, hrx_backend, hrx.hidden_state, hidden.data(),
+                          hidden.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.norm_weight, hrx_backend, hrx.norm_weight, norm_weight.data(),
+                          norm_weight.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.next_weight, hrx_backend, hrx.next_weight, next_weight.data(),
+                          next_weight.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.router_weight, hrx_backend, hrx.router_weight, router.data(),
+                          router.size() * sizeof(float));
+    // the device gets the quantised rows, the CPU the same rows dequantised to f32
+    const auto set_weight_pair = [&](ggml_tensor * cpu_weight, ggml_tensor * hrx_weight, int64_t row_length,
+                                     int64_t row_count, int seed) {
+        const std::vector<uint8_t> rows   = make_quantized_rows(GGML_TYPE_Q4_K, row_length, row_count, seed);
+        const ggml_type_traits *   traits = ggml_get_type_traits(GGML_TYPE_Q4_K);
+        REQUIRE(traits != nullptr);
+        REQUIRE(traits->to_float != nullptr);
+        std::vector<float> wide(static_cast<size_t>(row_length * row_count));
+        const size_t       row_size = ggml_row_size(GGML_TYPE_Q4_K, row_length);
+        for (int64_t r = 0; r < row_count; ++r) {
+            traits->to_float(rows.data() + static_cast<size_t>(r) * row_size,
+                             wide.data() + static_cast<size_t>(r * row_length), row_length);
+        }
+        ggml_backend_tensor_set(hrx_weight, rows.data(), 0, rows.size());
+        ggml_backend_tensor_set(cpu_weight, wide.data(), 0, wide.size() * sizeof(float));
+    };
+    set_weight_pair(cpu.gate_weight, hrx.gate_weight, kQwenHiddenSize, kQwenMoeIntermediate * kQwenRouterExpertCount, 23);
+    set_weight_pair(cpu.up_weight, hrx.up_weight, kQwenHiddenSize, kQwenMoeIntermediate * kQwenRouterExpertCount, 24);
+    set_weight_pair(cpu.down_weight, hrx.down_weight, kQwenMoeIntermediate, kQwenHiddenSize * kQwenRouterExpertCount, 25);
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    const std::vector<float> cpu_out = get_f32_tensor(cpu_backend, cpu.output);
+    const std::vector<float> hrx_out = get_f32_tensor(hrx_backend, hrx.output);
+    REQUIRE(cpu_out.size() == hrx_out.size());
+
+    double error      = 0.0;
+    double norm       = 0.0;
+    size_t non_finite = 0;
+    for (size_t i = 0; i < cpu_out.size(); ++i) {
+        REQUIRE(std::isfinite(cpu_out[i]));
+        if (!std::isfinite(hrx_out[i])) {
+            ++non_finite;
+            continue;
+        }
+        const double diff = static_cast<double>(hrx_out[i]) - static_cast<double>(cpu_out[i]);
+        error += diff * diff;
+        norm  += static_cast<double>(cpu_out[i]) * static_cast<double>(cpu_out[i]);
+    }
+    std::fprintf(stderr,
+                 "decode routed large activation: scale=%g block scaled sum about %g non-finite=%zu of %zu nmse(device vs cpu)=%g\n",
+                 static_cast<double>(activation_scale), 32.0 * static_cast<double>(activation_scale), non_finite,
+                 cpu_out.size(), norm > 0.0 ? error / norm : -1.0);
+    REQUIRE(non_finite == 0);
+    REQUIRE(error / norm < 1.0e-2);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_decode_attention_qkv_scheduling_case() {
     ggml_init_params params = {};
     params.mem_size         = 128 * 1024 * 1024;
@@ -5944,6 +6118,11 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K); });
     add(suite, "routed_moe_decode.q6_k.true",
         [=] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, true); });
+    // engine #2186: one-token routed decode with a block scaled sum above the f16 range (3000 and 30000)
+    for (float scale : { 1.0f, 1000.0f, 3000.0f, 30000.0f }) {
+        add(suite, std::string("decode_routed_moe.q4_K.large_activation.") + std::to_string(static_cast<int>(scale)),
+            [=] { run_decode_routed_moe_large_activation_case(scale); });
+    }
     add(suite, "rmsnorm_mul.256.1",
         [=] { run_rmsnorm_mul_case(256, 1); });
     add(suite, "rmsnorm_mul.256.4",
