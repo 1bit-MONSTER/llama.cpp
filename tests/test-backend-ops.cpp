@@ -4505,7 +4505,7 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
-static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
+static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float activation_scale = 1.0f) {
     std::random_device rd;
     std::default_random_engine rng(rd());
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
@@ -4520,6 +4520,15 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
                 std::shuffle(data.begin(), data.end(), rng);
                 ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
             }
+        } else if (activation_scale != 1.0f && strcmp(t->name, "b") == 0) {
+            // engine #2127 / #2167: the default fill is uniform in [-1, 1], which no half-precision narrowing of the
+            // activation can get wrong, so a case can ask for a wider activation. Only the activation `b` is scaled:
+            // scaling an f32 weight as well would put the weights outside half precision, which no model does.
+            const size_t ne = (size_t) ggml_nelements(t);
+            std::vector<float> data(ne);
+            std::uniform_real_distribution<float> gen(-activation_scale, activation_scale);
+            for (size_t i = 0; i < ne; i++) { data[i] = gen(rng); }
+            ggml_backend_tensor_set(t, data.data(), 0, ne * sizeof(float));
         } else {
             init_tensor_uniform(t);
         }
@@ -4536,9 +4545,10 @@ struct test_mul_mat_id : public test_case {
     const int64_t m;
     const int64_t n;
     const int64_t k;
+    const float   activation_scale;   // engine #2167: scales the activation `b`; 1.0f for every earlier case
 
     std::string vars() override {
-        return VARS_TO_STR8(type_a, type_b, n_mats, n_used, b, m, n, k);
+        return VARS_TO_STR9(type_a, type_b, n_mats, n_used, b, m, n, k, activation_scale);
     }
 
     double max_nmse_err() override {
@@ -4560,9 +4570,9 @@ struct test_mul_mat_id : public test_case {
 
     test_mul_mat_id(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
-            int64_t m = 32, int64_t n = 32, int64_t k = 32)
+            int64_t m = 32, int64_t n = 32, int64_t k = 32, float activation_scale = 1.0f)
         : type_a(type_a), type_b(type_b), n_mats(n_mats), n_used(n_used), b(b),
-            m(m), n(n), k(k) {
+            m(m), n(n), k(k), activation_scale(activation_scale) {
             GGML_ASSERT(n_used <= n_mats);
         }
 
@@ -4588,7 +4598,7 @@ struct test_mul_mat_id : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        init_mul_mat_id_tensors(ctx, n_mats);
+        init_mul_mat_id_tensors(ctx, n_mats, activation_scale);
     }
 };
 
@@ -9480,6 +9490,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // element-wise expert below or off that contract must stay refused rather than reach a kernel that rejects it.
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8, 1472));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8,   92));
+    // engine #2167: a plain MUL_MAT_ID with activations above the half-precision range (65504). The routed kernels
+    // narrow the activation at 2^-6 (llama.cpp #285, in the engine pin since 7a1f2b81c), so these pass; before that
+    // commit the bf16 row at 1e5 returned NaN against a finite CPU result. 1e4 is the ordinary side of the limit.
+    // The shape is one the sweep already runs with the default fill, so only the magnitude differs; n = 1 is the
+    // one-token decode kernel.
+    for (float scale : { 1e4f, 1e5f }) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 4, 2, false, 512, 32, 256, scale));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32,  GGML_TYPE_F32, 4, 2, false, 512, 32, 256, scale));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4, 2, false, 512, 32, 256, scale));
+    }
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 4, 2, false, 512, 1, 256, 1e5f));
     // Row-padded activation against a dense weight: the model's dt_proj at the prefill token count, and the same contraction
     // at a small token count so a regression at either end is visible.
     test_cases.emplace_back(new test_mul_mat_row_padded_activation(GGML_TYPE_BF16, GGML_TYPE_F32, 2944, 512,  92, 264));
