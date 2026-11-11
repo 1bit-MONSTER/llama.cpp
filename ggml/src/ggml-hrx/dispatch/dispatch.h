@@ -27,8 +27,16 @@ inline constexpr const char kQ5KSymmetricI8K256Row64Layout[]    = "q5k-symi8-k25
 inline constexpr const char kQ6KI8K32Row64Layout[]              = "q6k-i8-k32-row64";
 inline constexpr const char kQ6KPackedK256Row64ScaleRowLayout[] = "q6k-packed-k256-row64-scalerow";
 
+// AMD's rebase added a workload-specialization axis to kernel specialization; our line's refactor of this
+// struct dropped it when nothing used it, but AMD's new registrations set it, so it comes back here (union).
+enum class WorkloadSpecialization : uint8_t {
+    Exact,
+    Dynamic,
+};
+
 struct KernelSpecialization {
     uint64_t                           kernel_id = kUncatalogedKernelId;
+    WorkloadSpecialization             workload_specialization = WorkloadSpecialization::Exact;
     std::map<std::string, int64_t>     integer_parameters;
     std::map<std::string, std::string> compile_parameters;
 };

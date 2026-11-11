@@ -102,3 +102,23 @@ The pattern worth remembering: configure failures in this merge are merge bugs i
 Not started yet -- /home is at the 175G threshold and a full build needs headroom. When it runs, expect the compile
 and link to name the remaining silent losses: every undefined reference is a definition the merge removed while a
 caller survived (set_input_qsa was one; there are 77 files with markers left, mostly src/ models and conversion/).
+
+## COMPILE STATUS after the first two real attempts (commit 8b40b98ea)
+The kernel-corpus target BUILDS now: "embedded kernel corpus: source_files=244 source_bytes=4519204 source_format=text".
+ggml-backend.cpp compiles. The HRX target has 11 distinct errors left, captured verbatim in HRX-COMPILE-ERRORS.txt:
+
+  dispatch-gated-mul-mat.cpp        conflict markers still in the file; "expected } at end of input"    (NOT resolved yet)
+  dispatch-gated-mul-mat-id.cpp     kMulMatIdSkinnySwiGLUF32F32Kernel / kMulMatIdTiledSwiGLUF32F32Kernel not declared
+  dispatch-get-rows.cpp             WorkloadSpecialization / KernelSpecialization::<member> unknown, two match_* fns not declared
+  kernel-corpus-catalog-verify.h    static assertion: unknown HRX kernel catalog entry
+
+Two classes, and they are not the same job:
+  (a) files that still carry markers -> ordinary remaining resolution work (dispatch-gated-mul-mat.cpp is one).
+  (b) AMD renamed/restructured a type or catalog vocabulary (WorkloadSpecialization, KernelSpecialization members, the
+      kMulMatId*SwiGLU refs) while our files still speak the old one. That is the 'coupled vocabulary' class again: the
+      fix is to move our call sites onto AMD's names, not to union both, and the catalog static assertion is the same
+      thing one level up (AMD's corpus no longer names kernels our registrations list).
+
+Corpus decision that caused part of (b), recorded in 08d3ac000: the two corpus manifests are a coupled pair with a
+closure invariant, so they take AMD's side whole -- which leaves our _q4/_q6 export variants and any registration naming
+them outside the corpus. Those registrations are the kMulMatId*SwiGLU errors above.
