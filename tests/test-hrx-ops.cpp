@@ -3339,6 +3339,198 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     ggml_backend_free(hrx_backend);
 }
 
+// engine #1962: the draft head's logits step (common.mul_mat.q6_k_token1_shortlist). A Q6_K projection onto a vocabulary
+// of at least 65,536 at one token, whose input descends from a projection of concat(embedding row, external value),
+// runs as a shortlist: a coarse scan, a top-128 selection, and an exact refine of those candidates; every other logit
+// is filled negative. So the comparison with the CPU is over the refined candidates, not the whole output.
+// `branch_scale` multiplies both normalised branches; it sets the size of the activation the logits step reads.
+// Arms: Ordinary (everything inside f16); Spike (ONE activation above the f16 maximum, logits inside it, so the only
+// value out of range is the one the refine kernel narrows); Large (every activation scaled up, so the activations and
+// the logits are both above 65504 and inside the prescaled window).
+enum class ShortlistArm { Ordinary, Spike, Large };
+static void run_q6_k_token1_shortlist_case(float branch_scale, ShortlistArm arm) {
+    const bool require_large_activation = arm != ShortlistArm::Ordinary;
+    constexpr int64_t hidden_size = 256;
+    constexpr int64_t vocab_size  = 65536;
+    constexpr int64_t table_rows  = 8;
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = static_cast<size_t>(48 * 1024 * 1024);
+    params.no_alloc         = true;
+    ggml_context * cpu_ctx  = ggml_init(params);
+    ggml_context * hrx_ctx  = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+
+    struct Graph {
+        ggml_tensor * table;
+        ggml_tensor * ids;
+        ggml_tensor * external;
+        ggml_tensor * scale_a;
+        ggml_tensor * scale_b;
+        ggml_tensor * projection_weight;
+        ggml_tensor * head_weight;
+        ggml_tensor * projected;
+        ggml_tensor * logits;
+    };
+    auto build = [&](ggml_context * ctx) {
+        Graph g;
+        g.table             = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, table_rows);
+        g.ids               = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+        g.external          = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+        g.scale_a           = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+        g.scale_b           = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+        g.projection_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2 * hidden_size, hidden_size);
+        g.head_weight       = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, hidden_size, vocab_size);
+        ggml_tensor * embedded = ggml_get_rows(ctx, g.table, g.ids);
+        ggml_tensor * branch_a = ggml_mul(ctx, ggml_rms_norm(ctx, embedded, 1.0e-6f), g.scale_a);
+        ggml_tensor * branch_b = ggml_mul(ctx, ggml_rms_norm(ctx, g.external, 1.0e-6f), g.scale_b);
+        g.projected            = ggml_mul_mat(ctx, g.projection_weight, ggml_concat(ctx, branch_a, branch_b, 0));
+        g.logits               = ggml_mul_mat(ctx, g.head_weight, g.projected);
+        return g;
+    };
+    const Graph cpu = build(cpu_ctx);
+    const Graph hrx = build(hrx_ctx);
+
+    auto hrx_head_buffer = allocate_test_weight(hrx_backend, hrx.head_weight);
+
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    ggml_build_forward_expand(cpu_graph, cpu.logits);
+    ggml_build_forward_expand(hrx_graph, hrx.logits);
+
+    const std::vector<std::string> sequence = scheduled_kernel_sequence(hrx_graph);
+    REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_q6_k_symmetric_i2_scan_token1"));
+    REQUIRE(test_sequence_has(sequence, "loom_libs:ggml_mul_mat_q6_k_packed_selected_refine_token1"));
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+
+    std::vector<float> table(static_cast<size_t>(hidden_size * table_rows));
+    for (size_t i = 0; i < table.size(); ++i) {
+        table[i] = (static_cast<float>((i * 29) % 23) - 11.0f) / 11.0f;
+    }
+    std::vector<float> external(static_cast<size_t>(hidden_size));
+    for (size_t i = 0; i < external.size(); ++i) {
+        external[i] = (static_cast<float>((i * 41) % 19) - 9.0f) / 9.0f;
+    }
+    std::vector<float> scale_a(static_cast<size_t>(hidden_size));
+    std::vector<float> scale_b(static_cast<size_t>(hidden_size));
+    for (size_t i = 0; i < scale_a.size(); ++i) {
+        scale_a[i] = branch_scale * (0.75f + 0.5f * static_cast<float>(i % 5) / 4.0f);
+        scale_b[i] = branch_scale * (0.75f + 0.5f * static_cast<float>(i % 7) / 6.0f);
+    }
+    std::vector<float> projection(static_cast<size_t>(2 * hidden_size * hidden_size));
+    for (size_t i = 0; i < projection.size(); ++i) {
+        projection[i] = (static_cast<float>((i * 53) % 31) - 15.0f) / 15.0f;
+        // The large arm puts ONE activation above the f16 maximum and keeps the rest small, so the logits (which this
+        // path publishes through f16) stay in range while the value the kernels narrow does not.
+        if (arm == ShortlistArm::Spike && i / static_cast<size_t>(2 * hidden_size) != 7) {
+            projection[i] *= 1.0e-4f;
+        }
+    }
+    const std::vector<uint8_t> head_weight = make_matmul_weight_bytes(GGML_TYPE_Q6_K, hidden_size, vocab_size, 23);
+    const int32_t              id          = 3;
+    set_tensor_pair_bytes(cpu_backend, cpu.table, hrx_backend, hrx.table, table.data(), table.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.ids, hrx_backend, hrx.ids, &id, sizeof(id));
+    set_tensor_pair_bytes(cpu_backend, cpu.external, hrx_backend, hrx.external, external.data(),
+                          external.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.scale_a, hrx_backend, hrx.scale_a, scale_a.data(),
+                          scale_a.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.scale_b, hrx_backend, hrx.scale_b, scale_b.data(),
+                          scale_b.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.projection_weight, hrx_backend, hrx.projection_weight, projection.data(),
+                          projection.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.head_weight, hrx_backend, hrx.head_weight, head_weight.data(),
+                          head_weight.size());
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+
+    float activation_max = 0.0f;
+    for (const float value : get_f32_tensor(cpu_backend, cpu.projected)) {
+        activation_max = std::max(activation_max, std::fabs(value));
+    }
+    const std::vector<float> expected = get_f32_tensor(cpu_backend, cpu.logits);
+    const std::vector<float> actual   = get_f32_tensor(hrx_backend, hrx.logits);
+    REQUIRE(expected.size() == static_cast<size_t>(vocab_size));
+    REQUIRE(actual.size() == expected.size());
+
+    size_t expected_best = 0;
+    size_t actual_best   = 0;
+    size_t non_finite    = 0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        non_finite += std::isfinite(actual[i]) ? 0 : 1;
+        if (expected[i] > expected[expected_best]) {
+            expected_best = i;
+        }
+        if (actual[i] > actual[actual_best]) {
+            actual_best = i;
+        }
+    }
+    float logit_max = 0.0f;
+    for (const float value : expected) {
+        logit_max = std::max(logit_max, std::fabs(value));
+    }
+    // the refined candidates are the logits the device did not fill negative; compare those with the CPU
+    double error   = 0.0;
+    double norm    = 0.0;
+    size_t refined = 0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        if (!std::isfinite(actual[i]) || actual[i] < -1.0e30f) {
+            continue;
+        }
+        ++refined;
+        const double diff = static_cast<double>(actual[i]) - static_cast<double>(expected[i]);
+        error += diff * diff;
+        norm  += static_cast<double>(expected[i]) * static_cast<double>(expected[i]);
+    }
+    std::fprintf(stderr,
+                 "q6_k shortlist: activation max=%g logit max=%g non-finite=%zu refined=%zu nmse(refined)=%g best "
+                 "cpu=%zu (cpu %g, hrx %g) hrx=%zu (cpu %g, hrx %g)\n",
+                 static_cast<double>(activation_max), static_cast<double>(logit_max), non_finite, refined,
+                 norm > 0.0 ? error / norm : -1.0, expected_best, static_cast<double>(expected[expected_best]),
+                 static_cast<double>(actual[expected_best]), actual_best, static_cast<double>(expected[actual_best]),
+                 static_cast<double>(actual[actual_best]));
+    if (require_large_activation) {
+        REQUIRE(activation_max > 65504.0f);
+    } else {
+        REQUIRE(activation_max < 65504.0f);
+    }
+    if (arm == ShortlistArm::Large) {
+        REQUIRE(logit_max > 65504.0f);
+        REQUIRE(logit_max < 2.0e6f);
+    } else {
+        // the logits fit f16, so in the Spike arm the activation is the only value out of range
+        REQUIRE(logit_max < 65504.0f);
+    }
+    REQUIRE(non_finite == 0);
+    REQUIRE(refined > 0);
+    REQUIRE(error / norm < 1.0e-3);
+    // The device's best token must be as good as the CPU's. It may be a different token only when the two are a tie
+    // or a near tie: the generated weight repeats rows, and the refined logits are rounded to f16 (1 part in 2000).
+    // Not asserted in the Spike arm: the coarse scan reads the weight at 2 bits, so with one dominant activation it has
+    // four distinct scores and the 128 candidates are drawn from thousands of ties. That is the shortlist's recall on
+    // a degenerate input, not arithmetic; the arm checks that what is refined is finite and exact.
+    if (arm != ShortlistArm::Spike) {
+        REQUIRE(expected[actual_best] >= expected[expected_best] - 2.0e-3f * std::fabs(expected[expected_best]));
+    }
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 // engine #1962: down(swiglu(gate(x), up(x))) at prefill, with a gated product above the f16 maximum.
 // The gate/up kernel hands the f16 form of its result to the down-projection.
 static void run_ffn_prefill_large_activation_case(int64_t token_count, float input_scale) {
@@ -5099,6 +5291,12 @@ static void add_cases(test_runner::Suite & suite) {
                                    4,
                                    4096,
                                    GGML_GLU_OP_SWIGLU); });
+    add(suite, "mul_mat.q6_k.token1_shortlist",
+        [=] { run_q6_k_token1_shortlist_case(1.0f, ShortlistArm::Ordinary); });
+    add(suite, "mul_mat.q6_k.token1_shortlist.activation_spike",
+        [=] { run_q6_k_token1_shortlist_case(8000.0f, ShortlistArm::Spike); });
+    add(suite, "mul_mat.q6_k.token1_shortlist.large_activation",
+        [=] { run_q6_k_token1_shortlist_case(8000.0f, ShortlistArm::Large); });
     for (const int64_t tokens : { 256, 512 }) {
         // an input scale of 640 gives a gated maximum of 4.0e5
         add(suite, "ffn.q4_k.prefill.large_activation." + std::to_string(tokens),

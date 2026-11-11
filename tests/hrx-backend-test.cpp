@@ -3389,6 +3389,64 @@ static bool matmul_graph_is_supported(ggml_context * ctx, ggml_tensor * output) 
     return ggml::hrx::DispatchScheduler::can_schedule_graph(imported.graph, test_dispatch_target());
 }
 
+// engine #1962: the draft head's logits step (common.mul_mat.q6_k_token1_shortlist) selects activation groups, and the
+// scan reads as many group ids as it is told were selected. The selection kernel writes one id per 32-wide group that
+// exists, so the request must never exceed input_size / 32: at 96 for every width, an input below 3072 left the tail
+// of the id buffer unwritten and the scan used it as group indices.
+static void schedule_q6k_token1_shortlist_group_count(int64_t hidden_size, int64_t vocab_size, int64_t expected_groups) {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * table      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 8);
+    ggml_tensor * ids        = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    ggml_tensor * external   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+    ggml_tensor * scale_a    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+    ggml_tensor * scale_b    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+    ggml_tensor * projection = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2 * hidden_size, hidden_size);
+    ggml_tensor * head       = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, hidden_size, vocab_size);
+    ggml_tensor * branch_a   = ggml_mul(ctx, ggml_rms_norm(ctx, ggml_get_rows(ctx, table, ids), 0.000001f), scale_a);
+    ggml_tensor * branch_b   = ggml_mul(ctx, ggml_rms_norm(ctx, external, 0.000001f), scale_b);
+    ggml_tensor * projected  = ggml_mul_mat(ctx, projection, ggml_concat(ctx, branch_a, branch_b, 0));
+    ggml_tensor * logits     = ggml_mul_mat(ctx, head, projected);
+    REQUIRE(logits != nullptr);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, logits);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+
+    size_t select_count = 0;
+    size_t scan_count   = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
+        if (name == "loom_libs:ggml_select_symmetric_i4_k32_groups") {
+            ++select_count;
+            require_compile_parameter(dispatch, "ggml.mul_mat_q6_k_shortlist.selected_group_count",
+                                      std::to_string(expected_groups));
+            REQUIRE(dispatch.bindings.size() == 2);
+            REQUIRE(dispatch.bindings[1].length == static_cast<size_t>(expected_groups) * sizeof(int32_t));
+        } else if (name == "loom_libs:ggml_mul_mat_q6_k_symmetric_i2_scan_token1") {
+            ++scan_count;
+            require_compile_parameter(dispatch, "ggml.mul_mat_q6_k_shortlist.selected_group_count",
+                                      std::to_string(expected_groups));
+        }
+    }
+    // the case must reach the shortlist, or it asserts nothing
+    REQUIRE(select_count == 1);
+    REQUIRE(scan_count == 1);
+
+    ggml_free(ctx);
+}
+
 static void schedule_qwen_terminal_q6k_q8_command(int64_t token_count) {
     ggml_init_params params = {};
     params.mem_size         = 4 * 1024 * 1024;
@@ -11768,6 +11826,12 @@ int main(int argc, char ** argv) {
         { "gdn_selected_rms_q8_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(); } },
         { "llama_attention_matmul_dispatch", [] { run_llama_attention_matmul_dispatch_checks(); } },
         { "quantized_value_projection_dispatch", [] { run_quantized_value_projection_dispatch_checks(); } },
+        // widths 256 and 2560 (Qwen3.8-Flash-Next) have fewer than 96 groups; 4096 has more
+        { "q6k_token1_shortlist_group_count.256", [] { schedule_q6k_token1_shortlist_group_count(256, 65536, 8); } },
+        { "q6k_token1_shortlist_group_count.2560",
+          [] { schedule_q6k_token1_shortlist_group_count(2560, 248320, 80); } },
+        { "q6k_token1_shortlist_group_count.4096",
+          [] { schedule_q6k_token1_shortlist_group_count(4096, 65536, 96); } },
         { "schedule_qwen_terminal_q6k_q8_command.tokens1", [] { schedule_qwen_terminal_q6k_q8_command(1); } },
         { "schedule_qwen_terminal_q6k_q8_command.tokens18", [] { schedule_qwen_terminal_q6k_q8_command(18); } },
         { "schedule_get_rows_q8_1_alternate_command.q4_k", [] { schedule_get_rows_q8_1_alternate_command(GGML_TYPE_Q4_K); } },
