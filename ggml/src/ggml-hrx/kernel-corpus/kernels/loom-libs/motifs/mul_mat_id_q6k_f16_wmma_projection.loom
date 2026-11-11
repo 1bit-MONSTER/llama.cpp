@@ -109,6 +109,11 @@ template.def<@ggml.mul_mat_id_q6k_f16_wmma.project_vector16> device @ggml_mul_ma
   %c0_offset = index.constant 0 : offset
   %c0_i32 = scalar.constant 0 : i32
   %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  // engine #1962: the routed expert's activation is narrowed to f16 for the WMMA and f16 ends at 65504. A flint layer
+  // reaches 9.1e4, which becomes inf here and NaN downstream. Prescale by 2^-6, which is exact (a power of two, and the
+  // f16 store was already lossy), and the matching x64 is applied once in routed_down_weighted_reduce_next_rmsnorm_f32
+  // where the routed outputs are widened to f32 before they are weighted. Both halves are needed; this is only one.
+  %f16_activation_prescale = vector.constant 0.015625 : vector<4xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -150,7 +155,8 @@ template.def<@ggml.mul_mat_id_q6k_f16_wmma.project_vector16> device @ggml_mul_ma
       %token, %input_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
       %input_k = index.add %k_origin, %load_k : index
       %loaded = vector.load %input_view[%token, %input_k] : view<[%token_count]x[%input_size]xf32> -> vector<4xf32>
-      %converted = vector.fptrunc %loaded : vector<4xf32> to vector<4xf16>
+      %activation_prescaled = vector.mulf %loaded, %f16_activation_prescale : vector<4xf32>
+      %converted = vector.fptrunc %activation_prescaled : vector<4xf32> to vector<4xf16>
       scf.yield %converted : vector<4xf16>
     } else {
       scf.yield %c0_f16x4 : vector<4xf16>
