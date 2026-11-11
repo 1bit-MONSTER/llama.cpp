@@ -48,12 +48,9 @@ struct llama_cparams {
     bool fused_dsv4_hc_comb;
     bool fused_dsv4_hc_post;
     bool auto_fhc;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     bool fused_cross_device;  // keep a fused op enabled when its nodes are not all on the layer's device
-=======
     bool fused_top_k_mask;   // use fused top-k sparse attention mask
     bool auto_ftkm;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     bool no_perf;
     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;

@@ -167,12 +167,9 @@ enum llm_arch {
     LLM_ARCH_MAINCODER,
     LLM_ARCH_MAION_CODER,
     LLM_ARCH_KIMI_LINEAR,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     LLM_ARCH_ZAYA,
-=======
     LLM_ARCH_KIMI_K3,
     LLM_ARCH_GLM5_NEXT,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     LLM_ARCH_TALKIE,
     LLM_ARCH_MELLUM,
     LLM_ARCH_EAGLE3,
@@ -308,7 +305,6 @@ enum llm_kv {
     LLM_KV_ZAYA_VLORA_RANK_ATTN,
     LLM_KV_ZAYA_VLORA_RANK_FFN,
     LLM_KV_ATTENTION_SCALE,
-    LLM_KV_ATTENTION_ROPE_PATTERN,
     LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,
     LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT,
 
@@ -487,11 +483,9 @@ enum llm_kv {
     LLM_KV_XIELU_BETA,
     LLM_KV_XIELU_EPS,
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // zamba2: 0 or absent = the per-layer MLP adapters are baked into ffn_up (files written before this key
     // existed); > 0 = ffn_up is the shared base and each hybrid layer carries a low-rank adapter pair of this rank
     LLM_KV_ZAMBA2_FFN_GATE_UP_ADAPTER_RANK,
-=======
     LLM_KV_PRISM_HADAMARD_VERSION,
     LLM_KV_PRISM_HADAMARD_TIED_OUTPUT,
     LLM_KV_PRISM_HADAMARD_BLOCK_SIZE,
@@ -503,7 +497,6 @@ enum llm_kv {
     LLM_KV_PRISM_HADAMARD_WEIGHT_NAMES,
     LLM_KV_PRISM_HADAMARD_INVERSE_WEIGHT_NAMES,
     LLM_KV_PRISM_HADAMARD_GDN_V_GROUPED,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // deprecated:
     LLM_KV_TOKENIZER_PREFIX_ID,
@@ -814,7 +807,6 @@ enum llm_tensor {
     LLM_TENSOR_NEXTN_HNORM,
     LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,
     LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 
     // ZAYA CCA (Compressed Convolutional Attention)
     LLM_TENSOR_CCA_CONV_GRP,
@@ -851,9 +843,6 @@ enum llm_tensor {
     LLM_TENSOR_ZAYA_VLORA_DOWN_EXPS_A,
     LLM_TENSOR_ZAYA_VLORA_DOWN_EXPS_B,
     LLM_TENSOR_NEXTN_HC_HEAD_NORM,
-=======
-    LLM_TENSOR_NEXTN_HC_HEAD_NORM, // qwen4exp: the MTP block's own hyper-connection mixer
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     LLM_TENSOR_NEXTN_HC_HEAD_DOWN,
     LLM_TENSOR_NEXTN_HC_HEAD_UP,
     LLM_TENSOR_MASKED_EMBD_CENTROIDS,

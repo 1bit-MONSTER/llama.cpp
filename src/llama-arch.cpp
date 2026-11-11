@@ -169,12 +169,9 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MAINCODER,        "maincoder"        },
     { LLM_ARCH_MAION_CODER,      "maion-coder"      },
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     { LLM_ARCH_ZAYA,             "zaya"             },
-=======
     { LLM_ARCH_KIMI_K3,          "kimi-k3"          },
     { LLM_ARCH_GLM5_NEXT,        "glm5-next"        },
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     { LLM_ARCH_TALKIE,           "talkie"           },
     { LLM_ARCH_MELLUM,           "mellum"           },
     { LLM_ARCH_NANBEIGE,         "nanbeige"         },
@@ -301,14 +298,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_SLIDING_WINDOW,               "%s.attention.sliding_window"               },
     { LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,       "%s.attention.sliding_window_pattern"       },
     { LLM_KV_ATTENTION_ROPE_PATTERN,                 "%s.attention.rope_pattern"                 },
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     { LLM_KV_ZAYA_VLORA_RANK_ATTN,                   "%s.vision_lora.attention_rank"             },
     { LLM_KV_ZAYA_VLORA_RANK_FFN,                    "%s.vision_lora.ffn_rank"                   },
-=======
     { LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,           "%s.attention.value_expert_count"           },
     { LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT,      "%s.attention.value_expert_used_count"      },
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     { LLM_KV_ATTENTION_SCALE,                        "%s.attention.scale"                        },
     { LLM_KV_ATTENTION_OUTPUT_SCALE,                 "%s.attention.output_scale"                 },
     { LLM_KV_ATTENTION_VALUE_SCALE,                  "%s.attention.value_scale"                  },
@@ -1181,7 +1175,6 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     // latent projections feed ggml_mul_mat, the buft probe must use MUL_MAT to keep them on GPU
     {LLM_TENSOR_FFN_LATENT_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_FFN_LATENT_UP,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // ZAYA
     {LLM_TENSOR_CCA_CONV_GRP,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CCA_K_SCALE,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -1212,12 +1205,10 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_ZAYA_VLORA_UP_EXPS_B   , {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
     {LLM_TENSOR_ZAYA_VLORA_DOWN_EXPS_A , {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
     {LLM_TENSOR_ZAYA_VLORA_DOWN_EXPS_B , {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
-=======
     {LLM_TENSOR_FFN_PRE_EXP_NORM,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_FFN_POST_EXP_NORM,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_FFN_RESID_ALPHA,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_FFN_RESID_BETA,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     {LLM_TENSOR_MASKED_EMBD_CENTROIDS,      {LLM_TENSOR_LAYER_INPUT,     GGML_OP_NONE}},
     {LLM_TENSOR_MASKED_EMBD_ORDERING,       {LLM_TENSOR_LAYER_INPUT,     GGML_OP_NONE}},
     // eagle3
@@ -1438,20 +1429,9 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MINIMAX_M3:
         case LLM_ARCH_MISTRAL4:
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         case LLM_ARCH_ZAYA:
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_QWEN4EXP:   // TODO: fix test-llama-archs
-=======
-        case LLM_ARCH_MELLUM: // [TAG_MOE_AMAX_SCALE]
-        case LLM_ARCH_FLINT:  // [TAG_MOE_AMAX_SCALE]
-        case LLM_ARCH_LAGUNA: // [TAG_MOE_AMAX_SCALE]
-        case LLM_ARCH_KIMI_LINEAR:
-        case LLM_ARCH_BAILINGMOE3:
-        case LLM_ARCH_KIMI_K3:
-        case LLM_ARCH_GLM5_NEXT:
-        case LLM_ARCH_QWEN3TTS:
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             return false;
         default:
             return true;

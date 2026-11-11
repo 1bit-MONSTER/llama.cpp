@@ -418,11 +418,8 @@ private:
     std::array<llm_graph_result_ptr, 2> gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     bool hadamard_verified = false;  // prism.hadamard coverage checked on the first graph
-=======
     llm_graph_result * gf_res_prev_active = nullptr;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
