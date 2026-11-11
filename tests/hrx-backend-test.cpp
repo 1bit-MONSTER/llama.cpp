@@ -1835,8 +1835,11 @@ static void run_unmatched_graph_diagnostics_checks() {
     ggml_context * ctx      = ggml_init(params);
     REQUIRE(ctx != nullptr);
 
-    ggml_tensor * cache   = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 512, 512);
-    ggml_tensor * rows    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 512, 2);
+    // A SET_ROWS that no registration takes. The i32-index form at an ordinary row width used to be that graph; since
+    // llama.cpp #196 the standalone hip_set_rows dispatch runs it on the device. A row wider than that dispatch's 32,768
+    // limit (and with i32 indices, which the two Loom writers decline) is still refused by every matcher.
+    ggml_tensor * cache   = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 65536, 4);
+    ggml_tensor * rows    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 65536, 2);
     ggml_tensor * indices = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 2);
     REQUIRE(cache != nullptr);
     REQUIRE(rows != nullptr);
@@ -6330,7 +6333,8 @@ static void run_qwen_matmul_dispatch_checks() {
         REQUIRE(input != nullptr);
         ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
         REQUIRE(output != nullptr);
-        REQUIRE(!matmul_graph_is_supported(ctx, output));
+        // llama.cpp #207: a batched dense MUL_MAT runs as one dispatch per plane; before it this graph was refused.
+        REQUIRE(matmul_graph_is_supported(ctx, output));
     }
 
     {
