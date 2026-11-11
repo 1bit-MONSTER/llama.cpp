@@ -517,7 +517,18 @@ struct GraphValueAccess {
     int64_t     output_size         = 0;
     size_t      source_length       = 0;
     size_t      materialized_length = 0;
+    // GGML_HRX_HOST_WEIGHT_TRACE=2 only: the kernels of this program that read the value, with the layout each asks for
+    // (engine #2137: a weight held in two layouts is two kernels disagreeing, and the copy line alone cannot say which).
+    std::vector<std::pair<uint64_t, std::string>> readers;
 };
+
+static bool host_weight_copy_trace_enabled() {
+    static const bool enabled = [] {
+        const char * trace = std::getenv("GGML_HRX_HOST_WEIGHT_TRACE");
+        return trace != nullptr && std::atoi(trace) >= 2;
+    }();
+    return enabled;
+}
 
 static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(const CommandProgram & commands) {
     std::unordered_map<int32_t, GraphValueAccess> access_by_value;
@@ -528,6 +539,12 @@ static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(
                     continue;
                 }
                 GraphValueAccess & access = access_by_value[binding.value.value];
+                if (host_weight_copy_trace_enabled() && binding.access != ResourceAccess::Write) {
+                    const std::pair<uint64_t, std::string> reader(command.kernel.kernel_id, binding.layout);
+                    if (std::find(access.readers.begin(), access.readers.end(), reader) == access.readers.end()) {
+                        access.readers.push_back(reader);
+                    }
+                }
                 switch (binding.access) {
                     case ResourceAccess::Read:
                         access.read = true;
@@ -710,8 +727,24 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
                 materialized.push_back(binding);
                 continue;
             }
+            const unsigned long long misses_before = host_weight_copy_trace_enabled() ? context.host_weights->stats().misses : 0;
             HostWeightAcquireResult resident =
                 context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source, context.pool_budget);
+            // One line per device copy made, after HostWeightCache's own "hrx weight copy:" line for it: which kernels of
+            // this program read the weight, and in which layout. `layout=` is the copy just made.
+            if (host_weight_copy_trace_enabled() && context.host_weights->stats().misses != misses_before) {
+                std::string readers;
+                for (const auto & reader : access.readers) {
+                    const KernelDefinition * definition =
+                        context.corpus != nullptr && context.target != nullptr ?
+                            resolve_kernel_definition(*context.corpus, context.target, reader.first).definition :
+                            nullptr;
+                    readers += readers.empty() ? "" : ",";
+                    readers += kernel_definition_name_or_id(definition, reader.first) + "@" + reader.second;
+                }
+                GGML_LOG_ERROR("hrx weight copy readers: id=%llu off=%zu layout=%s readers=%s\n",
+                               (unsigned long long) source.identity, source.offset, source.layout.c_str(), readers.c_str());
+            }
             if (!resident.valid()) {
                 // engine #1618: this line and the HSA error behind it carried no pool figure,
                 // so an 89 GB model materialized against a 66.6 GiB budget read as a
