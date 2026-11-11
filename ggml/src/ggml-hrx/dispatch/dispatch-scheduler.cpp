@@ -158,9 +158,28 @@ static bool value_is_available(const Graph & graph, ValueId value, const std::ve
            covered_nodes[producer_index];
 }
 
+// A layout op whose output is a window into storage this graph does not hold: the view llama.cpp takes into the wide
+// input embedding of a deepstack model (Qwen3-VL: f32[2048,n] at nb[1] = 4 x the width, one slice in), reached through a
+// view whose own node is in another split, so the wide tensor is never a value here (engine #1467). The import already
+// classifies such a value External (its storage root is not a node of this graph) and gives it a storage of its own
+// (AliasMiss::NoAliasSource), so it is bound from the tensor like any other external input. A layout op writes no bytes
+// and no node of this graph produces these, so there is nothing to dispatch and nothing to wait for. It is not an alias
+// of its input, which is why is_layout_alias_node() stays false for it.
+static bool is_external_window_node(const Graph & graph, const GraphNode & node) {
+    if (!is_layout_alias_op(node.op) || node.inputs.size() != 1) {
+        return false;
+    }
+    const Value * output = graph.values().find(node.output);
+    return output != nullptr && output->kind == ValueKind::External && output->storage_root == output->id &&
+           output->alias_miss == AliasMiss::NoAliasSource;
+}
+
 static bool can_elide_layout_alias_node(const Graph &             graph,
                                         const GraphNode &         node,
                                         const std::vector<bool> & covered_nodes) {
+    if (is_external_window_node(graph, node)) {
+        return true;
+    }
     return is_layout_alias_node(graph, node) && value_is_available(graph, node.inputs[0], covered_nodes);
 }
 

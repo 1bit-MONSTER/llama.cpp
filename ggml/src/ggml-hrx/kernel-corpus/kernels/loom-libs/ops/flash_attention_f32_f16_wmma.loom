@@ -31,6 +31,10 @@ config.decl @ggml.flash_attention.value_stride : %value: index where [range(%val
 config.decl @ggml.flash_attention.attention_scale : f32
 
 config.def @ggml.flash_attention.value_layout = 0 : index
+// value_layout: 0 = row-major V; 1 = transposed V, packed (channels `keys` elements apart); 2 = transposed V with the
+// spread pitch: keys + 32 when the key count is a multiple of 64, else keys. The pitch is derived from the launch's key
+// count here, by the same rule the dispatcher uses for the buffer it allocates, so it is not a compile parameter and a
+// new key count does not compile a new kernel (engine #1989).
 
 config.decl @ggml.flash_attention.apply_gate : %value: index where [range(%value, 0, 1)]
 
@@ -321,11 +325,20 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
   %key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_width]xf16>
   %value_layout_tag = config.get @ggml.flash_attention.value_layout : index
-  %transposed_value = index.cmp eq, %value_layout_tag, %c1 : index
+  %transposed_value = index.cmp uge, %value_layout_tag, %c1 : index
   %value_stride0 = config.get @ggml.flash_attention.value_stride : index
   %value_stride = index.assume %value_stride0 [range(%value_stride0, 16, 36864), multiple_of(%value_stride0, 16)] : index
   %value_row_stride = scf.select %transposed_value, %c1, %value_stride : index
-  %value_column_stride = scf.select %transposed_value, %bounded_key_value_token_count, %c1 : index
+  %c2_layout = index.constant 2 : index
+  %c32_pitch = index.constant 32 : index
+  %c64_pitch = index.constant 64 : index
+  %spread_value = index.cmp eq, %value_layout_tag, %c2_layout : index
+  %key_count_rem64 = index.rem %bounded_key_value_token_count, %c64_pitch : index
+  %key_count_is_multiple_of_64 = index.cmp eq, %key_count_rem64, %c0 : index
+  %spread_applies = scalar.andi %spread_value, %key_count_is_multiple_of_64 : i1
+  %spread_pitch = index.add %bounded_key_value_token_count, %c32_pitch : index
+  %value_transposed_pitch = scf.select %spread_applies, %spread_pitch, %bounded_key_value_token_count : index
+  %value_column_stride = scf.select %transposed_value, %value_transposed_pitch, %c1 : index
   %value_layout = encoding.layout.strided [%value_row_stride, %value_column_stride] : encoding<layout>
   %value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout>
   %mask_view = buffer.view %mask_aligned[%c0_offset] : buffer -> view<[%query_token_count]x[%bounded_key_value_token_count]xf16>

@@ -246,6 +246,10 @@ struct RopeMatch {
     size_t               input_span_bytes   = 0;
     float                rope_mscale        = 1.0f;
     int64_t              mode               = 0;
+    int64_t              section_dims       = 1;  // mode 3 only: the position sections each pair selects from
+    int64_t              section_t3         = 0;
+    int64_t              section_h3         = 0;
+    int64_t              section_w3         = 0;
     size_t               theta_bytes        = 0;
     size_t               freq_factors_bytes = 0;
     std::vector<uint8_t> theta_data;
@@ -362,7 +366,16 @@ static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Sta
     match.input_span         = input_span;
     match.input_span_bytes   = input_span * sizeof(float);
     match.rope_mscale        = rope_mscale;
-    match.mode               = rope_kernel_mode(*params);
+    match.mode               = rope_generic_kernel_mode(*params);
+    // Mode 3 reads the position section each pair selects (qwen4exp-hrx-support.h); the other modes ignore these, and
+    // the kernels declare section_dims >= 1.
+    if (match.mode == kRopeKernelModeSectioned) {
+        match.section_dims = static_cast<int64_t>(params->sections[0]) + params->sections[1] + params->sections[2] +
+                             params->sections[3];
+        match.section_t3   = 3 * static_cast<int64_t>(params->sections[0]);
+        match.section_h3   = 3 * static_cast<int64_t>(params->sections[1]);
+        match.section_w3   = 3 * static_cast<int64_t>(params->sections[2]);
+    }
     match.theta_bytes        = theta_data.size();
     match.freq_factors_bytes = freq_factors_bytes;
     match.theta_data         = std::move(theta_data);
@@ -441,6 +454,12 @@ static void add_rope_compile_parameters(Dispatch & dispatch, const RopeMatch & m
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_stride2", to_config_value(match.input_stride2));
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.mscale", rope_mscale_config_value(match.rope_mscale));
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.mode", to_config_value(match.mode));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.section_dims", to_config_value(match.section_dims));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.section_t3", to_config_value(match.section_t3));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.section_h3", to_config_value(match.section_h3));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.section_w3", to_config_value(match.section_w3));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.section_stride", to_config_value(match.token_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.token_base", to_config_value(int64_t(0)));
 }
 
 static void add_set_rows_compile_parameters(Dispatch & dispatch, const SetRowsMatch & match) {
@@ -541,6 +560,12 @@ static Dispatch make_rope_set_rows_dispatch(const DispatchMatchContext & context
     dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.output_format",
                                                to_config_value(match.set_rows.output_format));
     dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.mode", to_config_value(match.rope.mode));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.section_dims", to_config_value(match.rope.section_dims));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.section_t3", to_config_value(match.rope.section_t3));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.section_h3", to_config_value(match.rope.section_h3));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.section_w3", to_config_value(match.rope.section_w3));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.section_stride", to_config_value(match.rope.token_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.token_base", to_config_value(int64_t(0)));
     dispatch.bindings.push_back({ match.rope.positions->id, 0, match.rope.positions->byte_count });
     dispatch.bindings.push_back({ match.set_rows.indices->id, 0, match.set_rows.indices->byte_count });
     dispatch.bindings.push_back(
@@ -629,13 +654,25 @@ static bool match_rope_f32_dispatch(const DispatchMatchContext & context, Dispat
     const size_t head_span = static_cast<size_t>(match.head_count - 1) * static_cast<size_t>(match.input_stride1) +
                              static_cast<size_t>(match.head_size);
     const size_t out_row   = static_cast<size_t>(match.head_count * match.head_size) * sizeof(float);
+    // Mode 3 reads four position sections of the WHOLE token count, so a chunk keeps the whole positions buffer and is
+    // told where its tokens start; the other modes take their own slice of the one position per token.
+    const bool                     sectioned = match.mode == kRopeKernelModeSectioned;
+    std::vector<TokenChunkBinding> chunked   = { { 1, static_cast<size_t>(match.input_stride2) * sizeof(float),
+                                                   head_span * sizeof(float) },
+                                                 { 4, out_row, out_row } };
+    if (!sectioned) {
+        chunked.insert(chunked.begin(), { 0, sizeof(int32_t), sizeof(int32_t) });
+    }
+    int64_t first_token = 0;
     return append_token_chunked_dispatches(
         make_rope_dispatch(context, match, dispatch_match), match.token_count, query_chunk_tokens(kRopeKernelMaxTokens),
-        { { 0, sizeof(int32_t), sizeof(int32_t) },
-          { 1, static_cast<size_t>(match.input_stride2) * sizeof(float), head_span * sizeof(float) },
-          { 4, out_row, out_row } },
+        chunked,
         "token_count",
         [&](Dispatch & part, int64_t count) {
+            if (sectioned) {
+                part.kernel.compile_parameters["ggml.rope_f32.token_base"] = to_config_value(first_token);
+            }
+            first_token += count;
             part.kernel.compile_parameters["ggml.rope_f32.token_capacity"] = to_config_value(count);
             part.kernel.compile_parameters["ggml.rope_f32.input_span"] =
                 to_config_value(static_cast<int64_t>((count - 1) * match.input_stride2) + static_cast<int64_t>(head_span));

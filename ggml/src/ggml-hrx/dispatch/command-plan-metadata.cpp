@@ -14,12 +14,13 @@ static bool metadata_matches(const CommandPlanResourceMetadata & lhs, const Comm
 static bool generated_resource_matches(const CommandPlanGeneratedResource & lhs,
                                        const CommandPlanGeneratedResource & rhs) {
     return lhs.source_value == rhs.source_value && lhs.role == rhs.role && lhs.generated_value == rhs.generated_value &&
-           lhs.byte_count == rhs.byte_count && metadata_matches(lhs.metadata, rhs.metadata);
+           lhs.byte_count == rhs.byte_count && lhs.scale_log2 == rhs.scale_log2 &&
+           metadata_matches(lhs.metadata, rhs.metadata);
 }
 
 static bool alternate_value_matches(const CommandPlanAlternateValue & lhs, const CommandPlanAlternateValue & rhs) {
     return lhs.graph_value == rhs.graph_value && lhs.alternate_value == rhs.alternate_value && lhs.type == rhs.type &&
-           lhs.byte_count == rhs.byte_count && lhs.name == rhs.name;
+           lhs.byte_count == rhs.byte_count && lhs.name == rhs.name && lhs.scale_log2 == rhs.scale_log2;
 }
 
 static bool moe_routing_bundle_matches(const CommandPlanMoeRoutingBundle & lhs,
@@ -77,12 +78,14 @@ bool CommandPlanMetadata::append_generated_resource(CommandPlanGeneratedResource
 bool CommandPlanMetadata::append_alternate_value(CommandPlanAlternateValue alternate, Status & status) {
     for (const CommandPlanAlternateValue & existing : alternate_values_) {
         if (existing.graph_value == alternate.graph_value && existing.type == alternate.type &&
-            existing.byte_count == alternate.byte_count) {
+            existing.byte_count == alternate.byte_count && existing.scale_log2 == alternate.scale_log2) {
             if (alternate_value_matches(existing, alternate)) {
                 return true;
             }
-            status.log("conflicting alternate value for graph value %d type %d byte_count %zu",
-                       alternate.graph_value.value, static_cast<int>(alternate.type), alternate.byte_count);
+            status.log("conflicting alternate value for graph value %d type %d byte_count %zu: '%s' (value %d) is recorded, '%s' (value %d) was offered",
+                       alternate.graph_value.value, static_cast<int>(alternate.type), alternate.byte_count,
+                       existing.name.c_str(), existing.alternate_value.value, alternate.name.c_str(),
+                       alternate.alternate_value.value);
             return false;
         }
     }
@@ -116,7 +119,7 @@ const CommandPlanGeneratedResource * CommandPlanMetadata::find_generated_resourc
 
 const CommandPlanAlternateValue * CommandPlanMetadata::find_alternate_value(ValueId graph_value) const {
     for (const CommandPlanAlternateValue & alternate : alternate_values_) {
-        if (alternate.graph_value == graph_value) {
+        if (alternate.graph_value == graph_value && alternate.scale_log2 == 0) {
             return &alternate;
         }
     }
@@ -125,9 +128,11 @@ const CommandPlanAlternateValue * CommandPlanMetadata::find_alternate_value(Valu
 
 const CommandPlanAlternateValue * CommandPlanMetadata::find_alternate_value(ValueId   graph_value,
                                                                             ggml_type type,
-                                                                            size_t    byte_count) const {
+                                                                            size_t    byte_count,
+                                                                            int       scale_log2) const {
     for (const CommandPlanAlternateValue & alternate : alternate_values_) {
-        if (alternate.graph_value == graph_value && alternate.type == type && alternate.byte_count == byte_count) {
+        if (alternate.graph_value == graph_value && alternate.type == type && alternate.byte_count == byte_count &&
+            alternate.scale_log2 == scale_log2) {
             return &alternate;
         }
     }

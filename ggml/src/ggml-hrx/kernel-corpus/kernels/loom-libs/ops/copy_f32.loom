@@ -91,7 +91,10 @@ kernel.def target(@ggml_copy_f16_k16_major_target) export("ggml_copy_f16_k16_maj
     } else {
       %source = buffer.view %input_noalias[%c0] : buffer -> view<[%tokens]x[%width]xf32>
       %loaded = vector.load %source[%bounded_row, %bounded_k] : view<[%tokens]x[%width]xf32> -> vector<8xf32>
-      %converted = vector.fptrunc %loaded : vector<8xf32> to vector<8xf16>
+      // Stored as value * 2^-6: an activation above the f16 maximum stays finite, the reader scales back (engine #1962).
+      %f16_range_prescale = vector.constant 0.015625 : vector<8xf32>
+      %prescaled = vector.mulf %loaded, %f16_range_prescale : vector<8xf32>
+      %converted = vector.fptrunc %prescaled : vector<8xf32> to vector<8xf16>
       scf.yield %converted : vector<8xf16>
     }
     vector.store %values, %dest[%linear] : vector<8xf16>, view<[%count]xf16>
@@ -101,6 +104,10 @@ kernel.def target(@ggml_copy_f16_k16_major_target) export("ggml_copy_f16_k16_maj
 
 config.decl @ggml.copy_transpose_f16.row_count : %value: index where [range(%value, 32, 32768), multiple_of(%value, 32)]
 config.decl @ggml.copy_transpose_f16.column_count : %value: index where [range(%value, 32, 32768), multiple_of(%value, 32)]
+// Elements between the starts of two output rows; 0 means row_count (packed). A caller that reads the output column by
+// column chooses a pitch whose byte size is not a multiple of the page size, so the rows do not share cache sets
+// (engine #1989).
+config.def @ggml.copy_transpose_f16.output_pitch = 0 : index
 kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_transpose_f16") @ggml_copy_transpose_f16() {
   %rows = config.get @ggml.copy_transpose_f16.row_count : index
   %columns = config.get @ggml.copy_transpose_f16.column_count : index
@@ -131,7 +138,11 @@ kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_transpose_f16")
   %source_col = index.add %col_origin, %col : index
   %src, %dst = buffer.assume.noalias %input, %output : buffer, buffer
   %input_view = buffer.view %src[%zero] : buffer -> view<[%rows]x[%columns]xf16>
-  %output_view = buffer.view %dst[%zero] : buffer -> view<[%columns]x[%rows]xf16>
+  %output_pitch0 = config.get @ggml.copy_transpose_f16.output_pitch : index
+  %packed_output = index.cmp eq, %output_pitch0, %c0 : index
+  %output_pitch = scf.select %packed_output, %rows, %output_pitch0 : index
+  %output_layout = encoding.layout.strided [%output_pitch, 1] : encoding<layout>
+  %output_view = buffer.view %dst[%zero] : buffer -> view<[%columns]x[%rows]xf16, %output_layout>
   %shared = buffer.alloca<workgroup> align(16) %bytes : buffer
   %shared_view = buffer.view %shared[%zero] : buffer -> view<32x40xf16>
   %transposed = encoding.layout.strided [1, 40] : encoding<layout>
@@ -154,7 +165,7 @@ kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_transpose_f16")
   %swapped = vector.from_elements %s0, %s1, %s2, %s3 : vector<4xf16>
   %target_row = index.add %col_origin, %row : index
   %target_col = index.add %row_origin, %col : index
-  vector.store %swapped, %output_view[%target_row, %target_col] : vector<4xf16>, view<[%columns]x[%rows]xf16>
+  vector.store %swapped, %output_view[%target_row, %target_col] : vector<4xf16>, view<[%columns]x[%rows]xf16, %output_layout>
   kernel.return
 }
 
@@ -170,7 +181,8 @@ check.case public @ggml_copy_f32_small_case {
 
 check.benchmark<@ggml_copy_f32_small_case> @ggml_copy_f32_small
 
-// Aligned tensor conversions used by existing F16-consuming matmul entries.
+// Aligned tensor conversion for the F16-consuming matmul entries. The copy is value * 2^-6 (engine #1962); the
+// dispatch records that scale with the alternate value and the consuming kernel scales its result back.
 kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_f32_f16") @ggml_copy_f32_f16(%element_count: index) {
   %one = index.constant 1 : index
   %threads = index.constant 256 : index
@@ -196,7 +208,10 @@ kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_f32_f16") @ggml
   %output_view = buffer.view %output_noalias[%zero] : buffer -> view<[%count]xf16>
   scf.if %valid {
     %values = vector.load %source_view[%linear] : view<[%count]xf32> -> vector<4xf32>
-    %converted = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+    // Stored as value * 2^-6: an activation above the f16 maximum stays finite, the reader scales back (engine #1962).
+    %f16_range_prescale = vector.constant 0.015625 : vector<4xf32>
+    %prescaled = vector.mulf %values, %f16_range_prescale : vector<4xf32>
+    %converted = vector.fptrunc %prescaled : vector<4xf32> to vector<4xf16>
     vector.store %converted, %output_view[%linear] : vector<4xf16>, view<[%count]xf16>
   }
   kernel.return
@@ -206,7 +221,7 @@ check.case public @ggml_copy_f32_f16_small_case {
   %count = check.literal value(12) : index
   %source = check.generate.iota offset(-2.0) step(0.5) : tensor<12xf32>
   %output = check.generate.fill value(0.0) : tensor<12xf16>
-  %expected = check.generate.iota offset(-2.0) step(0.5) : tensor<12xf16>
+  %expected = check.generate.iota offset(-0.03125) step(0.0078125) : tensor<12xf16>
   kernel.launch @ggml_copy_f32_f16[%count](%count, %source, %output) : [index](index, tensor<12xf32>, tensor<12xf16>)
   check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<12xf16>
   check.return

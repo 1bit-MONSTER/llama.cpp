@@ -653,6 +653,7 @@ static bool match_q6_k_i8_prepacked_dispatch(const DispatchMatchContext & contex
 static bool build_q6_k_prefill_wave32_dispatch(const CommonMulMatMatch & match,
                                                ValueId                   input,
                                                size_t                    input_bytes,
+                                               int                       input_scale_log2,
                                                KernelCatalogRef          kernel,
                                                size_t                    root_index,
                                                DispatchMatch &           dispatch_match) {
@@ -666,6 +667,7 @@ static bool build_q6_k_prefill_wave32_dispatch(const CommonMulMatMatch & match,
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_q6_k_packed.output_accumulation", "0");
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_q6_k_packed.token_capacity",
                                                common_to_config_value(match.token_count));
+    common_set_f16_prefill_activation_scale(dispatch, input_scale_log2);
     dispatch.bindings.push_back({ input, 0, input_bytes });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
@@ -688,15 +690,16 @@ static bool match_q6_k_prefill_wave32_dispatch(const DispatchMatchContext & cont
     const bool packed_input = common_mul_mat_uses_k16_major_f16(
         match.weight_format, match.input_size, match.output_size, match.token_count);
     DispatchBinding activation;
+    int             activation_scale_log2 = 0;
     const bool prepared = packed_input ?
         common_prepare_k16_major_f16_input(context, *match.input, match.input_size, match.token_count,
-                                           dispatch_match, activation) :
+                                           dispatch_match, activation, activation_scale_log2) :
         common_prepare_f16_input(context, *match.input, match.input_size, match.token_count,
-                                  dispatch_match, activation);
+                                  dispatch_match, activation, activation_scale_log2);
     if (!prepared) {
         return false;
     }
-    return build_q6_k_prefill_wave32_dispatch(match, activation.value, activation.length,
+    return build_q6_k_prefill_wave32_dispatch(match, activation.value, activation.length, activation_scale_log2,
                                               q6k_packed_prefill_enabled() ? kMulMatQ6KF16WmmaPrefillFromPackedKernel
                                                                            : kMulMatQ6KF16WmmaPrefillWave32Kernel,
                                               context.root_index,
@@ -863,15 +866,16 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
     const bool use_f16 = !split_tail && match.weight->type == GGML_TYPE_Q4_K &&
                          match.weight->alias_source.value < 0 && match.output_size >= match.input_size / 4;
     DispatchBinding activation;
+    int             activation_scale_log2 = 0;
     const bool packed_input = use_f16 && common_mul_mat_uses_k16_major_f16(
         match.weight_format, match.input_size, match.output_size, match.token_count,
         context.plan.metadata.find_generated_resource(match.input->id, GeneratedResourceRole::F16K16Major) != nullptr);
     if (use_f16) {
         const bool prepared = packed_input ?
             common_prepare_k16_major_f16_input(context, *match.input, match.input_size, match.token_count,
-                                               dispatch_match, activation) :
+                                               dispatch_match, activation, activation_scale_log2) :
             common_prepare_f16_input(context, *match.input, match.input_size, match.token_count,
-                                      dispatch_match, activation);
+                                      dispatch_match, activation, activation_scale_log2);
         if (!prepared) {
             return false;
         }
@@ -900,6 +904,7 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
                          match.weight->alias_source.value < 0;
     if (use_f16) {
         dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", packed_input ? "1" : "0");
+        common_set_f16_prefill_activation_scale(dispatch, activation_scale_log2);
     } else {
         dispatch.kernel.compile_parameters.emplace(
             "ggml.mul_mat_q8_1_x4.weight_format",

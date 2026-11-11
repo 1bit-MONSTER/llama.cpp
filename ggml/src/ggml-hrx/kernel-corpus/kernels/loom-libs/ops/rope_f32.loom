@@ -19,7 +19,25 @@ config.decl @ggml.rope_f32.input_span : %value: index where [range(%value, 1, 10
 
 config.decl @ggml.rope_f32.mscale : f32
 
-config.decl @ggml.rope_f32.mode : %value: index where [range(%value, 0, 2)]
+// mode 3: the interleaved multi-section rotation (GGML_ROPE_TYPE_IMROPE when it does not collapse to mode 2). The
+// positions buffer holds four sections of token_count values (t, h, w, e) and each rotated pair reads the section
+// its index selects, as ggml_mrope_cache_init does: sector = pair rem section_dims; sector rem 3 picks h (1), w (2)
+// or t (0) while sector < 3 x that section's size, and e otherwise. The pairing is mode 2's.
+config.decl @ggml.rope_f32.mode : %value: index where [range(%value, 0, 3)]
+
+config.decl @ggml.rope_f32.section_dims : %value: index where [range(%value, 1, 1024)]
+
+config.decl @ggml.rope_f32.section_t3 : %value: index where [range(%value, 0, 3072)]
+
+config.decl @ggml.rope_f32.section_h3 : %value: index where [range(%value, 0, 3072)]
+
+config.decl @ggml.rope_f32.section_w3 : %value: index where [range(%value, 0, 3072)]
+
+// mode 3: each position section holds section_stride values, and this launch's token 0 is token_base of them (a
+// launch over a token chunk still reads the whole positions buffer).
+config.decl @ggml.rope_f32.section_stride : %value: index where [range(%value, 1, 268435456)]
+
+config.decl @ggml.rope_f32.token_base : %value: index where [range(%value, 0, 268435456)]
 
 func.decl @ggml_rope_f32_pair_packet(%position: f32, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %x_values: vector<2xf32>, %y_values: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
 
@@ -60,6 +78,16 @@ template.def<@ggml.rope_f32.body> device @ggml_rope_f32_body(%token_count: index
   %token = scf.select %valid_token, %token0, %c0 : index
   %is_neox = index.cmp eq, %mode, %mode_neox : index
   %is_normal = index.cmp eq, %mode, %c0 : index
+  %mode_sectioned = index.constant 3 : index
+  %is_sectioned = index.cmp eq, %mode, %mode_sectioned : index
+  %section_dims0 = config.get @ggml.rope_f32.section_dims : index
+  %section_dims = index.assume %section_dims0 [range(%section_dims0, 1, 1024)] : index
+  %section_t3 = config.get @ggml.rope_f32.section_t3 : index
+  %section_h3 = config.get @ggml.rope_f32.section_h3 : index
+  %section_w3 = config.get @ggml.rope_f32.section_w3 : index
+  %section_stride0 = config.get @ggml.rope_f32.section_stride : index
+  %section_stride = index.assume %section_stride0 [range(%section_stride0, 1, 268435456)] : index
+  %token_base = config.get @ggml.rope_f32.token_base : index
   %positions_noalias, %input_noalias, %theta_noalias, %freq_factors_noalias, %output_noalias = buffer.assume.noalias %positions, %input, %theta, %freq_factors, %output : buffer, buffer, buffer, buffer, buffer
   scf.if %publish_rotary {
     %channel = index.assume %channel0 [lt(%channel0, %pair_packet_count)] : index
@@ -90,6 +118,74 @@ template.def<@ggml.rope_f32.body> device @ggml_rope_f32_body(%token_count: index
       %low_values = vector.load %low_input_view[%low_index] : view<[%low_end]xf32> -> vector<2xf32>
       %high_values = vector.load %high_input_view[%high_index] : view<[%high_end]xf32> -> vector<2xf32>
       %rotated_low, %rotated_high = func.call @ggml_rope_f32_pair_packet(%position, %theta_packet, %freq_factors_packet, %low_values, %high_values) : (f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+      %scaled_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_low, %mscale_vector : vector<2xf32>
+      %scaled_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_high, %mscale_vector : vector<2xf32>
+      vector.store %scaled_low, %output_view[%token, %head, %pair_channel] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
+      vector.store %scaled_high, %output_view[%token, %head, %paired_channel] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
+    }
+    scf.if %is_sectioned {
+      %sc0 = index.constant 0 : index
+      %sc1 = index.constant 1 : index
+      %sc2 = index.constant 2 : index
+      %sc3 = index.constant 3 : index
+      %sc4 = index.constant 4 : index
+      %unit_position = scalar.constant 1.0 : f32
+      %next_pair = index.add %pair_channel, %sc1 : index
+      %section_token = index.add %token_base, %token : index
+      %sector_a = index.rem %pair_channel, %section_dims : index
+      %kind_a = index.rem %sector_a, %sc3 : index
+      %kind_h_a = index.cmp eq, %kind_a, %sc1 : index
+      %kind_w_a = index.cmp eq, %kind_a, %sc2 : index
+      %kind_t_a = index.cmp eq, %kind_a, %sc0 : index
+      %in_h_a = index.cmp ult, %sector_a, %section_h3 : index
+      %in_w_a = index.cmp ult, %sector_a, %section_w3 : index
+      %in_t_a = index.cmp ult, %sector_a, %section_t3 : index
+      %is_h_a = scalar.andi %kind_h_a, %in_h_a : i1
+      %is_w_a = scalar.andi %kind_w_a, %in_w_a : i1
+      %is_t_a = scalar.andi %kind_t_a, %in_t_a : i1
+      %section_te_a = scf.select %is_t_a, %sc0, %sc3 : index
+      %section_wte_a = scf.select %is_w_a, %sc2, %section_te_a : index
+      %section_a = scf.select %is_h_a, %sc1, %section_wte_a : index
+      %section_base_a = index.mul %section_a, %section_stride : index
+      %position_index_a0 = index.add %section_base_a, %section_token : index
+      %sector_b = index.rem %next_pair, %section_dims : index
+      %kind_b = index.rem %sector_b, %sc3 : index
+      %kind_h_b = index.cmp eq, %kind_b, %sc1 : index
+      %kind_w_b = index.cmp eq, %kind_b, %sc2 : index
+      %kind_t_b = index.cmp eq, %kind_b, %sc0 : index
+      %in_h_b = index.cmp ult, %sector_b, %section_h3 : index
+      %in_w_b = index.cmp ult, %sector_b, %section_w3 : index
+      %in_t_b = index.cmp ult, %sector_b, %section_t3 : index
+      %is_h_b = scalar.andi %kind_h_b, %in_h_b : i1
+      %is_w_b = scalar.andi %kind_w_b, %in_w_b : i1
+      %is_t_b = scalar.andi %kind_t_b, %in_t_b : i1
+      %section_te_b = scf.select %is_t_b, %sc0, %sc3 : index
+      %section_wte_b = scf.select %is_w_b, %sc2, %section_te_b : index
+      %section_b = scf.select %is_h_b, %sc1, %section_wte_b : index
+      %section_base_b = index.mul %section_b, %section_stride : index
+      %position_index_b0 = index.add %section_base_b, %section_token : index
+      %section_positions0 = index.mul %section_stride, %sc4 : index
+      %position_index_a, %position_index_b, %section_positions = index.assume %position_index_a0, %position_index_b0, %section_positions0 [lt(%position_index_a0, %section_positions0), lt(%position_index_b0, %section_positions0)] : index, index, index
+      %section_positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<[%section_positions]xi32>
+      %position_a_i32 = view.load %section_positions_view[%position_index_a] : view<[%section_positions]xi32> -> i32
+      %position_b_i32 = view.load %section_positions_view[%position_index_b] : view<[%section_positions]xi32> -> i32
+      %position_a = scalar.sitofp %position_a_i32 : i32 to f32
+      %position_b = scalar.sitofp %position_b_i32 : i32 to f32
+      %section_position_packet = vector.from_elements %position_a, %position_b : vector<2xf32>
+      %section_theta_packet = vector.mulf %theta_packet, %section_position_packet : vector<2xf32>
+      %mscale_vector = vector.splat %mscale : vector<2xf32>
+      %paired_channel = index.add %pair_channel, %half_n_dims : index
+      %low_index0 = index.add %input_base, %pair_channel : index
+      %high_index0 = index.add %input_base, %paired_channel : index
+      %low_end0 = index.add %low_index0, %c2 : index
+      %high_end0 = index.add %high_index0, %c2 : index
+      %low_index, %low_end = index.assume %low_index0, %low_end0 [le(%low_end0, %bounded_input_span)] : index, index
+      %high_index, %high_end = index.assume %high_index0, %high_end0 [le(%high_end0, %bounded_input_span)] : index, index
+      %low_input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%low_end]xf32>
+      %high_input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%high_end]xf32>
+      %low_values = vector.load %low_input_view[%low_index] : view<[%low_end]xf32> -> vector<2xf32>
+      %high_values = vector.load %high_input_view[%high_index] : view<[%high_end]xf32> -> vector<2xf32>
+      %rotated_low, %rotated_high = func.call @ggml_rope_f32_pair_packet(%unit_position, %section_theta_packet, %freq_factors_packet, %low_values, %high_values) : (f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
       %scaled_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_low, %mscale_vector : vector<2xf32>
       %scaled_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_high, %mscale_vector : vector<2xf32>
       vector.store %scaled_low, %output_view[%token, %head, %pair_channel] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>

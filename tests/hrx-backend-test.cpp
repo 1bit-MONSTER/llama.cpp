@@ -1835,8 +1835,11 @@ static void run_unmatched_graph_diagnostics_checks() {
     ggml_context * ctx      = ggml_init(params);
     REQUIRE(ctx != nullptr);
 
-    ggml_tensor * cache   = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 512, 512);
-    ggml_tensor * rows    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 512, 2);
+    // A SET_ROWS that no registration takes. The i32-index form at an ordinary row width used to be that graph; since
+    // llama.cpp #196 the standalone hip_set_rows dispatch runs it on the device. A row wider than that dispatch's 32,768
+    // limit (and with i32 indices, which the two Loom writers decline) is still refused by every matcher.
+    ggml_tensor * cache   = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 65536, 4);
+    ggml_tensor * rows    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 65536, 2);
     ggml_tensor * indices = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 2);
     REQUIRE(cache != nullptr);
     REQUIRE(rows != nullptr);
@@ -4119,8 +4122,15 @@ static void schedule_flash_attention_command(ggml_context * ctx,
         REQUIRE(copy.bindings.size() == 2);
         REQUIRE(copy.bindings[1].value == dispatch.bindings[2].value);
         REQUIRE(copy.bindings[0].value != copy.bindings[1].value);
-        REQUIRE(copy.bindings[1].length == static_cast<size_t>(key_value_token_count * key_value_head_count * value_head_size) * sizeof(ggml_fp16_t));
-        require_compile_parameter(dispatch, "ggml.flash_attention.value_layout", "1");
+        // engine #1989: the transposed V has the spread pitch - keys + 32 when the key count is a multiple of 64 - which
+        // the transpose kernel is told and the attention kernel derives from its key count (value_layout 2). The source
+        // binding stays the packed V.
+        const int64_t transposed_pitch = key_value_token_count % 64 == 0 ? key_value_token_count + 32 : key_value_token_count;
+        REQUIRE(copy.bindings[0].length == static_cast<size_t>(key_value_token_count * key_value_head_count * value_head_size) * sizeof(ggml_fp16_t));
+        REQUIRE(copy.bindings[1].length == static_cast<size_t>(transposed_pitch * key_value_head_count * value_head_size) * sizeof(ggml_fp16_t));
+        require_compile_parameter(copy, "ggml.copy_transpose_f16.output_pitch", std::to_string(transposed_pitch));
+        require_compile_parameter(dispatch, "ggml.flash_attention.value_layout", "2");
+        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.flash_attention.value_transposed_pitch") == 0);
     } else {
         REQUIRE(dispatch.kernel.compile_parameters.count("ggml.flash_attention.value_layout") == 0);
     }
@@ -6323,7 +6333,8 @@ static void run_qwen_matmul_dispatch_checks() {
         REQUIRE(input != nullptr);
         ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
         REQUIRE(output != nullptr);
-        REQUIRE(!matmul_graph_is_supported(ctx, output));
+        // llama.cpp #207: a batched dense MUL_MAT runs as one dispatch per plane; before it this graph was refused.
+        REQUIRE(matmul_graph_is_supported(ctx, output));
     }
 
     {
@@ -8375,7 +8386,7 @@ static void run_alias_value_import_checks() {
         value_map
             .add_snapshot_value({ ggml::hrx::ValueId(0), ggml::hrx::ValueKind::External, ggml::hrx::ValueStorageId(0),
                                   ggml::hrx::ValueId(0), ggml::hrx::ValueId(), 0, 8 * sizeof(float), GGML_TYPE_F32, ne,
-                                  nb, 8, 8 * sizeof(float), true, nullptr, std::nullopt })
+                                  nb, 8, 8 * sizeof(float), true, nullptr, ggml::hrx::AliasMiss::None, std::nullopt })
             .success());
     REQUIRE(value_map.add_snapshot_storage({ ggml::hrx::ValueStorageId(1), ggml::hrx::ValueId(1), 8 * sizeof(float) })
                 .success());
@@ -8383,7 +8394,7 @@ static void run_alias_value_import_checks() {
         value_map
             .add_snapshot_value({ ggml::hrx::ValueId(1), ggml::hrx::ValueKind::Transient, ggml::hrx::ValueStorageId(1),
                                   ggml::hrx::ValueId(1), ggml::hrx::ValueId(), 0, 8 * sizeof(float), GGML_TYPE_F32, ne,
-                                  nb, 8, 8 * sizeof(float), true, nullptr, std::nullopt })
+                                  nb, 8, 8 * sizeof(float), true, nullptr, ggml::hrx::AliasMiss::None, std::nullopt })
             .success());
     REQUIRE(value_map.alias_storage(ggml::hrx::ValueId(1), ggml::hrx::ValueId(0)).success());
     const ggml::hrx::Value * aliased_value = value_map.find(ggml::hrx::ValueId(1));
@@ -10777,8 +10788,9 @@ static void run_tiled_matmul_alternate_publish_checks() {
         const size_t alternate_bytes = test.alternate_type == GGML_TYPE_F16 ?
             projection_value->byte_count / 2 :
             static_cast<size_t>(256) * ggml_row_size(GGML_TYPE_Q8_1, 2048);
-        const auto * alternate =
-            plan.metadata.find_alternate_value(projection_value->id, test.alternate_type, alternate_bytes);
+        // engine #1962: an f16 activation copy holds value * 2^-6 and is found under that scale only
+        const auto * alternate = plan.metadata.find_alternate_value(projection_value->id, test.alternate_type, alternate_bytes,
+                                                                    test.alternate_type == GGML_TYPE_F16 ? 6 : 0);
         REQUIRE(alternate != nullptr);
 
         // engine #449: neither publish producer this table named is in the corpus any more. The
@@ -10926,8 +10938,10 @@ static void run_rmsnorm_binary_f16_output_checks() {
         // and a consumer reads it - i.e. the f16 operand path is still there.
         const ggml::hrx::Value * norm_value = imported.graph.values().find_tensor(norm);
         REQUIRE(norm_value != nullptr);
+        // engine #1962: the copy holds value * 2^-6; a reader that does not ask for the scale must not find it
+        REQUIRE(plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_F16, norm_value->byte_count / 2) == nullptr);
         const auto * f16 =
-            plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_F16, norm_value->byte_count / 2);
+            plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_F16, norm_value->byte_count / 2, 6);
         REQUIRE(f16 != nullptr);
         const auto publisher = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
             return !dispatch.bindings.empty() && dispatch.bindings.back().value == f16->alternate_value &&
@@ -10979,7 +10993,7 @@ static void run_rmsnorm_binary_f16_output_checks() {
         const auto * q8 =
             plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_Q8_1, qwen_q8_1_x4_size(512, 2048));
         const auto * f16 =
-            plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_F16, norm_value->byte_count / 2);
+            plan.metadata.find_alternate_value(norm_value->id, GGML_TYPE_F16, norm_value->byte_count / 2, 6);
         REQUIRE(q8 != nullptr);
         REQUIRE(f16 != nullptr);
         for (const ggml::hrx::CommandPlanAlternateValue * publication : { q8, f16 }) {
@@ -11388,7 +11402,8 @@ static void run_packed_f16_producer_consumer_checks() {
         REQUIRE(value != nullptr);
         const auto * generated =
             plan.metadata.find_generated_resource(value->id, ggml::hrx::GeneratedResourceRole::F16K16Major);
-        const auto * alternate = plan.metadata.find_alternate_value(value->id, GGML_TYPE_F16, value->byte_count / 2);
+        // engine #1962: the gated product's f16 form is published at 2^-6
+        const auto * alternate = plan.metadata.find_alternate_value(value->id, GGML_TYPE_F16, value->byte_count / 2, 6);
         REQUIRE((generated != nullptr) == (test.packed || test.packed_copy));
         // engine #449: a row that used to get a plain f16 alternate now gets the packed k16-major form
         // (or the other way round). What the row asserts is that the producer's f16 output is published.
@@ -11406,10 +11421,14 @@ static void run_packed_f16_producer_consumer_checks() {
             const auto consumer = std::next(producer);
             REQUIRE(consumer != plan.dispatches.end());
             REQUIRE(consumer->bindings.front().value == generated->generated_value);
+            // the consumer is told the scale of the pack it reads
+            REQUIRE(generated->scale_log2 == 6);
+            require_compile_parameter(*consumer, "ggml.f16_prefill.activation_scale_log2", "6");
             if (test.type == GGML_TYPE_Q4_K) {
                 require_compile_parameter(*consumer, "ggml.mul_mat.f16_input_layout", "1");
             }
         } else if (test.packed_copy) {
+            REQUIRE(generated->scale_log2 == 6);
             const auto copy = std::next(producer);
             REQUIRE(copy != plan.dispatches.end());
             REQUIRE(kernel_name_for_id(copy->kernel.kernel_id) == "loom_libs:ggml_copy_f16_k16_major");

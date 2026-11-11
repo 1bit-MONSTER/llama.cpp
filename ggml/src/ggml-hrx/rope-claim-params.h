@@ -53,7 +53,7 @@ inline bool rope_params_supported_by_attention_fusion(const RopeParams & params,
 // common/dispatch-rope-set-rows.cpp: the rotation that registration builds a theta table for.
 inline bool rope_params_supported_by_rope_set_rows(const RopeParams & params, int64_t head_size) {
     const bool supported_mode = params.mode == GGML_ROPE_TYPE_NORMAL || params.mode == GGML_ROPE_TYPE_NEOX ||
-                                rope_mode_is_collapsible_imrope(params);
+                                rope_mode_is_collapsible_imrope(params) || rope_mode_is_sectioned_imrope(params);
     return params.n_dims >= 4 && params.n_dims <= head_size && params.n_dims % 4 == 0 && supported_mode &&
            std::isfinite(params.freq_base) && params.freq_base > 0.0f && std::isfinite(params.freq_scale) &&
            params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);

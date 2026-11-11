@@ -76,6 +76,8 @@ struct CommandPlanGeneratedResource {
     ValueId                     generated_value;
     size_t                      byte_count = 0;
     CommandPlanResourceMetadata metadata;
+    // The stored values are the source values * 2^-scale_log2 (0 = as they are). engine #1962
+    int                         scale_log2 = 0;
 };
 
 struct CommandPlanAlternateValue {
@@ -84,6 +86,9 @@ struct CommandPlanAlternateValue {
     ggml_type   type       = GGML_TYPE_COUNT;
     size_t      byte_count = 0;
     std::string name;
+    // The stored values are the graph values * 2^-scale_log2 (0 = as they are). A reader that does not ask for a
+    // scale only ever finds an unscaled alternate. engine #1962
+    int         scale_log2 = 0;
 };
 
 struct CommandPlanMoeRoutingBundle {
@@ -118,7 +123,8 @@ class CommandPlanMetadata {
 
     const CommandPlanAlternateValue * find_alternate_value(ValueId   graph_value,
                                                            ggml_type type,
-                                                           size_t    byte_count) const;
+                                                           size_t    byte_count,
+                                                           int       scale_log2 = 0) const;
 
     const CommandPlanMoeRoutingBundle * find_moe_routing_bundle(ValueId route_ids) const;
 

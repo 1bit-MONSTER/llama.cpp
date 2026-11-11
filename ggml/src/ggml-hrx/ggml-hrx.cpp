@@ -1590,7 +1590,16 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
     } else if (hrx_status_code(status) == HRX_STATUS_ALREADY_EXISTS) {
         hrx_status_ignore(status);
     } else {
-        hrx_status_ignore(status);
+        // NOT silent (engine #1766): a failed init registers zero devices, and then every downstream symptom points at
+        // something else -- `llama-bench --list-devices` prints "(none)", and `--device HRX0` is rejected as "invalid
+        // device: HRX0", a complaint about the CLI argument rather than about a runtime that never initialised. The
+        // status goes through hrx_check() so the line reads like every other HRX failure in this file (same
+        // file:line:expression prefix, same status consumption); the first attempt found the cause to be a ROCr whose
+        // libhsa-runtime64 does not export hsa_amd_queue_create, which that message names by symbol.
+        hrx_check(status, "hrx_gpu_initialize(0)", __FILE__, __LINE__);
+        GGML_LOG_ERROR("ggml_hrx: the HRX runtime did not initialise, so this backend registers no devices: "
+                       "--list-devices will print none and --device HRX0 will be rejected as an invalid device. "
+                       "The line above is the reason (engine #1766)\n");
         return context;
     }
     int count = 0;
@@ -1636,21 +1645,19 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         device_free_total(device_ctx.get(), device_free, device_total);
         // A failed /proc read is "unknown", not "zero bytes left": kHostUnknown disables the term, while a measured zero must
         // refuse - a host with nothing left is the worst moment to admit a launch (engine #1502).
-        const size_t host_raw       = ggml::hrx::host_memory_available_bytes();
-        const size_t host_available = host_raw == 0 ? ggml::hrx::onebit::kHostUnknown : host_raw;
+        size_t       host_raw       = 0;
+        const size_t host_available =
+            ggml::hrx::onebit::pool_host_term_read(ggml::hrx::host_memory_available_bytes, host_raw);
         const ggml::hrx::onebit::pool_budget_terms_t terms =
             ggml::hrx::onebit::pool_budget_terms(device_ctx->memory_total, device_free, host_available);
         device_ctx->memory_budget = terms.budget;
         if (device_ctx->memory_budget == 0 && device_ctx->memory_total != 0) {
             // Nothing fits under the ceiling: refuse the device here, loudly, instead of planning a launch that can
             // reach the fault line (#680). Report only, do not try to be clever about it.
-            const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
-            GGML_LOG_ERROR("ggml_hrx: %s: refusing to use the device: GTT total %.1f GiB with %.1f GiB free leaves "
-                           "nothing under the %.1f GiB ceiling (reserve GGML_HRX_GTT_RESERVE_MB, override "
-                           "GGML_HRX_POOL_LIMIT_MB); free GTT or lower the reserve (engine #680)\n",
-                           device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
-                           device_free / (1024.0 * 1024.0 * 1024.0),
-                           (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0));
+            // engine #2069: the line names the term that made the budget zero -- a host-bound refusal that says "free GTT"
+            // sends the operator to the wrong resource. The wording is a pure function so both branches are tested.
+            GGML_LOG_ERROR("%s\n", ggml::hrx::onebit::pool_refusal_note(terms, device_total, device_free,
+                                                                       device_ctx->name.c_str()).c_str());
             hrx_device_release(hrx_device);
             continue;
         }

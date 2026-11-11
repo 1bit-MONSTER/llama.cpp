@@ -3,6 +3,7 @@
 #include "dispatch/dispatch.h"
 #include "ggml.h"
 #include "runtime/host-buffer-registry.h"
+#include "hrx-1bit-safety.h"   // pool_tally (engine #1711/#1823)
 #include "runtime/host-memory-refusal.h"
 #include "status.h"
 
@@ -76,6 +77,36 @@ struct HostWeightCacheStats {
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
 };
+
+// The pairing every pooled allocation in this file needs (engine #1711/#1823): charge before the allocation, return
+// exactly what was charged when the object dies. Kept as a free pair rather than repeated inline so the contract can be
+// tested with no device -- a tally that is not zeroed on release gives the bytes back twice, and that is the failure the
+// #270 review found in a move-assignment before this existed.
+namespace pool_tally {
+
+// Returns false when the pool refuses; leaves both the ledger and `charged` untouched in that case.
+inline bool charge(std::size_t budget, std::size_t bytes, std::size_t & charged, const char * what) {
+    if (budget == 0 || bytes == 0) {
+        return true;   // uncharged mode (device size unknown): nothing to reserve and nothing to release
+    }
+    if (!onebit::pool_reserve(budget, bytes, what)) {
+        return false;
+    }
+    charged = bytes;
+    return true;
+}
+
+// Releases what was charged and zeroes the tally, so a second call (a destructor reached twice by a move, say) is a no-op
+// rather than an underflow of somebody else's bytes.
+inline void release(std::size_t & charged) {
+    if (charged == 0) {
+        return;
+    }
+    onebit::pool_release(charged);
+    charged = 0;
+}
+
+}  // namespace pool_tally
 
 class HostWeightLease {
   public:
@@ -191,6 +222,14 @@ class HostWeightCache {
     // Bytes this cache holds against the pool ledger (engine#1711). Tracked separately from arena_capacity_ so clear()
     // returns exactly what was charged, including the case where a grow released a superseded arena.
     size_t                                 charged_bytes_  = 0;
+  public:
+    // engine#1856: the ledger figure a test has to see and set. `tests/test-hrx-arena-ledger.cpp` simulates a charge the
+    // way `test-hrx-staging-ledger.cpp` simulates the staging buffer's -- reserve against the pool, record the tally, then
+    // exercise the paths that must return it -- because what is under test is conservation in the ledger, not the
+    // allocation. The staging object gets this for free by being a struct; the arena needs the seam named.
+    size_t held_bytes_for_test() const { return charged_bytes_; }
+    void   set_held_bytes_for_test(size_t bytes) { charged_bytes_ = bytes; }
+  private:
     size_t                                 arena_capacity_ = 0;
     size_t                                 arena_free_bytes_ = 0;
     std::vector<std::pair<size_t, size_t>> arena_free_;
@@ -249,6 +288,8 @@ class HostWeightExecutionScope {
 
 struct HostStagingBuffer {
     HostStagingBuffer() = default;
+    // engine#1711: bytes this staging buffer holds against the pool ledger. The object owns exactly one buffer, so the
+    // charge is taken on allocate and given back in clear() -- no delta arithmetic, unlike the two arenas.
     ~HostStagingBuffer();
 
     HostStagingBuffer(HostStagingBuffer && other) noexcept;
@@ -262,13 +303,15 @@ struct HostStagingBuffer {
     HostBufferRef source_host_buffer;
     int32_t      value     = -1;
     size_t       length    = 0;
+    size_t       charged_bytes_ = 0;   // engine#1711: pool bytes held for this buffer
     bool         upload    = false;
     bool         download  = false;
 
     void clear();
 };
 
-Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging);
+Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging,
+                                    size_t pool_budget = 0);
 Status allocate_mapped_host_staging_buffer(hrx_device_t device,
                                            size_t       size,
                                            hrx_buffer_t & buffer,

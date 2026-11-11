@@ -63,6 +63,18 @@ int main() {
     REQUIRE(mem_available_from_meminfo(nullptr) == 0);
     REQUIRE(mem_available_from_meminfo("") == 0);
 
+    // engine #1502/#259: the read-or-not form. "0 kB" is a reading (an exhausted host, which must REFUSE), while an
+    // absent or unparsable field is an unknown (the term is dropped). The size_t form above cannot tell them apart,
+    // which is how both pool call sites ended up mapping a measured zero to "unknown".
+    size_t parsed = 0;
+    REQUIRE(mem_available_from_meminfo("MemAvailable: 0 kB\n", parsed) && parsed == 0);
+    parsed = 1234;
+    REQUIRE(!mem_available_from_meminfo("MemFree: 512 kB\n", parsed) && parsed == 1234);      // untouched on failure
+    REQUIRE(!mem_available_from_meminfo("MemAvailable: banana kB\n", parsed));
+    REQUIRE(!mem_available_from_meminfo("", parsed));
+    REQUIRE(!mem_available_from_meminfo(nullptr, parsed));
+    REQUIRE(mem_available_from_meminfo("MemAvailable: 4096 kB\n", parsed) && parsed == 4096 * 1024);
+
     // The live reader on this host: whoever calls it must get either a plausible number or 0 ("unknown", stay quiet).
     const size_t live = host_memory_available_bytes();
     std::printf("host_memory_available_bytes() = %zu bytes (%.1f MiB)\n", live, double(live) / double(MiB));

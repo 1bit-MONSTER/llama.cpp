@@ -552,19 +552,40 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
     return match;
 }
 
-// Share the conversion used by F16-operand matmuls.
+// An f16 activation copy holds value * 2^-kCommonF16ActivationScaleLog2. A matmul narrows its f32 activation to f16
+// for WMMA, and f16 ends at 65504: a larger activation became inf and the product NaN (engine #1962, the prefill
+// form of #1539). Prescaled by 2^-6 the copy represents [3.9e-3, 4.19e6] at full precision; the kernel that reads it
+// scales its f32 accumulator back by 2^6, which is exact. The scale travels with the alternate value / generated
+// resource, so a reader always knows which form it holds.
+constexpr int          kCommonF16ActivationScaleLog2  = 6;
+constexpr const char * kCommonF16PrefillActivationScaleParameter = "ggml.f16_prefill.activation_scale_log2";
+
+// Tell a kernel built on ggml_mul_mat_quantized_f16_prefill_* which scale its f16 activation carries.
+inline void common_set_f16_prefill_activation_scale(Dispatch & dispatch, int scale_log2) {
+    if (scale_log2 != 0) {
+        dispatch.kernel.compile_parameters.emplace(kCommonF16PrefillActivationScaleParameter,
+                                                   common_to_config_value(static_cast<int64_t>(scale_log2)));
+    }
+}
+
+// Share the conversion used by F16-operand matmuls. `scale_log2` returns the scale of the bound copy: the copy made
+// here (and shared by later readers) is prescaled; an unscaled F16 value another kernel published is used as it is.
 inline bool common_prepare_f16_input(const DispatchMatchContext & context,
                                     const Value &                input,
                                     int64_t                      input_size,
                                     int64_t                      token_count,
                                     DispatchMatch &              match,
-                                    DispatchBinding &            binding) {
+                                    DispatchBinding &            binding,
+                                    int &                        scale_log2) {
     const size_t bytes = static_cast<size_t>(token_count * input_size) * sizeof(ggml_fp16_t);
-    const CommandPlanAlternateValue * alternate =
-        find_alternate_value(context.graph, context.plan, input.id, GGML_TYPE_F16, bytes);
-    if (alternate != nullptr) {
-        binding = { alternate->alternate_value, 0, bytes };
-        return true;
+    for (const int candidate_scale : { kCommonF16ActivationScaleLog2, 0 }) {
+        const CommandPlanAlternateValue * alternate =
+            find_alternate_value(context.graph, context.plan, input.id, GGML_TYPE_F16, bytes, candidate_scale);
+        if (alternate != nullptr) {
+            binding    = { alternate->alternate_value, 0, bytes };
+            scale_log2 = candidate_scale;
+            return true;
+        }
     }
 
     constexpr KernelCatalogRef kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_f32_f16");
@@ -578,11 +599,13 @@ inline bool common_prepare_f16_input(const DispatchMatchContext & context,
     convert.bindings.push_back({ activation, 0, bytes });
     match.dispatches.push_back(std::move(convert));
     Status status;
-    if (!match.metadata.append_alternate_value({ input.id, activation, GGML_TYPE_F16, bytes, name }, status)) {
+    if (!match.metadata.append_alternate_value(
+            { input.id, activation, GGML_TYPE_F16, bytes, name, kCommonF16ActivationScaleLog2 }, status)) {
         match.status.append(status);
         return false;
     }
-    binding = { activation, 0, bytes };
+    binding    = { activation, 0, bytes };
+    scale_log2 = kCommonF16ActivationScaleLog2;
     return true;
 }
 
@@ -592,18 +615,25 @@ inline bool common_prepare_k16_major_f16_input(const DispatchMatchContext & cont
                                                int64_t                      input_size,
                                                int64_t                      token_count,
                                                DispatchMatch &              match,
-                                               DispatchBinding &            binding) {
+                                               DispatchBinding &            binding,
+                                               int &                        scale_log2) {
     constexpr KernelCatalogRef kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_f16_k16_major");
     constexpr const char * name = "common.mul_mat.k16_major_f16";
     const size_t bytes = static_cast<size_t>(token_count * input_size) * sizeof(ggml_fp16_t);
     const CommandPlanGeneratedResource * generated =
         context.plan.metadata.find_generated_resource(input.id, GeneratedResourceRole::F16K16Major);
     if (generated != nullptr && generated->byte_count == bytes) {
-        binding = { generated->generated_value, 0, bytes };
+        binding    = { generated->generated_value, 0, bytes };
+        scale_log2 = generated->scale_log2;
         return true;
     }
-    const CommandPlanAlternateValue * alternate =
-        find_alternate_value(context.graph, context.plan, input.id, GGML_TYPE_F16, bytes);
+    // The pack keeps the scale of the F16 value it repacks; packed from the f32 value, the kernel prescales it.
+    const CommandPlanAlternateValue * alternate = find_alternate_value(
+        context.graph, context.plan, input.id, GGML_TYPE_F16, bytes, kCommonF16ActivationScaleLog2);
+    if (alternate == nullptr) {
+        alternate = find_alternate_value(context.graph, context.plan, input.id, GGML_TYPE_F16, bytes);
+    }
+    const int packed_scale_log2 = alternate != nullptr ? alternate->scale_log2 : kCommonF16ActivationScaleLog2;
     const ValueId packed(context.next_plan_value.value + static_cast<int32_t>(match.transients.size()));
     match.transients.push_back({ packed, name, bytes, 256 });
     Dispatch copy;
@@ -618,11 +648,12 @@ inline bool common_prepare_k16_major_f16_input(const DispatchMatchContext & cont
     match.dispatches.push_back(std::move(copy));
     Status status;
     if (!match.metadata.append_generated_resource(
-            { input.id, GeneratedResourceRole::F16K16Major, packed, bytes, {} }, status)) {
+            { input.id, GeneratedResourceRole::F16K16Major, packed, bytes, {}, packed_scale_log2 }, status)) {
         match.status.append(status);
         return false;
     }
-    binding = { packed, 0, bytes };
+    binding    = { packed, 0, bytes };
+    scale_log2 = packed_scale_log2;
     return true;
 }
 

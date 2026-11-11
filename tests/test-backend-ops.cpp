@@ -1496,6 +1496,11 @@ struct test_case {
             }
 
             double err = ud->tc->err(f1.data(), f2.data(), f1.size());
+            // GGML_TEST_PRINT_ERR=1 prints the measured error of every compared value, pass or fail: a case with a loose
+            // bound (the fused MoE cases allow 5e-3) otherwise says OK without saying how close the backend was.
+            if (getenv("GGML_TEST_PRINT_ERR") != nullptr) {
+                printf("[%s] err = %.9g (max %.9g) ", ggml_op_desc(t1), err, ud->tc->max_err(ud->backend1));
+            }
             if (err > ud->tc->max_err(ud->backend1)) {
                 printf("[%s] ERR = %.9f > %.9f ", ggml_op_desc(t1), err, ud->tc->max_err(ud->backend1));
                 //for (int i = 0; i < (int) f1.size(); i++) {
@@ -4584,6 +4589,172 @@ struct test_mul_mat_id : public test_case {
 
     void initialize_tensors(ggml_context * ctx) override {
         init_mul_mat_id_tensors(ctx, n_mats);
+    }
+};
+
+// GGML_OP_MUL_MAT whose weight is a resident model weight (engine #1997).
+// Several HRX MUL_MAT registrations read the weight in a packed layout that the backend only materialises for a tensor
+// in a buffer flagged GGML_BACKEND_BUFFER_USAGE_WEIGHTS. test_mul_mat keeps its weight in the ordinary buffer, so a case
+// that reaches one of them is refused at execution ("... is read in the packed weight layout ... but its buffer is not
+// flagged as weights") and those kernels never had a known-answer case. Here the weight goes through the weight context,
+// as a model's does.
+struct test_mul_mat_resident_weight : public test_case {
+    const ggml_type type_a;
+    const int64_t   m;
+    const int64_t   n;
+    const int64_t   k;
+
+    std::string vars() override {
+        return VARS_TO_STR4(type_a, m, n, k) + ",weight=resident";
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2 * m * k * n;
+    }
+
+    bool use_weight_context() override { return true; }
+
+    test_mul_mat_resident_weight(ggml_type type_a, int64_t m, int64_t n, int64_t k)
+        : type_a(type_a), m(m), n(n), k(k) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_UNUSED(ctx);
+        GGML_ABORT("test_mul_mat_resident_weight needs the weight context");
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        GGML_ASSERT(ctx_weights);
+        ggml_tensor * a = ggml_new_tensor_2d(ctx_weights, type_a, k, m);
+        ggml_set_name(a, "a");
+        ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_set_name(b, "b");
+        ggml_tensor * out = ggml_mul_mat(ctx, a, b);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+// The two together (engine #1962): a resident weight, so the packed-layout registrations are reached, and activations
+// outside [-1, 1]. A magnitude of 1 or more sets one activation in 64 of every fourth token to +-magnitude; a magnitude
+// below 1 scales every activation by it (the lower edge of the same f16 window).
+struct test_mul_mat_resident_weight_large_activation : public test_mul_mat_resident_weight {
+    const float magnitude;
+
+    std::string vars() override {
+        return test_mul_mat_resident_weight::vars() + ",magnitude=" + var_to_str(magnitude);
+    }
+
+    test_mul_mat_resident_weight_large_activation(ggml_type type_a, int64_t m, int64_t n, int64_t k, float magnitude)
+        : test_mul_mat_resident_weight(type_a, m, n, k), magnitude(magnitude) {}
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") != 0) {
+                continue;
+            }
+            std::vector<float> data(ggml_nelements(t));
+            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+            if (magnitude < 1.0f) {
+                for (float & value : data) {
+                    value *= magnitude;
+                }
+            } else {
+                for (int64_t token = 0; token < t->ne[1]; token += 4) {
+                    for (int64_t i = 0; i < t->ne[0]; i += 64) {
+                        data[token * t->ne[0] + i] = ((i / 64 + token / 4) % 2 == 0) ? magnitude : -magnitude;
+                    }
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+        }
+    }
+};
+
+// GGML_OP_MUL_MAT whose activations exceed the f16 range: the dense form of the engine #1539 case below.
+struct test_mul_mat_large_activation : public test_mul_mat {
+    const float magnitude;
+
+    std::string vars() override {
+        return test_mul_mat::vars() + ",magnitude=" + var_to_str(magnitude);
+    }
+
+    test_mul_mat_large_activation(ggml_type type_a, int64_t m, int64_t n, int64_t k, float magnitude)
+        : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}), magnitude(magnitude) {}
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") != 0) {
+                continue;
+            }
+            std::vector<float> data(ggml_nelements(t));
+            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+            if (magnitude < 1.0f) {
+                // the lower edge of the same window: every activation scaled down (see the MUL_MAT_ID case below)
+                for (float & value : data) {
+                    value *= magnitude;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+                continue;
+            }
+            for (int64_t token = 0; token < t->ne[1]; token += 4) {
+                for (int64_t i = 0; i < t->ne[0]; i += 64) {
+                    data[token * t->ne[0] + i] = ((i / 64 + token / 4) % 2 == 0) ? magnitude : -magnitude;
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+        }
+    }
+};
+
+// GGML_OP_MUL_MAT_ID whose activations exceed the f16 range (engine #1539).
+// An expert's down-projection reads the SwiGLU output, which nothing normalises: flint-40b's layer 46 reaches +-9.1e4 on
+// an ordinary 22-token prompt. A backend that narrows the activations to f16 for the multiply turns anything above 65504
+// into inf, and the sum over the routes into NaN - finite on the CPU, non-finite on the device, and invisible to every
+// other MUL_MAT_ID case here because init_tensor_uniform() stays inside [-1, 1]. One activation in 64 of every fourth
+// token is set to +-magnitude; the rest keep their order-1 values, as in the model.
+// A magnitude below 1 is the other end of the same window: every activation is scaled by it, so a narrowing that
+// trades the top of the f16 range for the bottom has a case pulling back. 3.2e-2 is the smallest column maximum
+// measured on flint's expert down-projections (37278 columns over 141 layer executions; median 4.1).
+struct test_mul_mat_id_large_activation : public test_mul_mat_id {
+    const float magnitude;
+
+    std::string vars() override {
+        return test_mul_mat_id::vars() + ",magnitude=" + var_to_str(magnitude);
+    }
+
+    test_mul_mat_id_large_activation(ggml_type type_a, int n_mats, int n_used, int64_t m, int64_t n, int64_t k, float magnitude)
+        : test_mul_mat_id(type_a, GGML_TYPE_F32, n_mats, n_used, false, m, n, k), magnitude(magnitude) {}
+
+    void initialize_tensors(ggml_context * ctx) override {
+        init_mul_mat_id_tensors(ctx, n_mats);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") != 0) {
+                continue;
+            }
+            std::vector<float> data(ggml_nelements(t));
+            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+            const int64_t per_token = t->ne[0] * t->ne[1];
+            if (magnitude < 1.0f) {
+                for (float & value : data) {
+                    value *= magnitude;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+                continue;
+            }
+            for (int64_t token = 0; token < t->ne[2]; token += 4) {
+                for (int64_t i = 0; i < per_token; i += 64) {
+                    data[token * per_token + i] = ((i / 64 + token / 4) % 2 == 0) ? magnitude : -magnitude;
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+        }
     }
 };
 
@@ -9316,6 +9487,71 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_row_padded_activation(GGML_TYPE_BF16, GGML_TYPE_F32, 3712, 512, 232, 264));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8, 1480));
 
+    // engine #1539: flint-40b's expert down-projection (256 experts, 6 used, 512 -> 2048, q5_K) at the 22-token batch
+    // that produced inf, with activations of the measured magnitude; then one decode-sized batch of the same contraction.
+    test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048, 22, 512, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048,  1, 512, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048, 22, 512, 3.2e-2f));
+    // engine #1962: the dense form. Weights [k, 2048], k = 4096 and 512, at decode, small-batch and prefill token counts.
+    // Only the cases this backend answers correctly today are listed, so the suite stays a gate: f16 weights are absent
+    // because the CPU reference itself returns NaN there, and q4_K/q5_K at 512 tokens and q6_K at 1, 8 (k = 4096) and 512
+    // tokens still overflow in kernel families this change does not touch (they are listed on the issue).
+    for (ggml_type type_a : { GGML_TYPE_Q8_0, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_0, GGML_TYPE_BF16 }) {
+        for (int64_t n : { 1, 8, 22, 512 }) {
+            test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, n, 4096, 9.1e4f));
+            test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, n,  512, 9.1e4f));
+        }
+    }
+    for (ggml_type type_a : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K }) {
+        for (int64_t n : { 1, 8, 22 }) {
+            test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, n, 4096, 9.1e4f));
+            test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, n,  512, 9.1e4f));
+        }
+    }
+    test_cases.emplace_back(new test_mul_mat_large_activation(GGML_TYPE_Q6_K, 2048, 22, 4096, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_large_activation(GGML_TYPE_Q6_K, 2048, 22,  512, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_large_activation(GGML_TYPE_Q6_K, 2048,  8,  512, 9.1e4f));
+    // and the lower edge: every activation at 2.4e-2, the smallest column maximum measured on the dense matmul inputs of
+    // Qwen3-0.6B, Qwen3-4B, ZAYA1-8B and flint-40b (26k columns; an all-zero column is exact at any scale and is not counted).
+    for (ggml_type type_a : { GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_BF16 }) {
+        test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, 22, 4096, 2.4e-2f));
+    }
+
+    // engine #1997: the registrations that read a packed weight layout, each reached with a resident weight.
+    // q4_K at 512 tokens (packed prefill), q6_K at 512 (prefill), 8 (i8 prepacked; the skinny form at k = 512, m = 4096)
+    // and 1 token (final projection); q5_K at 512 reads the native layout and is the control.
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2048, 512, 4096));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, 512, 4096));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048,   8, 4096));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 4096,   8,  512));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048,   1, 4096));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q5_K, 2048, 512, 4096));
+    // engine #1962: the two small-batch Q6_K kernels with activations of the magnitude measured in flint-40b, and the
+    // lower edge (the smallest dense-input column maximum measured on four models).
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 8, 4096, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 4096, 8,  512, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 8, 4096, 2.4e-2f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 4096, 8,  512, 2.4e-2f));
+    // engine #1962: the Q5_K prefill reads the activations as 8-bit blocks (block_q8_1_x4). Each block carries its scale
+    // and its sum; a sum stored already multiplied by the scale left the f16 range as soon as one activation did.
+    // 6.5e4 is the last step of the ladder where the stored sum is still finite (the stored path); 6.6e4 is the first
+    // where it is not (the rebuilt path).
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 6.5e4f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 6.6e4f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 9.1e4f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 1.0e6f));
+    test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q5_K, 2048, 512, 4096, 2.4e-2f));
+    // engine #1962: the prefill kernels, which read an f16 copy of the activation. Q4_K at 256 tokens (staged copy) and
+    // 512 (packed copy), Q6_K at 128 (the narrow-tile body), 256 and 512. The feed-forward hand-over (gate/up kernel
+    // to down-projection) needs the fused kernels and is in test-hrx-ops (ffn.q4_k.prefill.large_activation.*).
+    for (float magnitude : { 9.1e4f, 2.4e-2f }) {
+        test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q4_K, 2048, 256, 4096, magnitude));
+        test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q4_K, 2048, 512, 4096, magnitude));
+        test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 128, 4096, magnitude));
+        test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 256, 4096, magnitude));
+        test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 512, 4096, magnitude));
+    }
+
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
     for (ggml_type type_a : all_types) {
@@ -9627,6 +9863,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                     test_cases.emplace_back(new test_rope(type, {128,  28, 2, 1}, 128, GGML_ROPE_TYPE_IMROPE,  512, fs, ef, af, ff, v, fw)); // rope_multi,imrope (qwen3vl 7B)
                                     test_cases.emplace_back(new test_rope(type, {128,  12, 2, 1},  20, GGML_ROPE_TYPE_IMROPE,  512, fs, ef, af, ff, v, fw));
                                     test_cases.emplace_back(new test_rope(type, {128,  28, 2, 1},  32, GGML_ROPE_TYPE_IMROPE,  512, fs, ef, af, ff, v, fw));
+                                    // engine #1467: a token count between the 2-token cases above and the chunked ones below, so
+                                    // the per-section position read is checked on a batch-sized launch
+                                    test_cases.emplace_back(new test_rope(type, {128,  16, 300, 1}, 128, GGML_ROPE_TYPE_IMROPE,  512, fs, ef, af, ff, v, fw));
                                     test_cases.emplace_back(new test_rope(type, { 80,  16, 2, 1},  80, GGML_ROPE_TYPE_VISION, 512, fs, ef, af, ff, v, fw)); // rope_multi,m-rope (qwen2vl ViT)
                                     test_cases.emplace_back(new test_rope(type, {128,  16, 2, 1}, 128, GGML_ROPE_TYPE_IMROPE, 512, fs, ef, af, ff, v, fw)); // rope_multi,m-rope (qwen3vl)
                                     test_cases.emplace_back(new test_rope(type, {16, 16, 8192, 1}, 16, GGML_ROPE_TYPE_IMROPE, 512, fs, ef, af, ff, v, fw));
@@ -10072,6 +10311,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     }
                 }
             }
+        }
+    }
+
+    // Routed gate/up + SwiGLU at the Qwen3.8-Flash-Next prefill shape (hidden 2560, expert ffn 640, 10 routes per
+    // token, one broadcast input row), for the two formats that file's expert blocks use. The IQ3_XXS case is the
+    // one the HRX workgroup-table decode exists for (engine #572): it is the only place that decode is compared
+    // against the CPU, and with GGML_HRX_IQ3S_TABLE_DECODE=0 the same case runs the select-chain decode.
+    // 16 experts rather than 512 keeps the two weight tensors at 26 M values each; 512 tokens x 10 routes is 160
+    // partitions of 32 routed rows, and 80 tokens is 25, the last one partial.
+    for (ggml_type t : {GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ4_XS}) {
+        for (int64_t tokens : {80, 512}) {
+            test_cases.emplace_back(new test_mul_mat_vec_fusion(t, GGML_GLU_OP_SWIGLU, tokens, 640, 2560,
+                true, 16, 10, true, false, true, false));
         }
     }
 

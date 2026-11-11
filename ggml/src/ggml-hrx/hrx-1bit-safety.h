@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <string>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -46,9 +48,33 @@ inline constexpr size_t kHostUnknown = static_cast<size_t>(-1);
 
 pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, size_t memory_available = kHostUnknown);
 size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available = kHostUnknown);
+// The refusal line, as text (engine #2069, llama.cpp #259's review). A budget of 0 means "nothing fits", and WHICH term made
+// it zero decides what the operator should free: the GTT ceiling leaves GTT and the reserve as the knobs, while a host-bound
+// budget leaves host memory, and "free GTT" would send them to the wrong one. Pure, so the two wordings are pinned by
+// test-hrx-pool-refusal-budget.cpp without a device -- the whole product of a guardrail is this line.
+std::string pool_refusal_note(const pool_budget_terms_t & terms, size_t memory_total, size_t memory_free, const char * device_name);
+
 // true when GGML_HRX_POOL_LIMIT_MB is in force: pool_budget() then returns that fixed limit rather than a
 // remainder, so a caller that prints the figure has to word it differently.
 bool   pool_budget_is_fixed_limit();
+
+// engine #1502/#259: the host term as the pool arithmetic wants it. `readable` says whether the figure was actually
+// taken; a *measured* zero is passed through as 0 (a host with nothing left must refuse), while an unreadable one
+// becomes kHostUnknown so the term is dropped rather than refusing everything. The two call sites that used
+// `raw == 0 ? kHostUnknown : raw` collapsed those two cases - see tests/test-hrx-pool-refusal-budget.cpp.
+size_t pool_host_term(size_t raw, bool readable);
+
+// The same term, READ AND CLASSIFIED IN ONE SEQUENCED STEP (engine #1942). Both call sites used to write
+//     pool_host_term(raw, host_memory_available_bytes(raw))
+// which hands `raw` to the callee BY VALUE while a sibling argument fills it. C++ leaves the order in which a call's
+// arguments are evaluated unspecified, and clang evaluates them left to right: the by-value `raw` is copied (still 0)
+// before the reader runs, so the term arrives as (0, readable = true) - a "measured zero" - on a host with tens of
+// GiB available. The open-time guardrail then refused the device outright ("leaves nothing under the ceiling", no
+// device registered, `--device HRX0` invalid) and the live check refused every allocation. g++ evaluates right to
+// left, so the same line was correct there and the fault only showed on the pinned toolchain's own compiler.
+// |reader| is host_memory_available_bytes in production; a parameter so the test can drive the three cases without
+// a live /proc. |raw| receives the figure the reader took (0 when it took none), for the caller's log line.
+size_t pool_host_term_read(bool (*reader)(size_t &), size_t & raw);
 
 // The budget after an allocation the allocator refused, given the size it refused (engine #1502).
 //
@@ -98,7 +124,11 @@ bool gtt_counters(size_t & total, size_t & used);
 // Charge `size` against `budget`; false (with one log line naming the sizes) when it does not fit.
 // True when |size| fits the live pool (|total|, |used| from the driver's counters) with |margin| of headroom. Pure, so the
 // test drives it; the underflow and margin-saturation guards live here rather than in the caller.
-bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin);
+// The live check takes the host term too (engine #1502): the counters report GTT, but a hsa_amd_memory_pool_allocate on
+// this APU is served by host RAM, so `min(GTT free, MemAvailable)` is the honest figure -- the same two-term model the
+// open-time budget uses. kHostUnknown disables the term (an unreadable /proc must not refuse anything).
+bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin,
+                    size_t memory_available = kHostUnknown);
 
 bool pool_reserve(size_t budget, size_t size, const char * what);
 

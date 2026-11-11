@@ -7,6 +7,7 @@
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -461,6 +462,23 @@ static const GraphNode * single_consumer_with_op(const Graph & graph, ValueId va
                                                                                                   nullptr;
 }
 
+// Query tokens per prefill attention dispatch (engine #1989). The kernel takes up to kPrefillMaxQueryTokens, but with
+// the transposed V one launch over 512 query tokens is slower per token than two over 256 from about 4,096 keys up, and
+// up to 2x slower at long key counts: measured on gfx1151 at Qwen3-4B's geometry, 0.65-0.77 us per key per layer in
+// 256-token launches at every key count from 4,096 to 32,768, against 0.72-1.41 us in one launch. The chunks share the
+// one transposed V. GGML_HRX_FA_QUERY_CHUNK overrides (diagnostic); GGML_HRX_QUERY_CHUNK_TOKENS still caps it.
+static int64_t flash_attention_query_chunk_tokens(int64_t key_value_token_count) {
+    static const int64_t limit = [] {
+        const char * text = std::getenv("GGML_HRX_FA_QUERY_CHUNK");
+        const int64_t value = text != nullptr && text[0] != '\0' ? static_cast<int64_t>(std::atoll(text)) : 256;
+        return value >= 16 && value <= kPrefillMaxQueryTokens ? value : kPrefillMaxQueryTokens;
+    }();
+    // Below 4,096 keys one launch is as fast or faster (pp512 on Qwen3-4B: 2,988 tok/s in one launch, 2,929 in two), so
+    // short prompts keep it.
+    const int64_t whole = query_chunk_tokens(kPrefillMaxQueryTokens);
+    return key_value_token_count >= 4096 ? std::min(limit, whole) : whole;
+}
+
 static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext & context,
                                                      const FlashAttentionMatch & match,
                                                      DispatchMatch & dispatch_match,
@@ -476,7 +494,21 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
         return { match.value->id, 0, match.value->byte_count };
     }
 
-    const size_t bytes = static_cast<size_t>(match.key_value_token_count * columns) * sizeof(ggml_fp16_t);
+    // The attention kernel walks the transposed V across channels, i.e. across rows of this buffer. Packed, the rows are
+    // 2 x keys bytes apart, and when that is a multiple of the page size the channels of a key block share cache sets:
+    // at 256 query tokens the dispatch took 8.3 ms at 16,384 keys against 5.7 ms at 16,128 and at 16,640 (engine #1989).
+    // The buffer is private to this dispatch, so a key count that is a multiple of 64 gets a pitch of keys + 32 (an odd
+    // multiple of 64 bytes): 6.1 ms at 16,384. The attention kernel derives the same pitch from its key count
+    // (value_layout 2), so the pitch is not one of its compile parameters. GGML_HRX_FA_VALUE_PITCH=0 keeps the packed
+    // layout (diagnostic).
+    static const bool spread_pitch = [] {
+        const char * text = std::getenv("GGML_HRX_FA_VALUE_PITCH");
+        return text == nullptr || text[0] == '\0' || std::atoi(text) != 0;
+    }();
+    const int64_t pitch = spread_pitch && match.key_value_token_count % 64 == 0 ? match.key_value_token_count + 32 :
+                                                                                 match.key_value_token_count;
+    const size_t source_bytes = static_cast<size_t>(match.key_value_token_count * columns) * sizeof(ggml_fp16_t);
+    const size_t bytes        = static_cast<size_t>(pitch * columns) * sizeof(ggml_fp16_t);
     const ValueId transposed = match_value(context, dispatch_match, 0);
     dispatch_match.transients.push_back({ transposed, "common.flash_attention.transposed_value", bytes, 256 });
 
@@ -484,10 +516,11 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
     copy.kernel = make_kernel_specialization(kCopyTransposeF16Kernel);
     copy.kernel.compile_parameters.emplace("ggml.copy_transpose_f16.row_count", to_config_value(match.key_value_token_count));
     copy.kernel.compile_parameters.emplace("ggml.copy_transpose_f16.column_count", to_config_value(columns));
-    copy.bindings.push_back({ match.value->id, 0, bytes });
+    copy.kernel.compile_parameters.emplace("ggml.copy_transpose_f16.output_pitch", to_config_value(pitch));
+    copy.bindings.push_back({ match.value->id, 0, source_bytes });
     copy.bindings.push_back({ transposed, 0, bytes });
     dispatch_match.dispatches.push_back(std::move(copy));
-    attention.compile_parameters.emplace("ggml.flash_attention.value_layout", "1");
+    attention.compile_parameters.emplace("ggml.flash_attention.value_layout", spread_pitch ? "2" : "1");
     return { transposed, 0, bytes };
 }
 
@@ -573,7 +606,7 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
     dispatch.bindings.push_back({ raw_gate->id, 0, raw_gate->byte_count });
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
     return append_query_chunked_dispatches(
-        dispatch, match.query_token_count, query_chunk_tokens(kPrefillMaxQueryTokens),
+        dispatch, match.query_token_count, flash_attention_query_chunk_tokens(match.key_value_token_count),
         { { 0, match.query->nb[1] },
           { 3, static_cast<size_t>(match.key_value_token_count) * sizeof(ggml_fp16_t) },
           { 4, raw_gate->nb[2] },
@@ -610,7 +643,7 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
         }
     }
     if (!append_query_chunked_dispatches(
-            dispatch, match.query_token_count, query_chunk_tokens(kPrefillMaxQueryTokens),
+            dispatch, match.query_token_count, flash_attention_query_chunk_tokens(match.key_value_token_count),
             { { 0, match.query->nb[1] },
               { 3, static_cast<size_t>(match.key_value_token_count) * sizeof(ggml_fp16_t) },
               { 4, match.query->nb[1] },

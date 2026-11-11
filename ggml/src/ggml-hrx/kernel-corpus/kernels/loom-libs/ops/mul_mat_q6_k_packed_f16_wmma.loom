@@ -10,6 +10,9 @@ config.decl @ggml.mul_mat_q6_k_packed.weight_offset : %value: index where [range
 
 config.decl @ggml.mul_mat_q6_k_packed.token_capacity : %value: index where [range(%value, 128, 2048), multiple_of(%value, 128)]
 
+// Defined (default 0) with the shared f16 prefill body in motifs/mul_mat_quantized_f16_prefill.loom.
+config.decl @ggml.f16_prefill.activation_scale_log2 : %value: index where [range(%value, 0, 6)]
+
 config.decl @ggml.mul_mat_q6_k_shortlist.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 config.decl @ggml.mul_mat_q6_k_shortlist.output_size : %value: index where [range(%value, 64, 262144), multiple_of(%value, 64)]
@@ -112,6 +115,11 @@ template.def<@ggml.mul_mat_q6_k_packed.token1.body> device @ggml_mul_mat_q6_k_pa
   %weight_stage_bytes = index.constant 9216 : offset
   %activation_stage_bytes = index.constant 2304 : offset
   %zero_accumulator = vector.constant 0.0 : vector<8xf32>
+  // engine #1962: the activations pass through f16 for the multiply and f16 ends at 65504, so a larger value became
+  // inf and the product NaN. They are narrowed at 2^-6 and the f32 accumulator is scaled back by 2^6 before it is
+  // published (exact while the scaled value is a normal f16; window [3.9e-3, 4.19e6]), as in the f32 matmul cores.
+  %f16_range_prescale = vector.constant 0.015625 : vector<4xf32>
+  %f16_range_unscale = vector.constant 64.0 : vector<8xf32>
   %empty_words = vector.constant 0 : vector<4xi32>
   %zero_scale_bytes = vector.constant 0 : vector<8xi8>
   %nibble_mask = vector.constant 252645135 : vector<4xi32>
@@ -274,8 +282,10 @@ template.def<@ggml.mul_mat_q6_k_packed.token1.body> device @ggml_mul_mat_q6_k_pa
         %input_k_next = index.add %input_k0, %activation_k_next : index
         %loaded0 = vector.load %input_view[%bounded_token, %input_k] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
         %loaded1 = vector.load %input_view[%bounded_token, %input_k_next] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
-        %narrow0 = vector.fptrunc %loaded0 : vector<4xf32> to vector<4xf16>
-        %narrow1 = vector.fptrunc %loaded1 : vector<4xf32> to vector<4xf16>
+        %prescaled0 = vector.mulf %loaded0, %f16_range_prescale : vector<4xf32>
+        %narrow0 = vector.fptrunc %prescaled0 : vector<4xf32> to vector<4xf16>
+        %prescaled1 = vector.mulf %loaded1, %f16_range_prescale : vector<4xf32>
+        %narrow1 = vector.fptrunc %prescaled1 : vector<4xf32> to vector<4xf16>
         scf.yield %narrow0, %narrow1 : vector<4xf16>, vector<4xf16>
       } else {
         %zeros0 = vector.constant 0.0 : vector<4xf16>
@@ -297,13 +307,14 @@ template.def<@ggml.mul_mat_q6_k_packed.token1.body> device @ggml_mul_mat_q6_k_pa
     scf.yield %block_result : vector<8xf32>
   }
 
+  %result_unscaled = vector.mulf %result, %f16_range_unscale : vector<8xf32>
   %overwrites_output = index.cmp eq, %output_accumulation, %c0 : index
   %has_one_token = index.cmp eq, %bounded_token_count, %c1 : index
   %use_token1_overwrite = scalar.andi %overwrites_output, %has_one_token : i1
   scf.if %use_token1_overwrite {
-    template.apply<@ggml.mul_mat_q6_k_packed.publish_token1_overwrite_f32_wave32>(%result, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias) : (vector<8xf32>, index, index, index, buffer)
+    template.apply<@ggml.mul_mat_q6_k_packed.publish_token1_overwrite_f32_wave32>(%result_unscaled, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias) : (vector<8xf32>, index, index, index, buffer)
   } else {
-    template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result, %c0, %c0, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
+    template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result_unscaled, %c0, %c0, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
   }
   template.return
 }
@@ -383,6 +394,11 @@ template.def<@ggml.mul_mat_q6_k_i8_prepacked.body> device @ggml_mul_mat_q6_k_i8_
   %weight_stage_bytes = index.constant 9216 : offset
   %activation_stage_bytes = index.constant 2304 : offset
   %zero_accumulator = vector.constant 0.0 : vector<8xf32>
+  // engine #1962: the activations pass through f16 for the multiply and f16 ends at 65504, so a larger value became
+  // inf and the product NaN. They are narrowed at 2^-6 and the f32 accumulator is scaled back by 2^6 before it is
+  // published (exact while the scaled value is a normal f16; window [3.9e-3, 4.19e6]), as in the f32 matmul cores.
+  %f16_range_prescale = vector.constant 0.015625 : vector<4xf32>
+  %f16_range_unscale = vector.constant 64.0 : vector<8xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -468,8 +484,10 @@ template.def<@ggml.mul_mat_q6_k_i8_prepacked.body> device @ggml_mul_mat_q6_k_i8_
         %input_k_next = index.add %input_k0, %activation_k_next : index
         %loaded0 = vector.load %input_view[%bounded_token, %input_k] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
         %loaded1 = vector.load %input_view[%bounded_token, %input_k_next] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<4xf32>
-        %narrow0 = vector.fptrunc %loaded0 : vector<4xf32> to vector<4xf16>
-        %narrow1 = vector.fptrunc %loaded1 : vector<4xf32> to vector<4xf16>
+        %prescaled0 = vector.mulf %loaded0, %f16_range_prescale : vector<4xf32>
+        %narrow0 = vector.fptrunc %prescaled0 : vector<4xf32> to vector<4xf16>
+        %prescaled1 = vector.mulf %loaded1, %f16_range_prescale : vector<4xf32>
+        %narrow1 = vector.fptrunc %prescaled1 : vector<4xf32> to vector<4xf16>
         scf.yield %narrow0, %narrow1 : vector<4xf16>, vector<4xf16>
       } else {
         %zeros0 = vector.constant 0.0 : vector<4xf16>
@@ -491,7 +509,8 @@ template.def<@ggml.mul_mat_q6_k_i8_prepacked.body> device @ggml_mul_mat_q6_k_i8_
     scf.yield %block_result : vector<8xf32>
   }
 
-  template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result, %c0, %c0, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
+  %result_unscaled = vector.mulf %result, %f16_range_unscale : vector<8xf32>
+  template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result_unscaled, %c0, %c0, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
   template.return
 }
 
@@ -1277,6 +1296,7 @@ template.def<@ggml.mul_mat_q6_k_packed.publish_f32_wave32> device @ggml_mul_mat_
 }
 
 template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat_q6_k_packed_prefill_wave32_body(%input_is_f16: i1, %weight_layout: index, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %f16_range_prescale = vector.constant 0.015625 : vector<8xf32>
   %output_accumulation = config.get @ggml.mul_mat_q6_k_packed.output_accumulation : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
@@ -1349,7 +1369,7 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
   %init11 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
   %init12 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
   %init13 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
-  %result00, %result01, %result02, %result03, %result10, %result11, %result12, %result13 = scf.for %quant_block = [%c0 to %quant_block_count step %c1](%block_acc00 = %init00 : vector<8xf32>, %block_acc01 = %init01 : vector<8xf32>, %block_acc02 = %init02 : vector<8xf32>, %block_acc03 = %init03 : vector<8xf32>, %block_acc10 = %init10 : vector<8xf32>, %block_acc11 = %init11 : vector<8xf32>, %block_acc12 = %init12 : vector<8xf32>, %block_acc13 = %init13 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+  %sum00, %sum01, %sum02, %sum03, %sum10, %sum11, %sum12, %sum13 = scf.for %quant_block = [%c0 to %quant_block_count step %c1](%block_acc00 = %init00 : vector<8xf32>, %block_acc01 = %init01 : vector<8xf32>, %block_acc02 = %init02 : vector<8xf32>, %block_acc03 = %init03 : vector<8xf32>, %block_acc10 = %init10 : vector<8xf32>, %block_acc11 = %init11 : vector<8xf32>, %block_acc12 = %init12 : vector<8xf32>, %block_acc13 = %init13 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
     %block_result00, %block_result01, %block_result02, %block_result03, %block_result10, %block_result11, %block_result12, %block_result13 = scf.for %quant_group = [%c0 to %c8 step %c2](%acc00 = %block_acc00 : vector<8xf32>, %acc01 = %block_acc01 : vector<8xf32>, %acc02 = %block_acc02 : vector<8xf32>, %acc03 = %block_acc03 : vector<8xf32>, %acc10 = %block_acc10 : vector<8xf32>, %acc11 = %block_acc11 : vector<8xf32>, %acc12 = %block_acc12 : vector<8xf32>, %acc13 = %block_acc13 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
       %block_k_base = index.mul %quant_block, %c256 : index
       %group_k_add = index.mul %quant_group, %c32 : index
@@ -1426,7 +1446,8 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
             scf.yield %narrow0 : vector<8xf16>
           } else {
             %wide0 = vector.load %input_f32_view[%bounded_token0, %input_k0] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<8xf32>
-            %narrow0 = vector.fptrunc %wide0 : vector<8xf32> to vector<8xf16>
+            %prescaled0 = vector.mulf %wide0, %f16_range_prescale : vector<8xf32>
+            %narrow0 = vector.fptrunc %prescaled0 : vector<8xf32> to vector<8xf16>
             scf.yield %narrow0 : vector<8xf16>
           }
           scf.yield %loaded0 : vector<8xf16>
@@ -1464,7 +1485,8 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
             scf.yield %narrow1 : vector<8xf16>
           } else {
             %wide1 = vector.load %input_f32_view[%bounded_token1, %input_k1] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<8xf32>
-            %narrow1 = vector.fptrunc %wide1 : vector<8xf32> to vector<8xf16>
+            %prescaled1 = vector.mulf %wide1, %f16_range_prescale : vector<8xf32>
+            %narrow1 = vector.fptrunc %prescaled1 : vector<8xf32> to vector<8xf16>
             scf.yield %narrow1 : vector<8xf16>
           }
           scf.yield %loaded1 : vector<8xf16>
@@ -1492,6 +1514,29 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
       scf.yield %next00, %next01, %next02, %next03, %next10, %next11, %next12, %next13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
     }
     scf.yield %block_result00, %block_result01, %block_result02, %block_result03, %block_result10, %block_result11, %block_result12, %block_result13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  }
+  // The activation enters WMMA as value * 2^-6 so that one above the f16 maximum (65504) stays finite: an f32
+  // activation is prescaled where it is narrowed above, an f16 one arrives prescaled when the dispatch says so
+  // (activation_scale_log2). The f32 sums are scaled back here, which is exact. engine #1962
+  %f16_range_scale_log2 = config.get @ggml.f16_prefill.activation_scale_log2 : index
+  %f16_range_c0 = index.constant 0 : index
+  %f16_range_true = scalar.constant true : i1
+  %f16_input_scaled = index.cmp ne, %f16_range_scale_log2, %f16_range_c0 : index
+  %f16_range_f32_input = scalar.xori %input_is_f16, %f16_range_true : i1
+  %f16_range_scaled = scalar.ori %f16_range_f32_input, %f16_input_scaled : i1
+  %result00, %result01, %result02, %result03, %result10, %result11, %result12, %result13 = scf.if %f16_range_scaled -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+    %f16_range_unscale = vector.constant 64.0 : vector<8xf32>
+    %unscaled00 = vector.mulf %sum00, %f16_range_unscale : vector<8xf32>
+    %unscaled01 = vector.mulf %sum01, %f16_range_unscale : vector<8xf32>
+    %unscaled02 = vector.mulf %sum02, %f16_range_unscale : vector<8xf32>
+    %unscaled03 = vector.mulf %sum03, %f16_range_unscale : vector<8xf32>
+    %unscaled10 = vector.mulf %sum10, %f16_range_unscale : vector<8xf32>
+    %unscaled11 = vector.mulf %sum11, %f16_range_unscale : vector<8xf32>
+    %unscaled12 = vector.mulf %sum12, %f16_range_unscale : vector<8xf32>
+    %unscaled13 = vector.mulf %sum13, %f16_range_unscale : vector<8xf32>
+    scf.yield %unscaled00, %unscaled01, %unscaled02, %unscaled03, %unscaled10, %unscaled11, %unscaled12, %unscaled13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  } else {
+    scf.yield %sum00, %sum01, %sum02, %sum03, %sum10, %sum11, %sum12, %sum13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
   }
   template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result00, %c0, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
   template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result01, %c16, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)

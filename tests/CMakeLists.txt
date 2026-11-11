@@ -381,6 +381,21 @@ if (TARGET ggml-hrx)
     add_executable(test-hrx-transient-arena-charge test-hrx-transient-arena-charge.cpp)
     target_include_directories(test-hrx-transient-arena-charge PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-transient-arena-charge COMMAND test-hrx-transient-arena-charge)
+    # the host staging buffer's charge: the ledger is the only thing under test, no device and no libhrx (engine #1711)
+    add_executable(test-hrx-staging-ledger test-hrx-staging-ledger.cpp
+                   ../ggml/src/ggml-hrx/hrx-1bit-safety.cpp)
+    target_include_directories(test-hrx-staging-ledger PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    target_link_libraries(test-hrx-staging-ledger PRIVATE ggml)
+    add_test(NAME test-hrx-staging-ledger COMMAND test-hrx-staging-ledger)
+
+    # engine#1856: the same conservation for the HOST-WEIGHT arena's charge, which had no ledger arm while the staging
+    # buffer has had one since #270. Device-free for the same reason: the charge is simulated on the object and the paths
+    # that must return it are exercised directly.
+    add_executable(test-hrx-arena-ledger test-hrx-arena-ledger.cpp
+                   ../ggml/src/ggml-hrx/hrx-1bit-safety.cpp)
+    target_include_directories(test-hrx-arena-ledger PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    target_link_libraries(test-hrx-arena-ledger PRIVATE ggml)
+    add_test(NAME test-hrx-arena-ledger COMMAND test-hrx-arena-ledger)
 
     # MemAvailable parsing for the unbounded-residency warning: pure, no device and no /proc (engine #669)
     add_executable(test-hrx-host-memory-available test-hrx-host-memory-available.cpp
@@ -416,6 +431,13 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-view-alias-elision PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-view-alias-elision COMMAND test-hrx-view-alias-elision)
 
+    # a view into storage the graph does not hold (the deepstack window of Qwen3-VL, engine #1467): the plan on the
+    # host, the values on HRX0 when there is one
+    add_executable(test-hrx-external-window-view test-hrx-external-window-view.cpp)
+    target_link_libraries(test-hrx-external-window-view PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-external-window-view PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-external-window-view COMMAND test-hrx-external-window-view)
+
     add_executable(test-hrx-ops test-hrx-ops.cpp)
     target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-ops PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
@@ -449,6 +471,19 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-decode-stride PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-decode-stride PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-decode-stride COMMAND test-hrx-decode-stride)
+
+    # prefill FLASH_ATTN_EXT through the transposed V at 256+ query tokens: values against the CPU and the launch plan
+    # (engine #1989); skips without HRX0
+    add_executable(test-hrx-fa-transposed-value test-hrx-fa-transposed-value.cpp)
+    target_link_libraries(test-hrx-fa-transposed-value PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-fa-transposed-value PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-fa-transposed-value COMMAND test-hrx-fa-transposed-value)
+
+    # the fused Q projection at one token on head sizes that are not a power of two (engine #1926); skips without HRX0
+    add_executable(test-hrx-attention-q-decode-head-size test-hrx-attention-q-decode-head-size.cpp)
+    target_link_libraries(test-hrx-attention-q-decode-head-size PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-attention-q-decode-head-size PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-attention-q-decode-head-size COMMAND test-hrx-attention-q-decode-head-size)
 
     add_executable(test-hrx-mul-mat-id-k32 test-hrx-mul-mat-id-k32.cpp)
     target_link_libraries(test-hrx-mul-mat-id-k32 PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)

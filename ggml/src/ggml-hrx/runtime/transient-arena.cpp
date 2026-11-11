@@ -2,6 +2,7 @@
 
 #include "hrx-1bit-safety.h"   // engine#1711: the pool ledger (pool_reserve/pool_release)
 #include "transient-arena-charge.h"
+#include "runtime/failure-status.h"   // engine#1618: kPoolRefusalToken
 
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
@@ -96,7 +97,8 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
     bool                  charge_taken = false;
     if (charge.reserve_bytes > 0 && pool_budget > 0) {
         if (!ggml::hrx::onebit::pool_reserve(pool_budget, charge.reserve_bytes, "the transient arena")) {
-            status.log("refused: the transient arena needs %zu more bytes and the pool has no room", charge.reserve_bytes);
+            status.log("refused: the transient arena needs %zu more bytes and the pool has no room (%s)", charge.reserve_bytes,
+                       kPoolRefusalToken);
             return status;
         }
         charge_taken   = true;

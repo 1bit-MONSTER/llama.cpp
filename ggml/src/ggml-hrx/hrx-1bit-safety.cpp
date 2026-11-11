@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include "hrx-1bit-safety.h"
+#include "runtime/host-memory-available.h"   // MemAvailable for the live check's host term (engine #1502)
 
 #include "ggml-impl.h"
 
@@ -83,6 +84,20 @@ bool gtt_counters(size_t & total, size_t & used) {
     return false;
 }
 
+size_t pool_host_term(size_t raw, bool readable) {
+    return readable ? raw : kHostUnknown;
+}
+
+size_t pool_host_term_read(bool (*reader)(size_t &), size_t & raw) {
+    raw = 0;
+    // A full expression of its own: the read is complete before `raw` is looked at (see the header).
+    const bool readable = reader != nullptr && reader(raw);
+    if (!readable) {
+        raw = 0;  // a reader that failed may have written to its out parameter; that is not a reading
+    }
+    return pool_host_term(raw, readable);
+}
+
 bool pool_budget_is_fixed_limit() {
     const char * env = std::getenv("GGML_HRX_POOL_LIMIT_MB");
     return env != nullptr && std::atoll(env) > 0;
@@ -119,6 +134,36 @@ pool_budget_terms_t pool_budget_terms(size_t memory_total, size_t memory_free, s
         t.budget = t.gtt_term;
     }
     return t;
+}
+
+// engine #2069 (llama.cpp #259's review): the refusal has to name the term that bound it. `budget == 0` is reached two ways
+// that look identical and have opposite remedies -- the GTT ceiling leaving nothing under the reserve, or the host figure
+// being the smaller term (a measured zero refuses by design since #1942/#259, and a tiny MemAvailable does the same). The
+// numbers printed are the ones the decision used, not the ones that happen to be nearby.
+std::string pool_refusal_note(const pool_budget_terms_t & terms, size_t memory_total, size_t memory_free,
+                              const char * device_name) {
+    char line[512];
+    const double gib = 1024.0 * 1024.0 * 1024.0;
+    if (terms.host_bound) {
+        // The host term was the smaller one and it is what made the budget zero.
+        std::snprintf(line, sizeof line,
+                      "ggml_hrx: %s: refusing to use the device: the HOST term bound the pool - host MemAvailable %.1f GiB "
+                      "against a GTT term of %.1f GiB (GTT total %.1f GiB with %.1f GiB free). This is not the GTT ceiling: "
+                      "freeing GTT will not help while host memory is the smaller term%s (engine #1502, #2069)",
+                      device_name != nullptr ? device_name : "HRX", terms.host_available / gib, terms.gtt_term / gib,
+                      memory_total / gib, memory_free / gib,
+                      terms.host_available == 0 ? " -- a measured zero refuses by design, so check that /proc/meminfo is readable (#1942)"
+                                                : "");
+        return std::string(line);
+    }
+    const size_t reserve = pool_reserve_bytes();
+    std::snprintf(line, sizeof line,
+                  "ggml_hrx: %s: refusing to use the device: GTT total %.1f GiB with %.1f GiB free leaves nothing under the "
+                  "%.1f GiB ceiling (reserve GGML_HRX_GTT_RESERVE_MB, override GGML_HRX_POOL_LIMIT_MB); free GTT or lower the "
+                  "reserve (engine #680)",
+                  device_name != nullptr ? device_name : "HRX", memory_total / gib, memory_free / gib,
+                  (memory_total > reserve ? memory_total - reserve : 0) / gib);
+    return std::string(line);
 }
 
 size_t pool_budget(size_t memory_total, size_t memory_free, size_t memory_available) {
@@ -247,9 +292,15 @@ pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, 
 // Does |size| fit the live pool with |margin| of headroom? Pure, so the test drives it: the numbers come from the driver's
 // counters, and the arithmetic that matters is the underflow guard (|used| can exceed |total| transiently) and the margin
 // saturation (|margin| is an operator input and may be absurd).
-bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin) {
-    const size_t live_free = used >= total ? 0 : total - used;
-    const size_t wanted    = size + (margin > SIZE_MAX - size ? SIZE_MAX - size : margin);
+bool pool_live_fits(size_t size, size_t total, size_t used, size_t margin, size_t memory_available) {
+    size_t live_free = used >= total ? 0 : total - used;
+    // engine #1502: the GTT counter alone over-promises on this APU, because the pool allocation is served from host RAM.
+    // Without this term the live check admits a request the open-time budget would have refused -- the reported shape was
+    // a 15.35 GiB request, a GTT counter showing room, and ~15 GiB of host memory available.
+    if (memory_available != kHostUnknown && memory_available < live_free) {
+        live_free = memory_available;
+    }
+    const size_t wanted = size + (margin > SIZE_MAX - size ? SIZE_MAX - size : margin);
     return wanted <= live_free;
 }
 
@@ -260,7 +311,9 @@ bool pool_reserve(size_t budget, size_t size, const char * what) {
         size_t in_use = 0;
         if (pool_live_counters(total, in_use)) {
             const size_t margin = pool_live_margin_bytes();
-            if (!pool_live_fits(size, total, in_use, margin)) {
+            size_t       host_raw     = 0;
+            const size_t host_available = pool_host_term_read(host_memory_available_bytes, host_raw);
+            if (!pool_live_fits(size, total, in_use, margin, host_available)) {
                 const size_t live_free = in_use >= total ? 0 : total - in_use;
                 GGML_LOG_ERROR("%s: HRX pool limit: %s of %.1f MiB does not fit the live device budget "
                                "(%.1f MiB free - %.1f MiB margin of %.1f MiB); this is the live check, on by default since "
