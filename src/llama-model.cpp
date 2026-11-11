@@ -1598,9 +1598,20 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 hrx_maps_model = hrx_maps_model && props.caps.buffer_from_host_ptr;
             }
         }
+        // engine #2163: HRX copies a mapped weight through its host staging path, which is slow for a large model (a 27B
+        // dense model loads in 42.6 s instead of 14.9 s). Above the limit the model takes the upload below.
+        size_t map_max_mib = 4096;
+        if (const char * env = std::getenv("GGML_HRX_MODEL_MAP_MAX_MIB")) {
+            map_max_mib = std::strtoull(env, nullptr, 10);
+        }
+        const bool under_map_limit = ml.n_bytes <= map_max_mib * 1024 * 1024;
+        if (uses_hrx && hrx_maps_model && ml.use_mmap && !under_map_limit) {
+            LLAMA_LOG_INFO("%s: HRX: the model (%zu MiB) is over GGML_HRX_MODEL_MAP_MAX_MIB=%zu, so it is read into device buffers (engine #2163)\n",
+                           __func__, ml.n_bytes >> 20, map_max_mib);
+        }
         // engine #856: an HRX device that wraps the mapping as host memory (no import) packs each weight from the
         // file pages, so the device holds one copy and the mapping stays.
-        if (uses_hrx && hrx_maps_model && ml.use_mmap) {
+        if (uses_hrx && hrx_maps_model && ml.use_mmap && under_map_limit) {
             LLAMA_LOG_INFO("%s: HRX: the weights stay in the file mapping and are packed from it (engine #856)\n", __func__);
         } else if (uses_hrx) {
             if (ml.use_mmap) {
