@@ -93,10 +93,14 @@ inline bool packed_layout_wanted(PackedLayoutSwitch value, const Value & weight)
     return weight_in_file_mapping(weight) && !decode_reads_stored(weight);
 }
 
-inline bool q4k_packed_tail_enabled(const Value & weight) {
+inline PackedLayoutSwitch q4k_packed_tail_switch() {
     static const PackedLayoutSwitch value =
         packed_layout_switch("GGML_HRX_Q4K_PACKED_TAIL", "q4_k batches off the 256 grid");
-    return packed_layout_wanted(value, weight);
+    return value;
+}
+
+inline bool q4k_packed_tail_enabled(const Value & weight) {
+    return packed_layout_wanted(q4k_packed_tail_switch(), weight);
 }
 
 // The layout's own preconditions, and a weight that may be packed at all. A packed copy is made of a weight once; a
@@ -129,6 +133,21 @@ inline bool q6k_packed_rows_enabled(const Value & weight) {
 
 inline bool q6k_packed_rows_weight_ok(const Value & weight, int64_t input_size, int64_t output_size) {
     return packed_tail_weight_ok(weight, GGML_TYPE_Q6_K, input_size, output_size);
+}
+
+// engine #2137: the 256-aligned Q4_K prefill. Its f16 kernel reads only the packed rows; the 8-bit-block kernel
+// (ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256) reads Q4_K stored as well (weight format 4). For a weight that
+// already has a stored device copy, that kernel shares it instead of adding a packed one. GGML_HRX_Q4K_PACKED_TAIL=0
+// (stored for every weight) selects it for every Q4_K weight, which is also how the path is reached by a test.
+inline bool q4k_aligned_prefill_reads_stored(const Value & weight) {
+    if (weight.type != GGML_TYPE_Q4_K || weight.alias_source.value >= 0) {
+        return false;
+    }
+    const PackedLayoutSwitch value = q4k_packed_tail_switch();
+    if (value == PackedLayoutSwitch::Stored) {
+        return true;
+    }
+    return value == PackedLayoutSwitch::FollowWeight && weight_in_file_mapping(weight) && decode_reads_stored(weight);
 }
 
 // The 6-to-16-token Q6_K kernel reads an i8 layout of its own. That is an extra device copy of a weight in the file
