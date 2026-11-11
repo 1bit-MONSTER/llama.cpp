@@ -172,3 +172,15 @@ i.e. AMD's activation-publication header set wired into the file, not a constant
 8 -> 33 and was reverted. So dispatch-get-rows.cpp joins dispatch-gated-mul-mat.cpp in the 'needs the dispatch owner'
 group: both are three-way rewrites against AMD's new activation-publication / tiled-pair infrastructure, and neither
 is a merge-resolution task.
+
+## Files that are genuine three-way rework, not merge resolution (for the owners)
+Dispatch (cl-hrxkern, #2127 shares these):
+  dispatch-mul-mat.cpp  dispatch-gated-mul-mat.cpp  dispatch-get-rows.cpp  corpus<->registration gap
+Speculative decode (pi-attn / cl-856 — #2146, #2159 territory):
+  common/speculative.cpp (8 hunks): both sides reworked the DFlash2 selector lattice / lilicorr paths; hunk shapes
+  ours 49L vs theirs 5L, ours 34L vs theirs 4L, ours 1L vs theirs 7L. Every hunk changes behaviour in the same feature.
+Renderer (ggml): ggml/src/ggml-vulkan/ggml-vulkan.cpp (616L vs 2L) — AMD restructured the file around a light indexer
+  it added; our side's 616-line block is a different layout of the same area.
+Everything else in this worktree is resolved by rule, and each rule was earned by a failure first (see the sections
+above): coupled manifests take one side whole, decorators stay adjacent to their class, our deltas go onto the
+surviving structure when our side is a duplicate, and every additive union is checked for duplicates PER CONTAINER.
