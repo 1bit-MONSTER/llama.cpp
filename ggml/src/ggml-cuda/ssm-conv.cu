@@ -155,11 +155,7 @@ static void ssm_conv_f32_cuda(const float * src0, const float * src1, const floa
         case 7:  launch_kernel(std::integral_constant<int, 7 >{}); break;
         case 9:  launch_kernel(std::integral_constant<int, 9 >{}); break;
         case 15: launch_kernel(std::integral_constant<int, 15>{}); break;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        default: GGML_ABORT("Only support kernel sizes 2, 3, 4, 5, 9, 15 right now.");
-=======
-        default: GGML_ABORT("Only support kernel sizes 3, 4, 5, 7, 9, 15 right now.");
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
+        default: GGML_ABORT("Only support kernel sizes 2, 3, 4, 5, 7, 9, 15 right now.");
     }
 }
 
