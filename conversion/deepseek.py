@@ -17,12 +17,8 @@ from .base import LazyTorchTensor, MmprojModel, ModelBase, TextModel, gguf, logg
 from .qwen import QwenModel
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("DeepseekOCRForCausalLM", "UnlimitedOCRForCausalLM", "DeepseekOcrForConditionalGeneration")
-=======
-@ModelBase.register("DeepseekOCRForCausalLM")
 @ModelBase.example("deepseek-ai/DeepSeek-OCR")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class DeepseekOCRVisionModel(MmprojModel):
     # HF dynamic_preprocess() max_num, which differs per model
     preproc_max_tiles = 9
@@ -526,12 +522,8 @@ class DeepseekV32Model(DeepseekV2Model):
         self.gguf_writer.add_indexer_top_k(self.hparams["index_topk"])
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("DeepseekV4ForCausalLM", "DeepSeekV4")
-=======
-@ModelBase.register("DeepseekV4ForCausalLM")
 @ModelBase.example("deepseek-ai/DeepSeek-V4-Flash-Base")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class DeepseekV4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK4
     supports_mtp_export = True

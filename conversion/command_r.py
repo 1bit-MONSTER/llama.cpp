@@ -31,13 +31,9 @@ class CommandR2Model(TextModel):
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Cohere2ForCausalLM", "Cohere2Model")
-=======
-@ModelBase.register("Cohere2ForCausalLM")
 # [TAG_HF_EXAMPLE_GATED] CohereLabs/c4ai-command-r7b-12-2024 is gated
 @ModelBase.example("hf-tiny-v2/tiny-random-Cohere2ForCausalLM")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Cohere2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.COHERE2
 

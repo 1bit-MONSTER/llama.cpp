@@ -237,13 +237,10 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Olmo3ForCausalLM": "olmo",
     "OlmoForCausalLM": "olmo",
     "OlmoeForCausalLM": "olmo",
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     "OPTForCausalLM": "opt",
-=======
     "MuseGlimmerAssistantModel": "muse_glimmer",
     "MuseGlimmerForConditionalGeneration": "muse_glimmer",
     "MuseSparkForConditionalGeneration": "muse_spark",
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     "OpenELMForCausalLM": "openelm",
     "OpenJevModel": "qwen",
     "H2OLightningModel": "h2o_lightning",

@@ -10,12 +10,8 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Rwkv6ForCausalLM", "RWKV6ForCausalLM")
-=======
-@ModelBase.register("Rwkv6ForCausalLM")
 @ModelBase.example("RWKV/v6-Finch-1B6-HF")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Rwkv6Model(TextModel):
     model_arch = gguf.MODEL_ARCH.RWKV6
 

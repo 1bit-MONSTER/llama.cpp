@@ -46,12 +46,8 @@ class SeedOssModel(TextModel):
 
 
 @ModelBase.register("Olmo2ForCausalLM")
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Olmo3ForCausalLM", "OLMo3ForCausalLM")
-=======
-@ModelBase.register("Olmo3ForCausalLM")
 @ModelBase.example("allenai/OLMo-2-1124-7B-Instruct", "allenai/Olmo-3-7B-Instruct")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Olmo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMO2
 
@@ -73,12 +69,8 @@ class Olmo2Model(TextModel):
             self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("OlmoeForCausalLM", "OlmoeModel")
-=======
-@ModelBase.register("OlmoeForCausalLM")
 @ModelBase.example("allenai/OLMoE-1B-7B-0924")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class OlmoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMOE
 

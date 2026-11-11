@@ -264,12 +264,8 @@ class DistilBertModel(BertModel):
         return super().filter_tensors((name, gen))
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("RobertaModel", "RobertaForSequenceClassification", "RobertaForMaskedLM")
-=======
-@ModelBase.register("RobertaModel", "RobertaForSequenceClassification")
 @ModelBase.example("sentence-transformers/stsb-roberta-base")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class RobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 

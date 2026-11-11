@@ -13,12 +13,8 @@ if TYPE_CHECKING:
 from .base import MmprojModel, ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("PhiForCausalLM", "Phi2Model")
-=======
-@ModelBase.register("PhiForCausalLM")
 @ModelBase.example("microsoft/phi-2")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Phi2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI2
 
@@ -40,12 +36,8 @@ class Phi2Model(TextModel):
         self.gguf_writer.add_add_bos_token(False)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV", "Phi3Model")
-=======
-@ModelBase.register("Phi3ForCausalLM", "Phi4ForCausalLMV")
 @ModelBase.example("microsoft/Phi-3-mini-4k-instruct")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
@@ -346,12 +338,8 @@ class Phi4VisionMmprojModel(MmprojModel):
         return
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("PhiMoEForCausalLM", "PhimoeForCausalLM")
-=======
-@ModelBase.register("PhiMoEForCausalLM")
 @ModelBase.example("microsoft/Phi-3.5-MoE-instruct")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class PhiMoeModel(Phi3MiniModel):
     model_arch = gguf.MODEL_ARCH.PHIMOE
 

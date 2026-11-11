@@ -3,12 +3,8 @@ from __future__ import annotations
 from .base import ModelBase, TextModel, gguf
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("GPTBigCodeForCausalLM", "GPTBigCodeModel", "GPTBigCodeLMHeadModel")
-=======
-@ModelBase.register("GPTBigCodeForCausalLM")
 @ModelBase.example("bigcode/gpt_bigcode-santacoder")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class StarCoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER
 
@@ -23,11 +19,7 @@ class StarCoderModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Starcoder2ForCausalLM", "Starcoder2Model")
-=======
-@ModelBase.register("Starcoder2ForCausalLM")
 @ModelBase.example("bigcode/starcoder2-3b")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class StarCoder2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER2

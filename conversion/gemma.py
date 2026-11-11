@@ -14,13 +14,9 @@ from .base import MmprojModel, ModelBase, TextModel, gguf, logger
 from .qwen import DFlashModel
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("GemmaForCausalLM", "GemmaModel")
-=======
-@ModelBase.register("GemmaForCausalLM")
 # [TAG_HF_EXAMPLE_GATED] google/gemma-2b is gated
 @ModelBase.example("trl-internal-testing/tiny-GemmaForCausalLM")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class GemmaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA
 
@@ -74,13 +70,9 @@ class GemmaModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Gemma2ForCausalLM", "Gemma2Model")
-=======
-@ModelBase.register("Gemma2ForCausalLM")
 # [TAG_HF_EXAMPLE_GATED] google/gemma-2-9b-it is gated
 @ModelBase.example("trl-internal-testing/tiny-Gemma2ForCausalLM")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Gemma2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA2
 
@@ -130,13 +122,9 @@ class Gemma2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 @ModelBase.register("Gemma3ForCausalLM", "Gemma3ForConditionalGeneration", "Gemma3Model")
-=======
-@ModelBase.register("Gemma3ForCausalLM", "Gemma3ForConditionalGeneration")
 # [TAG_HF_EXAMPLE_GATED] google/gemma-3-4b-it is gated
 @ModelBase.example("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", "hf-tiny-v2/tiny-random-Gemma3ForCausalLM")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Gemma3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA3
 
@@ -822,18 +810,13 @@ class Gemma4Model(Gemma3Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-@ModelBase.register("Gemma4UnifiedForConditionalGeneration", "Gemma4UnifiedForCausalLM")
-=======
-@ModelBase.register("EmbeddingGemma2Model")
+@ModelBase.register("Gemma4UnifiedForConditionalGeneration", "Gemma4UnifiedForCausalLM", "EmbeddingGemma2Model")
 # TODO: add example model
 class EmbeddingGemma2Model(Gemma4Model):
     model_arch = gguf.MODEL_ARCH.GEMMA_EMBEDDING2
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.hparams["num_kv_shared_layers"] = 0
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         # HF sliding_window is bidirectional, llama.cpp expects the full window size
@@ -841,19 +824,13 @@ class EmbeddingGemma2Model(Gemma4Model):
         self.gguf_writer.add_embedding_length_out(self.hparams["embedding_dim"])
         self.gguf_writer.add_causal_attention(False)
         self._try_set_pooling_type()
-
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # default rope on all layers, no rope_freqs needed
         return iter(())
-
-
-@ModelBase.register("Gemma4DSparkModel")
 class Gemma4DSparkModel(DFlashModel):
     model_arch = gguf.MODEL_ARCH.DFLASH
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
         if not self.hparams.get("attention_k_eq_v", False):
             raise ValueError("Gemma4 DSpark currently requires attention_k_eq_v")
         if self.hparams.get("layer_types") != ["full_attention"] * self.block_count:
@@ -866,12 +843,10 @@ class Gemma4DSparkModel(DFlashModel):
             raise ValueError("Gemma4 DSpark currently requires a full draft vocabulary")
         if "model.lm_head.weight" not in self.model_tensors:
             raise ValueError("Gemma4 DSpark requires lm_head.weight")
-
         self.dflash_config = self.hparams.get("dflash_config", {})
         markov_type = self.dflash_config.get("markov_head_type", self.hparams.get("markov_head_type", "vanilla"))
         if markov_type != "vanilla":
             raise ValueError("Gemma4 DSpark currently requires a vanilla Markov head")
-
         # Gemma4TextConfig supplies these defaults when rope_parameters is absent.
         rope = self.hparams.get("rope_parameters") or {
             "full_attention": {"rope_type": "proportional", "partial_rotary_factor": 0.25, "rope_theta": 1000000.0},
@@ -879,7 +854,6 @@ class Gemma4DSparkModel(DFlashModel):
         self.rope_parameters = rope.get("full_attention", rope)
         if self.rope_parameters.get("rope_type") not in ("default", "proportional"):
             raise ValueError("Gemma4 DSpark requires default or proportional RoPE")
-
     def set_vocab(self):
         super().set_vocab()
         mask_id = self.dflash_config.get("mask_token_id", self.hparams.get("mask_token_id"))
@@ -887,7 +861,6 @@ class Gemma4DSparkModel(DFlashModel):
             raise ValueError("Gemma4 DSpark requires mask_token_id")
         if "mask_token_id" not in self.dflash_config:
             self.gguf_writer.add_mask_token_id(mask_id)
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         head_dim = int(self.hparams["global_head_dim"])
@@ -898,13 +871,11 @@ class Gemma4DSparkModel(DFlashModel):
         self.gguf_writer.add_embedding_scale(self.hparams["hidden_size"] ** 0.5)
         self.gguf_writer.add_attention_scale(1.0)
         self.gguf_writer.add_hidden_act("gelu_pytorch_tanh")
-
         self.gguf_writer.add_sample_from_anchor(self.hparams.get("sample_from_anchor", True))
         target_layers = self.dflash_config.get("target_layer_ids", self.hparams.get("target_layer_ids"))
         if not target_layers:
             raise ValueError("Gemma4 DSpark requires target_layer_ids")
         self.gguf_writer.add_has_confidence_head(any("confidence_head.proj" in name for name in self.model_tensors))
-
         if self.hparams.get("final_logit_softcapping"):
             raise ValueError("Gemma4 DSpark logit softcapping is not supported")
         # The top-level sliding_window is inert unless the draft enables SWA.
@@ -912,7 +883,6 @@ class Gemma4DSparkModel(DFlashModel):
             window = self.dflash_config["swa_window_size"]
             if window <= 0:
                 raise ValueError("Gemma4 DSpark swa_window_size must be positive")
-
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
@@ -922,7 +892,6 @@ class Gemma4DSparkModel(DFlashModel):
             name += ".weight"
         name = name.replace("model.confidence_proj.", "model.confidence_head.proj.")
         return super().filter_tensors((name, gen))
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # The shared DFlash map assigns this name to Qwen's pre-FFN norm.
         if name.endswith(".post_attention_layernorm.weight"):
@@ -930,7 +899,6 @@ class Gemma4DSparkModel(DFlashModel):
         elif name.endswith(".pre_feedforward_layernorm.weight"):
             name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_NORM, bid)
         yield from super().modify_tensors(data_torch, name, bid)
-
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         if self.rope_parameters["rope_type"] == "proportional":
             # Keep the unrotated dimensions in place, as in the Gemma4 converter.
@@ -944,11 +912,7 @@ class Gemma4DSparkModel(DFlashModel):
                 raise ValueError("Gemma4 DSpark rotary dimension count must be positive and even")
             factors = torch.tensor([1.0] * n_rot + [1e30] * (head_dim // 2 - n_rot), dtype=torch.float32)
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), factors
-
-
-@ModelBase.register("Gemma4UnifiedForConditionalGeneration")
 @ModelBase.example("hf-tiny-v2/tiny-random-Gemma4UnifiedForConditionalGeneration")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 class Gemma4UnifiedModel(Gemma4Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4
 
