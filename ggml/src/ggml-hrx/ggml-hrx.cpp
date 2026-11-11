@@ -1655,12 +1655,31 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             // Nothing fits under the ceiling: refuse the device here, loudly, instead of planning a launch that can
             // reach the fault line (#680). Report only, do not try to be clever about it.
             const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
-            GGML_LOG_ERROR("ggml_hrx: %s: refusing to use the device: GTT total %.1f GiB with %.1f GiB free leaves "
-                           "nothing under the %.1f GiB ceiling (reserve GGML_HRX_GTT_RESERVE_MB, override "
-                           "GGML_HRX_POOL_LIMIT_MB); free GTT or lower the reserve (engine #680)\n",
-                           device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
-                           device_free / (1024.0 * 1024.0 * 1024.0),
-                           (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0));
+            // engine #2069: name the term that actually bound the budget. `pool_budget_terms()` takes the smaller of the two,
+            // so a host-bound refusal used to print the GTT figures and advise freeing GTT - which is the wrong resource,
+            // and the one line a person reads when nothing runs at all. `host_bound` already decides the wording of the
+            // open-time guardrail line; this is the same distinction on the refusal path.
+            if (terms.host_bound) {
+                GGML_LOG_ERROR("ggml_hrx: %s: refusing to use the device: host memory is the binding term - %.1f GiB "
+                               "available against %.1f GiB of GTT headroom (GTT total %.1f GiB, %.1f GiB free, ceiling "
+                               "%.1f GiB); free RAM, or lower GGML_HRX_GTT_RESERVE_MB / set GGML_HRX_POOL_LIMIT_MB "
+                               "(engine #680, #2069)\n",
+                               device_ctx->name.c_str(),
+                               terms.host_available == ggml::hrx::onebit::kHostUnknown
+                                   ? -1.0
+                                   : terms.host_available / (1024.0 * 1024.0 * 1024.0),
+                               terms.gtt_term / (1024.0 * 1024.0 * 1024.0),
+                               device_total / (1024.0 * 1024.0 * 1024.0),
+                               device_free / (1024.0 * 1024.0 * 1024.0),
+                               (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0));
+            } else {
+                GGML_LOG_ERROR("ggml_hrx: %s: refusing to use the device: GTT total %.1f GiB with %.1f GiB free leaves "
+                               "nothing under the %.1f GiB ceiling (reserve GGML_HRX_GTT_RESERVE_MB, override "
+                               "GGML_HRX_POOL_LIMIT_MB); free GTT or lower the reserve (engine #680)\n",
+                               device_ctx->name.c_str(), device_total / (1024.0 * 1024.0 * 1024.0),
+                               device_free / (1024.0 * 1024.0 * 1024.0),
+                               (device_total > reserve ? device_total - reserve : 0) / (1024.0 * 1024.0 * 1024.0));
+            }
             hrx_device_release(hrx_device);
             continue;
         }
