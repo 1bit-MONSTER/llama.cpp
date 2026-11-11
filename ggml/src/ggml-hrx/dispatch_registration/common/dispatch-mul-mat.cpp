@@ -422,7 +422,7 @@ static bool match_symmetric_i4_low_row_dispatch(const DispatchMatchContext & con
 }
 
 static bool match_q6_k_token1_shortlist_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    constexpr int64_t selected_group_count  = 96;
+    constexpr int64_t max_selected_groups   = 96;
     constexpr int64_t candidate_count       = 128;
     constexpr int64_t refine_tile_size      = 64;
     constexpr size_t  partition_entry_count = 1024;
@@ -436,6 +436,12 @@ static bool match_q6_k_token1_shortlist_dispatch(const DispatchMatchContext & co
         !has_embedded_external_concat_projection_ancestor(context.graph, match.input->id, match.input_size)) {
         return false;
     }
+
+    // engine #1962: the selection kernel writes one id per 32-wide activation group that exists, and the scan reads
+    // `selected_group_count` ids. Asking for 96 at an input below 3072 (Qwen3.8-Flash-Next is 2560: 80 groups) left the
+    // tail of the id buffer unwritten, and the scan used whatever was there as group indices: a read outside the weight
+    // (a device memory fault at 256) or stray terms in the coarse scores. Never ask for more groups than there are.
+    const int64_t selected_group_count = std::min<int64_t>(max_selected_groups, match.input_size / 32);
 
     const CommonSymmetricI4ActivationLayout activation_layout =
         common_symmetric_i4_activation_layout(match.input_size, match.token_count);
