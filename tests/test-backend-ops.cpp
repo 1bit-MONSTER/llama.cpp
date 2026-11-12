@@ -10369,6 +10369,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // The same routed shapes with the file's real 512 experts (engine #572 tile fit): 10 routes over 512 experts give
+    // ~1.6 / 10 / 40 routed rows per expert at 80 / 512 / 2048 tokens, so these reach the small-row tiles that the
+    // 16-expert cases above (50-320 rows per expert) never select. Gate/up: IQ4_XS (UD-IQ4_XS) and IQ2_S
+    // (UD-IQ3_XXS); down: IQ4_NL (both files) and Q5_0 (UD-IQ4_XS), 640 -> 2560 with one input row per route.
+    for (ggml_type t : {GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_S}) {
+        for (int64_t tokens : {80, 512, 2048}) {
+            test_cases.emplace_back(new test_mul_mat_vec_fusion(t, GGML_GLU_OP_SWIGLU, tokens, 640, 2560,
+                true, 512, 10, true, false, true, false));
+        }
+    }
+    for (ggml_type t : {GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_0}) {
+        for (int64_t tokens : {80, 512, 2048}) {
+            test_cases.emplace_back(new test_mul_mat_id(t, GGML_TYPE_F32, 512, 10, false, 2560, tokens, 640));
+        }
+    }
+
     // one-token Q4_K/Q5_K gate/up + SwiGLU at the HRX HIP kernel sizes (output % 128 == 0)
     for (ggml_type t : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) { for (int64_t n : {128, 384}) { for (int64_t k : {256, 1024, 2560}) { test_cases.emplace_back(new test_mul_mat_vec_fusion(t, GGML_GLU_OP_SWIGLU, 1, n, k, false, 1, 1, false, false, true, false, {1, 1})); } } }
 
@@ -10648,6 +10664,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 32, 4, false, 2880, bs, 2880));
                 test_cases.emplace_back(new test_mul_mat_id_fusion(type_a, type_b, 32, 4, false, 2880, bs, 2880, 1));
             }
+        }
+    }
+
+    // Qwen3.8-Flash-Next routed down (engine #572): 512 experts, 10 routes, 640 -> 2560, the files' two down formats
+    for (int bs : {80, 512, 2048}) {
+        for (ggml_type type_a : {GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_0}) {
+            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 512, 10, false, 2560, bs, 640));
         }
     }
 
