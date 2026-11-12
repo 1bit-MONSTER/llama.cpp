@@ -1343,12 +1343,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
 
     ggml_tensor * output = build_recurrent_attn(inp, ssm_states_all, q_conv, k_conv, v_conv, gate, beta, state, il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
-=======
     ggml_tensor * z_2d = ggml_view_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
             ggml_row_size(z->type, head_v_dim), z->nb[1], z->nb[1] * n_seq_tokens, 0);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // gated normalization, as self.norm(core_attn_out, z) in the reference
     ggml_tensor * attn_out_norm = build_norm_gated(output, model.layers[il].ssm_norm, z_2d, il);
@@ -1418,19 +1414,11 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, co
 //   mixed_n = (t[p]*m[0]) ^ ... ^ (t[p-n+1]*m[n-1]);  row = mixed_n % vocab[h] + offset[h]
 // The hash runs host-side because ggml has no int64 and no xor. EOS resets the window.
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 class llm_graph_input_ple : public llm_graph_input_i {
 public:
     llm_graph_input_ple(const llama_model_qwen4exp & pmodel,
                         const llama_kv_cache_context * mctx) : pmodel(pmodel), mctx(mctx) {}
     virtual ~llm_graph_input_ple() = default;
-=======
-class llm_graph_input_qwen4exp_ple : public llm_graph_input_i {
-public:
-    llm_graph_input_qwen4exp_ple(const llama_model & model,
-                        const llama_kv_cache_context * mctx) : model(model), mctx(mctx) {}
-    virtual ~llm_graph_input_qwen4exp_ple() = default;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     void set_input(const llama_ubatch * ubatch) override;
 
@@ -1450,13 +1438,8 @@ public:
     std::vector<llama_token> prev;
 };
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
     const auto & hp = pmodel.hparams;
-=======
-void llm_graph_input_qwen4exp_ple::set_input(const llama_ubatch * ubatch) {
-    const auto & hparams = model.hparams;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // an image arrives as an embd batch, so ubatch->token is null, but every position still needs a row for ggml_get_rows
     // stand in the image token id that the reference hashes, or EOS if the file has no such key
