@@ -1022,17 +1022,6 @@ int main() {
     }
 
     HrxTestDevice device;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:tests/test-hrx-loom-jit.cpp
-    if (device.open()) {
-        run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Sync, binary);
-        run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Async, binary);
-        run_targeted_export_materialize_case(device);
-    } else {
-        std::printf("skipping KernelExecutableCache materialization checks: no HRX device available\n");
-    }
-
-    return 0;
-=======
     REQUIRE(device.open());
     run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Sync, binary);
     run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Async, binary);
@@ -1168,5 +1157,4 @@ int main(int argc, char ** argv) {
 
     const bool has_device = has_hrx_test_device();
     return suite.run(argc, argv, has_device);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:tests/hrx-loom-jit-test.cpp
 }
