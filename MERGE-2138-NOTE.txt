@@ -339,3 +339,24 @@ hunk 1's ours-block region declares -- so the remaining work is
 
 Method note: the *prelude before a hunk* identifies which class or function the hunk's two sides are bodies OF. Reading it first
 would have saved the concatenation attempt.
+
+## qwen4exp final 6: the exact structure a hand split has to produce
+Reading the shared text BETWEEN the hunks (not just the hunks) gives the whole picture:
+
+    <hunk 1 OURS>   class llm_graph_input_qsa  { ctor(...), dtor, ... }        (+2 braces, method opening)
+    <hunk 1 THEIRS> class llm_graph_input_kpool { ctor(mctx, kpool), dtor ... } (+2 braces, method opening)
+    SHARED          }  bool can_reuse(const llm_graph_params & params) override {  mctx = ...; idx check ...
+    <hunk 2 OURS>        cell_blk / blk_cells / blk_pos validation      <- belongs to QSA
+    <hunk 2 THEIRS>      pool_cells / pool_mask / tail_idxs validation  <- belongs to KPOOL
+    <hunk 3 OURS>        23L: k_idxs, cell_blk, blk_cells, blk_pos ...  <- QSA's members
+    <hunk 3 THEIRS>      67L: k_idxs, pool_cells, pool_idxs, pool_mask  <- KPOOL's members
+
+Only ONE class can own the shared `can_reuse` opening and the shared close, so a concatenation cannot work no matter how the
+braces are balanced: the shared middle has to be DUPLICATED, once per class, with the right qualifier and the right field set.
+
+What the split is, concretely:
+  1. qsa class: ours' hunk-1 block + ours' hunk-3 members + a can_reuse taking ours' hunk-2 validation, then `};`
+  2. kpool class: theirs' hunk-1 block + theirs' hunk-3 members + the shared can_reuse with theirs' hunk-2 validation, then `};`
+  3. hunk 4 (`reshape_4d` vs `view_4d`) is already decided: theirs (explicit strides are the safe superset).
+That is ~120 lines of hand work with two synthesized `can_reuse` signatures. It is the last thing standing between this file and a
+clean compile, and every piece of it is now named rather than guessed.
