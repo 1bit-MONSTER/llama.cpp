@@ -293,3 +293,16 @@ use them, so the file would be syntactically broken in a way that looks like a m
 the uses rewritten, which is one edit of ~200 lines, the same shape as the llama-bench flag pair (eleven sites, one decision).
 
 Call sites to rewrite once the three hunks are taken: lines 605, 685, 815, 883, 898 (all still in the ggml_tensor* form).
+
+## qwen4exp hunk "22L/18L" is a COMPOSITION, not a side (learned by breaking it)
+AMD's loader calls `load_block(il, trunk_flags)` and `load_block(il, mtp_flags)`, but **`load_block` is never defined anywhere in
+the tree**. The definition existed in AMD's file as a lambda whose body is the 22-line loop that OURS' side of that hunk carries.
+So the resolution is not "ours" or "theirs": our loop body has to be *wrapped* as the `load_block` lambda that AMD's two loops
+call (trunk loop over n_layer, MTP loop over n_layer..n_layer_all).
+
+I found this by taking theirs and watching the compiler report 'load_block was not declared in this scope' twice -- then reverted,
+because a call to a nonexistent function is worse than a marked conflict. The remaining 9 hunks in this file are otherwise the QSA
+path (see the models.h note: both graph inputs are live, both builders exist as separate definitions).
+
+Same shape as the dflash conv-guard and the llama-model boundary cases: one side owns the structure, the other owns the text that
+fills it.
