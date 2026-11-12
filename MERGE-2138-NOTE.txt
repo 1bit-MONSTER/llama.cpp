@@ -513,3 +513,16 @@ one item in my column I should stop trying to resolve by assembly.
 
 Correction to the previous note: the 'REORDER' framing there was wrong -- members may legally be declared after member functions, so
 the layout was never the obstacle. The signatures are.
+
+## CORRECTION: the dispatch gap is a helper-chain PORT, not "two copy-and-place items"
+My previous note called the two missing symbols small mechanical additions. Checking the dependency chain says otherwise:
+    find_full_ordered_value_resource   merged 0 files   /  pin 1 file      <- the helper the free function is built on
+    find_generated_resource           merged 0 (free)   /  pin inline in command-plan.h
+and the free function's body references detail::find_full_ordered_value_resource plus same_full_ordered_value_range,
+same_q8_1_x4_geometry and same_packed_row_geometry (those three DO exist in the merged tree). So restoring it means porting the
+detail:: helper (which does not exist here at all) plus the inline comparator family it takes as callables -- roughly 40-60 lines of
+command-plan.h, all verbatim-available from the pin, none of it a design decision, but not a two-line paste either.
+
+Being straight about the score: I have now twice described this gap as smaller than it is ('API drift', then 'two copy-and-place
+items'). Both times the estimate came from reading the error message rather than the callee. The measurements that are reliable are the
+ones in this file: which files have the symbol, in which parent, and whether it compiles.
