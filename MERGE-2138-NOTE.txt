@@ -434,3 +434,23 @@ re-scan with the same scanner. The scanner is the instrument to keep: three naiv
 
 Scanner recipe: strip comments and literals first, then count; report the LAST line at each depth level; the unmatched opens are
 between the last depth-(n+1) crossing and the next open at that level.
+
+## ONE owner-scoped gap explains FOUR of the remaining failures: AMD's activation-publication infrastructure
+The merged tree is missing `CommandPlanActivationPublicationDiagnostic` and everything that carries it. Measured:
+  AMD's pin has 'activation_publication_diagnostics' in 5 library files --
+    dispatch/command-plan-metadata.{h,cpp}      the type, the accessor, the private vector
+    dispatch/command-program.{h,cpp}            the plumbing
+    dispatch/command-program-dump.cpp           the dump
+  the merged tree has it in ZERO library files (only in the two tests that assert on it).
+  our line did touch all five files (numstat 1 row each), so this is a targeted PORT, not a file swap.
+
+Two tests fail on exactly this: hrx-backend-test.cpp:5396+ ('CommandPlanMetadata has no member named
+activation_publication_diagnostics') and the same assertion family in hrx-ops-test.cpp.
+
+And it is the same subsystem as the other two dispatch failures, which is the useful part:
+  hrx-ops-test      : too many initializers for DispatchMatchContext, register_gated_mul_mat_id_dispatches missing
+  hrx-backend-test  : CommandPlanMetadata::activation_publication_diagnostics missing  <- this one
+  hrx-loom-jit-test : KernelExecutableCache signature mismatch
+all three are AMD's activation-publication / tiled-pair / kpool refactors versus our line's dispatch vocabulary. That is ONE
+integration task for the dispatch owner (cl-hrxkern), not four, and the tests give it a precise acceptance signal: build the three
+test targets and watch them compile.
