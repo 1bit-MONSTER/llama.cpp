@@ -26,6 +26,17 @@ enum class DispatchSource {
     Qwen,
 };
 
+// AMD's activation-publication consumer classes: dispatch-activation-publication.h (restored from the pin) reports which
+// consumer classes a publication serves, and the merge kept the reporting without this enum.
+enum DispatchActivationConsumerSource : uint32_t {
+    DispatchActivationConsumerSourceCommon = 1u << 0,
+    DispatchActivationConsumerSourceLlm    = 1u << 1,
+    DispatchActivationConsumerSourceQwen   = 1u << 2,
+    DispatchActivationConsumerSourceAll    = DispatchActivationConsumerSourceCommon |
+                                             DispatchActivationConsumerSourceLlm |
+                                             DispatchActivationConsumerSourceQwen,
+};
+
 struct DispatchMatchContext {
     const Graph &             graph;
     const GraphNode *         root_node  = nullptr;
