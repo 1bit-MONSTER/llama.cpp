@@ -16,6 +16,7 @@
 #include "graph/graph-matcher.h"
 #include "graph/graph-traversal.h"
 #include "graph/graph.h"
+#include "hip/hip-capabilities.h"
 #include "hrx-interop-utils.h"
 #include "kernel-corpus/kernel-corpus.h"
 #include "model-buffer-from-mmap.h"
@@ -9064,6 +9065,49 @@ static void run_zero_output_scheduler_elision_checks() {
     ggml_free(ctx);
 }
 
+// engine #679: a node only a fused HIP dispatch executes is placed on HRX only through a matcher's own claim
+// predicate (hip/hip-capabilities.h). The QSA indexer's f16 gather at Flash-Next's 18.8k shape is the case: standalone
+// it has no dispatch, so supports_op says no and the scheduler puts it on the CPU, and hip.qsa_pool_blocks (the add-on
+// fusion rooted at it) never sees it in a model graph. A predicate claims exactly what it names and nothing else.
+static bool hip_tensor_claim_test_predicate(const ggml_tensor * op) {
+    return op != nullptr && op->op == GGML_OP_GET_ROWS && std::strcmp(op->name, "hip_tensor_claim_test.claimed") == 0;
+}
+
+static void run_hip_tensor_claim_checks() {
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = 512 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 128, 18944);
+    ggml_tensor * cells = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 18944);
+    ggml_tensor * named = ggml_get_rows(ctx, cache, cells);
+    ggml_tensor * other = ggml_get_rows(ctx, cache, cells);
+    REQUIRE(named != nullptr && other != nullptr);
+    ggml_set_name(named, "hip_tensor_claim_test.claimed");
+    ggml_set_name(other, "hip_tensor_claim_test.not_claimed");
+
+    // before any predicate: the standalone answer, which is no for this gather
+    REQUIRE(!ggml::hrx::hip_tensor_claimed(named));
+    REQUIRE(!ggml_backend_supports_op(backend, named));
+    REQUIRE(!ggml_backend_supports_op(backend, other));
+
+    ggml::hrx::hip_declare_tensor_claim(hip_tensor_claim_test_predicate);
+    ggml::hrx::hip_declare_tensor_claim(hip_tensor_claim_test_predicate);  // registries run per architecture: once
+    REQUIRE(ggml::hrx::hip_tensor_claimed(named));
+    REQUIRE(ggml_backend_supports_op(backend, named));
+    // the claim is the predicate's, not the op's: the same gather under another name keeps the standalone answer
+    REQUIRE(!ggml::hrx::hip_tensor_claimed(other));
+    REQUIRE(!ggml_backend_supports_op(backend, other));
+
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
 static void run_zero_output_device_support_checks() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -12197,6 +12241,7 @@ int main(int argc, char ** argv) {
 
     const std::vector<Case> device_cases = {
         { "zero_output_device_support", [] { run_zero_output_device_support_checks(); } },
+        { "hip_tensor_claim", [] { run_hip_tensor_claim_checks(); } },
         { "scale_f32_device_support", [] { run_scale_f32_device_support_checks(); } },
         { "qwen_expert_table_partition_prefill_512_execution", [] { run_qwen_expert_table_partition_prefill_512_execution(); } },
         { "add_f32", [] { run_add_f32(); } },
