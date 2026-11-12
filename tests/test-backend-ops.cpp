@@ -4684,40 +4684,23 @@ struct test_dsv4_hc_pre : public test_dsv4_hc {
     }
 
     std::string vars() override {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        return VARS_TO_STR3(n_embd, n_tokens, gated);
-    }
-
-    test_dsv4_hc_pre(int64_t n_embd = 31, int64_t n_tokens = 17, bool gated = false)
-        : n_embd(n_embd), n_tokens(n_tokens), gated(gated) {}
-=======
         return VARS_TO_STR4(n_embd, n_hc, n_tokens, gated);
     }
 
     test_dsv4_hc_pre(int64_t n_embd = 31, int64_t n_hc = 4, int64_t n_tokens = 17, bool gated = false)
         : n_embd(n_embd), n_hc(n_hc), n_tokens(n_tokens), gated(gated) {}
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_hc, n_tokens);
         ggml_set_name(x, "x");
 
         if (gated) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            ggml_tensor * gate = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
-            ggml_set_name(gate, "gate");
-
-            out = ggml_dsv4_hc_pre_gated(ctx, x, gate, 1.0f/hc);
-        } else {
-            ggml_tensor * weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hc, n_tokens);
-=======
             ggml_tensor * gate = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_hc, n_tokens);
             ggml_set_name(gate, "gate");
 
             out = ggml_dsv4_hc_pre_gated(ctx, x, gate, 1.0f/n_hc);
         } else {
             ggml_tensor * weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_hc, n_tokens);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             ggml_set_name(weights, "weights");
 
             out = ggml_dsv4_hc_pre(ctx, x, weights);
@@ -4739,13 +4722,6 @@ struct test_dsv4_hc_post : public test_dsv4_hc {
     }
 
     std::string vars() override {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        return VARS_TO_STR3(n_embd, n_tokens, identity);
-    }
-
-    test_dsv4_hc_post(int64_t n_embd = 31, int64_t n_tokens = 17, bool identity = false)
-        : n_embd(n_embd), n_tokens(n_tokens), identity(identity) {}
-=======
         return VARS_TO_STR4(n_embd, n_tokens, identity, gated);
     }
 
@@ -4754,7 +4730,6 @@ struct test_dsv4_hc_post : public test_dsv4_hc {
 
     test_dsv4_hc_post(int64_t n_embd = 31, int64_t n_tokens = 17, bool identity = false, bool gated = false)
         : n_embd(n_embd), n_tokens(n_tokens), identity(identity), gated(gated) {}
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
@@ -9054,7 +9029,6 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 // engine #528: a KV cache's padded columns may hold anything, including NaN (a failed buffer clear
 // leaves the tail of the cache as it was, ggml-hrx's clear only logs it). The reference skips a key
 // whose mask is -INFINITY before it reads K or V, so a masked column cannot reach the output; a
@@ -9114,7 +9088,6 @@ struct test_flash_attn_ext_pad_nan : public test_flash_attn_ext {
                 }
             }
         }
-=======
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -9128,7 +9101,6 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     void initialize_tensors(ggml_context * ctx) override {
         test_flash_attn_ext::initialize_tensors(ctx);
         init_tensor_uniform(ggml_get_tensor(ctx, "q"), -(float) q_range, (float) q_range);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 };
 
@@ -10558,14 +10530,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_dsv4_hc_comb(n_tokens, 20));
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    test_cases.emplace_back(new test_dsv4_hc_pre(1, 1));
-    test_cases.emplace_back(new test_dsv4_hc_pre(31, 17));
-    test_cases.emplace_back(new test_dsv4_hc_pre(128, 257));
-    test_cases.emplace_back(new test_dsv4_hc_pre(4096, 21));
-    test_cases.emplace_back(new test_dsv4_hc_pre(31, 17, true));
-    test_cases.emplace_back(new test_dsv4_hc_pre(4096, 21, true));
-=======
     test_cases.emplace_back(new test_dsv4_hc_pre(1, 4, 1));
     test_cases.emplace_back(new test_dsv4_hc_pre(31, 4, 17));
     test_cases.emplace_back(new test_dsv4_hc_pre(128, 4, 257));
@@ -10576,7 +10540,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_dsv4_hc_pre(128, n_hc, 17));
         test_cases.emplace_back(new test_dsv4_hc_pre(128, n_hc, 17, true));
     }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     test_cases.emplace_back(new test_dsv4_hc_post(1, 1));
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17));
