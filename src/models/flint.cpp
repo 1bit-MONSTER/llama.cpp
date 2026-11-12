@@ -4,11 +4,7 @@
 void llama_model_flint::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
-=======
     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm);
@@ -25,11 +21,7 @@ void llama_model_flint::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_flint::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    const int64_t n_ff_exp        = hparams.n_ff_exp;
-=======
     const int64_t n_ff_exp        = hparams.n_ff_exp();
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 

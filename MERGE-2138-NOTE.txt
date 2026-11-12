@@ -234,3 +234,13 @@ rotated rows), ours discards the placeholder structure the rest of the refactor 
 The integration is: apply hadamard->inverse to whichever tensor in THEIR path is the embedding rows (likely right after
 the get_rows that fills the placeholder), and make sure the inverse is not applied twice on the paths that already carry
 primal weights. Needs the three-path structure read first -- which is why it is marked rather than merged.
+
+## The buffer-ownership decision now covers TWO files, and should be made once
+	src/llama-kv-cache.cpp   (marked)  our kv-share/share_alloc + no_alloc dummy + #528 zero-fill  vs  ctxs_bufs.emplace()
+	src/llama-memory-recurrent.cpp (marked)  the same block for the "rs cache" buffer            vs  ctxs_bufs.emplace(..., "rs cache")
+
+Both flow through llama_memory_bufs (src/llama-memory.h:36), whose emplace() wraps the buffer in an OWNING
+ggml_backend_buffer_ptr. Our kv-share regions are exported/aliased (llama-kv-share.cpp) and must not be freed by that
+container. Deciding these two files differently would leave two ownership conventions in one subsystem, so resolve them
+together: borrowed insertion, or the shared buffer kept outside `bufs` with an explicit lifetime, or emplace() extended
+with a borrow flag.
