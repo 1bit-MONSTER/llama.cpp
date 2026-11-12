@@ -1354,14 +1354,8 @@ static Status prepare_kernel_command(const CommandProgramExecutionContext & cont
     }
 
     prepared       = make_prepared_command_shape(command);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     executable_ref = context.kernel_executables->get_or_compile(
         { context.device, context.target }, *resolved.definition, dispatch, prepared.kernel.constants);
-=======
-    executable_ref =
-        context.kernel_executables->get_or_compile({ context.device, context.target, context.compile_trace },
-                                                   *resolved.definition, dispatch);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     if (!executable_ref.valid()) {
         status.log("failed to prepare %s", command_context.c_str());
         return status;
