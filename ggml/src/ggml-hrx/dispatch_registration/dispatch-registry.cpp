@@ -62,8 +62,14 @@ static DispatchRegistry build_registry(bool include_qwen) {
 }  // namespace
 
 // Debug switches. GGML_HRX_DISABLE_DISPATCH: comma-separated substrings of registration names to
-// skip ("fused" skips every fused registration). GGML_HRX_LOG_DISPATCH=1: print each
-// registration name the first time it matches.
+// skip. The bare word "fused" is not a substring here: it is special-cased below to skip EVERY
+// registration whose kind is DispatchMatchKind::Fused, which is a large fraction of this backend
+// (engine#2146 counted the fallout). That difference is invisible from the command line -- the
+// switch looks like the per-name form the README documents -- so it is announced once, and the
+// one-registration form is named. A category-wide disable is a state no test covers, and it can
+// change the answer without failing a node: measured on LFM2.5-1.2B, `=fused` turned a coherent
+// completion into fragments with no error, which is how it was read as a kernel defect twice.
+// GGML_HRX_LOG_DISPATCH=1: print each registration name the first time it matches.
 static bool dispatch_disabled(const DispatchRegistration & registration) {
     static const std::vector<std::string> patterns = [] {
         std::vector<std::string> out;
@@ -79,6 +85,15 @@ static bool dispatch_disabled(const DispatchRegistration & registration) {
                 out.push_back(list.substr(start, end - start));
             }
             start = end + 1;
+        }
+        for (const std::string & pattern : out) {
+            if (pattern == "fused") {
+                std::fprintf(stderr,
+                             "hrx: GGML_HRX_DISABLE_DISPATCH=fused disables EVERY registration whose kind is "
+                             "DispatchMatchKind::Fused, not the names containing \"fused\" (engine#2146). That is a "
+                             "configuration no test covers and it can change the answer without failing a node; to "
+                             "A/B one kernel, name that registration instead, as hip/README.md documents.\n");
+            }
         }
         return out;
     }();
