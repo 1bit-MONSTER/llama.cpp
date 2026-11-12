@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 #include <vector>
@@ -92,6 +93,36 @@ std::vector<int32_t> sorted_rows(const Case & c, std::vector<int32_t> out) {
     return out;
 }
 
+
+// The same graph through a scheduler with HRX first and the CPU as fallback, as llama.cpp runs it. `claimed` says
+// whether HRX accepted the TOP_K node (supports_op), `on_hrx` whether the scheduler actually placed it there.
+std::vector<int32_t> run_top_k_sched(ggml_backend_t hrx, ggml_backend_t cpu, const Case & c, const std::vector<float> & input,
+                                     bool & claimed, bool & on_hrx) {
+    ggml_init_params params = { ggml_tensor_overhead() * 4 + ggml_graph_overhead(), nullptr, true };
+    ggml_context *   ctx    = ggml_init(params);
+    ggml_tensor *    x      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, c.cols, c.rows);
+    ggml_set_input(x);
+    ggml_tensor * y = ggml_top_k(ctx, x, c.k);
+    ggml_set_output(y);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, y);
+    claimed                      = ggml_backend_supports_op(hrx, y);
+    ggml_backend_t       backends[] = { hrx, cpu };
+    ggml_backend_sched_t sched      = ggml_backend_sched_new(backends, nullptr, 2, GGML_DEFAULT_GRAPH_SIZE, false, false);
+    std::vector<int32_t> out;
+    on_hrx = false;
+    if (ggml_backend_sched_alloc_graph(sched, graph)) {
+        on_hrx = ggml_backend_sched_get_tensor_backend(sched, y) == hrx;
+        ggml_backend_tensor_set(x, input.data(), 0, input.size() * sizeof(float));
+        if (ggml_backend_sched_graph_compute(sched, graph) == GGML_STATUS_SUCCESS) {
+            out.resize(static_cast<size_t>(c.k) * c.rows);
+            ggml_backend_tensor_get(y, out.data(), 0, out.size() * sizeof(int32_t));
+        }
+    }
+    ggml_backend_sched_free(sched);
+    ggml_free(ctx);
+    return out;
+}
 }  // namespace
 
 int main() {
@@ -119,6 +150,34 @@ int main() {
         { 2561, 2051, 64, 64 },   // odd pitch: rows after the first are unaligned, the scalar visit path
         { 7, 7, 3, 0 },           // k == cols
     };
+    // GGML_HRX_DISABLE_DISPATCH=top_k (ctest: test-hrx-top-k-declined): the declined path. HRX must not claim the
+    // node, the scheduler must place it on the CPU, and the result must be the CPU backend's, index for index.
+    // Before the claim followed the switch's own rule, the node stayed claimed with no dispatch and the graph failed.
+    const char * disabled = std::getenv("GGML_HRX_DISABLE_DISPATCH");
+    if (disabled != nullptr && *disabled != '\0') {
+        int failures = 0;
+        for (const Case & c : cases) {
+            std::vector<float> input(static_cast<size_t>(c.cols) * c.rows);
+            std::mt19937       rng(2146u + static_cast<unsigned>(c.cols * 31 + c.k));
+            for (float & v : input) {
+                v = c.levels > 0 ? static_cast<float>(rng() % c.levels) / c.levels - 0.5f
+                                 : std::uniform_real_distribution<float>(-1.0f, 1.0f)(rng);
+            }
+            bool                       claimed = true, on_hrx = true;
+            const std::vector<int32_t> got = run_top_k_sched(hrx, cpu, c, input, claimed, on_hrx);
+            const std::vector<int32_t> ref = run_top_k(cpu, c, input);
+            const bool same = !got.empty() && got == ref;
+            const bool ok   = !claimed && !on_hrx && same && invalid_rows(c, input, got) == 0;
+            failures += !ok;
+            std::printf("  %s declined (%s) cols=%d k=%d rows=%d levels=%d: HRX claims it %s, scheduled on %s, result %s\n",
+                        ok ? "ok  " : "FAIL", disabled, c.cols, c.k, c.rows, c.levels, claimed ? "yes" : "no",
+                        on_hrx ? "HRX" : "CPU", got.empty() ? "none (graph failed)" : same ? "== CPU" : "!= CPU");
+        }
+        ggml_backend_free(cpu);
+        ggml_backend_free(hrx);
+        std::printf("test-hrx-top-k-repeat (declined): %s\n", failures ? "FAIL" : "ok");
+        return failures ? 1 : 0;
+    }
     constexpr int kRuns    = 12;
     int           failures = 0;
     for (const Case & c : cases) {
