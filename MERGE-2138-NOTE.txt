@@ -564,3 +564,23 @@ Two rules from this, for any future edit on a large test file:
 
 Also: the pin's body and the merged body of run_generic_swiglu_k16_publish_checks are the SAME length (59 lines), so that function was
 never truncated -- my hypothesis about the orphan fragment's owner was wrong. The fragment's owner is still unidentified.
+
+## hrx-loom-jit-test is a SYMPTOM: the KernelExecutableCache API conflict lives in command-program-executor.cpp
+The last failing test TU calls, as AMD's test does:
+    cache.get_or_compile(context, binary, dispatch)                       -- 3 args
+    cache.materialize(context, ref, dispatch.kernel, constants, launch)   -- 5 args
+while the merged library declares ours:
+    get_or_compile(const Context &, const KernelDefinition &, const Dispatch &, std::vector<uint8_t> & constants)
+    std::shared_ptr<KernelExecutable> materialize(const Context &, const KernelExecutableRef &, const std::vector<uint8_t> &)
+Checked AMD's pin: it declares the 3-arg / 5-arg forms, so both sides are self-consistent and the difference is ours.
+
+The decision point is NOT the test -- it is ggml/src/ggml-hrx/runtime/command-program-executor.cpp, where the same API is conflicted
+(one of its 6 markers, at ~1358 and ~1433):
+    ours:    get_or_compile({device, target}, *resolved.definition, dispatch, prepared.kernel.constants)
+    AMD's:   get_or_compile({device, target, context.compile_trace}, *resolved.definition, dispatch)
+    ours:    materialize({device, target}, executable_refs[i], command.kernel.constants)
+    AMD's:   materialize({device, target, context.compile_trace}, executable_refs[i], command.kernel.specialization,
+                         command.kernel.constants, command.kernel.launch)
+i.e. our line moved `constants` from materialize into get_or_compile, and AMD's added compile_trace to the context plus kept
+specialization/launch on materialize. Whichever side wins that file decides both the library and the test; the test cannot be
+'fixed' independently without silently blessing one API.
