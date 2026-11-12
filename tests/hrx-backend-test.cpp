@@ -3571,6 +3571,75 @@ static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool fi
     ggml_free(ctx);
 }
 
+// engine #2137: a weight a GET_ROWS also reads (a tied token embedding) is read stored by every kernel, because the
+// gather needs the stored layout and a program holds one layout per value (engine #1316). A 2-to-8-token batch on it
+// stays on the kquant few-token kernel, which reads that same stored copy; handing it to the packed prefill kernel
+// would only pick the stored tiled path, which is slower.
+static void schedule_tied_weight_few_tokens_keeps_kquant(ggml_type weight_type, int64_t token_count) {
+    if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr || std::getenv("GGML_HRX_Q6K_PACKED_ROWS") != nullptr) {
+        std::printf("       skipped: a packed-layout switch is set in the environment\n");
+        return;
+    }
+    constexpr int64_t input_size  = 512;
+    constexpr int64_t output_size = 256;
+
+    ggml_backend_hrx_device_context device_context = {};
+    device_context.name                            = "HRX0";
+    ggml::hrx::model_buffer_from_mmap_init_type(&device_context);
+
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, weight_type, input_size, output_size);
+    ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+    ggml_tensor * ids    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
+    REQUIRE(weight != nullptr);
+    REQUIRE(input != nullptr);
+    REQUIRE(ids != nullptr);
+
+    const size_t          byte_count = GGML_PAD(ggml_nbytes(weight), 64) + 64;
+    std::vector<uint8_t>  storage(byte_count + 64);
+    uint8_t *             bytes  = storage.data() + (64 - reinterpret_cast<uintptr_t>(storage.data()) % 64) % 64;
+    ggml_backend_buffer_t buffer = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, byte_count);
+    REQUIRE(buffer != nullptr);
+    REQUIRE(ggml::hrx::buffer_is_file_mapped(buffer));
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_tallocr allocator = ggml_tallocr_new(buffer);
+    REQUIRE(ggml_tallocr_alloc(&allocator, weight) == GGML_STATUS_SUCCESS);
+
+    ggml_tensor * gathered = ggml_get_rows(ctx, weight, ids);
+    ggml_tensor * output   = ggml_mul_mat(ctx, weight, input);
+    REQUIRE(gathered != nullptr);
+    REQUIRE(output != nullptr);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, gathered);
+    ggml_build_forward_expand(graph, output);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+
+    size_t kquant = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
+        if (name == "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32") {
+            ++kquant;
+        } else {
+            std::printf("       %s, %lld tokens: dispatch %s\n", ggml_type_name(weight_type),
+                        static_cast<long long>(token_count), name.c_str());
+        }
+    }
+    REQUIRE(kquant == 1);
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+}
+
 // engine #1962: the draft head's logits step (common.mul_mat.q6_k_token1_shortlist) selects activation groups, and the
 // scan reads as many group ids as it is told were selected. The selection kernel writes one id per 32-wide group that
 // exists, so the request must never exceed input_size / 32: at 96 for every width, an input below 3072 left the tail
@@ -12054,6 +12123,12 @@ int main(int argc, char ** argv) {
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, true, 6); } },
         { "packed_layout_follows_weight.q6_k.file_mapped.tokens8",
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 8); } },
+        // ...but not for a weight a GET_ROWS also reads (a tied embedding): prefill cannot pack it either. (Q6_K: the
+        // i8 kernel takes a tied weight at 6 to 16 tokens before this matcher, dispatch-mul-mat.cpp)
+        { "tied_weight_few_tokens_keeps_kquant.q4_k.tokens6",
+          [] { schedule_tied_weight_few_tokens_keeps_kquant(GGML_TYPE_Q4_K, 6); } },
+        { "tied_weight_few_tokens_keeps_kquant.q4_k.tokens8",
+          [] { schedule_tied_weight_few_tokens_keeps_kquant(GGML_TYPE_Q4_K, 8); } },
         // engine #2137: a file-mapped weight that already has a stored device copy (a decode kernel read it stored) is
         // read stored by prefill too, so it is not copied a second time; and not in the i8 layout at 6 to 16 tokens
         { "stored_copy_entries_forgotten_on_remap", [] { run_stored_copy_entries_forgotten_on_remap(); } },
