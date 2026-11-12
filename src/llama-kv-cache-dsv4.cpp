@@ -1778,15 +1778,9 @@ void llama_kv_cache_dsv4::state_write(llama_io_write_i & io, llama_seq_id seq_id
         const uint32_t n_rows_lid = seq_id >= 0 ?
             dsv4_state_n_used_k_rows(pos_max, lid_state->get_ratio(), kv_lid->get_size()) : kv_lid->get_size();
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        dsv4_state_write_k_cache(io, kv_csa.get(), seq_id, flags, n_rows_csa, comp_kv_src);
-        dsv4_state_write_k_cache(io, kv_hca.get(), seq_id, flags, n_rows_hca, comp_kv_src);
-        dsv4_state_write_k_cache(io, kv_lid.get(), seq_id, flags, n_rows_lid, comp_kv_src);
-=======
         dsv4_state_write_k_cache(io, kv_csa.get(), seq_id, flags, n_rows_csa, comp_il_src);
         dsv4_state_write_k_cache(io, kv_hca.get(), seq_id, flags, n_rows_hca, comp_il_src);
         dsv4_state_write_k_cache(io, kv_lid.get(), seq_id, flags, n_rows_lid, comp_il_src);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     csa_state->state_write(io, seq_id, flags, rs_idx);
