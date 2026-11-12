@@ -2814,12 +2814,6 @@ struct llama_model_qwen35 : public llama_model_base {
 };
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-struct llama_model_qwen4exp : public llama_model_base {
-    llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
-
-    class llm_graph_input_qsa;
-=======
 // Qwen3.5 backbone evaluated without memory, with a joint decision head on top of its hidden states
 struct llama_model_clef : public llama_model_qwen35 {
     llama_model_clef(const struct llama_model_params & params) : llama_model_qwen35(params) {}
@@ -2916,8 +2910,9 @@ struct llama_model_clef : public llama_model_qwen35 {
 struct llama_model_qwen4exp : public llama_model_base {
     llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
 
+    class llm_graph_input_qsa;   // our QSA graph input (engine #1467 work)
+
     class llm_graph_input_kpool;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
