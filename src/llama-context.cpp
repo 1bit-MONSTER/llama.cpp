@@ -1886,7 +1886,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     const int64_t n_vocab = vocab.n_tokens();
     // MTP batches carry the target hidden state, which is n_embd_out wide (4 * n_embd for qwen4exp)
-    const bool    mtp_embd = cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && batch_inp.embd;
+    const bool    mtp_embd = cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && !batch_inp.embd.empty();
     const int64_t n_embd  = mtp_embd ? hparams.n_embd_out() : hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
@@ -2588,14 +2588,6 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
             res += lora->get_n_nodes();
         }
     }
-    uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
-    if (model.arch == LLM_ARCH_DFLASH && model.hparams.dflash_selector_rank > 0) {
-        // DFlash2's convolutions and selector are shape work rather than matmuls
-        res = std::max<uint32_t>(res, 12u*model.n_tensors());
-    }
-    for (const auto & lora : model.loras) {
-        res += lora->get_n_nodes();
-
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
     for (const auto & [seq_id, sampler] : sampling.samplers) {
         res += llama_sampler_backend_n_nodes(sampler) * cparams.n_outputs_max_per_seq;
