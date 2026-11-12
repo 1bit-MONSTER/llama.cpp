@@ -16,6 +16,7 @@
 #include "graph/graph-matcher.h"
 #include "graph/graph-traversal.h"
 #include "graph/graph.h"
+#include "hip/hip-capabilities.h"
 #include "hrx-interop-utils.h"
 #include "kernel-corpus/kernel-corpus.h"
 #include "model-buffer-from-mmap.h"
@@ -9064,6 +9065,104 @@ static void run_zero_output_scheduler_elision_checks() {
     ggml_free(ctx);
 }
 
+// engine #679: a node only a fused HIP dispatch executes is placed on HRX only through a matcher's own claim
+// predicate (hip/hip-capabilities.h). The QSA indexer's f16 gather at Flash-Next's 18.8k shape is the case: standalone
+// it has no dispatch, so supports_op says no and the scheduler puts it on the CPU, and hip.qsa_pool_blocks (the add-on
+// fusion rooted at it) never sees it in a model graph. A predicate claims exactly what it names and nothing else.
+static bool hip_tensor_claim_test_predicate(const ggml_tensor * op) {
+    return op != nullptr && op->op == GGML_OP_GET_ROWS &&
+           (std::strcmp(op->name, "hip_tensor_claim_test.claimed") == 0 ||
+            std::strcmp(op->name, "hip_tensor_claim_test.sched_claimed") == 0);
+}
+
+static void run_hip_tensor_claim_checks() {
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = 512 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 128, 18944);
+    ggml_tensor * cells = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 18944);
+    ggml_tensor * named = ggml_get_rows(ctx, cache, cells);
+    ggml_tensor * other = ggml_get_rows(ctx, cache, cells);
+    REQUIRE(named != nullptr && other != nullptr);
+    ggml_set_name(named, "hip_tensor_claim_test.claimed");
+    ggml_set_name(other, "hip_tensor_claim_test.not_claimed");
+
+    // before any predicate: the standalone answer, which is no for this gather
+    REQUIRE(!ggml::hrx::hip_tensor_claimed(named));
+    REQUIRE(!ggml_backend_supports_op(backend, named));
+    REQUIRE(!ggml_backend_supports_op(backend, other));
+
+    ggml::hrx::hip_declare_tensor_claim(hip_tensor_claim_test_predicate);
+    ggml::hrx::hip_declare_tensor_claim(hip_tensor_claim_test_predicate);  // registries run per architecture: once
+    REQUIRE(ggml::hrx::hip_tensor_claimed(named));
+    REQUIRE(ggml_backend_supports_op(backend, named));
+    // the claim is the predicate's, not the op's: the same gather under another name keeps the standalone answer
+    REQUIRE(!ggml::hrx::hip_tensor_claimed(other));
+    REQUIRE(!ggml_backend_supports_op(backend, other));
+
+    ggml_free(ctx);
+
+    // The constraint the hook documents, armed: a claim no dispatch takes fails the graph loudly (engine #389), it does
+    // not fall back. Through the scheduler, HRX0 + CPU, cache and cells in HRX memory: the unclaimed gather is placed
+    // on the CPU and computes; the same gather claimed (this predicate has no fusion behind it) is placed on HRX,
+    // where nothing executes it, and the compute returns an error.
+    ggml_backend_t cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    REQUIRE(cpu != nullptr);
+    for (const bool claimed : { false, true }) {
+        ggml_init_params gp = {};
+        gp.mem_size         = 512 * 1024;
+        gp.no_alloc         = true;
+        ggml_context * gctx = ggml_init(gp);
+        REQUIRE(gctx != nullptr);
+        ggml_tensor * gcache = ggml_new_tensor_2d(gctx, GGML_TYPE_F16, 128, 18944);
+        ggml_tensor * gcells = ggml_new_tensor_1d(gctx, GGML_TYPE_I32, 18944);
+        ggml_backend_buffer_t inputs = ggml_backend_alloc_ctx_tensors(gctx, backend);
+        REQUIRE(inputs != nullptr);
+        std::vector<ggml_fp16_t> hv((size_t) ggml_nelements(gcache), ggml_fp32_to_fp16(1.0f));
+        std::vector<int32_t>     iv((size_t) ggml_nelements(gcells));
+        for (size_t i = 0; i < iv.size(); ++i) {
+            iv[i] = (int32_t) i;
+        }
+        ggml_backend_tensor_set(gcache, hv.data(), 0, ggml_nbytes(gcache));
+        ggml_backend_tensor_set(gcells, iv.data(), 0, ggml_nbytes(gcells));
+
+        ggml_init_params cp = {};
+        cp.mem_size         = 512 * 1024;
+        cp.no_alloc         = true;
+        ggml_context * cctx = ggml_init(cp);
+        REQUIRE(cctx != nullptr);
+        ggml_tensor * gathered = ggml_get_rows(cctx, gcache, gcells);
+        ggml_set_name(gathered, claimed ? "hip_tensor_claim_test.sched_claimed" : "hip_tensor_claim_test.sched_free");
+        ggml_set_output(gathered);
+        ggml_cgraph * graph = ggml_new_graph(cctx);
+        ggml_build_forward_expand(graph, gathered);
+
+        ggml_backend_t       backends[2] = { backend, cpu };
+        ggml_backend_sched_t sched = ggml_backend_sched_new(backends, nullptr, 2, GGML_DEFAULT_GRAPH_SIZE, false, true);
+        REQUIRE(sched != nullptr);
+        REQUIRE(ggml_backend_sched_alloc_graph(sched, graph));
+        REQUIRE(ggml_backend_sched_get_tensor_backend(sched, gathered) == (claimed ? backend : cpu));
+        const ggml_status status = ggml_backend_sched_graph_compute(sched, graph);
+        if (claimed) {
+            REQUIRE(status != GGML_STATUS_SUCCESS);
+        } else {
+            REQUIRE(status == GGML_STATUS_SUCCESS);
+        }
+        ggml_backend_sched_free(sched);
+        ggml_free(cctx);
+        ggml_backend_buffer_free(inputs);
+        ggml_free(gctx);
+    }
+    ggml_backend_free(cpu);
+    ggml_backend_free(backend);
+}
+
 static void run_zero_output_device_support_checks() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -12197,6 +12296,7 @@ int main(int argc, char ** argv) {
 
     const std::vector<Case> device_cases = {
         { "zero_output_device_support", [] { run_zero_output_device_support_checks(); } },
+        { "hip_tensor_claim", [] { run_hip_tensor_claim_checks(); } },
         { "scale_f32_device_support", [] { run_scale_f32_device_support_checks(); } },
         { "qwen_expert_table_partition_prefill_512_execution", [] { run_qwen_expert_table_partition_prefill_512_execution(); } },
         { "add_f32", [] { run_add_f32(); } },

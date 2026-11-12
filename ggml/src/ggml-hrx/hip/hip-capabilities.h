@@ -38,4 +38,29 @@ bool hip_eager_op_declared(enum ggml_op op);
 // of failing the graph (engine #679).
 bool hip_top_k_tensor_supported(const struct ggml_tensor * op);
 
+// A per-tensor claim for a node only a fused HIP dispatch executes. The scheduler asks supports_op about each node
+// alone, before any graph exists, and device_supports_op answers that from can_execute_standalone_op_as_graph: a
+// one-node graph. A node whose only dispatch is a fusion rooted at it (the consumers are what make the pattern) then
+// reads as unsupported, the scheduler puts it on the CPU, and the fusion never sees it in a model graph. engine #679:
+// the add-on's hip.qsa_pool_blocks is rooted at the QSA indexer's f16 GET_ROWS, so in Flash-Next decode that gather
+// ran on the CPU in all 12 QSA layers, with a 4.85 MB copy out and 9.7 MB back per layer per step.
+//
+// A matcher registers a predicate while it registers itself, and device_supports_op returns true when one holds.
+// The predicate has to be no broader than its matcher: a claimed node no dispatch takes fails the whole graph
+// (engine #389). Builds without such a registration claim exactly what they claimed before.
+//
+// GGML_HRX_HIP_TENSOR_CLAIM is 1 unless the build sets it: device_supports_op consults the predicates only when it is
+// non-zero, so -DGGML_HRX_HIP_TENSOR_CLAIM=0 builds the fork as it answered before this hook (the path-taken mutant
+// of tests/hrx-backend-test.cpp hip_tensor_claim, which then fails). An add-on tests `#ifdef` for the declaration,
+// which exists either way.
+#ifndef GGML_HRX_HIP_TENSOR_CLAIM
+#    define GGML_HRX_HIP_TENSOR_CLAIM 1
+#endif
+using HipTensorClaim = bool (*)(const struct ggml_tensor * op);
+void hip_declare_tensor_claim(HipTensorClaim claim);
+
+// True when a registered predicate claims op. Builds the dispatch registries on first use, like
+// hip_eager_op_declared, so the registrations exist before the scheduler probes supports_op.
+bool hip_tensor_claimed(const struct ggml_tensor * op);
+
 }  // namespace ggml::hrx
