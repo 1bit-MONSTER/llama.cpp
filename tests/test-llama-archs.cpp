@@ -327,14 +327,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             n_ff_per_layer.push_back(il <= 1 ? 0 : n_ff);
         }
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
-    } else if (arch == LLM_ARCH_BLACKMAMBA) {
-        // Mamba-1 layers (n_ff 0) alternate with Switch MoE layers
-        std::vector<uint32_t> n_ff_per_layer;
-        n_ff_per_layer.reserve(n_layer);
-        for (uint32_t il = 0; il < n_layer; il++) {
-            n_ff_per_layer.push_back(il % 2 == 0 ? 0 : n_ff);
-        }
-        ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
     } else {
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff);
     }
@@ -407,16 +399,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     } else if (arch == LLM_ARCH_MINIMAX_M3) {
         // partial rotary: n_rot must not exceed the indexer key length (64)
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
-    } else if (arch == LLM_ARCH_ZAMBA || arch == LLM_ARCH_ZAMBA2) {
-        // the shared attention block runs on concat(hidden, embeddings): 2 * n_embd wide
-        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   2 * n_embd_head);
-        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, 2 * n_embd_head);
-        if (arch == LLM_ARCH_ZAMBA2) {
-            // exercise the low-rank MLP adapter form (engine #1036 cause 2) rather than the merged one:
-            // it is the newer path, it adds tensors the saver has to round-trip, and the merged form is
-            // what every published Zamba2 GGUF already exercises
-            ms.add_kv(LLM_KV_ZAMBA2_FFN_GATE_UP_ADAPTER_RANK, uint32_t(8));
-        }
     }
     if (arch == LLM_ARCH_SENSENOVA_U1) {
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SPATIAL, 10000.0f);
@@ -448,10 +430,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,              10000.0f);
         // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
-    } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_FLINT) {
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT) {        std::vector<uint32_t> pattern;
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT) {
+        std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
             pattern.push_back(il % 2);
@@ -482,12 +464,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
     // indexer head count is independent of the main attention head count.
-    if (arch == LLM_ARCH_QWEN4EXP) {
-        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,    uint32_t(4));
     if (arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT) {
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,    uint32_t(4));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(2));
-        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,  1.0e-6f);        ms.add_kv(LLM_KV_HYPER_CONNECTION_LOW_RANK, uint32_t(8));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,  1.0e-6f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_LOW_RANK, uint32_t(8));
         // without this the QSA layers fall back to dense and go uncovered
         ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS, std::vector<uint32_t>(n_layer, 4));
 
@@ -516,12 +497,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_PLE_HEAD_VOCAB_SIZES,        ple_head_vocab_sizes);
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,   arch == LLM_ARCH_MINIMAX_M3 ? n_head : uint32_t(1));
-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
-              arch == LLM_ARCH_QWEN4EXP ? n_embd_head : uint32_t(64));
-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
-=======
     // minimax-m3 keeps one indexer head per GQA head; the rest use a fixed 64 to match the fused
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,   arch == LLM_ARCH_MINIMAX_M3 ? n_head : uint32_t(64));
     // qwen4exp ropes indexer keys with the main rotary width, so its head can't be < n_rot
@@ -533,7 +508,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     //ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(131072));
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KPOOL,        uint32_t(4));
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KPOOL_SELECT_TAIL, true);
@@ -664,11 +638,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
         if (arch == LLM_ARCH_FLINT) {
             ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, true);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE, 1.0f);
-            ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, n_ff / 2);
-        }
-=======
         }
         if (arch == LLM_ARCH_K2_HORIZON) {
             ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      uint32_t(2));
@@ -687,7 +656,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     if (arch == LLM_ARCH_MAION_CODER) {
         ms.add_kv(LLM_KV_MOE_LATENT_SIZE, n_embd / 2);
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, std::vector<uint32_t>{n_ff, n_ff / 2, n_ff, n_ff});
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
@@ -699,7 +667,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
     ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP ? 256 : 2*n_embd);
-    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(arch == LLM_ARCH_ZAYA ? 2 : 4)); // zaya: 2-tap CCA convs
+    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
     ms.add_kv(LLM_KV_SSM_GROUP_COUNT,           arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
@@ -926,7 +894,6 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN4EXP:
-        case LLM_ARCH_BLACKMAMBA:
         case LLM_ARCH_PHIMOE:
         case LLM_ARCH_DBRX:
         case LLM_ARCH_OLMOE:
@@ -969,10 +936,10 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_LAGUNA:
-        case LLM_ARCH_ZAYA:
         case LLM_ARCH_MAPLE:
         case LLM_ARCH_MUSE_SPARK:
-        case LLM_ARCH_KOLIBRI1:            return true;
+        case LLM_ARCH_KOLIBRI1:
+            return true;
         default:
             return false;
     }
@@ -998,7 +965,7 @@ static bool moe_implemented(const llm_arch arch) {
 }
 
 static bool arch_supported(const llm_arch arch) {
-    if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_UNKNOWN) {
+    if (arch == LLM_ARCH_CLIP || arch == LLM_ARCH_GPTJ || arch == LLM_ARCH_UNKNOWN) {
         return false; // These models don't have usable implementations.
     }
     if (arch == LLM_ARCH_CHAMELEON) {
@@ -1010,19 +977,15 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
         return false; // FIXME @ngxson
     }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
+    if (arch == LLM_ARCH_GRANITE_SWITCH) {
+        return false; // FIXME adapter fixture
+    }
     if (arch == LLM_ARCH_DEEPSEEK41) {
         // TODO(dsv41): no synthetic fixture yet - deepseek41 needs the Engram/indexer/compressor
         // metadata (V4.1 hparams) that this fixture builder does not know how to write.
         return false;
     }
-    if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_T5ENCODER) {
-=======
-    if (arch == LLM_ARCH_GRANITE_SWITCH) {
-        return false; // FIXME adapter fixture
-    }
     if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_GEMMA_EMBEDDING2 || arch == LLM_ARCH_T5ENCODER) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         return false; // FIXME Embedding (?) models produce inconsistent results.
     }
     if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
@@ -1043,9 +1006,9 @@ static bool arch_supported(const llm_arch arch) {
     }
     // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
 #ifdef GGML_USE_WEBGPU
-    if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MINIMAX_M3 || arch == LLM_ARCH_QWEN4EXP) {
     if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
-            arch == LLM_ARCH_HY_V4) {        return false;
+            arch == LLM_ARCH_HY_V4) {
+        return false;
     }
 #endif // GGML_USE_WEBGPU
 
