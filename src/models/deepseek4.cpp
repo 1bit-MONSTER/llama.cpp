@@ -363,7 +363,10 @@ llama_model_deepseek4::graph::build_hc_mixes(
         ggml_tensor * hc_scale,
         ggml_tensor * hc_base,
         int il) const {
-    return build_hc_pre(x, build_hc_mixes(x, hc_fn, hc_scale, hc_base, post, comb, false, il), il);
+    // the struct form: the 8-argument overload fills post and comb through its out-parameters
+    hc_mixes result;
+    result.pre = build_hc_mixes(x, hc_fn, hc_scale, hc_base, &result.post, &result.comb, false, il);
+    return result;
 }
 
 ggml_tensor * llama_model_deepseek4::graph::build_hc_mixes(
@@ -404,28 +407,30 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_mixes(
     pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
     cb(pre, "hc_pre", il);
 
-    ggml_tensor * post = dsv4_view_2d(ctx0, mixes, hc, nt, hc);
-    post = dsv4_hc_affine(ctx0, post, scale_post, base_post);
-    post = ggml_sigmoid(ctx0, post);
-    post = ggml_scale(ctx0, post, 2.0f);
-    cb(post, "hc_post", il);
+    ggml_tensor * post_t = dsv4_view_2d(ctx0, mixes, hc, nt, hc);
+    post_t = dsv4_hc_affine(ctx0, post_t, scale_post, base_post);
+    post_t = ggml_sigmoid(ctx0, post_t);
+    post_t = ggml_scale(ctx0, post_t, 2.0f);
+    cb(post_t, "hc_post", il);
 
-    ggml_tensor * comb = nullptr;
+    ggml_tensor * comb_t = nullptr;
     if (cparams.fused_dsv4_hc_comb) {
-        comb = ggml_dsv4_hc_comb(ctx0, mixes, hc_scale, hc_base, hparams.dsv4_hc_eps,
+        comb_t = ggml_dsv4_hc_comb(ctx0, mixes, hc_scale, hc_base, hparams.dsv4_hc_eps,
                 (int32_t) hparams.dsv4_hc_sinkhorn_iters);
-        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_COMB, comb, il});
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_COMB, comb_t, il});
     } else {
         ggml_tensor * scale_comb = dsv4_view_1d(ctx0, hc_scale, 1, 2);
         ggml_tensor * base_comb  = dsv4_view_1d(ctx0, hc_base, hc*hc, 2*hc);
 
-        comb = dsv4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc);
-        comb = dsv4_hc_affine(ctx0, comb, scale_comb, base_comb);
-        comb = ggml_reshape_3d(ctx0, comb, hc, hc, nt);
-        comb = build_hc_sinkhorn(comb, il);
+        comb_t = dsv4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc);
+        comb_t = dsv4_hc_affine(ctx0, comb_t, scale_comb, base_comb);
+        comb_t = ggml_reshape_3d(ctx0, comb_t, hc, hc, nt);
+        comb_t = build_hc_sinkhorn(comb_t, il);
     }
-    cb(comb, "hc_comb", il);
+    cb(comb_t, "hc_comb", il);
 
+    *post = post_t;
+    *comb = comb_t;
     return pre;
 }
 
