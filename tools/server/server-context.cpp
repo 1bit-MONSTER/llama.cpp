@@ -1,5 +1,6 @@
 #include "server-context.h"
 #include "server-prefill.h"
+#include <nlohmann/json.hpp>   // [1bit] kv-share regions
 #include <atomic>
 #include <thread>
 #include "base64.hpp"
@@ -2835,7 +2836,6 @@ private:
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // [1bit] engine#941: a handoff (file or shared region) writes its cells into this slot's memory directly, so
     // there is no state buffer to snapshot - what the prompt-cache search needs is the bookkeeping, and a
     // checkpoint with no data is an existing shape (common_prompt_checkpoint::load_tgt returns at once when
@@ -2866,8 +2866,6 @@ private:
                 cur.pos_min, cur.pos_max, cur.n_tokens);
     }
 
-    void process_single_task(server_task && task) {
-=======
     // checkpoints are appended to the slot save file, after the llama state payload
     // they cannot be recreated from the final state alone (a recurrent state cannot be rewound)
     static constexpr uint32_t SLOT_CKPT_MAGIC   = 0x504b4353; // "SCKP"
@@ -3087,7 +3085,6 @@ private:
             return false;
         }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         switch (task.type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
@@ -3407,19 +3404,10 @@ private:
                         send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                    tokens.resize(token_count);
-                    slot->prompt.clear();
-                    slot->prompt.tokens.insert(tokens);
-                    if (task.slot_action.leave_one_token) {
-                        create_inplace_checkpoint(*slot, (int64_t) token_count);
-                    }
-=======
 
                     // nread is the end offset of the llama state payload within the file
                     const size_t nread_ckpt = load_slot_checkpoints(filepath, nread, *slot);
                     const size_t nread_dft  = load_slot_draft(filepath, nread + nread_ckpt, *slot);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
@@ -3835,18 +3823,8 @@ private:
                 scoped_timer t(t_decode, n_decode);
                 // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                batch_view = batch.get_view(off, n_tokens);
-                // [1bit] the prompt prefix runs on the prefill device, the rest of the view on ctx_tgt
-                if (const int32_t k = spec || mctx != nullptr ? 0 : prefill_dev.prefill(ctx_tgt, batch_view); k > 0) {
-                    off_next = off + k;
-                    continue;
-                }
-                bool ok = decode(n_batch, off, batch_view);
-=======
                 batch.render(off, n_tokens);
                 bool ok = decode(n_batch, off);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #ifdef DEBUG_TIMINGS
                 llama_synchronize(ctx_tgt);
 #endif
@@ -4648,16 +4626,7 @@ private:
                             SLT_ERR(slot, "failed to process mtmd chunk, res = %d\n", res);
                             send_error(slot, "failed to process mtmd chunk", ERROR_TYPE_SERVER);
                             slot.release();
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                            // The slot is done, skip it entirely. release() moves the task into task_prev and
-                            // resets slot.task, so `continue` re-enters the chunk loop and its next
-                            // `slot.task->n_tokens()` dereferences null - the SIGSEGV in engine #1489 (a failed
-                            // CLIP encode killed llama-server 3 ms after this error line). Upstream master returns
-                            // at the equivalent handler.
-                            return;
-=======
                             return; // the slot is done, skip it entirely
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                         }
 
                         metrics_queue_prompt(n_tokens_out);
@@ -7251,7 +7220,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_adopt(const se
                                          "and the export they were written into)", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
-    if (!body.contains("share_id") || !body.at("share_id").is_number_unsigned()) {
+    if (!body.contains("share_id") || !body.at("share_id").is_number_integer()) {
         res->error(format_error_response("adopt needs the \"share_id\" that ?action=share returned", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
