@@ -1289,54 +1289,6 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         inpL = build_hc_post(cur, residual, attn_hc.post, attn_hc.comb, il);
         cb(inpL, "hc_attn_post", il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        Qcur = build_rope(Qcur, inp_pos);
-        Kcur = build_rope(Kcur, inp_pos);
-        cb(Qcur, "Qcur", il);
-        cb(Kcur, "Kcur", il);
-        cb(Vcur, "Vcur", il);
-
-        // cache-aware, non-causal attention
-        ggml_tensor * cur = use_iswa
-            ? build_attn(inp_attn_iswa, layer.wo, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il)
-            : build_attn(inp_attn,      layer.wo, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
-
-        if (attn_dynamic) {
-            cur = build_dflash2_conv(*this, cur, attn_dynamic, layer.dflash_attn_conv_base, 1);
-            cb(cur, "attn_conv_out", il);
-        }
-
-        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
-        cb(ffn_inp, "ffn_inp", il);
-
-        cur = build_norm(ffn_inp, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
-        cb(cur, "ffn_norm", il);
-
-        ggml_tensor * ffn_dynamic = nullptr;
-        if (layer.dflash_ffn_conv_proj) {
-            ffn_dynamic = build_lora_mm(layer.dflash_ffn_conv_proj, cur);
-            cur = build_dflash2_conv(*this, cur, ffn_dynamic, layer.dflash_ffn_conv_base, 0);
-            cb(cur, "ffn_conv_in", il);
-        }
-
-        cur = build_ffn(cur,
-                layer.ffn_up,   NULL, NULL,
-                layer.ffn_gate, NULL, NULL,
-                layer.ffn_down, NULL, NULL,
-                NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, il);
-        cb(cur, "ffn_out", il);
-
-        if (ffn_dynamic) {
-            cur = build_dflash2_conv(*this, cur, ffn_dynamic, layer.dflash_ffn_conv_base, 1);
-            cb(cur, "ffn_conv_out", il);
-        }
-
-        cur = ggml_add(ctx0, cur, ffn_inp);
-        cb(cur, "l_out", il);
-
-        inpL = cur;
-=======
         residual = inpL;
         hc_pre ffn_hc = build_hc_pre(inpL,
                 layer.hc_ffn_fn,
@@ -1374,7 +1326,6 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
 
         inpL = build_hc_post(cur, residual, ffn_hc.post, ffn_hc.comb, il);
         cb(inpL, "l_out", il);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     ggml_tensor * cur = build_hc_head(inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
