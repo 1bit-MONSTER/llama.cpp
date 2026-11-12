@@ -310,12 +310,6 @@ void llm_graph_input_dsv41::set_input(const llama_ubatch * ubatch) {
         // a token shared by several sequences has the same history in each, so its first sequence resolves it
         std::vector<llama_token> prev;
         mctx->get_raw()->get_prev_tokens(*ubatch, model.hparams.ple_ngram_size - 1, prev);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        // hash every Engram layer up front, then hand the whole set of rows to the backend in one go
-        std::vector<std::vector<int32_t>> ids(engram_ids.size());
-        for (size_t e = 0; e < engram_ids.size(); ++e) {
-            model.engram_hash((int) e, *ubatch, prev, ids[e]);
-=======
         // hash all Engram layers first so a lazily read table gets one batched readahead before the first gather
         std::vector<std::vector<int32_t>> ids(engram_ids.size());
         std::vector<int32_t> all;
@@ -325,7 +319,6 @@ void llm_graph_input_dsv41::set_input(const llama_ubatch * ubatch) {
         }
         if (model.can_prefetch.count(model.per_layer_tok_embd)) {
             llama_prefetch_rows(model.per_layer_tok_embd, all.data(), all.size());
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         }
         for (size_t e = 0; e < engram_ids.size(); ++e) {
             if (engram_ids[e]->buffer) {
@@ -737,11 +730,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                 cb(kq_mask, "comp_kq_mask_sel", il);
             }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, kq_scale, il);
-=======
             out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, 0, kq_scale, il);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         } else {
             // dense attention over [window | all compressed rows], selection applied as a mask
             ggml_tensor * comp_k = ggml_view_4d(ctx0, comp_all, n_embd_head, 1, n_comp, n_stream,
@@ -767,13 +756,9 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
             ggml_tensor * kq_mask  = ggml_concat(ctx0, raw_mask, sel_mask, 0);
             cb(kq_mask, "comp_kq_mask", il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, kq_scale, il);
-=======
             // at most window + top-k visible columns per query: lets CUDA FA gather only those
             const int64_t n_kv_max = sparse ? std::min<int64_t>(raw_mask->ne[0], hparams.n_swa) + k_sel : 0;
             out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, n_kv_max, kq_scale, il);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         }
         if (k_rot) {
             out = llama_mul_mat_hadamard(ctx0, out, k_rot);
@@ -891,20 +876,6 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
 
         cur = build_attention41(model, inp_dsv4, cur, inp_pos, cand_pin, il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        inpL = build_hc_post(cur, residual, post, comb, il);
-        cb(inpL, "hc_attn_post", il);
-
-        residual = inpL;
-        pre_prev = build_hc_mixes(inpL, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, true, il);
-
-        cur = build_hc_pre(inpL, attn_pre, il);
-        cb(cur, "hc_ffn_pre", il);
-
-        ggml_build_forward_expand(gf, residual);
-        ggml_build_forward_expand(gf, post);
-        ggml_build_forward_expand(gf, comb);
-=======
         inpL = build_hc_post(cur, residual, attn_mix.post, attn_mix.comb, il);
         cb(inpL, "hc_attn_post", il);
 
@@ -918,23 +889,16 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
         ggml_build_forward_expand(gf, residual);
         ggml_build_forward_expand(gf, ffn_mix.post);
         ggml_build_forward_expand(gf, ffn_mix.comb);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
         cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         // F32 router inputs: expert selection is near-tie sensitive
         ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur);
         dsv41_prec_acc(logits, GGML_PREC_F32);
         if (!ggml_is_quantized(layer.ffn_gate_inp->type)) {
             dsv41_prec_src(logits, GGML_PREC_F32, 1);
         }
-=======
-        // F32 router accumulation: expert selection is near-tie sensitive
-        ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur);
-        ggml_prec_set_acc(logits, GGML_PREC_F32);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         cb(logits, "ffn_moe_logits", il);
 
         // image (embedding) tokens use the vision router bias, as DeepSeek-V4
@@ -950,13 +914,8 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
                 layer.ffn_gate_exps,
                 layer.ffn_down_exps,
                 exp_probs_b,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                n_expert, hparams.n_expert_used,
-                LLM_FFN_SILU, hparams.expert_weights_norm && hparams.n_expert_used > 1,
-=======
                 n_expert, hparams.n_expert_used(),
                 LLM_FFN_SILU, hparams.expert_weights_norm && hparams.n_expert_used() > 1,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                 hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il, logits);
@@ -972,11 +931,7 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
         cur = ggml_add(ctx0, moe_out, ffn_shexp);
         cb(cur, "ffn_out", il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        inpL = build_hc_post(cur, residual, post, comb, il);
-=======
         inpL = build_hc_post(cur, residual, ffn_mix.post, ffn_mix.comb, il);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         inpL = build_cvec(inpL, il);
         cb(inpL, "l_out", il);
     }
