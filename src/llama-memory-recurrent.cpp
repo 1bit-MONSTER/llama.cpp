@@ -118,23 +118,21 @@ llama_memory_recurrent::llama_memory_recurrent(
 
     // allocate the tensors and initialize the buffers to avoid NaNs in the padding
     for (auto & [buft, ctx] : ctx_map) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        ggml_backend_buffer_t buf;
-        if (llama_kv_share_enabled() && !hparams.no_alloc) {
+        ggml_backend_buffer_t buf = nullptr;
+        if (llama_kv_share_enabled() && !no_alloc) {
+            // [1bit] exportable region: llama_share_alloc allocates, so this cache owns it and the container may free it
             std::vector<llama_kv_shared_region> chunks;
-            buf = llama_share_alloc(ctx.get(), buft, chunks); // [1bit] exportable region (llama-kv-share.cpp)
+            buf = llama_share_alloc(ctx.get(), buft, chunks);
             shared_.push_back(std::move(chunks));
-        } else {
-            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
-            if (!buf) {
-                throw std::runtime_error("failed to allocate buffer for rs cache");
+            if (buf != nullptr) {
+                ctxs_bufs.bufs.emplace_back(std::move(ctx), ggml_backend_buffer_ptr(buf));
             }
+        } else {
+            buf = ctxs_bufs.emplace(std::move(ctx), buft, "rs cache");
         }
-        ggml_backend_buffer_clear(buf, 0);
-=======
-        ggml_backend_buffer_t buf = ctxs_bufs.emplace(std::move(ctx), buft, "rs cache");
-
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
+        if (buf == nullptr) {
+            throw std::runtime_error("failed to allocate buffer for the recurrent cache");
+        }
         LLAMA_LOG_INFO("%s: %10s RS buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
     }
 

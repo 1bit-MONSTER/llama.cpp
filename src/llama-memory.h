@@ -48,6 +48,11 @@ struct llama_memory_bufs {
 
     bool empty() const { return bufs.empty(); }
 
+    // [1bit] kv-share walks the buffers by index (import replaces each one in place)
+    size_t size() const { return bufs.size(); }
+    auto &       operator[](size_t i)       { return bufs[i]; }
+    const auto & operator[](size_t i) const { return bufs[i]; }
+
     auto begin()       { return bufs.begin(); }
     auto end()         { return bufs.end();   }
     auto begin() const { return bufs.begin(); }

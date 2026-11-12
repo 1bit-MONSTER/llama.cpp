@@ -337,7 +337,7 @@ bool llama_kv_cache::cells_copy_from(const llama_kv_cache & src) {
 }
 
 void llama_context::kv_memory_rebound() {
-    gf_res_prev->reset();
+    for (auto & r : gf_res_prev) { r.reset(); }   // merged: an array of two buffers, not a single pointer
     ggml_backend_sched_reset(sched.get());
     sched_need_reserve = true;
 }
