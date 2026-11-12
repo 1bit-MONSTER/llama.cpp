@@ -143,7 +143,6 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
     return vk_device_architecture::OTHER;
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 enum vk_conv_shapes {
     CONV_SHAPE_128x128,
     CONV_SHAPE_64x32,
@@ -760,10 +759,10 @@ void vk_command_pool::init(vk_device& device, vk_queue *q_) {
         vk::CommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT),
         q->queue_family_index);
     pool = device->device.createCommandPool(command_pool_create_info);
-=======
+}
+
 bool ggml_vk_lightning_indexer_k_type_supported(ggml_type type) {
     return std::find(lightning_indexer_k_types.begin(), lightning_indexer_k_types.end(), type) != lightning_indexer_k_types.end();
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 void ggml_vk_print_device_fault_info(const vk_device& device) {
     if (!device->device_fault || !device->pfn_vkGetDeviceFaultInfoEXT) {
