@@ -276,3 +276,20 @@ Only ~6 hunks in the whole tree are decidable by the empty-side or superset rule
    in llama-graph.cpp hunk 5.
 Plus the test-suite merges (tests/hrx-ops-test.cpp, tests/test-llama-archs.cpp fixtures) which need both suites kept and
 reconciled against the current API.
+
+## qwen4exp.cpp: the remaining ~24 hunks are ONE API MIGRATION, not independent conflicts
+The definition of build_hc_mix is settled (struct form, models.h:2934). What remains is migrating every USE to it:
+    before   ggml_tensor * inject = nullptr;  ggml_tensor * cur = build_hc_mix(x, norm, down, up, ..., &inject);
+    after    hc_mix m = build_hc_mix(x, norm, down, up, ...);   ... m.cur ... m.inject ...
+
+Three hunks carry the call sites and must be taken TOGETHER, because the shared context around each one still refers to the
+OLD variable names:
+    hunk  5 (line 589)  ours 2L   / theirs 1L     the declaration + call
+    hunk  8 (line 657)  ours 16L  / theirs 16L    the MTP-head export path (ours exports res_hc, AMD reshapes it)
+    hunk 11 (line 755)  ours 152L / theirs 72L    the main decode builder, which uses cur/inject throughout
+
+Taking hunk 5 alone is exactly what must NOT be done: it removes the names `cur` and `inject` while the lines below it still
+use them, so the file would be syntactically broken in a way that looks like a merge bug. The three have to move together with
+the uses rewritten, which is one edit of ~200 lines, the same shape as the llama-bench flag pair (eleven sites, one decision).
+
+Call sites to rewrite once the three hunks are taken: lines 605, 685, 815, 883, 898 (all still in the ggml_tensor* form).
