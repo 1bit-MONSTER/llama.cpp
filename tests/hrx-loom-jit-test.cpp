@@ -203,8 +203,6 @@ static std::map<std::string, int64_t> token_count_workload(int64_t token_count) 
     };
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:tests/test-hrx-loom-jit.cpp
-=======
 static std::map<std::string, std::string> moe_routing_config() {
     return {
         { "ggml.moe_routing.route_count", "8" },
@@ -217,7 +215,6 @@ static std::map<std::string, std::string> moe_routing_config() {
     };
 }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:tests/hrx-loom-jit-test.cpp
 static std::map<std::string, int64_t> flash_attention_workload(int64_t query_token_count,
                                                                int64_t key_value_token_count) {
     return {

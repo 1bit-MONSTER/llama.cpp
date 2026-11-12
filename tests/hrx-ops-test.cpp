@@ -418,8 +418,6 @@ static std::vector<std::string> scheduled_kernel_sequence(ggml_cgraph * graph) {
     return names;
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:tests/test-hrx-ops.cpp
-=======
 static void require_native_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
     REQUIRE(imported.valid());
@@ -480,7 +478,6 @@ static ggml::hrx::KernelSpecialization scheduled_kernel_specialization(ggml_cgra
     return {};
 }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:tests/hrx-ops-test.cpp
 static size_t producer_index_for_tensor(const ggml::hrx::Graph & graph, const ggml_tensor * tensor) {
     const ggml::hrx::Value * value = graph.values().find_tensor(tensor);
     REQUIRE(value != nullptr);
@@ -1424,8 +1421,6 @@ static void run_rmsnorm_binary_add_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:tests/test-hrx-ops.cpp
-=======
 static void run_gemma_post_proj_cpu_reference_case(int64_t token_count, bool normalized_add = false) {
     constexpr int64_t hidden_size = 640;
     constexpr float   epsilon     = 1.0e-6f;
@@ -1586,7 +1581,6 @@ static void run_gemma_post_proj_matcher_negatives() {
     }
 }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:tests/hrx-ops-test.cpp
 static void run_rmsnorm_gate_cpu_reference_case(int64_t hidden_size,
                                                int64_t head_count,
                                                int64_t token_count,
@@ -4501,7 +4495,6 @@ static void run_asymmetric_flash_attention_cpu_reference_case() {
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:tests/test-hrx-ops.cpp
 static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t token_count) {
     constexpr int64_t kQueryHeadCount    = 32;
     constexpr int64_t kKeyValueHeadCount = 4;
@@ -4585,8 +4578,6 @@ static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t 
     ggml_free(ctx);
 }
 
-=======
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:tests/hrx-ops-test.cpp
 static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_token_count,
                                                                   int64_t key_value_token_count,
                                                                   bool    use_common_dispatch = false,
@@ -4866,8 +4857,6 @@ static void run_add_f32_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:tests/test-hrx-ops.cpp
-=======
 static void run_gdn_snapshot_cpu_reference_case(int64_t tokens, bool rms_scale_norm = false) {
     ggml_backend_t cpu = init_cpu_backend();
     ggml_backend_t hrx = ggml_backend_hrx_init(0);
@@ -5104,7 +5093,6 @@ static void run_dynamic_generic_ops_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:tests/hrx-ops-test.cpp
 static void run_view_mul_f32_cpu_reference_case() {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
@@ -6219,8 +6207,6 @@ static void run_dense_matmul_binary_cpu_reference_case(ggml_type    lhs_weight_t
     ggml_backend_free(hrx_backend);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:tests/test-hrx-ops.cpp
-=======
 static void run_vector_q8_publish_cpu_reference_case() {
     constexpr int64_t input_size        = 256;
     constexpr int64_t intermediate_size = 256;
@@ -6333,7 +6319,6 @@ static void run_vector_q8_publish_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:tests/hrx-ops-test.cpp
 static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type,
                                                         const char * expected_kernel,
                                                         int64_t      token_count,
