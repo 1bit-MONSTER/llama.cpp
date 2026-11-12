@@ -584,3 +584,16 @@ The decision point is NOT the test -- it is ggml/src/ggml-hrx/runtime/command-pr
 i.e. our line moved `constants` from materialize into get_or_compile, and AMD's added compile_trace to the context plus kept
 specialization/launch on materialize. Whichever side wins that file decides both the library and the test; the test cannot be
 'fixed' independently without silently blessing one API.
+
+## hrx-loom-jit-test: needs PER-CALL-SITE adaptation (10 sites), not a blanket rewrite
+After deciding the API in favour of the merged header (see the previous commit), the test's ten call sites have to be adapted one by
+one, because each passes a DIFFERENT constants variable:
+    407  cache.get_or_compile(context, binary, dispatch)                     -> needs `constants`
+    426  cache.prepare(context, binary, dispatch, constants_for_prepare, launch_for_prepare) -> drop launch, keep constants_for_prepare
+    449  get_or_compile(context, binary, first)                              -> needs `first_constants`
+    460  materialize(context, first_ref, first.kernel, first_constants, first_launch) -> keep first_constants, drop the rest
+    472/501/548/... likewise, each with its own *_constants / *_launch pair
+A blanket regex that appends `constants` produced 'constants was not declared' at four sites, which is what a names-are-not-uniform
+rewrite always looks like. It is a fifteen-minute edit with eyes on each site and it is the LAST test TU.
+
+Reverted the test; the library-side API decision stands.
