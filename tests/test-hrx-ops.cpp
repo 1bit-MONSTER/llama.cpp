@@ -5336,8 +5336,13 @@ static SsmConvPrefillGraph make_ssm_conv_prefill_graph(ggml_type type, int64_t k
     const auto sequence = scheduled_kernel_sequence(c.graph);
     const char * fused = gathered ? "loom_libs:ggml_mul_mat_quantized_f16_wmma_prefill_conv4_interior" :
                                     "loom_libs:ggml_mul_mat_quantized_f16_wmma_prefill_conv4";
-    REQUIRE((std::find(sequence.begin(), sequence.end(), fused) != sequence.end()) == !expose);
-    if (gathered && !expose) {
+    // engine #2137: the fused kernel reads Q4_K only packed, so GGML_HRX_Q4K_PACKED_TAIL=0 (stored for every Q4_K
+    // weight) sends the projection to the stored kernels and the conv runs on its own.
+    const char * q4k_layout     = std::getenv("GGML_HRX_Q4K_PACKED_TAIL");
+    const bool   q4k_stored     = type == GGML_TYPE_Q4_K && q4k_layout != nullptr && std::string(q4k_layout) == "0";
+    const bool   expect_fused   = !expose && !q4k_stored;
+    REQUIRE((std::find(sequence.begin(), sequence.end(), fused) != sequence.end()) == expect_fused);
+    if (gathered && expect_fused) {
         REQUIRE(std::find(sequence.begin(), sequence.end(),
                           "loom_libs:llm_ssm_conv_dconv4_silu_prefill_finish_f32") != sequence.end());
     }
