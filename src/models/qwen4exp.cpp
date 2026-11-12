@@ -399,19 +399,6 @@ std::unique_ptr<llm_graph_context> llama_model_qwen4exp::build_arch_graph(const 
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
         return std::make_unique<graph_mtp>(*this, params);
     }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    // without this a self-contained draft loads, then walks the null trunk and segfaults.
-    if (hc_head_norm == nullptr) {
-        throw std::runtime_error("this model is an MTP draft head without a trunk; "
-                                 "load it as a draft of its target model (-md), not on its own");
-    }
-    return std::make_unique<graph>(*this, params);
-}
-
-// Hyper-connections keep hc parallel residual streams [n_embd, hc, T] in place of layer norms.
-// Returns the mixed [n_embd, T] stream; `inject` gets the [hc, T] scatter weights.
-ggml_tensor * llama_model_qwen4exp::graph::build_hc_mix(
-=======
     return std::make_unique<graph>(*this, params);
 }
 
@@ -433,7 +420,6 @@ static ggml_tensor * hc_stream_mean(ggml_context * ctx, ggml_tensor * x) {
 // build_hc_mix returns the mixed [n_embd, T] stream and the [hc, T] scatter weights.
 llama_model_qwen4exp::graph::hc_mix
 llama_model_qwen4exp::graph::build_hc_mix(
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         ggml_tensor *  x,
         ggml_tensor *  w_norm,
         ggml_tensor *  w_down,
