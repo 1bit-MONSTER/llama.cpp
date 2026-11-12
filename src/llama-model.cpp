@@ -656,10 +656,6 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
 
     // if a model has fused tensors they need to be separated into "segments", see the comments on ggml_backend_meta_split_state struct
     auto get_split_segments = [&](int axis, uint32_t il) -> std::vector<std::pair<int64_t, uint32_t>> {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE ||
-                ud->model->arch == LLM_ARCH_QWEN4EXP) {
-=======
         // TODO: deduplicate condition [TAG_SPLIT_QGATE_QWEN]
         if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE || ud->model->arch == LLM_ARCH_CLEF ||
                 ud->model->arch == LLM_ARCH_QWEN4EXP) {
@@ -672,8 +668,6 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                 GGML_ASSERT(tensor->ne[axis] == n_embd + 2*n_embd_gqa);
                 return {{n_embd, 1}, {n_embd_gqa, 2}};
             }
-
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             const int64_t head_k_dim = hparams.ssm_d_state;
             const int64_t head_v_dim = hparams.ssm_d_state;
             const int64_t n_k_heads  = hparams.ssm_n_group;
@@ -820,12 +814,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_q_bias)) {
                 GGML_ASSERT(segments.size() == 1);
                 // some models have Q gate tensors, for those cases the granularity needs to be doubled:
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE ||
-=======
                 // TODO: deduplicate condition [TAG_SPLIT_QGATE_QWEN]
                 if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE || ud->model->arch == LLM_ARCH_CLEF ||
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                         ud->model->arch == LLM_ARCH_QWEN4EXP) {
                     return {std::lcm(2*n_embd_q, blck_size_perf)};
                 }
@@ -1411,11 +1401,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
         gguf_kv.emplace(name, value);
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    hadamard.load_keys(ml, arch);
-=======
     load_hparams_hadamard(ml);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // get general kv
     ml.get_key(LLM_KV_GENERAL_NAME, name, false);
@@ -1493,11 +1479,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     std::fill(hparams.n_ff_exp_arr.begin(),     hparams.n_ff_exp_arr.end(),     0);
 
     std::fill(hparams.rope_sections.begin(), hparams.rope_sections.end(), 0);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    std::fill(hparams.rope_pattern.begin(),  hparams.rope_pattern.end(),  1);
-=======
     std::fill(hparams.rope_pattern.begin(),  hparams.rope_pattern.end(), 1);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     std::fill(hparams.is_swa_impl.begin(),   hparams.is_swa_impl.end(), 0);
     std::fill(hparams.is_recr_impl.begin(),  hparams.is_recr_impl.end(),  llm_arch_is_recurrent(ml.get_arch()) ? 1 : 0);
     std::fill(hparams.is_indexer_full_impl.begin(), hparams.is_indexer_full_impl.end(), 0);
@@ -1951,7 +1933,6 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // engine #1339: on HRX, read the weights into their buffers instead of mapping the file, and drop each weight's
     // page-cache pages once it is read. A mapped load keeps the file's pages cached next to the device copy (the model
     // resident twice, engine #856), and importing the mapping instead makes the kernel write-fault the whole file into a
@@ -1974,10 +1955,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             ml.drop_page_cache = true;
         }
     }
-=======
     // per-tensor activation precision policy
     prec_policy.load(ml, *this);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
@@ -2136,11 +2115,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    hadamard.setup(*this);
-=======
     load_tensors_hadamard();
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     return true;
 }
@@ -3198,15 +3173,11 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 // Dense MTP heads use a plain attention KV cache instead of the hybrid wrapper.
                 const bool mtp_on_hybrid_qwen =
                     params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                    (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP);
-=======
                     (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE ||
-                     arch == LLM_ARCH_BAILINGMOE3);
+                     arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_BAILINGMOE3);
 
                 const bool mtp_on_hybrid_nemotron =
                     params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && arch == LLM_ARCH_NEMOTRON_H_MOE;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
                 if (llm_arch_is_recurrent(arch)) {
                     res = new llama_memory_recurrent(
@@ -3247,11 +3218,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter_recr = [&](uint32_t il) {
                             return hparams.is_recr(il) && hparams.n_ff(il) == 0;
                         };
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                    } else if (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP) {
-=======
                     } else if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_MINIMAX_01) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                         filter_attn = [&](uint32_t il) {
                             return il < hparams.n_layer() && !hparams.is_recr(il);
                         };
@@ -3824,13 +3791,9 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        case LLM_ARCH_QWEN4EXP:
-=======
         case LLM_ARCH_CLEF:
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_QWEN3TTS:
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             return LLAMA_ROPE_TYPE_IMROPE;
 
         case LLM_ARCH_GLM4:
