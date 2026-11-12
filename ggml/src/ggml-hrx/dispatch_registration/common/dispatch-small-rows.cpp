@@ -716,8 +716,7 @@ bool small_rows_argsort_tensor_supported(const struct ggml_tensor * op) {
     // GGML_HRX_DISABLE_DISPATCH - the node has to decline here as well and keep its CPU fallback. Without this the
     // scheduler claims the node, no dispatch covers it, and the whole graph fails with
     // "unsupported HRX node ... ARGSORT" instead of splitting (engine #1259). Same pattern as hip_top_k_tensor_supported.
-    const char * disabled = std::getenv("GGML_HRX_DISABLE_DISPATCH");
-    if (disabled != nullptr && std::string(disabled).find("common.argsort_rows_f32") != std::string::npos) {
+    if (dispatch_name_disabled("common.argsort_rows_f32")) {
         return false;
     }
     if (op == nullptr || op->src[0] == nullptr || op->src[0]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_I32) {
