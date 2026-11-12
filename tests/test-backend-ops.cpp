@@ -11874,7 +11874,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 1056, 1, 67,  {1,  1}, {4, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 16, 32, 32, { 1,  1}, {1, 1}, {0, 1, 2, 3}, 64, 3));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 64, 77, 77, {12,1}, {1,1}));
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // Batched dense matmul in the shapes the Zyphra ports place (engine #991): the 2-D contraction repeated per plane,
     // first with one weight shared by every plane, then with one matrix per plane (ggml pairs the operands' planes).
     // The `k=232` rows are the unaligned contraction, which no HRX kernel admits yet -- they must stay refused.
@@ -11980,7 +11979,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 256, 4096, magnitude));
         test_cases.emplace_back(new test_mul_mat_resident_weight_large_activation(GGML_TYPE_Q6_K, 2048, 512, 4096, magnitude));
     }
-=======
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 32, 4, 96, {3, 2}, {1, 1}, {0, 1, 2, 3}, 0, 1, true));
     // the first rows of a KV cache: a is a view whose batches are strided by the cache length
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 8,  1, 64, {8, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 5120));
@@ -11991,7 +11989,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // as is a view whose experts are strided by more rows than it uses
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32, GGML_TYPE_F32, 4, 2, false, 8,  1, 64, 64));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 4, 2, false, 8, 16, 64, 64));
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
@@ -12090,7 +12087,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // Element-wise expert weights whose contraction is a multiple of 32 but not of 256. The MUL_MAT_ID wmma
     // core pads the contraction and gates the tail, so these are legal at the kernel; the dispatcher used to
     // refuse them by inheriting the dense table's % 256 default (engine #991).
@@ -12098,7 +12094,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 8, 2, false, 3872, 512, 1472));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 8, 2, false, 1472, 512, 3872));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 3872, 512, 1472));
-=======
     // multiple blocks per row: exercises the block-stride loop and the
     // per-expert base offset, which k == 256 alone leaves untested
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_TQ1_0, GGML_TYPE_F32, 28, 10, false, 1024, 1, 4096));
@@ -12118,7 +12113,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_id_dup(ta, GGML_TYPE_F32, 2050, 10, true, 64, 33, 256));
     }
 #endif
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 2, false, 64, 16, 3*ggml_blck_size(type_a)));
@@ -12763,13 +12757,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // Cases past one workgroup score row (kv > 2048), the first time the suite reaches the blocked rows
     // attention kernel; hsv a multiple of 32 is what lets common.attention_strided_f32_f16 take them at all.
     for (int kv : { 2560, 4096, }) {
         for (int hs : { 64, 160, 256, }) {
             test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 8, {4, 1}, kv, 32, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-=======
     // KV-head counts that do not divide the device count
     for (int hs : { 128, 256, 512, }) {
         for (int nh : { 1, 2, 6, }) {
@@ -12778,7 +12770,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     test_cases.emplace_back(new test_flash_attn_ext(hs, hs, nh, {nr2, 1}, 1024, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
                 }
             }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         }
     }
 
@@ -12859,7 +12850,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(64, 128, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q2_0));
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 64, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q2_0, GGML_TYPE_F16));
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // engine #528: a KV cache's padded columns hold zeros - llama-kv-zero.cpp verifies that at allocation and
     // on every reset, because a padded column with garbage in it (a clear that did not take) turns a whole
     // output row into NaN. pad_nan=0 is that case: real K/V, padded columns that are finite, a mask that puts
@@ -12880,7 +12870,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         // layout a model uses ([head_dim][position][head], the permuted variant)
         test_cases.emplace_back(new test_flash_attn_ext_pad_nan(128, 128, 8, {1, 1}, 1024, 1, pad_nan, {0, 2, 1, 3}));
     }
-=======
     // q8_0 KV cases: decode and prompt batches, KV pad, permuted KV, feature flags, and long context
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1},   113,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1},  1024,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
@@ -12950,7 +12939,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(192, 128, 4, {8, 1},  512, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true));
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {4, 1},  512, 8, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true));
     test_cases.emplace_back(new test_flash_attn_ext(64,  64,  4, {1, 1},  512, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // large-KV F16 cases (Qwen3.6-27B geometry and a llama-class control): the upstream matrix
     // stops at kv=1024, blind to long-context FA bugs (e.g. the oneDNN SDPA ordering race on BMG).
@@ -13056,7 +13044,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // Routed gate/up + SwiGLU at the Qwen3.8-Flash-Next prefill shape (hidden 2560, expert ffn 640, 10 routes per
     // token, one broadcast input row), for the two formats that file's expert blocks use. The IQ3_XXS case is the
     // one the HRX workgroup-table decode exists for (engine #572): it is the only place that decode is compared
@@ -13072,7 +13059,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // one-token Q4_K/Q5_K gate/up + SwiGLU at the HRX HIP kernel sizes (output % 128 == 0)
     for (ggml_type t : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) { for (int64_t n : {128, 384}) { for (int64_t k : {256, 1024, 2560}) { test_cases.emplace_back(new test_mul_mat_vec_fusion(t, GGML_GLU_OP_SWIGLU, 1, n, k, false, 1, 1, false, false, true, false, {1, 1})); } } }
-=======
     for (bool b : {false, true}) {
         test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_IQ2_S, GGML_GLU_OP_SWIGLU_CLAMP, 1, 32, 256,
             true, 16, 8, b, false, true, false));
@@ -13123,7 +13109,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // The same with experts (~1280 tiles each): 17 tokens with broadcast input (one MMA tile per warp), 2048 tokens without (two, several column tiles per expert).
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,        17,  5120, 256, true, 16, 8, true));
     test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q8_0,   GGML_GLU_OP_SWIGLU,      2048,   128, 256, true, 40, 8, false));
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
         for (bool with_norm : {false, true}) {

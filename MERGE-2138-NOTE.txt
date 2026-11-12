@@ -244,3 +244,16 @@ ggml_backend_buffer_ptr. Our kv-share regions are exported/aliased (llama-kv-sha
 container. Deciding these two files differently would leave two ownership conventions in one subsystem, so resolve them
 together: borrowed insertion, or the shared buffer kept outside `bufs` with an explicit lifetime, or emplace() extended
 with a borrow flag.
+
+## RENAME-FORM MARKERS (a class my scripts could not see)
+Two test files carry '<<<<<<< <sha>:tests/test-hrx-loom-jit.cpp' -- the form git emits when a file was renamed on one side
+and edited on the other. My resolution regexes matched '<<<<<<< [0-9a-f]+\n', which does NOT match a sha followed by
+':path', so every mechanical pass silently SKIPPED these hunks. They were never "left deliberately"; they were invisible.
+Detector: grep -rn '^<<<<<<< [0-9a-f]*:' .
+
+	 tests/hrx-loom-jit-test.cpp   7 real conflicts after resolving the empty-side ones
+	 tests/hrx-ops-test.cpp        hunks where BOTH sides carry content; hunk 11 is 697 lines vs 774
+
+The both-content hunks are a TEST-SUITE merge, not a hunk merge: ours holds the engine#444 and engine#1962 cases, theirs
+holds the gemma post-proj, GDN snapshot, vector-q8 publish and native-weight-binding cases. Taking a side deletes a set of
+coverage silently, so they need both suites kept and reconciled against the current API.
