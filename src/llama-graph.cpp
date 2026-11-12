@@ -2712,10 +2712,6 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
         ggml_set_input(inp->tokens);
         res->t_inp_tokens = inp->tokens;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        cur = ggml_get_rows(ctx0, tok_embd, inp->tokens);
-        cur = hadamard ? hadamard->inverse(ctx0, tok_embd, cur) : cur;
-=======
         inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ubatch.n_tokens);
         cb(inp->embd, "inp_embd", -1);
         ggml_set_input(inp->embd);
@@ -2732,6 +2728,10 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
     // this way the embeddings remain in the host buffer, and the GET_ROWS run before any other computations
     {
         embd0 = ggml_get_rows(ctx0, tok_embd, inp->tokens);
+        // a Hadamard-latent table stores rotated rows; restore the primal basis before anything reads them
+        if (hadamard) {
+            embd0 = hadamard->inverse(ctx0, tok_embd, embd0);
+        }
         ggml_build_forward_order(gf, embd0);
 
         embd1 = inp->embd;
@@ -2755,7 +2755,6 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
                 }
             }
         }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
         // apply lora for embedding tokens if needed
         for (const auto & lora : *loras) {
