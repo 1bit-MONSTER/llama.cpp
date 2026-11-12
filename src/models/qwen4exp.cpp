@@ -439,11 +439,7 @@ llama_model_qwen4exp::graph::build_hc_mix(
         ggml_tensor *  w_down,
         ggml_tensor *  w_up,
         ggml_tensor *  w_inject,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        ggml_tensor ** inject,
-=======
         ggml_tensor *  w_down_inject,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         int            il) {
     const int64_t hc     = hparams.dsv4_hc_mult;
     const int64_t hc_dim = hc * n_embd;
@@ -614,13 +610,9 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
                 model.layers[il].hc_attn_down,
                 model.layers[il].hc_attn_up,
                 model.layers[il].hc_attn_inject,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                &inject, il);
-=======
                 model.layers[il].hc_attn_down_inject,
                 il);
         ggml_tensor * cur = attn_mix.cur;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
         ggml_build_forward_expand(gf, cur);
 
