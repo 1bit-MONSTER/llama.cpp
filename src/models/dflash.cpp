@@ -1392,37 +1392,12 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
     if (output == nullptr) {
         GGML_ASSERT(cparams.ctx_other != nullptr);
         const auto * model_other = llama_get_model(cparams.ctx_other);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        GGML_ASSERT(model_other->output != nullptr && "DFlash decoder requires the target model's output projection");
-        output = model_other->output;
-        if (!model_other->hadamard.empty()) {
-            llama_hadamard_memo memo;
-            cur = model_other->hadamard.forward(ctx0, output, cur, memo);
-        }
-    }
-
-    cur = build_lora_mm(output, cur);
-
-    // DFlash2 feeds these logits to the selector, so they need the target's output
-    // transforms; DFlash1 and DSpark read them through the sampler instead
-    if (model.dflash_selector_hidden) {
-        if (hparams.f_logit_scale != 0.0f) {
-            cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
-        }
-        if (hparams.f_final_logit_softcapping > 0.0f) {
-            cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
-            cur = ggml_tanh(ctx0, cur);
-            cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
-        }
-    }
-=======
         GGML_ASSERT(model_other->output != nullptr && "DSpark decoder requires the target model's output projection");
         output   = model_other->output;
         output_s = model_other->output_s;
     }
 
     cur = build_lora_mm(output, cur, output_s);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
