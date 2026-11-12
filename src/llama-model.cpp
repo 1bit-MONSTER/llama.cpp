@@ -3339,6 +3339,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                         res = new llama_kv_cache_dsv4(
                                 *this,
+                                params.no_alloc,
                                 params.type_k,
                                 params.type_v,
                                 !cparams.flash_attn,
@@ -3348,7 +3349,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 cparams.n_ctx_seq,
                                 cparams.n_seq_max,
                                 cparams.n_ubatch,
-                                1,
                                 cparams.n_rs_seq,
                                 filter,
                                 reuse);
