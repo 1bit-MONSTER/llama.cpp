@@ -404,11 +404,11 @@ static void run_cache_materialize_case(HrxTestDevice &                     devic
     ggml_hrx_loom_jit_launch_config  launch;
     ggml::hrx::KernelExecutableCache cache(mode);
 
-    ggml::hrx::KernelExecutableRef ref = cache.get_or_compile(context, binary, dispatch);
+    ggml::hrx::KernelExecutableRef ref = cache.get_or_compile(context, binary, dispatch, constants);
     REQUIRE(ref.valid());
 
     std::shared_ptr<ggml::hrx::KernelExecutable> executable =
-        cache.materialize(context, ref, dispatch.kernel, constants, launch);
+        cache.materialize(context, ref, constants);
     REQUIRE(executable != nullptr);
     REQUIRE(executable->executable != nullptr);
     REQUIRE(executable->export_info.binding_count == dispatch.bindings.size());
@@ -417,13 +417,13 @@ static void run_cache_materialize_case(HrxTestDevice &                     devic
     REQUIRE(launch.workgroup_size[0] > 0);
 
     std::shared_ptr<ggml::hrx::KernelExecutable> loaded_hit =
-        cache.materialize(context, ref, dispatch.kernel, constants, launch);
+        cache.materialize(context, ref, constants);
     REQUIRE(loaded_hit == executable);
 
     std::vector<uint8_t>                         constants_for_prepare;
     ggml_hrx_loom_jit_launch_config              launch_for_prepare;
     std::shared_ptr<ggml::hrx::KernelExecutable> prepared =
-        cache.prepare(context, binary, dispatch, constants_for_prepare, launch_for_prepare);
+        cache.prepare(context, binary, dispatch, constants_for_prepare);
     REQUIRE(prepared == executable);
 
     const char * mode_name = mode == ggml::hrx::LoomJitMode::Async ? "async" : "sync";
@@ -446,20 +446,20 @@ static void run_dynamic_cache_materialize_case(HrxTestDevice &                  
     second.kernel.workload_specialization = ggml::hrx::WorkloadSpecialization::Dynamic;
 
     ggml::hrx::KernelExecutableCache cache(mode);
-    ggml::hrx::KernelExecutableRef   first_ref  = cache.get_or_compile(context, binary, first);
-    ggml::hrx::KernelExecutableRef   second_ref = cache.get_or_compile(context, binary, second);
-    REQUIRE(first_ref.valid());
-    REQUIRE(second_ref.valid());
-    REQUIRE(first_ref.entry == second_ref.entry);
-
     std::vector<uint8_t>            first_constants;
     std::vector<uint8_t>            second_constants;
     ggml_hrx_loom_jit_launch_config first_launch;
     ggml_hrx_loom_jit_launch_config second_launch;
+    ggml::hrx::KernelExecutableRef   first_ref  = cache.get_or_compile(context, binary, first, first_constants);
+    ggml::hrx::KernelExecutableRef   second_ref = cache.get_or_compile(context, binary, second, second_constants);
+    REQUIRE(first_ref.valid());
+    REQUIRE(second_ref.valid());
+    REQUIRE(first_ref.entry == second_ref.entry);
+
     std::shared_ptr<ggml::hrx::KernelExecutable> first_executable =
-        cache.materialize(context, first_ref, first.kernel, first_constants, first_launch);
+        cache.materialize(context, first_ref, first_constants);
     std::shared_ptr<ggml::hrx::KernelExecutable> second_executable =
-        cache.materialize(context, second_ref, second.kernel, second_constants, second_launch);
+        cache.materialize(context, second_ref, second_constants);
     REQUIRE(first_executable != nullptr);
     REQUIRE(second_executable == first_executable);
     REQUIRE(first_launch.workgroup_count[0] == 1);
@@ -469,7 +469,8 @@ static void run_dynamic_cache_materialize_case(HrxTestDevice &                  
 
     ggml::hrx::Dispatch exact_second = second;
     exact_second.kernel.workload_specialization = ggml::hrx::WorkloadSpecialization::Exact;
-    ggml::hrx::KernelExecutableRef exact_ref = cache.get_or_compile(context, binary, exact_second);
+    std::vector<uint8_t>            exact_constants;
+    ggml::hrx::KernelExecutableRef exact_ref = cache.get_or_compile(context, binary, exact_second, exact_constants);
     REQUIRE(exact_ref.valid());
     REQUIRE(exact_ref.entry != first_ref.entry);
 }
@@ -498,20 +499,20 @@ static void run_dynamic_export_reuse_case(
     ggml::hrx::Dispatch first  = make_dispatch(first_workload);
     ggml::hrx::Dispatch second = make_dispatch(second_workload);
     ggml::hrx::KernelExecutableCache cache(ggml::hrx::LoomJitMode::Sync);
-    ggml::hrx::KernelExecutableRef first_ref  = cache.get_or_compile(context, definition, first);
-    ggml::hrx::KernelExecutableRef second_ref = cache.get_or_compile(context, definition, second);
+    std::vector<uint8_t>            first_constants;
+    std::vector<uint8_t>            second_constants;
+    ggml::hrx::KernelExecutableRef first_ref  = cache.get_or_compile(context, definition, first, first_constants);
+    ggml::hrx::KernelExecutableRef second_ref = cache.get_or_compile(context, definition, second, second_constants);
     REQUIRE(first_ref.valid());
     REQUIRE(second_ref.valid());
     REQUIRE(first_ref.entry == second_ref.entry);
 
-    std::vector<uint8_t>            first_constants;
-    std::vector<uint8_t>            second_constants;
     ggml_hrx_loom_jit_launch_config first_launch;
     ggml_hrx_loom_jit_launch_config second_launch;
     std::shared_ptr<ggml::hrx::KernelExecutable> first_executable =
-        cache.materialize(context, first_ref, first.kernel, first_constants, first_launch);
+        cache.materialize(context, first_ref, first_constants);
     std::shared_ptr<ggml::hrx::KernelExecutable> second_executable =
-        cache.materialize(context, second_ref, second.kernel, second_constants, second_launch);
+        cache.materialize(context, second_ref, second_constants);
     REQUIRE(first_executable != nullptr);
     REQUIRE(second_executable == first_executable);
     REQUIRE(first_launch.workgroup_count[0] > 0);
@@ -545,7 +546,7 @@ static void run_targeted_export_materialize_case(HrxTestDevice & device) {
     std::vector<uint8_t>                         constants;
     ggml_hrx_loom_jit_launch_config              launch;
     std::shared_ptr<ggml::hrx::KernelExecutable> executable =
-        cache.prepare(context, *definition, dispatch, constants, launch);
+        cache.prepare(context, *definition, dispatch, constants);
     REQUIRE(executable != nullptr);
     REQUIRE(executable->executable != nullptr);
     REQUIRE(launch.workgroup_count[0] == 151936);
