@@ -12,13 +12,9 @@
 #include <string>
 
 // ref: deepseek-ai/DeepSeek-V4.1-Flash-1017 inference/model.py, engram.py
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 // compressed layers attend over [window | all compressed rows] with top-k as a mask. with flash attention the default
 // is sparse: fused indexer, FA bounded to window + top-k, decode-sized ubatches gather only the selected rows (same
 // keys and mask, different key order). LLAMA_DSV41_SPARSE=0 restores the reference path
-=======
-// LLAMA_DSV41_SPARSE=0 disables the sparse attention path (see build_attention41)
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
 static constexpr int64_t DSV41_ENGRAM_DEAD = -1;
 
@@ -101,11 +97,7 @@ void llama_model_deepseek41::load_arch_hparams(llama_model_loader & ml) {
         ml.get_arr(LLM_KV_PLE_LAYER_MULTIPLIERS,      mult);
         ml.get_arr(LLM_KV_PLE_HEAD_OFFSETS,           offsets);
         ml.get_arr(LLM_KV_PLE_HEAD_VOCAB_SIZES,       primes);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         ml.get_key(LLM_KV_ENGRAM_PAD_TOKEN_ID,        engram_pad_id);
-=======
-        ml.get_key(LLM_KV_ENGRAM_PAD_TOKEN_ID,        hparams.engram_pad_id);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         ml.get_arr(LLM_KV_ENGRAM_TOKEN_MAP,           engram_token_map);
 
         const size_t n_e    = e_layers.size();
@@ -114,11 +106,7 @@ void llama_model_deepseek41::load_arch_hparams(llama_model_loader & ml) {
         if (n_cols == 0 || hparams.ple_head_dim == 0 ||
                 mult.size() != n_e*n_gram || primes.size() != n_e*n_cols || offsets.size() != n_e*n_cols ||
                 mult.size() > LLAMA_MAX_PLE_NGRAM || primes.size() > LLAMA_MAX_PLE_HEADS ||
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
                 engram_pad_id >= engram_token_map.size()) {
-=======
-                hparams.engram_pad_id >= engram_token_map.size()) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             throw std::runtime_error("DeepSeek-V4.1 engram metadata is inconsistent");
         }
         for (size_t e = 0; e < n_e; ++e) {
@@ -146,11 +134,7 @@ void llama_model_deepseek41::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t q_lora_rank     = hparams.n_lora_q;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    const int64_t n_ff_exp        = hparams.n_ff_exp;
-=======
     const int64_t n_ff_exp        = hparams.n_ff_exp();
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     const int64_t n_expert_shared = hparams.n_expert_shared;
     const int64_t n_embd_head     = hparams.n_embd_head_k();
     const int64_t o_groups        = hparams.dsv4_o_group_count;
@@ -264,11 +248,7 @@ void llama_model_deepseek41::engram_hash(int e, const llama_ubatch & ubatch, con
 
     const uint64_t * mult   = hparams.ple_layer_multipliers.data() + (size_t) e*n_gram;
     const uint32_t * primes = hparams.ple_head_vocab_sizes.data()  + (size_t) e*n_cols;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     const int64_t    pad    = engram_token_map[engram_pad_id];
-=======
-    const int64_t    pad    = engram_token_map[hparams.engram_pad_id];
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     const uint32_t * offs   = hparams.ple_head_offsets.data()      + (size_t) e*n_cols;
 
     const auto cid = [&](llama_token t) -> int64_t {
