@@ -12727,6 +12727,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int kv : { 2560, 4096, }) {
         for (int hs : { 64, 160, 256, }) {
             test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 8, {4, 1}, kv, 32, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+    }
+
     // KV-head counts that do not divide the device count
     for (int hs : { 128, 256, 512, }) {
         for (int nh : { 1, 2, 6, }) {
