@@ -448,14 +448,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,              10000.0f);
         // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_FLINT) {
-=======
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
-        std::vector<uint32_t> pattern;
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT) {        std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
             pattern.push_back(il % 2);
@@ -486,16 +482,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
     // indexer head count is independent of the main attention head count.
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     if (arch == LLM_ARCH_QWEN4EXP) {
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,    uint32_t(4));
-=======
     if (arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT) {
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,    uint32_t(4));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(2));
-        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,  1.0e-6f);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
-        ms.add_kv(LLM_KV_HYPER_CONNECTION_LOW_RANK, uint32_t(8));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,  1.0e-6f);        ms.add_kv(LLM_KV_HYPER_CONNECTION_LOW_RANK, uint32_t(8));
         // without this the QSA layers fall back to dense and go uncovered
         ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS, std::vector<uint32_t>(n_layer, 4));
 
@@ -977,14 +969,10 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_LAGUNA:
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         case LLM_ARCH_ZAYA:
-=======
         case LLM_ARCH_MAPLE:
         case LLM_ARCH_MUSE_SPARK:
-        case LLM_ARCH_KOLIBRI1:
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
-            return true;
+        case LLM_ARCH_KOLIBRI1:            return true;
         default:
             return false;
     }
@@ -1055,13 +1043,9 @@ static bool arch_supported(const llm_arch arch) {
     }
     // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
 #ifdef GGML_USE_WEBGPU
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MINIMAX_M3 || arch == LLM_ARCH_QWEN4EXP) {
-=======
     if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
-            arch == LLM_ARCH_HY_V4) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
-        return false;
+            arch == LLM_ARCH_HY_V4) {        return false;
     }
 #endif // GGML_USE_WEBGPU
 
