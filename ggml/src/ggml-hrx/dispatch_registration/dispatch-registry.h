@@ -37,6 +37,8 @@ enum DispatchActivationConsumerSource : uint32_t {
                                              DispatchActivationConsumerSourceQwen,
 };
 
+class DispatchRegistry;
+
 struct DispatchMatchContext {
     const Graph &             graph;
     const GraphNode *         root_node  = nullptr;
@@ -44,6 +46,9 @@ struct DispatchMatchContext {
     const std::vector<bool> & covered_nodes;
     const CommandPlan &       plan;
     ValueId                   next_plan_value;
+    // AMD's dispatch-activation-publication.h and the ops test both read the registry back out of the context. Our line had
+    // removed this field; the merge kept the readers, so it comes back -- and now at the position AMD's own initializers expect.
+    const DispatchRegistry *  registry = nullptr;
 };
 
 // Non-native weight bindings require bytes that remain available after graph import.
