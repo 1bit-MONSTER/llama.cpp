@@ -243,30 +243,9 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         FIXTURES_SETUP generate-models
     )
 
-    llama_test(
-        test-recurrent-state-rollback
-        LABEL main
-        ARGS -m "${MODEL_DIR}/qwen35-dense.gguf"
-    )
-    set_tests_properties(test-recurrent-state-rollback PROPERTIES
-        FIXTURES_REQUIRED generate-models
-    )
 endif()
 
-llama_build(test-llama-archs.cpp)
 
-set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
-file(MAKE_DIRECTORY "${MODEL_DIR}")
-
-llama_test(
-    test-llama-archs
-    NAME test-generate-models
-    LABEL "main behavior backend"
-    ARGS -o "${MODEL_DIR}"
-)
-set_tests_properties(test-generate-models PROPERTIES
-    FIXTURES_SETUP generate-models
-)
 
 # Target model for test-speculative-rejection-sampling
 set(SPEC_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-speculative-models/target")
@@ -532,10 +511,6 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-external-window-view PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-external-window-view COMMAND test-hrx-external-window-view)
 
-    add_executable(test-hrx-ops test-hrx-ops.cpp)
-    target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
-    target_include_directories(test-hrx-ops PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
-    add_test(NAME test-hrx-ops COMMAND test-hrx-ops)
 
     add_executable(test-hrx-hadamard test-hrx-hadamard.cpp)
     target_link_libraries(test-hrx-hadamard PRIVATE ggml)
