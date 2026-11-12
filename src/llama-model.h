@@ -718,42 +718,8 @@ struct llama_prec_policy {
 };
 
 // transform of a folded weight, applied to the matmul input: optional sign flip, then the normalized block Hadamard rotation
-struct llama_hadamard_transform {
-    ggml_tensor * rot;
-    ggml_tensor * signs; // nullptr for identity sign mode
-
-    // if perm_rep > 1, permute the input from tiled head order [hd, nk, rep] to grouped order [hd, rep, nk] before signs and rotation
-    int64_t perm_hd  = 0;
-    int64_t perm_nk  = 0;
-    int64_t perm_rep = 0;
-
-    // ssm_out of a gated delta net gets its value heads in tiled order, but the fold used grouped order
-    // record the head geometry for that permutation, return false if it does not match the input width
-    bool set_gdn_v_perm(int64_t n_in, int64_t n_v, int64_t n_k) {
-        if (n_k <= 0 || n_v <= 0 || n_v % n_k != 0 || n_in % n_v != 0) {
-            return false;
-        }
-        perm_hd  = n_in / n_v;
-        perm_nk  = n_k;
-        perm_rep = n_v / n_k;
-        return true;
-    }
-};
 using llama_hadamard_rotations = std::unordered_map<const ggml_tensor *, llama_hadamard_transform>;
 
-struct llama_hadamard {
-    // names and sign data come from the GGUF metadata in load_hparams, the transforms are made in load_tensors
-    std::unordered_map<std::string, uint32_t> weight_blocks;
-    std::unordered_map<std::string, uint32_t> inverse_blocks;
-
-    std::map<uint32_t, std::vector<int32_t>> sign_data;
-
-    bool gdn_v_grouped = false;
-    bool tied_output = false;
-
-    llama_hadamard_rotations rot; // folded weight -> activation transform
-    llama_hadamard_rotations inv; // latent lookup table -> inverse transform
-};
 
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
