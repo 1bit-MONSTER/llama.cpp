@@ -180,13 +180,6 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
     const int64_t hc_dim = hc * n_embd;
     const int64_t hc_lr  = hparams.hc_low_rank;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    const bool mtp_only    = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.hc_attn_norm.weight") == nullptr);
-    const int  trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
-
-    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, trunk_flags);
-
-=======
     const auto nf = nextn_flags(ml, LLM_TENSOR_HC_ATTN_NORM);
     const int trunk_flags = nf.trunk;
     const int mtp_flags   = nf.mtp;
@@ -195,7 +188,6 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
 
     // there is no output_norm: the final hyper-connection mixer carries it
     // the gammas load as [n_embd, hc] so the grouped norm multiplies them without a graph reshape
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     hc_head_norm = create_tensor(tn(LLM_TENSOR_HC_HEAD_NORM, "weight"), { n_embd, hc }, trunk_flags | TENSOR_ALLOW_RESHAPE);
     hc_head_down = create_tensor(tn(LLM_TENSOR_HC_HEAD_DOWN, "weight"), { hc_dim, hc_lr }, trunk_flags);
     hc_head_up   = create_tensor(tn(LLM_TENSOR_HC_HEAD_UP,   "weight"), { hc_lr, hc_dim }, trunk_flags);
@@ -228,12 +220,10 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
                                            { hparams.ple_head_dim, ple_rows }, TENSOR_READ_LAZY);
     }
 
-    const int mtp_flags = !ml.load_mtp ? TENSOR_SKIP : 0;
 
-    for (int il = 0; il < (int) hparams.n_layer_all; ++il) {
+    auto load_block = [&](int il, int flags) {
         auto & layer = layers[il];
 
-        const int flags = il < n_layer ? trunk_flags : mtp_flags;
 
         const int64_t n_ff_exp   = hparams.n_ff_exp()   ? hparams.n_ff_exp()   : n_ff / n_expert_used;
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
@@ -315,30 +305,6 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         layer.ffn_gate_shexp     = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP,     "weight", il), { n_embd, n_ff_shexp }, flags);
         layer.ffn_up_shexp       = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,       "weight", il), { n_embd, n_ff_shexp }, flags);
         layer.ffn_down_shexp     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,     "weight", il), { n_ff_shexp, n_embd }, flags);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-
-        if (il < n_layer) {
-            continue;
-        }
-
-        layer.nextn.enorm   = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM,   "weight", il), { n_embd }, flags);
-        layer.nextn.hnorm   = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM,   "weight", il), { hc_dim }, flags);
-        layer.nextn.eh_proj = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", il), { 2 * n_embd, n_embd }, flags);
-
-        layer.nextn.hc_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_NORM, "weight", il), { n_embd, hc }, flags | TENSOR_ALLOW_RESHAPE);
-        layer.nextn.hc_head_down = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_DOWN, "weight", il), { hc_dim, hc_lr }, flags);
-        layer.nextn.hc_head_up   = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_UP,   "weight", il), { hc_lr, hc_dim }, flags);
-
-        layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS,     "weight", il), { n_embd, n_vocab }, flags | TENSOR_NOT_REQUIRED);
-        // reduced draft vocabulary (qwen4exp-draft-vocab.h): a K-row head plus d2t
-        const int64_t n_draft_rows = mtp_flags == 0 ? qwen4exp_draft_vocab_rows(ml, tn(LLM_TENSOR_D2T).str(), n_vocab) : 0;
-        if (n_draft_rows > 0) {
-            d2t = create_tensor(tn(LLM_TENSOR_D2T), { n_draft_rows }, 0);
-        }
-        layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", il),
-                                                     { n_embd, n_draft_rows > 0 ? n_draft_rows : n_vocab },
-                                                     flags | (n_draft_rows > 0 ? 0 : TENSOR_NOT_REQUIRED));
-=======
     };
 
     for (int il = 0; il < n_layer; ++il) {
@@ -357,7 +323,6 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         nextn.hc_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_NORM, "weight", il), { n_embd, hc }, mtp_flags | TENSOR_ALLOW_RESHAPE);
         nextn.hc_head_down = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_DOWN, "weight", il), { hc_dim, hc_lr }, mtp_flags);
         nextn.hc_head_up   = create_tensor(tn(LLM_TENSOR_NEXTN_HC_HEAD_UP,   "weight", il), { hc_lr, hc_dim }, mtp_flags);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 }
 
@@ -519,7 +484,6 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
         ggml_build_forward_expand(gf, ple_emb);
     }
 
-    ggml_tensor * inpL = build_inp_embd(model.tok_embd);
     cb(inpL, "model.input_embed", -1);
     ggml_build_forward_expand(gf, inpL);
 
@@ -530,8 +494,6 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
         inp_kpool = build_inp_kpool(mctx_hyb);
     }
 
-    ggml_tensor * inp_pos     = build_inp_pos();
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     // the wide residual starts as hc identical copies of the embedding
     ggml_tensor * res_hc = ggml_repeat_4d(ctx0,
@@ -566,17 +528,6 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
         if (hparams.is_recr(il)) {
             cur = build_layer_attn_linear(inp->get_recr(), cur, il);
         } else {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            cur = build_layer_attn(inp->get_attn(), mctx_hyb, cur, inp_pos, sections, il);
-        }
-
-        const bool gather_now = !cparams.embeddings_nextn || cparams.embeddings_nextn_masked;
-
-        if (il == n_layer - 1 && inp_out_ids && gather_now) {
-            // everything below is per token, so drop the rows that produce no output
-            cur    = ggml_get_rows(ctx0, cur,    inp_out_ids);
-            inject = ggml_get_rows(ctx0, inject, inp_out_ids);
-=======
             cur = build_layer_attn(inp->get_attn(), mctx_hyb, inp_kpool, cur, inp_pos, sections, il);
         }
 
@@ -584,7 +535,6 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
             // everything below is per token, so drop the rows that produce no output
             cur = ggml_get_rows(ctx0, cur, inp_out_ids);
             attn_mix.inject = ggml_get_rows(ctx0, attn_mix.inject, inp_out_ids);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
             res_hc = ggml_reshape_2d(ctx0, res_hc, n_embd*hc, res_hc->ne[2]);
             res_hc = ggml_get_rows(ctx0, res_hc, inp_out_ids);
@@ -640,7 +590,7 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
 
 // TODO: QSA for the draft head; dense is a numerical superset below the 2048-token budget.
 llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
-    graph(model, params, no_build_t{}) {
+    graph(model, params, no_build{}) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "QWEN4EXP MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "QWEN4EXP MTP currently only supports a single MTP block");
     GGML_ASSERT(ubatch.token && "QWEN4EXP MTP requires token input");
