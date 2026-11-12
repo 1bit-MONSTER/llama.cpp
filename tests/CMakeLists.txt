@@ -181,17 +181,8 @@ llama_build(${LLAMA_CONTEXT_TEST_SRC})
 
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    llama_build_and_test(test-sampling.cpp)
-    llama_build_and_test(test-reasoning-budget.cpp)
-    llama_build_and_test(test-grammar-parser.cpp)
-    llama_build_and_test(test-grammar-integration.cpp)
-    llama_build_and_test(test-llama-grammar.cpp)
-    llama_build_and_test(test-batch-alloc.cpp)
     llama_build_and_test(test-kv-zero.cpp)
     target_include_directories(test-kv-zero PRIVATE ${PROJECT_SOURCE_DIR}/src)
-    llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-=======
     llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-reasoning-budget.cpp  LABEL behavior)
@@ -200,7 +191,6 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-llama-grammar.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-batch-alloc.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-chat.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     target_link_libraries(test-chat PRIVATE server-context)
     llama_build_and_test(test-server-component.cpp  LABEL behavior)
@@ -446,7 +436,6 @@ target_include_directories(test-server-health PRIVATE ../tools/server)
 add_test(NAME test-server-health COMMAND test-server-health)
 
 if (TARGET ggml-hrx)
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     # the program cache's byte budget and LRU order: pure policy, no device and no HRX link
     # Which rotations the fused registrations accept, i.e. what the claim may assert (engine #1467).
     # Header-only: no device, no model, and the vision rotation must be rejected here.
@@ -511,13 +500,11 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-buffer PRIVATE ggml-hrx ggml hrx::hrx)
     target_include_directories(test-hrx-buffer PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-buffer COMMAND test-hrx-buffer)
-=======
     add_executable(hrx-buffer-test hrx-buffer-test.cpp)
     target_link_libraries(hrx-buffer-test PRIVATE ggml-hrx ggml hrx::hrx)
     target_include_directories(hrx-buffer-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME hrx-buffer-test COMMAND hrx-buffer-test
         --hrx-buffer-test-jobs 1 --hrx-buffer-test-output all --hrx-buffer-test-filter ".*")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     add_executable(hrx-backend-test hrx-backend-test.cpp)
     target_link_libraries(hrx-backend-test PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
@@ -531,7 +518,6 @@ if (TARGET ggml-hrx)
     add_test(NAME hrx-loom-jit-test COMMAND hrx-loom-jit-test
         --hrx-loom-jit-test-jobs 2 --hrx-loom-jit-test-output all --hrx-loom-jit-test-filter ".*")
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     # How a layout-alias node is judged when its input is PRODUCED vs EXTERNAL: engine #1467's projector is
     # refused at a no-op VIEW that the standalone oracle calls supported because it feeds the view from a leaf.
     add_executable(test-hrx-view-alias-elision test-hrx-view-alias-elision.cpp)
@@ -611,7 +597,6 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-attention-sink PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-attention-sink PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-attention-sink COMMAND test-hrx-attention-sink)
-=======
     add_executable(hrx-ops-test hrx-ops-test.cpp)
     target_link_libraries(hrx-ops-test PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(hrx-ops-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
@@ -622,5 +607,4 @@ if (TARGET ggml-hrx)
         LABELS hrx
         TIMEOUT 900
         FAIL_REGULAR_EXPRESSION "test skipped: no device available")
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 endif()
