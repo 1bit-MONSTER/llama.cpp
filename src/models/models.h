@@ -2961,7 +2961,6 @@ struct llama_model_qwen4exp : public llama_model_base {
                     ggml_tensor * q_cur,
                     ggml_tensor * k_cur,
                     ggml_tensor * v_cur,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
                     ggml_tensor * top_k,
                           float   kq_scale,
                             int   il);
@@ -2976,7 +2975,6 @@ struct llama_model_qwen4exp : public llama_model_base {
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
                     ggml_tensor * kq_mask,
-=======
                     ggml_tensor * sel,
                         int64_t   n_sel,
                           float   kq_scale,
@@ -2991,7 +2989,6 @@ struct llama_model_qwen4exp : public llama_model_base {
           llm_graph_input_kpool * inp_kpool,
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                             int * sections,
                             int   il);
 
