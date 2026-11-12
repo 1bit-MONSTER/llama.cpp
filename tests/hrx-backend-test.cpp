@@ -9293,13 +9293,8 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[1].kernel.kernel_id) ==
                 "loom_libs:ggml_moe_build_expert_partition_table");
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[2].kernel.kernel_id) ==
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
                 "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma");
         REQUIRE(gate_up_match.dispatches[2].bindings.size() == 6);
-=======
-                common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));
-        REQUIRE(gate_up_match.dispatches[2].bindings.size() == 7);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         REQUIRE(gate_up_match.dispatches[2].bindings[1].value == gate_up_match.transients[0].value);
         REQUIRE(gate_up_match.dispatches[2].bindings[2].value == gate_up_match.transients[1].value);
         REQUIRE(gate_up_match.metadata.generated_resources().size() == 2);
@@ -9331,13 +9326,8 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, gate_index, gate_up_match));
         REQUIRE(gate_up_match.dispatches.size() == 1);
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[0].kernel.kernel_id) ==
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
                 "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma");
         REQUIRE(gate_up_match.dispatches[0].bindings.size() == 6);
-=======
-                common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));
-        REQUIRE(gate_up_match.dispatches[0].bindings.size() == 7);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     {
@@ -9351,13 +9341,8 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, gate_index, gate_up_match));
         REQUIRE(gate_up_match.dispatches.size() == 1);
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[0].kernel.kernel_id) ==
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
                 "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma");
         REQUIRE(gate_up_match.dispatches[0].bindings.size() == 6);
-=======
-                common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));
-        REQUIRE(gate_up_match.dispatches[0].bindings.size() == 7);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     {
