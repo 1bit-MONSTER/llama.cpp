@@ -494,3 +494,22 @@ signatures. That is the complete specification; nothing about it is now unknown,
 
 Three attempts cost three reverts and produced this paragraph -- which is the right trade, but the next attempt should start by
 copying the file apart rather than editing it in place.
+
+## qwen4exp: the reason no text assembly can work -- our DEFINITIONS do not match the unioned DECLARATIONS
+Checked the class body directly instead of reasoning about layout:
+    build_qsa_top_k   declared 1x   (ours)
+    build_qsa_sel     declared 1x   (AMD's)
+    build_inp_kpool   declared 2x
+    qsa_inps          declared 1x
+    set_input_qsa     NOT declared in this class at all
+So models.h carries the union of both vocabularies, and each side's *definitions* in qwen4exp.cpp are written against its own
+vocabulary only. That is why all-ours says 'no declaration matches' at 804/948: those definitions have signatures the unioned header
+does not declare, and all-theirs fails symmetrically.
+
+Which means the remaining work on this file is not text movement at all (my three boundary attempts were chasing a shape problem that
+does not exist) -- it is a PORT: rewrite each surviving function to the shape the merged header declares, for both the qsa and kpool
+paths. That is dispatch/model-owner work with a real design content (which QSA representation does this model build), and it is the
+one item in my column I should stop trying to resolve by assembly.
+
+Correction to the previous note: the 'REORDER' framing there was wrong -- members may legally be declared after member functions, so
+the layout was never the obstacle. The signatures are.
