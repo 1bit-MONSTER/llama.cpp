@@ -101,10 +101,10 @@ struct llama_hadamard {
     bool onebit_q4_0   = false;  // from onebit.hadamard_q4_0: the Q4_0 matmul weights, MTP ones only if loaded
 
     // bound to the model's tensors (setup)
-    std::unordered_map<const ggml_tensor *, llama_hadamard_transform> rotations;
-    std::unordered_map<const ggml_tensor *, llama_hadamard_transform> inverses;
+    std::unordered_map<const ggml_tensor *, llama_hadamard_transform> rot;
+    std::unordered_map<const ggml_tensor *, llama_hadamard_transform> inv;
 
-    bool empty() const { return rotations.empty() && inverses.empty(); }
+    bool empty() const { return rot.empty() && inv.empty(); }
 
     // reads prism.hadamard.*; throws on anything this implementation does not verify
     void load_keys(llama_model_loader & ml, llm_arch arch);
