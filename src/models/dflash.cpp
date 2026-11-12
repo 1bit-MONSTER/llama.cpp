@@ -535,30 +535,13 @@ static ggml_tensor * build_dflash2_conv(
 
     ggml_tensor * weight_all = ggml_add(ctx0, coeff_all, base_side);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     ggml_tensor * result = nullptr;
     for (int64_t tap = 0; tap < kernel_size; ++tap) {
-=======
-    // taps at or past block_size only read the left padding and add nothing
-    const int64_t n_taps = std::min(kernel_size, block_size);
-
-    ggml_tensor * result = nullptr;
-    for (int64_t tap = 0; tap < n_taps; ++tap) {
-        ggml_tensor * values = blocks;
-        if (tap > 0) {
-            ggml_tensor * previous = ggml_view_3d(ctx0, blocks, hidden_size, block_size - tap, n_blocks,
-                    blocks->nb[1], blocks->nb[2], 0);
-            values = ggml_pad_ext(ctx0, previous, 0, 0, tap, 0, 0, 0, 0, 0);
-        }
-        values = ggml_reshape_2d(ctx0, values, hidden_size, n_tokens);
-
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         ggml_tensor * weight = ggml_reshape_2d(ctx0,
                 ggml_cont(ctx0, ggml_view_4d(ctx0, weight_all, group_size, n_groups, 1, n_tokens,
                         weight_all->nb[1], weight_all->nb[2], weight_all->nb[3], tap * weight_all->nb[2])),
                 hidden_size, n_tokens);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         if (tap == 0) {
             result = ggml_mul(ctx0, weight, ggml_reshape_2d(ctx0, blocks, hidden_size, n_tokens));
             continue;
@@ -581,10 +564,6 @@ static ggml_tensor * build_dflash2_conv(
                 ggml_mul(ctx0, shifted_weight, previous));
         ggml_tensor * head = ggml_view_2d(ctx0, result_blocks, hidden_size * tap, n_blocks, result_blocks->nb[2], 0);
         result = ggml_reshape_2d(ctx0, ggml_concat(ctx0, head, tail, 0), hidden_size, n_tokens);
-=======
-        ggml_tensor * term = ggml_mul(ctx0, weight, values);
-        result = result ? ggml_add(ctx0, result, term) : term;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
     return result;
 }
