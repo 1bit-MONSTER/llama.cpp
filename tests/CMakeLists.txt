@@ -510,4 +510,10 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-attention-sink PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-attention-sink PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-attention-sink COMMAND test-hrx-attention-sink)
+
+    # engine #2146: TOP_K on HRX gives the same indices in the same order every run
+    add_executable(test-hrx-top-k-repeat test-hrx-top-k-repeat.cpp)
+    target_link_libraries(test-hrx-top-k-repeat PRIVATE ggml)
+    target_include_directories(test-hrx-top-k-repeat PRIVATE ../ggml/include)
+    add_test(NAME test-hrx-top-k-repeat COMMAND test-hrx-top-k-repeat)
 endif()
