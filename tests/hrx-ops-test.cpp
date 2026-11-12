@@ -732,6 +732,9 @@ static bool publication_accepts_mul_output_15(const ggml::hrx::DispatchMatchCont
     return consumer.output == ggml::hrx::ValueId(15) && publication_accepts_mul(context, consumer, input);
 }
 
+// a lambda's default argument cannot name a local, so the element count it defaults to lives at file scope
+static constexpr int64_t kActPubElements = 2048 * 2;
+
 static void run_activation_publication_contract_checks() {
     constexpr int64_t row_size  = 2048;
     constexpr int64_t row_count = 2;
@@ -739,7 +742,7 @@ static void run_activation_publication_contract_checks() {
     const size_t      f32_bytes = ggml_row_size(GGML_TYPE_F32, elements);
 
     auto make_activation = [&](ggml::hrx::ValueId id, ggml::hrx::ValueStorageId storage, ggml::hrx::ValueId root,
-                               ggml::hrx::ValueId alias, int64_t element_count = elements) {
+                               ggml::hrx::ValueId alias, int64_t element_count = kActPubElements) {
         ggml::hrx::Value value = make_test_value(id, storage, root, alias, 0, f32_bytes, GGML_TYPE_F32, element_count);
         if (element_count == elements) {
             value.ne = { row_size, row_count, 1, 1 };

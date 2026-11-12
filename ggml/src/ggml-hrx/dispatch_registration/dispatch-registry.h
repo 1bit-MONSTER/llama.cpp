@@ -148,6 +148,10 @@ class DispatchRegistry {
 
     const std::vector<DispatchRegistration> & registrations_for_root(ggml_op root_op) const;
 
+    // AMD's publication bookkeeping: which consumer classes a publication for this root op serves.
+    const std::vector<DispatchActivationConsumerRegistration> &
+    activation_consumers_for_root(ggml_op root_op) const;
+
     const std::vector<DispatchRegistration> & single_op_registrations() const { return single_op_registrations_; }
 
   private:
@@ -160,12 +164,14 @@ class DispatchRegistry {
     };
 
     std::vector<RegistrationGroup>    registrations_by_root_;
+    std::vector<std::vector<DispatchActivationConsumerRegistration>> activation_consumers_by_root_;
     std::vector<DispatchRegistration> single_op_registrations_;
 };
 
 class DispatchRegistryBuilder {
   public:
     void             add(DispatchRegistration registration);
+    void             add_activation_consumer(DispatchActivationConsumerRegistration registration);
     DispatchRegistry build();
 
   private:

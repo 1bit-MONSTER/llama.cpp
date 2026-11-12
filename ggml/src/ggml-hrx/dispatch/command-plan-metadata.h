@@ -96,6 +96,18 @@ struct CommandPlanAlternateValue {
     int         scale_log2 = 0;
 };
 
+// AMD's activation-publication diagnostics: the merge dropped the type while keeping its readers.
+struct CommandPlanActivationPublicationDiagnostic {
+    ValueId     source_value;
+    ValueId     alternate_value;
+    ValueId     consumer_value;
+    std::string requested_format;
+    std::string publication_name;
+    std::string publication_stage;
+    std::string fallback_reason;
+    size_t      alias_depth  = 0;
+    bool        mixed_fanout = false;
+};
 struct CommandPlanMoeRoutingBundle {
     ValueId route_ids;
     ValueId route_weights;
@@ -135,6 +147,10 @@ class CommandPlanMetadata {
 
     const std::vector<CommandPlanGeneratedResource> & generated_resources() const { return generated_resources_; }
 
+    const std::vector<CommandPlanActivationPublicationDiagnostic> & activation_publication_diagnostics() const {
+        return activation_publication_diagnostics_;
+    }
+
     const std::vector<CommandPlanAlternateValue> & alternate_values() const { return alternate_values_; }
 
     const std::vector<CommandPlanMoeRoutingBundle> & moe_routing_bundles() const { return moe_routing_bundles_; }
@@ -142,6 +158,7 @@ class CommandPlanMetadata {
   private:
     std::vector<CommandPlanGeneratedResource> generated_resources_;
     std::vector<CommandPlanAlternateValue>    alternate_values_;
+    std::vector<CommandPlanActivationPublicationDiagnostic> activation_publication_diagnostics_;
     std::vector<CommandPlanMoeRoutingBundle>  moe_routing_bundles_;
 };
 

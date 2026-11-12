@@ -356,6 +356,9 @@ void DispatchRegistryBuilder::add(DispatchRegistration registration) {
     if (registry_.registrations_by_root_.empty()) {
         registry_.registrations_by_root_.resize(kOpCount);
     }
+    if (registry_.activation_consumers_by_root_.empty()) {
+        registry_.activation_consumers_by_root_.resize(kOpCount);
+    }
     DispatchRegistry::RegistrationGroup & group =
         registry_.registrations_by_root_[static_cast<size_t>(registration.root_op)];
     if (registration.kind == DispatchMatchKind::Fused) {
@@ -364,6 +367,29 @@ void DispatchRegistryBuilder::add(DispatchRegistration registration) {
         group.single_op.push_back(registration);
         registry_.single_op_registrations_.push_back(std::move(registration));
     }
+}
+
+
+static const std::vector<DispatchActivationConsumerRegistration> kEmptyActivationConsumers;
+
+const std::vector<DispatchActivationConsumerRegistration> &
+DispatchRegistry::activation_consumers_for_root(ggml_op root_op) const {
+    if (!valid_root_op(root_op) || activation_consumers_by_root_.empty()) {
+        return kEmptyActivationConsumers;
+    }
+    return activation_consumers_by_root_[static_cast<size_t>(root_op)];
+}
+
+void DispatchRegistryBuilder::add_activation_consumer(DispatchActivationConsumerRegistration registration) {
+    if (!valid_root_op(registration.root_op) || registration.accepts == nullptr ||
+        registration.accepted_formats == DispatchActivationInputNone) {
+        return;
+    }
+    if (registry_.activation_consumers_by_root_.empty()) {
+        registry_.activation_consumers_by_root_.resize(kOpCount);
+    }
+    registry_.activation_consumers_by_root_[static_cast<size_t>(registration.root_op)].push_back(
+        std::move(registration));
 }
 
 DispatchRegistry DispatchRegistryBuilder::build() {

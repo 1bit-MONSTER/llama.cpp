@@ -78,6 +78,8 @@ struct CommandProgram {
     TransientPlan                       transients;
     CompletionCounterPlan               completion_counters;
     std::vector<ConstantInitialization> constant_initializations;
+    // AMD's publication diagnostics travel with the program (the ops test copies them between programs).
+    std::vector<CommandPlanActivationPublicationDiagnostic> activation_publication_diagnostics;
     Status                              status;
 
     bool valid() const { return status.success(); }
