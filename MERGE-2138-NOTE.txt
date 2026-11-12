@@ -526,3 +526,25 @@ command-plan.h, all verbatim-available from the pin, none of it a design decisio
 Being straight about the score: I have now twice described this gap as smaller than it is ('API drift', then 'two copy-and-place
 items'). Both times the estimate came from reading the error message rather than the callee. The measurements that are reliable are the
 ones in this file: which files have the symbol, in which parent, and whether it compiles.
+
+## The activation-publication subsystem: complete remaining chain (measured)
+The ops test cannot compile until five things exist. Measured against the pin's dispatch-registry.h:
+
+    DispatchActivationConsumerRegistration    merged 1 use  / pin 4   (the type exists; its USERS are missing)
+    activation_consumers_for_root            merged 0      / pin 1   (registry accessor)
+    activation_consumers_by_root             merged 0      / pin 1   (registry storage)
+    add_activation_consumer                  merged 0      / pin 1   (builder method)
+    DispatchActivationConsumerSource{...}    restored last commit (fixed)
+
+Done already this session: the enum family, DispatchMatchContext::registry (with its forward declaration), the comparator family,
+detail::find_full_ordered_value_resource, the free find_generated_resource, and the activation_publication_diagnostics accessor is still
+outstanding.
+
+What the rest of the chain is, concretely: add `std::vector<std::vector<DispatchActivationConsumerRegistration>>
+activation_consumers_by_root_;` and `activation_consumers_for_root(ggml_op)` to DispatchRegistry, `add_activation_consumer(...)` to the
+builder, and have build() move the vectors across. All verbatim from the pin, none of it a design decision -- it is AMD's own
+bookkeeping for "which consumers a publication serves".
+
+That is where I stop on this subsystem: the remaining pieces are mechanical but they are a block of registry plumbing, and I would
+rather hand over five named members than a half-wired builder. The test TU's error list is the acceptance signal and it is down to two
+items from the original six.
