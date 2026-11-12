@@ -68,11 +68,7 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     if (hparams.dsv4_hc_mult > 0) {
         ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,                hparams.n_lora_q);
         ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,             hparams.n_swa);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,    hparams.n_ff_arr, hparams.n_layer_all);
-=======
         ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,    hparams.n_ff_exp_arr, hparams.n_layer_all);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,                  hparams.n_expert_shared);
         ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,                 hparams.expert_weights_scale);
         ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,                  hparams.expert_weights_norm);
@@ -260,11 +256,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
     if (hparams.dsv4_hc_mult > 0) {
         const int64_t q_lora_rank     = hparams.n_lora_q;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        const int64_t n_ff_exp        = hparams.n_ff_exp;
-=======
         const int64_t n_ff_exp        = hparams.n_ff_exp();
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         const int64_t n_expert_shared = hparams.n_expert_shared;
         const int64_t n_embd_head     = hparams.n_embd_head_k();
         const int64_t o_groups        = hparams.dsv4_o_group_count;
@@ -340,21 +332,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, 0);
         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, 0);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-
-        if (selector_meta) {
-            const int64_t kernel = hparams.dflash_conv_kernel_size;
-            const int64_t groups = n_embd / hparams.dflash_conv_group_size;
-            const int64_t projected = 2 * kernel * groups;
-            layer.dflash_attn_conv_base = create_tensor(tn(LLM_TENSOR_DFLASH_ATTN_CONV_BASE, i), { n_embd, kernel, 2 }, 0);
-            layer.dflash_attn_conv_proj = create_tensor(tn(LLM_TENSOR_DFLASH_ATTN_CONV_PROJ, "weight", i), { n_embd, projected }, 0);
-            layer.dflash_ffn_conv_base  = create_tensor(tn(LLM_TENSOR_DFLASH_FFN_CONV_BASE, i), { n_embd, kernel, 2 }, 0);
-            layer.dflash_ffn_conv_proj  = create_tensor(tn(LLM_TENSOR_DFLASH_FFN_CONV_PROJ,  "weight", i), { n_embd, projected }, 0);
-        }
-    }
-}
-
-=======
 
         if (conv_meta) {
             const int64_t kernel = hparams.dflash_conv_kernel_size;
@@ -367,7 +344,8 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         }
     }
 }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
+    }
+}
 
 template <>
 ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const {
