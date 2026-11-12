@@ -169,6 +169,8 @@ bool has_q8_alternate(const DispatchMatchContext & context, const Value & input,
 // Q6_K weight in the packed rows. These kernels read the stored layout, so taking the batch would add a second device
 // copy of the weight; the packed prefill kernels take it instead. A single token, and a weight prefill reads stored (for
 // example one decode already holds stored, dispatch-q4k-packed-tail.h), stay here.
+// The upper end is kMaxTokens in this file: the callers reject larger batches before asking. The predicate would still
+// be correct above it, because prefill reads these weights packed there too.
 bool few_token_batch_reads_packed(const CommonMulMatMatch & match) {
     if (match.token_count <= 1 || match.weight == nullptr) {
         return false;
