@@ -1,22 +1,16 @@
 #include "server-context.h"
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 #include "server-prefill.h"
-=======
 #include <atomic>
 #include <thread>
 #include "base64.hpp"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #include "server-chat.h"
 #include "server-common.h"
 #include "server-decision.h"
 #include "server-http.h"
 #include "server-task.h"
 #include "server-queue.h"
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 #include "server-health.h"
-=======
 #include "server-realtime.h"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #include "server-schema.h"
 #include "server-stream.h"
 
@@ -1140,7 +1134,6 @@ private:
     // slots / clients
     std::vector<server_slot> slots;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // [1bit] target 1: the last KV-region share issued per slot. An adopt has to quote it back, so cells that
     // nobody exported (stale, forgotten, or a client inventing ids) are refused instead of silently becoming a
     // prompt's cache. Single use: adopting erases it.
@@ -1148,13 +1141,8 @@ private:
     uint64_t kv_share_seq = 0;
 
     int trace = 0;
-    int slots_debug = 0;
-=======
-    int trace = 0;        // env: LLAMA_TRACE
     int slots_debug = 0;  // env: LLAMA_SERVER_SLOTS_DEBUG
     int slots_n_diff = 0; // env: LLAMA_SERVER_SLOTS_N_DIFF
-
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     int n_empty_consecutive = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
@@ -1709,14 +1697,8 @@ private:
         GGML_ASSERT(!sleeping);
 
         // wiring up server queues
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        queue_tasks.on_new_task([this](server_task && task) {
-            health_pending_tasks.fetch_add(1);  // /health: a task is queued for the main loop
-            process_single_task(std::move(task));
-=======
         queue_tasks.on_new_task([this](server_task && task, bool is_yielding) {
             return process_single_task(std::move(task), is_yielding);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         });
         queue_tasks.on_update_slots([this]() {
             update_slots();
