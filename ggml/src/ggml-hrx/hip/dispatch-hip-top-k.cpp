@@ -115,8 +115,7 @@ bool match_hip_top_k(const DispatchMatchContext & context, DispatchMatch & match
 bool hip_top_k_tensor_supported(const struct ggml_tensor * op) {
     // The claim must follow the matcher, including the debug switch: with GGML_HRX_DISABLE_DISPATCH naming this
     // registration the node has to fall back to the CPU backend, not become an unsupported HRX node.
-    const char * disabled = std::getenv("GGML_HRX_DISABLE_DISPATCH");
-    if (disabled != nullptr && std::string(disabled).find("hip.top_k_f32") != std::string::npos) {
+    if (dispatch_name_disabled("hip.top_k_f32")) {
         return false;
     }
     if (op == nullptr || op->src[0] == nullptr || !ggml_is_contiguous(op->src[0]) ||
