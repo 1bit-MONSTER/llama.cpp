@@ -400,3 +400,21 @@ The general rule this file has taught, at the cost of three probes: when a union
 the damage is invisible to marker counts and shows up as a brace depth that never returns to 0 -- measure depth per top-level
 declaration rather than counting braces in the whole file (HEAD itself has a +5 imbalance from braces inside string literals, so a
 global count can never be 0 and is useless as a signal).
+
+## test-backend-ops: two instruments measured as UNUSABLE on this file; the third is the one to use
+1. **Global brace count**: cannot be zero -- HEAD itself reads 4788/4783 because braces appear inside string literals in op_desc
+   implementations. Measured, so "braces match HEAD" says nothing.
+2. **Per-line depth profile**: also unreliable for the same reason -- it reported test_falcon closing at 10387 (correct) while
+   simultaneously reporting depth 4 at 13214 with test_falcon as the last depth-0 struct: contradictory, because string braces skew
+   the running total.
+3. **Prefix truncation + compile**: does NOT localise -- every prefix of an unbalanced file is unbalanced, so the error count just
+   wobbles (14500->12, 14300->12, 14100->8, 13900->7, 13700->3 errors). Measured, not assumed.
+
+What DOES work (proven on the 9037..9108 region): **rebuild the damaged region verbatim from the parents** -- `git show
+<rev>:tests/test-backend-ops.cpp`, extract the struct by brace matching, splice ours' and AMD's classes in sequence -- and then let
+the compiler say where the next region is. Each rebuild moves the first error forward; that is the only reliable progress signal on
+this file.
+
+Remaining work for the next session: keep applying the verbatim rebuild at each successive first-error location. The file is ~14.5k
+lines and the damage is localised to the class regions my two-class unions touched, so this is a bounded loop, not open-ended -- but
+it is not something to finish with two probes and a depth counter, which is what I just spent this turn establishing.
