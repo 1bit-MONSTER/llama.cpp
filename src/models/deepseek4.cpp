@@ -435,11 +435,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_mixes(
     }
     cb(comb, "hc_comb", il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     return pre;
-=======
-    return { pre, post, comb };
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 
 ggml_tensor * llama_model_deepseek4::graph::build_hc_post(
