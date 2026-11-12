@@ -306,3 +306,36 @@ path (see the models.h note: both graph inputs are live, both builders exist as 
 
 Same shape as the dflash conv-guard and the llama-model boundary cases: one side owns the structure, the other owns the text that
 fills it.
+
+## qwen4exp's last 6 hunks need SYNTHESIZED class/function boundaries (not concatenation)
+The three big hunks are the two LIVE graph-input classes: ours' `llama_model_qwen4exp::llm_graph_input_qsa` and AMD's
+`...::llm_graph_input_kpool`. Both are declared in models.h (unioned earlier) and both are constructed in the file, so both must
+survive. But concatenating the two sides does NOT work: each side carries the *body* of a method whose opening signature lives in
+the shared context before the hunk, and the shared context supplies exactly ONE closing brace. Concatenation therefore leaves the
+first class open and every later member definition nests inside it -- the compiler said so precisely:
+    'cannot define member function llama_model_qwen4exp::graph::build_inp_kpool within ...'
+
+The fix per hunk: keep ours, then insert the closing brace for ours' method/class AND synthesize the opening signature for AMD's
+method (name, parameters, constness) from what its body uses -- then AMD's body, then the shared closer. That is two synthesized
+signatures for hunk 2 and one each for hunks 1 and 3.
+
+Same rule as llama-model.h and dflash: the side that owns the STRUCTURE is the one whose brace the shared context closes, and the
+other side's structure has to be written.
+
+## CORRECTION to the note above: hunks 2 and 3 sit inside KPOOL's set_input, so theirs is the right side there
+The shared context immediately before those hunks is
+    void set_input(const llama_ubatch * ubatch) override {
+        mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
+        ...
+i.e. it is **llm_graph_input_kpool::set_input** -- AMD's class. So our `cell_blk`/`blk_cells`/`blk_pos` validation body is the
+MISFILED side there, not the one to keep: `pool_cells`/`pool_mask`/`tail_idxs` are what that method can legitimately touch.
+
+That flips the resolution: hunks 2 and 3 take THEIRS. Our cell_blk validation belongs in `llm_graph_input_qsa::set_input`, which
+hunk 1's ours-block region declares -- so the remaining work is
+  (a) take theirs for hunks 2 and 3,
+  (b) make sure qsa's own set_input carries our cell_blk validation (it may already, elsewhere in the file -- check before writing),
+  (c) hunk 4 (`reshape_4d` vs `view_4d`) is already resolved to theirs: an explicit-stride view equals a reshape for contiguous
+      input and is correct for strided, so it is the safe superset.
+
+Method note: the *prelude before a hunk* identifies which class or function the hunk's two sides are bodies OF. Reading it first
+would have saved the concatenation attempt.
