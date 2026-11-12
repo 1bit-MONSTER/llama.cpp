@@ -220,3 +220,17 @@ our block and store the shared buffer outside `bufs` with an explicit lifetime, 
 kv-share branch and a flag saying the buffer is borrowed. Each changes where the free happens, so it is an ownership
 decision, not a merge decision -- and the wrong choice is a double free or a leaked GTT region, neither of which a
 compile catches.
+
+## src/llama-graph.cpp hunk 5 (LEFT MARKED): our Hadamard inverse vs AMD's 3-path embedding refactor
+Ours is two lines: get_rows on tok_embd, then `hadamard->inverse(ctx0, tok_embd, cur)` to restore the primal basis from a
+Hadamard-latent table. AMD's side replaces the whole embedding path with a 39-line refactor: an `inp->embd` F32 tensor,
+optional `mixed_tokens`, and placeholders for THREE paths (so GET_ROWS ops stick at the front of the compute graph via
+ggml_build_forward_order).
+
+`hadamard->inverse` occurs EXACTLY ONCE in the entire file -- inside this conflict. AMD's side contains no Hadamard
+equivalent. So neither side can be taken: theirs silently drops our Hadamard-latent restore (qwen35/flint packs that store
+rotated rows), ours discards the placeholder structure the rest of the refactor depends on.
+
+The integration is: apply hadamard->inverse to whichever tensor in THEIR path is the embedding rows (likely right after
+the get_rows that fills the placeholder), and make sure the inverse is not applied twice on the paths that already carry
+primal weights. Needs the three-path structure read first -- which is why it is marked rather than merged.

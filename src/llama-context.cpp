@@ -12,11 +12,8 @@
 #include "llama-model.h"
 #include "llama-moe-cache.h"
 #include "llama-ext.h"
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 #include "llama-kv-share.h"
-=======
 #include "llama-sampler.h"
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #include "llama.h"
 
 #include <cinttypes>
@@ -343,13 +340,10 @@ llama_context::llama_context(
     cparams.fused_dsv4_hc_post = true;
     cparams.auto_fhc           = true;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     cparams.fused_cross_device = params.fused_cross_device;
-=======
     // only the indexer models build this mask, skip the probe for the others
     cparams.fused_top_k_mask = true;
     cparams.auto_ftkm        = hparams.indexer_top_k > 0;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
@@ -360,12 +354,10 @@ llama_context::llama_context(
     cparams.n_outputs_max_per_seq = params.n_outputs_max_per_seq == 0 ?
             cparams.n_outputs_max : std::min(params.n_outputs_max_per_seq, cparams.n_outputs_max);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
     cparams.type_k     = params.type_k;
     cparams.type_v     = params.type_v;
-=======
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
     // re-reserve when graph nodes change.
@@ -388,7 +380,6 @@ llama_context::llama_context(
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size = params.moe_cache_size;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -2498,27 +2489,11 @@ void llama_context::output_reorder() {
             }
         }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        if (embd_nextn.size > 0) {
+        if (embd_nextn.size > 0 && cparams.embeddings_nextn_masked) {
             // nextn rows are n_embd_out wide (4 * n_embd for qwen4exp)
             const uint64_t n_out = model.hparams.n_embd_out();
             for (uint64_t k = 0; k < n_out; k++) {
                 std::swap(embd_nextn.data[i0*n_out + k], embd_nextn.data[i1*n_out + k]);
-            }
-        }
-
-        if (embd_layer_inp.size() > 0) {
-            for (int lid = 0; lid < (int) embd_layer_inp.size(); ++lid) {
-                if (embd_layer_inp[lid].size > 0) {
-                    for (uint64_t k = 0; k < n_embd; ++k) {
-                        std::swap(embd_layer_inp[lid].data[i0*n_embd + k], embd_layer_inp[lid].data[i1*n_embd + k]);
-                    }
-                }
-=======
-        if (embd_nextn.size > 0 && cparams.embeddings_nextn_masked) {
-            for (uint64_t k = 0; k < n_embd_out; k++) {
-                std::swap(embd_nextn.data[i0*n_embd_out + k], embd_nextn.data[i1*n_embd_out + k]);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             }
         }
 
@@ -2613,7 +2588,6 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
             res += lora->get_n_nodes();
         }
     }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
     if (model.arch == LLM_ARCH_DFLASH && model.hparams.dflash_selector_rank > 0) {
         // DFlash2's convolutions and selector are shape work rather than matmuls
@@ -2621,12 +2595,10 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     }
     for (const auto & lora : model.loras) {
         res += lora->get_n_nodes();
-=======
 
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
     for (const auto & [seq_id, sampler] : sampling.samplers) {
         res += llama_sampler_backend_n_nodes(sampler) * cparams.n_outputs_max_per_seq;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     if (cparams.training) {
@@ -2744,14 +2716,6 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * gf = model.build_graph(gparams);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    // once, on the pristine graph (after scheduling, cross-backend copies hide the producers)
-    if (gf && !hadamard_verified && !model.hadamard.empty()) {
-        model.hadamard.verify_graph(gf);
-        hadamard_verified = true;
-    }
-
-=======
     // check the graph before scheduling: cross-backend copies break the producer chain that the check follows
     if (!hadamard_verified && gf && (!model.hdmd.rot.empty() || !model.hdmd.inv.empty())) {
         llama_verify_hadamard_graph(gf, model.hdmd.rot, model.hdmd.inv, moe_cache.get());
@@ -2759,7 +2723,6 @@ ggml_cgraph * llama_context::graph_reserve(
     }
 
     this->n_input_tensors = llama_graph_n_input_tensors(gf);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     this->n_outputs = save_n_outputs;
 
     // initialize scheduler with the specified graph
