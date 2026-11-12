@@ -444,7 +444,6 @@ struct llama_model_bloom : public llama_model_base {
 };
 
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 struct llama_model_codegen : public llama_model_base {
     llama_model_codegen(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -467,7 +466,6 @@ struct llama_model_gptneo : public llama_model_base {
         graph(const llama_model & model, const llm_graph_params & params);
     };
 
-=======
 // Quant-only stub for mmproj GGUFs
 // none of these are ever called, they only exist to satisfy the llama_model_base interface
 struct llama_model_clip : public llama_model_base {
@@ -480,7 +478,6 @@ struct llama_model_clip : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
 
     [[noreturn]]
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
@@ -1632,15 +1629,11 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // Engram: the hash constants are hparams.ple_* (one module per Engram layer), hashed on the host (ggml has no
     // int64 mul/xor/mod); the token map and its pad id are V4.1 only
     uint32_t engram_pad_id = 0;
     std::vector<int32_t> engram_token_map;
 
-=======
-    // Engram: the hash constants are hparams.ple_* (one module per Engram layer), hashed on the host (ggml has no int64 mul/xor/mod)
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     int engram_index(int il) const;
 
     void engram_hash(int e, const llama_ubatch & ubatch, const std::vector<llama_token> & prev, std::vector<int32_t> & out) const;
@@ -2932,14 +2925,6 @@ struct llama_model_qwen4exp : public llama_model_base {
     struct graph : public llm_build_delta_net_base {
         graph(const llama_model & model, const llm_graph_params & params);
     protected:
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        struct no_build_t {};
-        graph(const llama_model & model, const llm_graph_params & params, no_build_t) :
-            llm_build_delta_net_base(params), model(model) {}
-
-        // HC replaces every layer norm: residual is [n_embd, hc, n_tokens]
-        ggml_tensor * build_hc_mix(
-=======
         // the helpers alone, graph_mtp builds its own body
         struct no_build {};
         graph(const llama_model & model, const llm_graph_params & params, no_build) :
@@ -2952,17 +2937,12 @@ struct llama_model_qwen4exp : public llama_model_base {
         };
 
         hc_mix build_hc_mix(
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                     ggml_tensor * x,
                     ggml_tensor * w_norm,
                     ggml_tensor * w_down,
                     ggml_tensor * w_up,
                     ggml_tensor * w_inject,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                    ggml_tensor ** inject,
-=======
                     ggml_tensor * w_down_inject, // [w_down | w_inject] in one weight, can be null
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                             int   il);
 
         ggml_tensor * build_hc_combine(
@@ -2980,11 +2960,7 @@ struct llama_model_qwen4exp : public llama_model_base {
                             int * sections,
                             int   il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        // dense self-attention restricted to the cells that top_k names
-=======
         // dense self-attention over the cells the QSA mask keeps
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         ggml_tensor * build_attn_qsa(
         llm_graph_input_attn_kv * inp,
                     ggml_tensor * q_cur,
