@@ -1226,7 +1226,10 @@ kernel.def export("ggml_mul_mat_q6_k_packed_selected_refine_token1") @ggml_mul_m
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
   %bounded_candidate_count = index.assume %candidate_count [range(%candidate_count, 1, 64)] : index
   template.apply<@ggml.mul_mat_q6_k_packed.selected_refine.body>(%bounded_token_count, %input_size, %output_size, %scale_row_layout, %bounded_candidate_count, %input, %weight, %candidates, %exact_output) : (index, index, index, index, index, buffer, buffer, buffer, buffer)
-  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  // engine #2150: the body stores each refined logit to %exact_output, which is GLOBAL memory, and the loop below reads
+  // it back from a different workitem. A workgroup-memory barrier fences LDS only, so a reader could see the slot's
+  // previous contents (the reduce kernel's coarse score) and publish that. The global form releases and acquires it.
+  kernel.barrier<global> scope(workgroup) ordering(acq_rel)
   %tid0 = kernel.workitem.id<x> : index
   %tid = index.assume %tid0 [range(%tid0, 0, 127)] : index
   %publishes = index.cmp ult, %tid, %bounded_candidate_count : index
