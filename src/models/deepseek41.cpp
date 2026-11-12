@@ -279,11 +279,7 @@ void llama_model_deepseek41::engram_hash(int e, const llama_ubatch & ubatch, con
     std::vector<uint64_t> toks(n_gram);
     for (int64_t i = 0; i < ubatch.n_tokens; ++i) {
         // shift 0 is the token itself; once a shift is blocked (sequence start or dead token) every longer one is too
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         const bool is_embd = dsv41_ubatch_i_is_embd(ubatch, (int) i);
-=======
-        const bool is_embd = !ubatch.token || (ubatch.is_mixed() && ubatch.type[i]);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         int64_t c = is_embd ? DSV41_ENGRAM_DEAD : cid(ubatch.token[i]);
         bool blocked = c == DSV41_ENGRAM_DEAD;
         toks[0] = blocked ? pad : c;
@@ -365,11 +361,7 @@ void llm_graph_input_dsv41::set_input(const llama_ubatch * ubatch) {
     if (engram_keep && engram_keep->buffer) {
         std::vector<float> keep(ubatch->n_tokens);
         for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             const bool is_embd = dsv41_ubatch_i_is_embd(*ubatch, (int) i);
-=======
-            const bool is_embd = !ubatch->token || (ubatch->is_mixed() && ubatch->type[i]);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             keep[i] = is_embd ? 0.0f : 1.0f;
         }
         ggml_backend_tensor_set(engram_keep, keep.data(), 0, keep.size()*sizeof(float));
