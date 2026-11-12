@@ -25,6 +25,7 @@
 #include "dispatch-kquant-decode.h"
 
 #include "dispatch-mul-mat-common.h"
+#include "dispatch-q4k-packed-tail.h"
 #include "dispatch/ternary-q4-0.h"
 #include "graph/graph-matcher.h"
 
@@ -164,6 +165,27 @@ bool has_q8_alternate(const DispatchMatchContext & context, const Value & input,
     return find_alternate_value(context.graph, context.plan, input.id, GGML_TYPE_Q8_1, bytes) != nullptr;
 }
 
+// engine #2137: a 2-to-8-token batch (a short prompt, or a speculative verify batch) where prefill reads this Q4_K /
+// Q6_K weight in the packed rows. These kernels read the stored layout, so taking the batch would add a second device
+// copy of the weight; the packed prefill kernels take it instead. A single token, and a weight prefill reads stored (for
+// example one decode already holds stored, dispatch-q4k-packed-tail.h), stay here.
+// The upper end is kMaxTokens in this file: the callers reject larger batches before asking. The predicate would still
+// be correct above it, because prefill reads these weights packed there too.
+bool few_token_batch_reads_packed(const CommonMulMatMatch & match) {
+    if (match.token_count <= 1 || match.weight == nullptr) {
+        return false;
+    }
+    if (match.weight->type == GGML_TYPE_Q4_K) {
+        return q4k_packed_tail_weight_ok(*match.weight, match.input_size, match.output_size) &&
+               q4k_packed_tail_enabled(*match.weight);
+    }
+    if (match.weight->type == GGML_TYPE_Q6_K) {
+        return q6k_packed_rows_weight_ok(*match.weight, match.input_size, match.output_size) &&
+               q6k_packed_rows_enabled(*match.weight);
+    }
+    return false;
+}
+
 bool uncovered(const DispatchMatchContext & context, const GraphNode * node) {
     size_t index = 0;
     return context.graph.index().node_index(node, index) && index < context.covered_nodes.size() &&
@@ -180,7 +202,8 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
     if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens || !kquant_supported(root) ||
         root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize ||
         !value_ready(context, root.input->id) ||
-        has_q8_alternate(context, *root.input, root.input_size, root.token_count)) {
+        has_q8_alternate(context, *root.input, root.input_size, root.token_count) ||
+        few_token_batch_reads_packed(root)) {
         return false;
     }
 
@@ -205,7 +228,7 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
     const CommonMulMatMatch other = match_few_token_mul_mat(graph, peer, kKQuantSwiGLUDecodeKernel);
     if (!other.matched() || !kquant_supported(other) || other.input->id != root.input->id ||
         other.input_size != root.input_size || other.output_size != root.output_size ||
-        other.token_count != root.token_count) {
+        other.token_count != root.token_count || few_token_batch_reads_packed(other)) {
         return false;
     }
     const Value * output = common_graph_value(graph, glu->output);
@@ -258,7 +281,8 @@ bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, Disp
     if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens || !kquant_supported(root) ||
         root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize ||
         !value_ready(context, root.input->id) ||
-        has_q8_alternate(context, *root.input, root.input_size, root.token_count)) {
+        has_q8_alternate(context, *root.input, root.input_size, root.token_count) ||
+        few_token_batch_reads_packed(root)) {
         return false;
     }
 

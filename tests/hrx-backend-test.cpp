@@ -12048,6 +12048,12 @@ int main(int argc, char ** argv) {
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 12); } },
         { "packed_layout_follows_weight.q6_k.uploaded.tokens12",
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, false, 12); } },
+        // engine #2137: 6 to 8 tokens is also the kquant few-token kernels' range, which read the stored layout; for a
+        // file-mapped weight prefill reads packed, the packed prefill kernel takes the batch
+        { "packed_layout_follows_weight.q4_k.file_mapped.tokens6",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, true, 6); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped.tokens8",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 8); } },
         // engine #2137: a file-mapped weight that already has a stored device copy (a decode kernel read it stored) is
         // read stored by prefill too, so it is not copied a second time; and not in the i8 layout at 6 to 16 tokens
         { "stored_copy_entries_forgotten_on_remap", [] { run_stored_copy_entries_forgotten_on_remap(); } },
