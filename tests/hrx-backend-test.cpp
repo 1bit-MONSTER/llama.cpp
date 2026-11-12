@@ -1,3 +1,4 @@
+#include "ggml-cpu.h"
 #include "backend-buffer-binding.h"
 #include "backend-context.h"
 #include "dispatch/command-program-bindings.h"
@@ -518,6 +519,56 @@ static void append_match_to_plan(ggml::hrx::CommandPlan &   plan,
                                  ggml::hrx::DispatchMatch & match,
                                  std::vector<bool> &        covered_nodes,
                                  ggml::hrx::Graph *         graph = nullptr);
+
+// Restored from AMD's pin: the merge kept this helper's three CALLS in the ops tests and dropped its definition.
+static void schedule_fused_matmul_swiglu_postops_command(ggml_context *                  ctx,
+                                                         ggml_tensor *                   output,
+                                                         const char *                    expected_kernel_name,
+                                                         size_t                          expected_node_count,
+                                                         const std::vector<ggml_op> &    expected_ops,
+                                                         const std::vector<const char *> expected_binding_names) {
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    REQUIRE(imported.graph.nodes().size() == expected_node_count);
+    REQUIRE(expected_ops.size() == expected_node_count);
+    for (size_t i = 0; i < expected_ops.size(); ++i) {
+        REQUIRE(imported.graph.nodes()[i].op == expected_ops[i]);
+    }
+
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+    REQUIRE(scheduler.plan().dispatches.size() == 1);
+
+    const ggml::hrx::Dispatch & dispatch = scheduler.plan().dispatches.front();
+    REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == expected_kernel_name);
+    REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == 8);
+    REQUIRE(dispatch.bindings.size() == expected_binding_names.size());
+    require_compile_parameter(dispatch, "ggml.workload.token_capacity", "8");
+    require_compile_parameter(dispatch, "ggml.mul_mat_swiglu.input_size", "640");
+    require_compile_parameter(dispatch, "ggml.mul_mat_swiglu.output_size", "256");
+    require_compile_parameter(dispatch, "ggml.mul_mat_swiglu.gate_weight_format",
+                              std::to_string(matmul_weight_format_config(GGML_TYPE_IQ4_NL)));
+    require_compile_parameter(dispatch, "ggml.mul_mat_swiglu.up_weight_format",
+                              std::to_string(matmul_weight_format_config(GGML_TYPE_IQ4_NL)));
+    require_compile_parameter(dispatch, "ggml.mul_mat_swiglu.op",
+                              std::to_string(ggml::hrx::binary_kind_config_value(ggml::hrx::BinaryKind::SwiGLU)));
+    REQUIRE(dispatch.bindings.back().value == imported.graph.nodes().back().output);
+
+    const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+        imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(commands.valid());
+    REQUIRE(commands.commands.size() == 1);
+    REQUIRE(command_program_verifies(commands));
+    REQUIRE(commands.commands.front().bindings.size() == expected_binding_names.size());
+    for (size_t i = 0; i < expected_binding_names.size(); ++i) {
+        REQUIRE(commands.commands.front().bindings[i].name == expected_binding_names[i]);
+    }
+}
 
 static void run_status_checks() {
     ggml::hrx::Status status;
@@ -8565,7 +8616,6 @@ static CommonMulMatIdPostOpsTensors build_common_mul_mat_id_postops_graph(ggml_c
                                                                           int64_t        input_size   = 256,
                                                                           int64_t        input_routes = 1) {
     CommonMulMatIdPostOpsTensors tensors;
-    constexpr int64_t            token_count  = 4;
     constexpr int64_t            route_count  = 8;
     constexpr int64_t            output_size  = 128;
     constexpr int64_t            expert_count = 16;
@@ -11785,6 +11835,1548 @@ struct GatherAddRmsNormOutputs {
     std::vector<float> raw;
     std::vector<float> normalized;
 };
+
+// Restored from AMD's pin: the merge kept these helpers' USES and dropped their definitions.
+struct GatherAddRmsNormGraph {
+    ggml_tensor * attention         = nullptr;
+    ggml_tensor * residual          = nullptr;
+    ggml_tensor * row_ids           = nullptr;
+    ggml_tensor * weight            = nullptr;
+    ggml_tensor * selected          = nullptr;
+    ggml_tensor * raw_output        = nullptr;
+    ggml_tensor * normalized_output = nullptr;
+    ggml_cgraph * graph             = nullptr;
+};
+
+
+static const char * common_mul_mat_id_postops_f32_kernel_name(int64_t token_count, bool has_rmsnorm) {
+    if (has_rmsnorm) {
+        return token_count <= 5 ? "loom_libs:ggml_mul_mat_id_skinny_input_f32_postops_next_rmsnorm_publish_f32" :
+                                  "loom_libs:ggml_mul_mat_id_tiled_input_f32_postops_next_rmsnorm_publish_f32";
+    }
+    return token_count <= 5 ? "loom_libs:ggml_mul_mat_id_skinny_input_f32_postops_publish_f32" :
+                              "loom_libs:ggml_mul_mat_id_tiled_input_f32_postops_publish_f32";
+}
+
+// Restored from AMD's pin in one block: this file's merge dropped 32 of AMD's test definitions while keeping their uses.
+static std::vector<std::string> scheduled_kernel_names(ggml_cgraph * graph) {
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+
+    std::vector<std::string> result;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        result.push_back(kernel_name_for_id(dispatch.kernel.kernel_id));
+    }
+    return result;
+}
+
+static void require_scale_add_dispatch(ggml_context * ctx,
+                                       ggml_tensor *  input,
+                                       ggml_tensor *  residual,
+                                       int64_t        expected_element_count,
+                                       int64_t        expected_input_stride1,
+                                       int64_t               expected_residual_stride1,
+                                       ggml::hrx::BinaryKind binary_kind = ggml::hrx::BinaryKind::Add,
+                                       bool                  scaled_lhs  = true) {
+    ggml_tensor * scaled = ggml_scale_bias(ctx, input, 0.177800179f, 0.25f);
+    ggml_tensor * output = nullptr;
+    switch (binary_kind) {
+        case ggml::hrx::BinaryKind::Add:
+            output = ggml_add(ctx, scaled, residual);
+            break;
+        case ggml::hrx::BinaryKind::Sub:
+            output = scaled_lhs ? ggml_sub(ctx, scaled, residual) : ggml_sub(ctx, residual, scaled);
+            break;
+        case ggml::hrx::BinaryKind::Mul:
+            output = ggml_mul(ctx, scaled, residual);
+            break;
+        case ggml::hrx::BinaryKind::Div:
+            output = scaled_lhs ? ggml_div(ctx, scaled, residual) : ggml_div(ctx, residual, scaled);
+            break;
+        default:
+            REQUIRE(false);
+    }
+    REQUIRE(scaled != nullptr);
+    REQUIRE(output != nullptr);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    require_scheduled_command_program(graph, [&](const ggml::hrx::Graph &, const ggml::hrx::CommandPlan & plan,
+            const ggml::hrx::CommandProgram & commands) {
+            REQUIRE(plan.dispatches.size() == 1);
+            const ggml::hrx::Dispatch & dispatch = plan.dispatches.front();
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_scale_add_f32");
+            REQUIRE(dispatch.kernel.integer_parameters.at("element_count") == expected_element_count);
+            require_compile_parameter(dispatch, "ggml.scale_add_f32.scale", expected_config_value(0.177800179f));
+            require_compile_parameter(dispatch, "ggml.scale_add_f32.bias", expected_config_value(0.25f));
+        require_compile_parameter(dispatch, "ggml.scale_add_f32.binary_op",
+                                  std::to_string(ggml::hrx::binary_kind_config_value(binary_kind)));
+        require_compile_parameter(dispatch, "ggml.scale_add_f32.scaled_lhs", scaled_lhs ? "1" : "0");
+        require_compile_parameter(dispatch, "ggml.scale_add_f32.input_stride1", std::to_string(expected_input_stride1));
+            require_compile_parameter(dispatch, "ggml.scale_add_f32.residual_stride1",
+                                      std::to_string(expected_residual_stride1));
+            REQUIRE(dispatch.bindings.size() == 3);
+            REQUIRE(commands.commands.size() == 1);
+            REQUIRE(commands.commands.front().bindings[0].name == "input");
+            REQUIRE(commands.commands.front().bindings[1].name == "residual");
+            REQUIRE(commands.commands.front().bindings[2].name == "output");
+        });
+}
+
+static void run_scale_add_f32_dispatch_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 2 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * packed_input    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2560, 64);
+    ggml_tensor * packed_residual = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2560, 64);
+    REQUIRE(packed_input != nullptr);
+    REQUIRE(packed_residual != nullptr);
+    require_scale_add_dispatch(ctx, packed_input, packed_residual, 163840, 2560, 2560);
+    require_scale_add_dispatch(ctx, packed_input, packed_residual, 163840, 2560, 2560, ggml::hrx::BinaryKind::Sub,
+                               false);
+    require_scale_add_dispatch(ctx, packed_input, packed_residual, 163840, 2560, 2560, ggml::hrx::BinaryKind::Mul,
+                               true);
+    require_scale_add_dispatch(ctx, packed_input, packed_residual, 163840, 2560, 2560, ggml::hrx::BinaryKind::Div,
+                               true);
+
+    ggml_tensor * input_storage    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 320, 3);
+    ggml_tensor * residual_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 384, 3);
+    ggml_tensor * strided_input    = ggml_view_2d(ctx, input_storage, 257, 3, input_storage->nb[1], 0);
+    ggml_tensor * strided_residual = ggml_view_2d(ctx, residual_storage, 257, 3, residual_storage->nb[1], 0);
+    REQUIRE(strided_input != nullptr);
+    REQUIRE(strided_residual != nullptr);
+    require_scale_add_dispatch(ctx, strided_input, strided_residual, 771, 320, 384);
+
+    ggml_tensor * scaled       = ggml_scale(ctx, packed_input, 0.5f);
+    ggml_tensor * alias_output = ggml_add_inplace(ctx, scaled, packed_residual);
+    REQUIRE(scaled != nullptr);
+    REQUIRE(alias_output != nullptr);
+    REQUIRE(!can_schedule_tensor(ctx, alias_output));
+
+    ggml_tensor * alias_scaled      = ggml_scale_inplace(ctx, packed_input, 0.5f);
+    ggml_tensor * output_from_alias = ggml_add(ctx, alias_scaled, packed_residual);
+    REQUIRE(alias_scaled != nullptr);
+    REQUIRE(output_from_alias != nullptr);
+    ggml_cgraph * alias_graph = ggml_new_graph(ctx);
+    REQUIRE(alias_graph != nullptr);
+    ggml_build_forward_expand(alias_graph, output_from_alias);
+    ggml::hrx::GraphImportResult alias_imported = ggml::hrx::import_ggml_graph(*alias_graph);
+    REQUIRE(alias_imported.valid());
+    ggml::hrx::DispatchScheduler alias_scheduler;
+    REQUIRE(alias_scheduler.schedule_graph(alias_imported.graph, test_dispatch_target()));
+    REQUIRE(alias_scheduler.plan().dispatches.size() == 2);
+    REQUIRE(kernel_name_for_id(alias_scheduler.plan().dispatches[0].kernel.kernel_id) ==
+            "loom_libs:ggml_scale_bias_f32");
+    REQUIRE(kernel_name_for_id(alias_scheduler.plan().dispatches[1].kernel.kernel_id) == "loom_libs:ggml_binary_f32");
+
+    ggml_free(ctx);
+}
+
+static ggml_tensor * make_test_binary(ggml_context *        ctx,
+                                      ggml_tensor *         lhs,
+                                      ggml_tensor *         rhs,
+                                      ggml::hrx::BinaryKind kind) {
+    switch (kind) {
+        case ggml::hrx::BinaryKind::Add:
+            return ggml_add(ctx, lhs, rhs);
+        case ggml::hrx::BinaryKind::Sub:
+            return ggml_sub(ctx, lhs, rhs);
+        case ggml::hrx::BinaryKind::Mul:
+            return ggml_mul(ctx, lhs, rhs);
+        case ggml::hrx::BinaryKind::Div:
+            return ggml_div(ctx, lhs, rhs);
+        default:
+            REQUIRE(false);
+            return nullptr;
+    }
+}
+
+static const char * expected_plain_rmsnorm_binary_kernel(int64_t hidden_size, int64_t token_count) {
+    return token_count < 6 && hidden_size >= 2048 && hidden_size <= 5120 ?
+               "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" :
+               "loom_libs:ggml_rmsnorm_binary_f32";
+}
+
+static void run_rmsnorm_lowtoken_striped_dispatch_checks() {
+    const struct {
+        int64_t              hidden_size;
+        int64_t              token_count;
+        ggml::hrx::BinaryKind op;
+        const char *         expected_kernel;
+    } cases[] = {
+        { 1024, 1, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32"                  },
+        { 2048, 1, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" },
+        { 3072, 2, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" },
+        { 5120, 4, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" },
+        { 5120, 6, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32"                  },
+        { 2048, 1, ggml::hrx::BinaryKind::Add, "loom_libs:ggml_rmsnorm_binary_f32"                  },
+    };
+
+    for (const auto & test : cases) {
+        ggml_init_params params = {};
+        params.mem_size = static_cast<size_t>(test.hidden_size * test.token_count * sizeof(float) * 8 + 1024 * 1024);
+        params.no_alloc = true;
+        ggml_context * ctx = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, test.hidden_size, test.token_count);
+        ggml_tensor * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, test.hidden_size);
+        ggml_tensor * rms = ggml_rms_norm(ctx, input, 1.0e-6f);
+        ggml_tensor * output = make_test_binary(ctx, rms, weight, test.op);
+        REQUIRE(output != nullptr);
+
+        const ggml::hrx::Dispatch dispatch = schedule_single_dispatch_for_tensor(ctx, output);
+        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == test.expected_kernel);
+        REQUIRE(dispatch.bindings.size() == 3);
+        require_compile_parameter(dispatch, "ggml.rmsnorm_binary_f32.hidden_size",
+                                  std::to_string(test.hidden_size));
+        require_compile_parameter(dispatch, "ggml.rmsnorm_binary_f32.op",
+                                  std::to_string(ggml::hrx::binary_kind_config_value(test.op)));
+        ggml_free(ctx);
+    }
+}
+
+static void run_rmsnorm_two_binary_dispatch_checks() {
+    const struct {
+        ggml::hrx::BinaryKind normalized_op;
+        ggml::hrx::BinaryKind output_op;
+        bool                  binary_lhs;
+    } cases[] = {
+        { ggml::hrx::BinaryKind::Add, ggml::hrx::BinaryKind::Mul, true  },
+        { ggml::hrx::BinaryKind::Sub, ggml::hrx::BinaryKind::Sub, true  },
+        { ggml::hrx::BinaryKind::Mul, ggml::hrx::BinaryKind::Div, true  },
+        { ggml::hrx::BinaryKind::Div, ggml::hrx::BinaryKind::Sub, false },
+    };
+
+    for (const auto & test : cases) {
+        ggml_init_params params = {};
+        params.mem_size         = 512 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+
+        ggml_tensor * input    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 4);
+        ggml_tensor * weight   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128);
+        ggml_tensor * residual = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 4);
+        ggml_tensor * rms      = ggml_rms_norm(ctx, input, 1.0e-6f);
+        ggml_tensor * scaled   = make_test_binary(ctx, rms, weight, test.normalized_op);
+        ggml_tensor * output   = test.binary_lhs ? make_test_binary(ctx, scaled, residual, test.output_op) :
+                                                   make_test_binary(ctx, residual, scaled, test.output_op);
+        REQUIRE(output != nullptr);
+
+        const ggml::hrx::Dispatch dispatch = schedule_single_dispatch_for_tensor(ctx, output);
+        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_rmsnorm_mul_add_f32");
+        REQUIRE(dispatch.bindings.size() == 4);
+        require_compile_parameter(dispatch, "ggml.rmsnorm_mul_add_f32.normalized_op",
+                                  std::to_string(ggml::hrx::binary_kind_config_value(test.normalized_op)));
+        require_compile_parameter(dispatch, "ggml.rmsnorm_mul_add_f32.output_op",
+                                  std::to_string(ggml::hrx::binary_kind_config_value(test.output_op)));
+        require_compile_parameter(dispatch, "ggml.rmsnorm_mul_add_f32.binary_lhs", test.binary_lhs ? "1" : "0");
+        ggml_free(ctx);
+    }
+}
+
+static void run_binary_q8_publication_checks() {
+    const struct {
+        int64_t      hidden;
+        int64_t      tokens;
+        bool         broadcast;
+        bool         multiply;
+        bool         side_use;
+        int          projections;
+        const char * expected_kernel;
+    } cases[] = {
+        { 2048, 2, false, true,  false, 1, "loom_libs:ggml_binary_f32_publish_q8_1_x4"    },
+        { 2048, 4, false, false, true,  2, "loom_libs:ggml_binary_f32_publish_q8_1_x4"    },
+        { 256,  2, true,  true,  false, 1, "loom_libs:ggml_binary_bc_f32_publish_q8_1_x4" },
+        { 2048, 6, false, true,  false, 1, "loom_libs:ggml_binary_f32"                    },
+        { 2048, 2, false, true,  false, 0, "loom_libs:ggml_binary_f32"                    },
+    };
+
+    for (const auto & test : cases) {
+        ggml_init_params params = {};
+        params.mem_size         = 4 * 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+
+        ggml_tensor * lhs    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, test.hidden, test.tokens);
+        ggml_tensor * rhs    = test.broadcast ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, test.hidden) :
+                                                ggml_new_tensor_2d(ctx, GGML_TYPE_F32, test.hidden, test.tokens);
+        ggml_tensor * binary = test.multiply ? ggml_mul(ctx, lhs, rhs) : ggml_add(ctx, lhs, rhs);
+        REQUIRE(lhs != nullptr);
+        REQUIRE(rhs != nullptr);
+        REQUIRE(binary != nullptr);
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        for (int i = 0; i < test.projections; ++i) {
+            ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, test.hidden, 512);
+            ggml_build_forward_expand(graph, ggml_mul_mat(ctx, weight, binary));
+        }
+        if (test.projections == 0 || test.side_use) {
+            ggml_build_forward_expand(graph, ggml_scale(ctx, binary, 0.5f));
+        }
+
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const ggml::hrx::CommandPlan & plan = scheduler.plan();
+        REQUIRE(plan.valid());
+        const ggml::hrx::Value * binary_value = imported.graph.values().find_tensor(binary);
+        REQUIRE(binary_value != nullptr);
+        const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
+            return dispatch.bindings.size() >= 3 && dispatch.bindings[2].value == binary_value->id;
+        });
+        REQUIRE(producer != plan.dispatches.end());
+        REQUIRE(kernel_name_for_id(producer->kernel.kernel_id) == test.expected_kernel);
+
+        const bool publishes = std::string_view(test.expected_kernel).find("publish_q8_1_x4") != std::string_view::npos;
+        const size_t q8_bytes = qwen_q8_1_x4_size(test.tokens, test.hidden);
+        const auto * q8       = plan.metadata.find_alternate_value(binary_value->id, GGML_TYPE_Q8_1, q8_bytes);
+        REQUIRE((q8 != nullptr) == publishes);
+        if (publishes) {
+            REQUIRE(producer->bindings.size() == 4);
+            REQUIRE(producer->bindings.back().value == q8->alternate_value);
+            REQUIRE(std::count_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
+                        return kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:ggml_quantize_q8_1_x4_f32";
+                    }) == 0);
+            REQUIRE(std::count_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
+                        return &dispatch != &*producer && !dispatch.bindings.empty() &&
+                               dispatch.bindings.front().value == q8->alternate_value;
+                    }) == test.projections);
+        }
+
+        const ggml::hrx::CommandProgram commands =
+            ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        REQUIRE(commands.valid());
+        REQUIRE(command_program_verifies(commands));
+        ggml_free(ctx);
+    }
+}
+
+static void run_iq1_codebook_matmul_dispatch_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    auto check_single = [&](ggml_type type, int64_t token_count, const char * expected_kernel) {
+        ggml_tensor * weight = ggml_new_tensor_2d(ctx, type, 2048, 128);
+        ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, token_count);
+        ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+        REQUIRE(weight != nullptr);
+        REQUIRE(input != nullptr);
+        REQUIRE(output != nullptr);
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, output);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        REQUIRE(scheduler.plan().valid());
+        REQUIRE(scheduler.plan().dispatches.size() == 1);
+        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches[0].kernel.kernel_id) == expected_kernel);
+        REQUIRE(scheduler.plan().transients.size() == 1);
+        REQUIRE(scheduler.plan().transients[0].name == "common.iq1.grid.v1");
+        REQUIRE(scheduler.plan().transients[0].size == 16384);
+        REQUIRE(scheduler.plan().constant_initializations.size() == 1);
+        REQUIRE(scheduler.plan().constant_initializations[0].name == "common.iq1.grid.v1");
+        REQUIRE(scheduler.plan().constant_initializations[0].data.size() == 16384);
+        const std::array<uint8_t, 8> expected_grid_1542 = { 0, 1, 0, 0xff, 1, 0, 0xff, 1 };
+        REQUIRE(std::equal(expected_grid_1542.begin(), expected_grid_1542.end(),
+                           scheduler.plan().constant_initializations[0].data.begin() + 1542 * 8));
+
+        const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+            imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        REQUIRE(commands.valid());
+        REQUIRE(commands.commands.size() == 1);
+        REQUIRE(command_program_verifies(commands));
+        REQUIRE(commands.commands[0].bindings.size() == (token_count == 1 ? 5 : 4));
+        REQUIRE(commands.commands[0].bindings[0].name == "input");
+        REQUIRE(commands.commands[0].bindings[1].name == "weight");
+        REQUIRE(commands.commands[0].bindings[2].name == "iq1_grid");
+        REQUIRE(commands.commands[0].bindings[3].name == "output");
+    };
+
+    check_single(GGML_TYPE_IQ1_S, 1, "loom_libs:ggml_mul_mat_vector_iq1_s_f32_f32");
+    check_single(GGML_TYPE_IQ1_S, 64, "loom_libs:ggml_mul_mat_tiled_input_f32_iq1_s_publish_f32");
+    check_single(GGML_TYPE_IQ1_M, 1, "loom_libs:ggml_mul_mat_vector_iq1_m_f32_f32");
+    check_single(GGML_TYPE_IQ1_M, 64, "loom_libs:ggml_mul_mat_tiled_input_f32_iq1_m_publish_f32");
+
+    for (const auto [type, disable_env] :
+         { std::pair{ GGML_TYPE_IQ1_S, "GGML_HRX_DISABLE_IQ1_S_CODEBOOK_MATMUL" },
+           std::pair{ GGML_TYPE_IQ1_M, "GGML_HRX_DISABLE_IQ1_M_CODEBOOK_MATMUL" } }) {
+        EnvironmentVariableGuard guard(disable_env);
+        REQUIRE(setenv(disable_env, "1", 1) == 0);
+        ggml_tensor * weight = ggml_new_tensor_2d(ctx, type, 2048, 128);
+        ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 1);
+        ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+        REQUIRE(output != nullptr);
+        REQUIRE(!matmul_graph_is_supported(ctx, output));
+    }
+
+    ggml_tensor * iq1_s_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_IQ1_S, 2048, 128);
+    ggml_tensor * iq1_m_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_IQ1_M, 2048, 128);
+    ggml_tensor * input        = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 1);
+    ggml_tensor * iq1_s_output = ggml_mul_mat(ctx, iq1_s_weight, input);
+    ggml_tensor * iq1_m_output = ggml_mul_mat(ctx, iq1_m_weight, input);
+    REQUIRE(iq1_s_output != nullptr);
+    REQUIRE(iq1_m_output != nullptr);
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx, GGML_DEFAULT_GRAPH_SIZE, false);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, iq1_s_output);
+    ggml_build_forward_expand(graph, iq1_m_output);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+    REQUIRE(scheduler.plan().dispatches.size() == 2);
+    REQUIRE(scheduler.plan().transients.size() == 1);
+    REQUIRE(scheduler.plan().transients[0].name == "common.iq1.grid.v1");
+    REQUIRE(scheduler.plan().constant_initializations.size() == 1);
+    REQUIRE(scheduler.plan().dispatches[0].bindings[2].value == scheduler.plan().transients[0].value);
+    REQUIRE(scheduler.plan().dispatches[1].bindings[2].value == scheduler.plan().transients[0].value);
+
+    ggml_free(ctx);
+}
+
+static void run_qwen_decode_rmsnorm_publication_checks() {
+    const struct {
+        bool projection;
+        bool side_use;
+        bool q8;
+    } cases[] = {
+        { true,  false, true  },
+        { true,  true,  true  },
+        { false, false, false },
+    };
+    for (const auto & test : cases) {
+        ggml_init_params params = {};
+        params.mem_size         = 8 * 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+
+        ggml_tensor * input       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 1);
+        ggml_tensor * norm_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2048);
+        ggml_tensor * normalized  = ggml_mul(ctx, ggml_rms_norm(ctx, input, 0.000001f), norm_weight);
+        ggml_tensor * projection  = nullptr;
+        if (test.projection) {
+            ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, 2048, 512);
+            projection           = ggml_mul_mat(ctx, weight, normalized);
+        }
+        ggml_tensor * side = test.side_use ? ggml_scale(ctx, normalized, 0.5f) : nullptr;
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, projection != nullptr ? projection : normalized);
+        if (side != nullptr) {
+            ggml_build_forward_expand(graph, side);
+        }
+
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const ggml::hrx::CommandPlan & plan = scheduler.plan();
+        REQUIRE(plan.valid());
+
+        const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
+            return kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                   "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4";
+        });
+        REQUIRE((producer != plan.dispatches.end()) == test.q8);
+        const ggml::hrx::Value * output = imported.graph.values().find_tensor(normalized);
+        REQUIRE(output != nullptr);
+        const auto * q8 = plan.metadata.find_alternate_value(
+            output->id, GGML_TYPE_Q8_1, qwen_q8_1_x4_size(1, 2048));
+        REQUIRE((q8 != nullptr) == test.q8);
+        if (test.q8) {
+            REQUIRE(producer->bindings.size() == 4);
+            REQUIRE(producer->bindings.back().value == q8->alternate_value);
+            REQUIRE(std::any_of(std::next(producer), plan.dispatches.end(), [&](const auto & dispatch) {
+                return !dispatch.bindings.empty() && dispatch.bindings.front().value == q8->alternate_value;
+            }));
+        }
+        const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+            imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        REQUIRE(commands.valid());
+        REQUIRE(command_program_verifies(commands));
+        ggml_free(ctx);
+    }
+}
+
+static void schedule_qwen_terminal_q6k_vector_command() {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * input        = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 1);
+    ggml_tensor * vocab_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, 2048, 151936);
+    REQUIRE(input != nullptr);
+    REQUIRE(vocab_weight != nullptr);
+    ggml_tensor * logits = ggml_mul_mat(ctx, vocab_weight, input);
+    REQUIRE(logits != nullptr);
+
+    schedule_single_matmul_command(ctx, logits, "loom_libs:ggml_mul_mat_vector_q6_f32_f32", 1, 2048, 151936);
+    ggml_free(ctx);
+}
+
+static void run_get_rows_rmsnorm_binary_dispatch_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * embedding_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, 2048, 128256);
+    ggml_tensor * token_ids        = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 512);
+    ggml_tensor * norm_weight      = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2048);
+    REQUIRE(embedding_weight != nullptr);
+    REQUIRE(token_ids != nullptr);
+    REQUIRE(norm_weight != nullptr);
+    ggml_tensor * embedding = ggml_get_rows(ctx, embedding_weight, token_ids);
+    ggml_tensor * rms       = ggml_rms_norm(ctx, embedding, 0.00001f);
+    ggml_tensor * output    = ggml_mul(ctx, rms, norm_weight);
+    REQUIRE(embedding != nullptr);
+    REQUIRE(rms != nullptr);
+    REQUIRE(output != nullptr);
+    ggml_set_output(embedding);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    REQUIRE(imported.graph.nodes().size() == 3);
+
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    const ggml::hrx::CommandPlan & plan = scheduler.plan();
+    REQUIRE(plan.valid());
+    REQUIRE(plan.dispatches.size() == 1);
+    REQUIRE(plan.transients.size() == 2);
+    const ggml::hrx::Dispatch & dispatch = plan.dispatches.front();
+    REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_get_rows_rmsnorm_binary_q8_1_x4_f16");
+    REQUIRE(dispatch.bindings.size() == 7);
+    require_compile_parameter(dispatch, "ggml.get_rows_f32.weight_format", "6");
+    require_compile_parameter(dispatch, "ggml.get_rows_rmsnorm.rms_epsilon", "9.99999975e-06");
+
+    const ggml::hrx::Value * output_value = imported.graph.values().find_tensor(output);
+    REQUIRE(output_value != nullptr);
+    const size_t q8_bytes  = qwen_q8_1_x4_size(512, 2048);
+    const size_t f16_bytes = output_value->byte_count / 2;
+    const auto * q8        = plan.metadata.find_alternate_value(output_value->id, GGML_TYPE_Q8_1, q8_bytes);
+    const auto * f16       = plan.metadata.find_alternate_value(output_value->id, GGML_TYPE_F16, f16_bytes);
+    REQUIRE(q8 == nullptr);
+    REQUIRE(f16 == nullptr);
+    REQUIRE(dispatch.bindings[5].value == plan.transients[0].value);
+    REQUIRE(dispatch.bindings[6].value == plan.transients[1].value);
+    REQUIRE(plan.transients[0].size == q8_bytes);
+    REQUIRE(plan.transients[1].size == f16_bytes);
+
+    const ggml::hrx::CommandProgram commands =
+        ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(commands.valid());
+    REQUIRE(commands.commands.size() == 1);
+    REQUIRE(command_program_verifies(commands));
+
+    ggml_free(ctx);
+}
+
+static void run_get_rows_scale_dispatch_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2560, 64);
+    ggml_tensor * ids    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 5);
+    REQUIRE(weight != nullptr);
+    REQUIRE(ids != nullptr);
+    ggml_tensor * rows   = ggml_get_rows(ctx, weight, ids);
+    ggml_tensor * output = ggml_scale(ctx, rows, 0.177800179f);
+    REQUIRE(rows != nullptr);
+    REQUIRE(output != nullptr);
+    ggml_set_output(rows);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+    require_scheduled_command_program(
+        graph, [&](const ggml::hrx::Graph & imported_graph, const ggml::hrx::CommandPlan & plan,
+            const ggml::hrx::CommandProgram & commands) {
+            REQUIRE(imported_graph.nodes().size() == 2);
+            REQUIRE(plan.dispatches.size() == 1);
+            const ggml::hrx::Dispatch & dispatch = plan.dispatches.front();
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_get_rows_scale_f32");
+            REQUIRE(dispatch.bindings.size() == 4);
+            require_compile_parameter(dispatch, "ggml.get_rows_f32.weight_format", "32");
+            require_compile_parameter(dispatch, "ggml.get_rows_scale_f32.scale", expected_config_value(0.177800179f));
+            require_compile_parameter(dispatch, "ggml.get_rows_scale_f32.bias", expected_config_value(0.0f));
+            REQUIRE(commands.commands.size() == 1);
+            REQUIRE(commands.commands.front().bindings[0].name == "token_ids");
+            REQUIRE(commands.commands.front().bindings[1].name == "weight");
+            REQUIRE(commands.commands.front().bindings[2].name == "raw_output");
+            REQUIRE(commands.commands.front().bindings[3].name == "output");
+        });
+
+    ggml_tensor * q5_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q5_1, 640, 262144);
+    ggml_tensor * q5_ids    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 64);
+    REQUIRE(q5_weight != nullptr);
+    REQUIRE(q5_ids != nullptr);
+    ggml_tensor * q5_rows   = ggml_get_rows(ctx, q5_weight, q5_ids);
+    ggml_tensor * q5_output = ggml_scale(ctx, q5_rows, 25.2982216f);
+    REQUIRE(q5_rows != nullptr);
+    REQUIRE(q5_output != nullptr);
+    ggml_set_output(q5_rows);
+
+    ggml_cgraph * q5_graph = ggml_new_graph(ctx);
+    REQUIRE(q5_graph != nullptr);
+    ggml_build_forward_expand(q5_graph, q5_output);
+    require_scheduled_command_program(
+        q5_graph, [&](const ggml::hrx::Graph & imported_graph, const ggml::hrx::CommandPlan & plan,
+            const ggml::hrx::CommandProgram & commands) {
+            REQUIRE(imported_graph.nodes().size() == 2);
+            REQUIRE(plan.dispatches.size() == 1);
+            const ggml::hrx::Dispatch & dispatch = plan.dispatches.front();
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_get_rows_scale_f32");
+            REQUIRE(dispatch.bindings.size() == 4);
+            require_compile_parameter(dispatch, "ggml.get_rows_f32.weight_format", "51");
+            require_compile_parameter(dispatch, "ggml.get_rows_scale_f32.scale", expected_config_value(25.2982216f));
+            require_compile_parameter(dispatch, "ggml.get_rows_scale_f32.bias", expected_config_value(0.0f));
+            REQUIRE(commands.commands.size() == 1);
+        });
+
+    ggml_tensor * q5_decode_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    REQUIRE(q5_decode_ids != nullptr);
+    ggml_tensor * q5_decode_rows   = ggml_get_rows(ctx, q5_weight, q5_decode_ids);
+    ggml_tensor * q5_decode_output = ggml_scale(ctx, q5_decode_rows, 25.2982216f);
+    REQUIRE(q5_decode_rows != nullptr);
+    REQUIRE(q5_decode_output != nullptr);
+    ggml_cgraph * q5_decode_graph = ggml_new_graph(ctx);
+    REQUIRE(q5_decode_graph != nullptr);
+    ggml_build_forward_expand(q5_decode_graph, q5_decode_output);
+    const std::vector<std::string> q5_decode_kernels = scheduled_kernel_names(q5_decode_graph);
+    REQUIRE(std::find(q5_decode_kernels.begin(), q5_decode_kernels.end(), "loom_libs:ggml_get_rows_scale_f32") ==
+            q5_decode_kernels.end());
+    REQUIRE(std::find(q5_decode_kernels.begin(), q5_decode_kernels.end(), "loom_libs:ggml_get_rows_f32") !=
+            q5_decode_kernels.end());
+    REQUIRE(std::find(q5_decode_kernels.begin(), q5_decode_kernels.end(), "loom_libs:ggml_scale_f32") !=
+            q5_decode_kernels.end());
+
+    ggml_tensor * q4_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_0, 640, 64);
+    ggml_tensor * q4_ids    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 5);
+    REQUIRE(q4_weight != nullptr);
+    REQUIRE(q4_ids != nullptr);
+    ggml_tensor * q4_rows   = ggml_get_rows(ctx, q4_weight, q4_ids);
+    ggml_tensor * q4_output = ggml_scale(ctx, q4_rows, 0.5f);
+    REQUIRE(q4_rows != nullptr);
+    REQUIRE(q4_output != nullptr);
+    ggml_cgraph * q4_graph = ggml_new_graph(ctx);
+    REQUIRE(q4_graph != nullptr);
+    ggml_build_forward_expand(q4_graph, q4_output);
+    const std::vector<std::string> q4_kernels = scheduled_kernel_names(q4_graph);
+    REQUIRE(std::find(q4_kernels.begin(), q4_kernels.end(), "loom_libs:ggml_get_rows_scale_f32") == q4_kernels.end());
+    REQUIRE(std::find(q4_kernels.begin(), q4_kernels.end(), "loom_libs:ggml_get_rows_f32") != q4_kernels.end());
+
+    ggml_tensor * side_use = ggml_add(ctx, rows, rows);
+    REQUIRE(side_use != nullptr);
+    ggml_cgraph * fallback_graph = ggml_new_graph(ctx);
+    REQUIRE(fallback_graph != nullptr);
+    ggml_build_forward_expand(fallback_graph, output);
+    ggml_build_forward_expand(fallback_graph, side_use);
+    const std::vector<std::string> fallback_kernels = scheduled_kernel_names(fallback_graph);
+    REQUIRE(std::find(fallback_kernels.begin(), fallback_kernels.end(), "loom_libs:ggml_get_rows_scale_f32") ==
+            fallback_kernels.end());
+    REQUIRE(std::find(fallback_kernels.begin(), fallback_kernels.end(), "loom_libs:ggml_get_rows_f32") !=
+            fallback_kernels.end());
+
+    ggml_tensor * inplace_rows   = ggml_get_rows(ctx, weight, ids);
+    ggml_tensor * inplace_output = ggml_scale_inplace(ctx, inplace_rows, 0.5f);
+    REQUIRE(inplace_rows != nullptr);
+    REQUIRE(inplace_output != nullptr);
+    ggml_cgraph * inplace_graph = ggml_new_graph(ctx);
+    REQUIRE(inplace_graph != nullptr);
+    ggml_build_forward_expand(inplace_graph, inplace_output);
+    const std::vector<std::string> inplace_kernels = scheduled_kernel_names(inplace_graph);
+    REQUIRE(std::find(inplace_kernels.begin(), inplace_kernels.end(), "loom_libs:ggml_get_rows_scale_f32") ==
+            inplace_kernels.end());
+    REQUIRE(std::find(inplace_kernels.begin(), inplace_kernels.end(), "loom_libs:ggml_get_rows_f32") !=
+            inplace_kernels.end());
+
+    ggml_free(ctx);
+}
+
+static GatherAddRmsNormGraph build_gather_add_rmsnorm_graph(
+    ggml_context *        ctx,
+                                                            int64_t        hidden_size,
+                                                            int64_t        source_token_count,
+                                                            int64_t        output_token_count,
+                                                            bool           produced_row_ids = false,
+    bool                  produced_weight  = false,
+    ggml::hrx::BinaryKind gather_op        = ggml::hrx::BinaryKind::Add,
+    bool                  first_is_lhs     = true) {
+    GatherAddRmsNormGraph result;
+    result.attention                 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, source_token_count);
+    result.residual                  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, source_token_count);
+    ggml_tensor * raw_row_ids        = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, output_token_count);
+    ggml_tensor * raw_weight         = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
+    result.row_ids                   = produced_row_ids ? ggml_dup(ctx, raw_row_ids) : raw_row_ids;
+    result.weight                    = produced_weight ? ggml_scale(ctx, raw_weight, 0.5f) : raw_weight;
+    ggml_tensor * selected_attention = ggml_get_rows(ctx, result.attention, result.row_ids);
+    ggml_tensor * selected_residual  = ggml_get_rows(ctx, result.residual, result.row_ids);
+    result.selected                  = selected_attention;
+    switch (gather_op) {
+        case ggml::hrx::BinaryKind::Add:
+    result.raw_output                = ggml_add(ctx, selected_attention, selected_residual);
+            break;
+        case ggml::hrx::BinaryKind::Sub:
+            result.raw_output = first_is_lhs ? ggml_sub(ctx, selected_attention, selected_residual) :
+                                               ggml_sub(ctx, selected_residual, selected_attention);
+            break;
+        case ggml::hrx::BinaryKind::Mul:
+            result.raw_output = ggml_mul(ctx, selected_attention, selected_residual);
+            break;
+        case ggml::hrx::BinaryKind::Div:
+            result.raw_output = first_is_lhs ? ggml_div(ctx, selected_attention, selected_residual) :
+                                               ggml_div(ctx, selected_residual, selected_attention);
+            break;
+        default:
+            REQUIRE(false);
+    }
+    ggml_tensor * rms                = ggml_rms_norm(ctx, result.raw_output, 0.000001f);
+    result.normalized_output         = ggml_mul(ctx, rms, result.weight);
+    REQUIRE(result.attention != nullptr);
+    REQUIRE(result.residual != nullptr);
+    REQUIRE(raw_row_ids != nullptr);
+    REQUIRE(raw_weight != nullptr);
+    REQUIRE(result.row_ids != nullptr);
+    REQUIRE(result.weight != nullptr);
+    REQUIRE(selected_attention != nullptr);
+    REQUIRE(selected_residual != nullptr);
+    REQUIRE(result.raw_output != nullptr);
+    REQUIRE(rms != nullptr);
+    REQUIRE(result.normalized_output != nullptr);
+
+    ggml_set_output(result.raw_output);
+    result.graph = ggml_new_graph(ctx);
+    REQUIRE(result.graph != nullptr);
+    ggml_build_forward_expand(result.graph, result.normalized_output);
+    return result;
+}
+
+static ggml::hrx::DispatchRegistry gather_add_test_registry() {
+    ggml::hrx::DispatchRegistryBuilder builder;
+    ggml::hrx::register_gather_add_dispatch(builder);
+    return builder.build();
+}
+
+static bool match_gather_add_at(const ggml::hrx::DispatchRegistry & registry,
+                                const ggml::hrx::Graph &            graph,
+                                size_t                              root_index,
+                                const std::vector<bool> &           covered_nodes,
+                                ggml::hrx::DispatchMatch &          match) {
+    ggml::hrx::CommandPlan                plan;
+    const ggml::hrx::DispatchMatchContext context = {
+        graph,      &graph.nodes()[root_index],
+        root_index, covered_nodes,
+        plan,       ggml::hrx::ValueId(static_cast<int32_t>(graph.values().size())),
+    };
+    return registry.match(context, match);
+}
+
+static void require_gather_add_rmsnorm_route(ggml_context *        ctx,
+                                             ggml::hrx::BinaryKind gather_op    = ggml::hrx::BinaryKind::Add,
+                                             bool                  first_is_lhs = true) {
+    GatherAddRmsNormGraph tensors =
+        build_gather_add_rmsnorm_graph(ctx, 128, 4, 5, false, false, gather_op, first_is_lhs);
+    require_scheduled_command_program(tensors.graph, [&](const ggml::hrx::Graph &, const ggml::hrx::CommandPlan & plan,
+            const ggml::hrx::CommandProgram & commands) {
+            REQUIRE(plan.dispatches.size() == 1);
+            const ggml::hrx::Dispatch & dispatch = plan.dispatches.front();
+        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_gather_add_rmsnorm_binary_f32");
+            REQUIRE(dispatch.bindings.size() == 6);
+            require_compile_parameter(dispatch, "ggml.gather_add_rmsnorm_binary_f32.hidden_size", "128");
+            require_compile_parameter(dispatch, "ggml.gather_add_rmsnorm_binary_f32.rms_epsilon", "9.99999997e-07");
+        require_compile_parameter(dispatch, "ggml.gather_add_rmsnorm_binary_f32.gather_op",
+                                  std::to_string(ggml::hrx::binary_kind_config_value(gather_op)));
+            REQUIRE(commands.commands.size() == 1);
+            REQUIRE(commands.commands.front().bindings.size() == 6);
+            REQUIRE(commands.commands.front().bindings[0].name == "attention");
+            REQUIRE(commands.commands.front().bindings[1].name == "residual");
+            REQUIRE(commands.commands.front().bindings[2].name == "output_ids");
+            REQUIRE(commands.commands.front().bindings[3].name == "raw_output");
+            REQUIRE(commands.commands.front().bindings[4].name == "weight");
+            REQUIRE(commands.commands.front().bindings[5].name == "normalized_output");
+        });
+}
+
+static void require_gather_add_rmsnorm_availability(ggml_context * ctx) {
+    GatherAddRmsNormGraph        tensors  = build_gather_add_rmsnorm_graph(ctx, 128, 4, 5, true, true);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*tensors.graph);
+    REQUIRE(imported.valid());
+    const ggml::hrx::DispatchRegistry registry     = gather_add_test_registry();
+    const size_t                      root_index   = producer_index_for_tensor(imported.graph, tensors.selected);
+    const size_t                      row_index    = producer_index_for_tensor(imported.graph, tensors.row_ids);
+    const size_t                      weight_index = producer_index_for_tensor(imported.graph, tensors.weight);
+    std::vector<bool>                 covered_nodes(imported.graph.nodes().size(), false);
+    ggml::hrx::DispatchMatch          match;
+
+    REQUIRE(!match_gather_add_at(registry, imported.graph, root_index, covered_nodes, match));
+
+    covered_nodes[row_index] = true;
+    match                    = {};
+    REQUIRE(match_gather_add_at(registry, imported.graph, root_index, covered_nodes, match));
+    REQUIRE(match.dispatches.size() == 1);
+    REQUIRE(kernel_name_for_id(match.dispatches.front().kernel.kernel_id) == "hrx:ggml_gather_add_f32");
+
+    covered_nodes[weight_index] = true;
+    match                       = {};
+    REQUIRE(match_gather_add_at(registry, imported.graph, root_index, covered_nodes, match));
+    REQUIRE(match.dispatches.size() == 1);
+    REQUIRE(kernel_name_for_id(match.dispatches.front().kernel.kernel_id) ==
+            "loom_libs:ggml_gather_add_rmsnorm_binary_f32");
+}
+
+static void require_gather_add_rmsnorm_row_ids_noalias(ggml_context * ctx) {
+    GatherAddRmsNormGraph        tensors  = build_gather_add_rmsnorm_graph(ctx, 128, 4, 5);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*tensors.graph);
+    REQUIRE(imported.valid());
+    const ggml::hrx::Value * row_ids   = imported.graph.values().find_tensor(tensors.row_ids);
+    const ggml::hrx::Value * attention = imported.graph.values().find_tensor(tensors.attention);
+    REQUIRE(row_ids != nullptr);
+    REQUIRE(attention != nullptr);
+
+    ggml::hrx::Graph aliased_graph;
+    for (const ggml::hrx::ValueStorage & storage : imported.graph.values().storages()) {
+        REQUIRE(aliased_graph.values().add_snapshot_storage(storage).success());
+    }
+    for (ggml::hrx::Value value : imported.graph.values().values()) {
+        if (value.id == row_ids->id) {
+            value.storage            = attention->storage;
+            value.storage_root       = attention->storage_root;
+            value.alias_source       = attention->id;
+            value.storage_offset     = attention->storage_offset;
+            value.storage_byte_count = attention->storage_byte_count;
+        }
+        REQUIRE(aliased_graph.values().add_snapshot_value(std::move(value)).success());
+    }
+    for (const ggml::hrx::GraphNode & node : imported.graph.nodes()) {
+        ggml::hrx::GraphNode & copied = aliased_graph.add_node(node.op, node.output, node.inputs);
+        copied.params                 = node.params;
+    }
+    REQUIRE(aliased_graph.build_index().success());
+
+    const ggml::hrx::DispatchRegistry registry   = gather_add_test_registry();
+    size_t                            root_index = aliased_graph.nodes().size();
+    for (size_t i = 0; i < aliased_graph.nodes().size(); ++i) {
+        if (aliased_graph.nodes()[i].op == GGML_OP_GET_ROWS) {
+            root_index = i;
+            break;
+        }
+    }
+    REQUIRE(root_index < aliased_graph.nodes().size());
+    std::vector<bool>        covered_nodes(aliased_graph.nodes().size(), false);
+    ggml::hrx::DispatchMatch match;
+    REQUIRE(match_gather_add_at(registry, aliased_graph, root_index, covered_nodes, match));
+    REQUIRE(match.dispatches.size() == 1);
+    REQUIRE(kernel_name_for_id(match.dispatches.front().kernel.kernel_id) == "hrx:ggml_gather_add_f32");
+}
+
+static void schedule_common_flash_attention_decode_fallback_command(ggml_context * ctx,
+                                                                    ggml_tensor *  output,
+                                                                    int64_t        query_token_count,
+                                                                    int64_t        key_value_token_count,
+                                                                    int64_t        query_head_count,
+                                                                    int64_t        key_value_head_count,
+                                                                    int64_t        qk_head_size    = kQwenFlashHeadSize,
+                                                                    int64_t        value_head_size = kQwenFlashHeadSize,
+                                                                    float scale = 1.0f / std::sqrt(128.0f)) {
+    ggml_cgraph * graph              = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    REQUIRE(imported.graph.nodes().size() == 1);
+    REQUIRE(imported.graph.nodes()[0].op == GGML_OP_FLASH_ATTN_EXT);
+
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+    REQUIRE(scheduler.plan().dispatches.size() == static_cast<size_t>(query_token_count));
+    REQUIRE(scheduler.plan().transients.size() == 4);
+    REQUIRE(scheduler.plan().completion_counter_requests.size() == 1);
+    REQUIRE(scheduler.plan().completion_counter_requests.front().count == key_value_head_count);
+    REQUIRE(scheduler.plan().metadata.alternate_values().empty());
+
+    const ggml::hrx::Dispatch & dispatch = scheduler.plan().dispatches.front();
+    REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
+            "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
+    REQUIRE(dispatch.kernel.integer_parameters.at("key_value_token_count") == key_value_token_count);
+    REQUIRE(dispatch.bindings.size() == 10);
+    require_compile_parameter(dispatch, "ggml.flash_attention.query_head_count", std::to_string(query_head_count));
+    require_compile_parameter(dispatch, "ggml.flash_attention.key_value_head_count",
+                              std::to_string(key_value_head_count));
+    require_compile_parameter(dispatch, "ggml.flash_attention.qk_head_size", std::to_string(qk_head_size));
+    require_compile_parameter(dispatch, "ggml.flash_attention.value_head_size", std::to_string(value_head_size));
+    require_compile_parameter(dispatch, "ggml.flash_attention.attention_scale", expected_config_value(scale));
+
+    const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+        imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(commands.valid());
+    REQUIRE(commands.commands.size() == static_cast<size_t>(query_token_count));
+    REQUIRE(command_program_verifies(commands));
+    REQUIRE(commands.commands.front().bindings.size() == 10);
+    REQUIRE(commands.commands.front().bindings[0].name == "query");
+    REQUIRE(commands.commands.front().bindings[1].name == "key");
+    REQUIRE(commands.commands.front().bindings[2].name == "value");
+    REQUIRE(commands.commands.front().bindings[3].name == "mask");
+    REQUIRE(commands.commands.front().bindings[8].name == "output");
+    REQUIRE(commands.commands.front().bindings[9].name == "next_q8_output");
+}
+
+static void schedule_common_flash_attention_decode_q8_command(ggml_context * ctx, ggml_type weight_type) {
+    constexpr int64_t query_token_count     = 1;
+    constexpr int64_t key_value_token_count = 512;
+    constexpr int64_t query_head_count      = 4;
+    constexpr int64_t key_value_head_count  = 2;
+    constexpr int64_t hidden_size           = query_head_count * kQwenFlashHeadSize;
+    constexpr int64_t output_size           = 256;
+    const size_t      q8_bytes              = ggml_row_size(GGML_TYPE_Q8_1, hidden_size);
+
+    ggml_tensor * output = build_qwen_flash_attention_graph(
+        ctx, query_token_count, key_value_token_count, query_head_count, key_value_head_count);
+    ggml_tensor * reshaped  = ggml_reshape_2d(ctx, output, hidden_size, query_token_count);
+    ggml_tensor * weight    = ggml_new_tensor_2d(ctx, weight_type, hidden_size, output_size);
+    ggml_tensor * projected = ggml_mul_mat(ctx, weight, reshaped);
+    REQUIRE(reshaped != nullptr);
+    REQUIRE(weight != nullptr);
+    REQUIRE(projected != nullptr);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, projected);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    const ggml::hrx::CommandPlan & plan = scheduler.plan();
+    REQUIRE(plan.valid());
+    REQUIRE(plan.dispatches.size() == 2);
+    REQUIRE(plan.transients.size() == 4);
+    REQUIRE(plan.completion_counter_requests.size() == 1);
+
+    const ggml::hrx::Value * native_value  = imported.graph.values().find_tensor(output);
+    const ggml::hrx::Value * reshape_value = imported.graph.values().find_tensor(reshaped);
+    REQUIRE(native_value != nullptr);
+    REQUIRE(reshape_value != nullptr);
+    const ggml::hrx::CommandPlanAlternateValue * q8 =
+        ggml::hrx::find_alternate_value(plan, reshape_value->id, GGML_TYPE_Q8_1, q8_bytes);
+    REQUIRE(q8 != nullptr);
+    REQUIRE(ggml::hrx::find_alternate_value(plan, native_value->id, GGML_TYPE_Q8_1, q8_bytes) == nullptr);
+
+    const ggml::hrx::Dispatch & producer = plan.dispatches.front();
+    const ggml::hrx::Dispatch & consumer = plan.dispatches.back();
+    REQUIRE(kernel_name_for_id(producer.kernel.kernel_id) ==
+            "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
+    REQUIRE(producer.bindings.size() == 10);
+    REQUIRE(producer.bindings[9].value == q8->alternate_value);
+    REQUIRE(consumer.bindings[0].value == q8->alternate_value);
+
+    const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+        imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(commands.valid());
+    REQUIRE(commands.commands.size() == 2);
+    REQUIRE(command_program_verifies(commands));
+    REQUIRE(commands.commands.front().bindings.size() == 10);
+    REQUIRE(commands.commands.front().bindings[8].name == "output");
+    REQUIRE(commands.commands.front().bindings[9].name == "next_q8_output");
+}
+
+static void schedule_common_flash_attention_decode_unqualified_command(ggml_context * ctx) {
+    constexpr int64_t hidden_size = 4 * kQwenFlashHeadSize;
+    ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 1, 512, 4, 2);
+    ggml_tensor * reshaped  = ggml_reshape_2d(ctx, output, hidden_size, 1);
+    ggml_tensor * weight    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 256);
+    ggml_tensor * projected = ggml_mul_mat(ctx, weight, reshaped);
+    REQUIRE(reshaped != nullptr);
+    REQUIRE(weight != nullptr);
+    REQUIRE(projected != nullptr);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, projected);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    const ggml::hrx::CommandPlan & plan = scheduler.plan();
+    REQUIRE(plan.valid());
+    REQUIRE(plan.metadata.alternate_values().empty());
+    REQUIRE(plan.dispatches.size() == 2);
+    REQUIRE(plan.transients.size() == 4);
+    REQUIRE(plan.completion_counter_requests.size() == 1);
+    REQUIRE(kernel_name_for_id(plan.dispatches.front().kernel.kernel_id) ==
+            "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
+    REQUIRE(plan.dispatches.front().bindings.size() == 10);
+
+    const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+        imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(commands.valid());
+    REQUIRE(command_program_verifies(commands));
+    REQUIRE(commands.commands.size() == 2);
+    REQUIRE(commands.commands.front().bindings.size() == 10);
+}
+
+static void run_iq3_xxs_codebook_matmul_dispatch_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    auto check_plan = [&](int64_t token_count, const char * expected_kernel, size_t expected_binding_count,
+                          const char * weight_format_parameter) {
+        ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_IQ3_XXS, 2048, 128);
+        ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, token_count);
+        REQUIRE(weight != nullptr);
+        REQUIRE(input != nullptr);
+        ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+        REQUIRE(output != nullptr);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, output);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const ggml::hrx::CommandPlan & plan = scheduler.plan();
+        REQUIRE(plan.dispatches.size() == 1);
+        REQUIRE(kernel_name_for_id(plan.dispatches[0].kernel.kernel_id) == expected_kernel);
+        REQUIRE(plan.dispatches[0].bindings.size() == expected_binding_count);
+        REQUIRE(plan.dispatches[0].bindings[2].length == 1024);
+        REQUIRE(plan.transients.size() == 1);
+        REQUIRE(plan.constant_initializations.size() == 1);
+        REQUIRE(plan.constant_initializations[0].value == plan.dispatches[0].bindings[2].value);
+        REQUIRE(plan.constant_initializations[0].data.size() == 1024);
+        require_compile_parameter(plan.dispatches[0], weight_format_parameter, "18");
+    };
+
+    check_plan(1, "loom_libs:ggml_mul_mat_vector_iq3_xxs_f32_f32", 5, "ggml.matmul.vector.weight_format");
+    check_plan(64, "loom_libs:ggml_mul_mat_tiled_input_f32_iq3_xxs_publish_f32", 4,
+               "ggml.mul_mat.weight_format");
+
+    const char * disable_name = "GGML_HRX_DISABLE_IQ3_XXS_CODEBOOK_MATMUL";
+    REQUIRE(setenv(disable_name, "1", 1) == 0);
+    ggml_tensor * disabled_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_IQ3_XXS, 2048, 128);
+    ggml_tensor * disabled_input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 1);
+    REQUIRE(disabled_weight != nullptr);
+    REQUIRE(disabled_input != nullptr);
+    ggml_tensor * disabled_output = ggml_mul_mat(ctx, disabled_weight, disabled_input);
+    REQUIRE(disabled_output != nullptr);
+    ggml_cgraph * disabled_graph = ggml_new_graph(ctx);
+    REQUIRE(disabled_graph != nullptr);
+    ggml_build_forward_expand(disabled_graph, disabled_output);
+    ggml::hrx::GraphImportResult disabled_imported = ggml::hrx::import_ggml_graph(*disabled_graph);
+    REQUIRE(disabled_imported.valid());
+    ggml::hrx::DispatchScheduler disabled_scheduler;
+    REQUIRE(!disabled_scheduler.schedule_graph(disabled_imported.graph, test_dispatch_target()));
+    REQUIRE(unsetenv(disable_name) == 0);
+
+    ggml_free(ctx);
+}
+
+static void run_iq2_codebook_resource_reuse_checks() {
+    for (const ggml_type type : { GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS }) {
+        ggml_init_params params = {};
+        params.mem_size         = 8 * 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+
+        ggml_tensor * vector_weight = ggml_new_tensor_2d(ctx, type, 2048, 128);
+        ggml_tensor * vector_input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 1);
+        ggml_tensor * tiled_weight  = ggml_new_tensor_2d(ctx, type, 2048, 128);
+        ggml_tensor * tiled_input   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 64);
+        REQUIRE(vector_weight != nullptr);
+        REQUIRE(vector_input != nullptr);
+        REQUIRE(tiled_weight != nullptr);
+        REQUIRE(tiled_input != nullptr);
+        ggml_tensor * vector_output = ggml_mul_mat(ctx, vector_weight, vector_input);
+        ggml_tensor * tiled_output  = ggml_mul_mat(ctx, tiled_weight, tiled_input);
+        REQUIRE(vector_output != nullptr);
+        REQUIRE(tiled_output != nullptr);
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, vector_output);
+        ggml_build_forward_expand(graph, tiled_output);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        REQUIRE(scheduler.plan().valid());
+        REQUIRE(scheduler.plan().dispatches.size() == 2);
+        REQUIRE(scheduler.plan().constant_initializations.size() == 1);
+        REQUIRE(scheduler.plan().transients.size() == 1);
+
+        const char * expected_key =
+            type == GGML_TYPE_IQ2_XXS ? "common.iq2_xxs.grid.v1" : "common.iq2_xs.grid.v1";
+        const ggml::hrx::CommandPlanConstantInitialization & initialization =
+            scheduler.plan().constant_initializations.front();
+        REQUIRE(initialization.name == expected_key);
+        REQUIRE(scheduler.plan().transients.front().name == expected_key);
+        REQUIRE(scheduler.plan().transients.front().value == initialization.value);
+        REQUIRE(std::count_if(scheduler.plan().dispatches.begin(), scheduler.plan().dispatches.end(),
+                              [&](const ggml::hrx::Dispatch & dispatch) {
+                                  return std::any_of(dispatch.bindings.begin(), dispatch.bindings.end(),
+                                                     [&](const ggml::hrx::DispatchBinding & binding) {
+                                                         return binding.value == initialization.value;
+                                                     });
+                              }) == 2);
+
+        const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+            imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        REQUIRE(commands.valid());
+        REQUIRE(command_program_verifies(commands));
+        REQUIRE(commands.constant_initializations.size() == 1);
+        ggml_free(ctx);
+    }
+}
+
+static void run_iq4_matmul_dispatch_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 2 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    const auto check = [ctx](ggml_type weight_type, int64_t input_size, int64_t output_size,
+                             int64_t token_count, const char * expected_kernel) {
+        ggml_tensor * weight = ggml_new_tensor_2d(ctx, weight_type, input_size, output_size);
+        ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+        REQUIRE(weight != nullptr);
+        REQUIRE(input != nullptr);
+        ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+        REQUIRE(output != nullptr);
+        schedule_single_matmul_command(ctx, output, expected_kernel, token_count, input_size, output_size);
+    };
+
+    check(GGML_TYPE_IQ4_NL, 640, 1024, 1, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64");
+    check(GGML_TYPE_IQ4_NL, 640, 1024, 64, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned");
+    check(GGML_TYPE_IQ4_XS, 2048, 128, 1, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64");
+    check(GGML_TYPE_IQ4_XS, 2048, 128, 64, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned");
+
+    ggml_free(ctx);
+}
+
+static void run_prefill_value_projection_cache_dispatch_checks() {
+    static constexpr const char * kDisableFusionEnv = "GGML_HRX_DISABLE_PREFILL_V_CACHE_FUSION";
+    EnvironmentVariableGuard     disable_fusion(kDisableFusionEnv);
+    disable_fusion.unset();
+
+    auto check_case = [&](ggml_type weight_type, int64_t input_size, int64_t output_size, int64_t token_count,
+                          ggml_type cache_type, int64_t cache_row_count, bool publish_f16_alternate,
+                          bool set_rows_available, bool disable, bool expect_fusion, bool observe_projection = false,
+                          bool alias_weight = false) {
+        ggml_init_params params = {};
+        params.mem_size         = 4 * 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+
+        ggml_tensor * weight_storage = ggml_new_tensor_2d(ctx, weight_type, input_size, output_size);
+        REQUIRE(weight_storage != nullptr);
+        ggml_tensor * weight =
+            alias_weight ? ggml_view_2d(ctx, weight_storage, input_size, output_size, weight_storage->nb[1], 0) :
+            weight_storage;
+        ggml_tensor * input   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+        ggml_tensor * cache   = ggml_new_tensor_2d(ctx, cache_type, output_size, cache_row_count);
+        ggml_tensor * indices = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, token_count);
+        REQUIRE(weight != nullptr);
+        REQUIRE(input != nullptr);
+        REQUIRE(cache != nullptr);
+        REQUIRE(indices != nullptr);
+        ggml_tensor * projection = ggml_mul_mat(ctx, weight, input);
+        ggml_tensor * value      = ggml_reshape_3d(ctx, projection, 128, output_size / 128, token_count);
+        ggml_tensor * rows       = ggml_reshape_2d(ctx, value, output_size, token_count);
+        ggml_tensor * output     = ggml_set_rows(ctx, cache, rows, indices);
+        REQUIRE(projection != nullptr);
+        REQUIRE(value != nullptr);
+        REQUIRE(rows != nullptr);
+        REQUIRE(output != nullptr);
+        if (observe_projection) {
+            ggml_set_output(projection);
+        }
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, output);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+
+        ggml::hrx::CommandPlan plan;
+        const ggml::hrx::Value * input_value = imported.graph.values().find_tensor(input);
+        REQUIRE(input_value != nullptr);
+        if (publish_f16_alternate) {
+            const size_t bytes = static_cast<size_t>(input_size * token_count) * sizeof(ggml_fp16_t);
+            const ggml::hrx::ValueId alternate(static_cast<int32_t>(imported.graph.values().size()));
+            plan.transients.push_back({ alternate, "test.prefill_v_cache.f16", bytes, 256 });
+            plan.constant_initializations.push_back(
+                { alternate, "test.prefill_v_cache.f16", 0, std::vector<uint8_t>(bytes) });
+            ggml::hrx::Status status;
+            REQUIRE(plan.metadata.append_alternate_value(
+                { input_value->id, alternate, GGML_TYPE_F16, bytes, "test.prefill_v_cache.f16" }, status));
+        }
+
+        std::vector<bool> covered_nodes(imported.graph.nodes().size(), false);
+        if (!set_rows_available) {
+            covered_nodes[producer_index_for_tensor(imported.graph, output)] = true;
+        }
+        if (disable) {
+            disable_fusion.set("1");
+        } else {
+            disable_fusion.unset();
+        }
+
+        ggml::hrx::DispatchMatch match;
+        const size_t projection_index = producer_index_for_tensor(imported.graph, projection);
+        REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, projection_index, match));
+        REQUIRE(!match.dispatches.empty());
+        const ggml::hrx::Dispatch & dispatch = match.dispatches.back();
+        const bool                  fused =
+            kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:llm_attention_v_matmul_set_rows_tiled_f32_f32";
+        REQUIRE(fused == expect_fusion);
+        if (expect_fusion) {
+            REQUIRE(match.dispatches.size() == 1);
+            REQUIRE(match.covered_nodes.size() == 4);
+            REQUIRE(dispatch.bindings.size() == 4);
+            REQUIRE(dispatch.bindings[0].value == plan.transients.front().value);
+            REQUIRE(dispatch.bindings[0].length == plan.transients.front().size);
+            require_compile_parameter(dispatch, "ggml.mul_mat.activation_format", std::to_string(GGML_TYPE_F16));
+            require_compile_parameter(dispatch, "llm.attention_qkv.weight_format", "6");
+            require_compile_parameter(dispatch, "llm.attention_qkv.input_size", "1536");
+            require_compile_parameter(dispatch, "llm.attention_qkv.output_size", "256");
+            require_compile_parameter(dispatch, "llm.attention_qkv.cache_row_count", "512");
+            require_compile_parameter(dispatch, "llm.attention_qkv.cache_output_format", "16");
+
+            append_match_to_plan(plan, match, covered_nodes, &imported.graph);
+            const ggml::hrx::CommandProgram commands =
+                ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+            REQUIRE(commands.valid());
+            REQUIRE(command_program_verifies(commands));
+            REQUIRE(commands.commands.size() == 1);
+            REQUIRE(commands.commands.front().bindings.size() == 4);
+            REQUIRE(commands.commands.front().bindings[0].name == "input");
+            REQUIRE(commands.commands.front().bindings[1].name == "weight");
+            REQUIRE(commands.commands.front().bindings[2].name == "indices");
+            REQUIRE(commands.commands.front().bindings[3].name == "cache");
+        }
+        ggml_free(ctx);
+    };
+
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, true, false, true);
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, true, true, false);
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, false, true, false, false);
+    check_case(GGML_TYPE_Q4_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, true, false, false);
+    check_case(GGML_TYPE_Q6_K, 2048, 256, 64, GGML_TYPE_F16, 512, true, true, false, false);
+    check_case(GGML_TYPE_Q6_K, 1536, 512, 64, GGML_TYPE_F16, 512, true, true, false, false);
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 32, GGML_TYPE_F16, 512, true, true, false, false);
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F32, 512, true, true, false, false);
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 1024, true, true, false, false);
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, false, false, false);
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, true, false, false, true);
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, true, false, false, false, true);
+}
+
+static const char * common_mul_mat_id_f32_kernel_name(int64_t token_count) {
+    return token_count <= 5 ? "loom_libs:ggml_mul_mat_id_skinny_input_f32_publish_f32" :
+                              "loom_libs:ggml_mul_mat_id_tiled_input_f32_publish_f32";
+}
+
+static const char * common_mul_mat_id_swiglu_f32_kernel_name(int64_t token_count) {
+    return token_count <= 5 ? "loom_libs:ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32" :
+                              "loom_libs:ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32";
+}
+
+static void run_graph_match_empty_expert_views_checks() {
+    ggml_context * ctx = ggml_init({ 512 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+
+    // Simulate MoE output layout: 2048 features, 8 selected expert slots, and no requested token rows.
+    // Scale supplies a producer node without needing a model or actual expert computation.
+    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2048, 8, 0);
+    ggml_tensor * experts = ggml_scale(ctx, input, 2.0f);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    graph->uid = 3003;
+    ggml_build_forward_expand(graph, experts);
+
+    // Build empty views to verify that the graph is accepted with each slot's
+    // offset preserved (0, 8192, ..., 57344 bytes). Previous check rejected
+    // empty views with positive offsets (which admittedly is a little odd but
+    // that's how GGML represents this).
+    for (int expert = 0; expert < 8; ++expert) {
+        ggml_tensor * view = ggml_view_2d(ctx, experts, 2048, 0, experts->nb[2], expert * experts->nb[1]);
+        ggml_build_forward_expand(graph, view);
+    }
+
+    // Building and matching this graph must accept the empty views; an old bounds check rejected their positive offsets.
+    // gfx1151 selects a target configuration for this host test, not a GPU on which to execute it.
+    ggml::hrx::GraphProgramCache cache;
+    auto lookup = cache.get_or_build(*graph, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(lookup.valid());
+    REQUIRE(lookup.program->match_current_graph(*graph).valid());
+    // Empty operations require no numerical device work.
+    REQUIRE(lookup.program->commands().commands.empty());
+
+    // The same graph must also match when reusing the cached program.
+    lookup = cache.get_or_build(*graph, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(lookup.valid());
+    REQUIRE(cache.stats().hits == 1);
+
+    // Empty views still have to agree with the recorded alias offsets: changing 57344 to 57348 must fail.
+    // Restoring the offset must make the graph match again.
+    ggml_tensor * last_view = ggml_graph_node(graph, ggml_graph_n_nodes(graph) - 1);
+    last_view->view_offs += sizeof(float);
+    REQUIRE(!lookup.program->match_current_graph(*graph).valid());
+    last_view->view_offs -= sizeof(float);
+    REQUIRE(lookup.program->match_current_graph(*graph).valid());
+    ggml_free(ctx);
+}
+
+static std::vector<uint8_t> read_transient_bytes(ggml_backend_hrx_context *             context,
+                                                 ggml::hrx::TransientArenaAllocationRef arena,
+                                                 const ggml::hrx::TransientAllocation & allocation) {
+    REQUIRE(context != nullptr);
+    REQUIRE(arena.buffer != nullptr);
+    std::vector<uint8_t> data(allocation.size);
+    require_hrx_status(hrx_synchronous_d2h(context->device->device, arena.buffer, allocation.arena_offset, data.data(),
+                                           allocation.size));
+    return data;
+}
+
+static void run_binary_q8_publication_numerics() {
+    const struct {
+        int64_t hidden;
+        int64_t tokens;
+        bool    broadcast;
+        int     op;
+    } cases[] = {
+        { 2048, 3, false, 0 },
+        { 2176, 4, false, 2 },
+        { 2048, 4, true,  0 },
+        { 2176, 5, true,  2 },
+    };
+
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    auto * backend_context = static_cast<ggml_backend_hrx_context *>(backend->context);
+    REQUIRE(backend_context != nullptr);
+    const ggml::hrx::KernelCorpus & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    const char * target = backend_context->device->architecture.c_str();
+
+    for (const auto & test : cases) {
+        ggml_init_params params = {};
+        params.mem_size         = 512 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+
+        const int64_t element_count = test.hidden * test.tokens;
+        const int64_t rhs_count     = test.broadcast ? test.hidden : element_count;
+        ggml_tensor * lhs = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, test.hidden, test.tokens);
+        ggml_tensor * rhs = test.broadcast ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, test.hidden) :
+                                             ggml_new_tensor_2d(ctx, GGML_TYPE_F32, test.hidden, test.tokens);
+        REQUIRE(lhs != nullptr && rhs != nullptr);
+        ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+        REQUIRE(buffer != nullptr);
+
+        std::vector<float> lhs_data(element_count);
+        std::vector<float> rhs_data(rhs_count);
+        std::vector<float> expected(element_count);
+        for (int64_t i = 0; i < element_count; ++i) {
+            lhs_data[i] = static_cast<float>((i * 17 + 3) % 251 - 125) / 31.0f;
+        }
+        for (int64_t i = 0; i < rhs_count; ++i) {
+            rhs_data[i] = static_cast<float>((i * 29 + 11) % 239 - 119) / 37.0f;
+        }
+        for (int64_t token = 0; token < test.tokens; ++token) {
+            for (int64_t channel = 0; channel < test.hidden; ++channel) {
+                const int64_t i   = token * test.hidden + channel;
+                const float rhs_v = rhs_data[test.broadcast ? channel : i];
+                expected[i]       = test.op == 0 ? lhs_data[i] + rhs_v : lhs_data[i] * rhs_v;
+            }
+        }
+        ggml_backend_tensor_set(lhs, lhs_data.data(), 0, lhs_data.size() * sizeof(float));
+        ggml_backend_tensor_set(rhs, rhs_data.data(), 0, rhs_data.size() * sizeof(float));
+        ggml_backend_synchronize(backend);
+
+        ggml::hrx::Graph graph;
+        const ggml::hrx::ValueId lhs_value =
+            graph.values().get_or_add_tensor_value(lhs, ggml::hrx::ValueKind::External);
+        const ggml::hrx::ValueId rhs_value =
+            graph.values().get_or_add_tensor_value(rhs, ggml::hrx::ValueKind::External);
+        ggml::hrx::ValueBufferBinding lhs_binding;
+        ggml::hrx::ValueBufferBinding rhs_binding;
+        REQUIRE(ggml_backend_hrx_resolve_value_buffer(lhs, lhs_binding));
+        REQUIRE(ggml_backend_hrx_resolve_value_buffer(rhs, rhs_binding));
+        REQUIRE(graph.values().bind_buffer(lhs_value, lhs_binding));
+        REQUIRE(graph.values().bind_buffer(rhs_value, rhs_binding));
+
+        const ggml::hrx::ValueId reference_f32(static_cast<int32_t>(graph.values().size()));
+        const ggml::hrx::ValueId reference_q8(reference_f32.value + 1);
+        const ggml::hrx::ValueId published_f32(reference_f32.value + 2);
+        const ggml::hrx::ValueId published_q8(reference_f32.value + 3);
+        const size_t f32_bytes = static_cast<size_t>(element_count) * sizeof(float);
+        const size_t q8_bytes  = qwen_q8_1_x4_size(test.tokens, test.hidden);
+
+        ggml::hrx::CommandPlan plan;
+        plan.transients.push_back({ reference_f32, "test.binary.reference_f32", f32_bytes, 256 });
+        plan.transients.push_back({ reference_q8, "test.binary.reference_q8", q8_bytes, 256 });
+        plan.transients.push_back({ published_f32, "test.binary.published_f32", f32_bytes, 256 });
+        plan.transients.push_back({ published_q8, "test.binary.published_q8", q8_bytes, 256 });
+
+        ggml::hrx::Dispatch legacy;
+        legacy.kernel = ggml::hrx::make_kernel_specialization(ggml::hrx::kernel_catalog_ref(
+            "loom_libs", test.broadcast ? "ggml_binary_bc_f32" : "ggml_binary_f32"));
+        legacy.kernel.integer_parameters.emplace("element_count", element_count);
+        legacy.kernel.compile_parameters.emplace(
+            test.broadcast ? "ggml.binary_bc_f32.op" : "ggml.binary_f32.op", std::to_string(test.op));
+        if (test.broadcast) {
+            legacy.kernel.integer_parameters.emplace("ne0", test.hidden);
+            legacy.kernel.integer_parameters.emplace("ne1", test.tokens);
+            legacy.kernel.integer_parameters.emplace("ne2", 1);
+            legacy.kernel.integer_parameters.emplace("ne3", 1);
+            legacy.kernel.integer_parameters.emplace("src0_element_count", element_count);
+            legacy.kernel.integer_parameters.emplace("src1_element_count", rhs_count);
+        } else {
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.ne0", std::to_string(test.hidden));
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.ne1", std::to_string(test.tokens));
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.ne2", "1");
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride1", std::to_string(test.hidden));
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride2", std::to_string(element_count));
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride3", std::to_string(element_count));
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.src1_stride1", std::to_string(test.hidden));
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.src1_stride2", std::to_string(element_count));
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.src1_stride3", std::to_string(element_count));
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.src0_span", std::to_string(element_count));
+            legacy.kernel.compile_parameters.emplace("ggml.binary_f32.src1_span", std::to_string(element_count));
+        }
+        if (test.broadcast) {
+            for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+                legacy.kernel.compile_parameters.emplace("ggml.binary_bc_f32.src0_broadcast_dim" +
+                                                              std::to_string(dim),
+                                                          "0");
+                legacy.kernel.compile_parameters.emplace("ggml.binary_bc_f32.src1_broadcast_dim" +
+                                                              std::to_string(dim),
+                                                          dim == 1 ? "1" : "0");
+            }
+        }
+        legacy.bindings.push_back({ lhs_value, 0, ggml_nbytes(lhs) });
+        legacy.bindings.push_back({ rhs_value, 0, ggml_nbytes(rhs) });
+        legacy.bindings.push_back({ reference_f32, 0, f32_bytes });
+        plan.dispatches.push_back(std::move(legacy));
+
+        ggml::hrx::Dispatch quantize;
+        quantize.kernel = ggml::hrx::make_kernel_specialization(
+            ggml::hrx::kernel_catalog_ref("qwen3_moe", "ggml_quantize_q8_1_x4_f32"));
+        quantize.kernel.integer_parameters.emplace("token_count", test.tokens);
+        quantize.kernel.integer_parameters.emplace("input_size", test.hidden);
+        quantize.kernel.compile_parameters.emplace("ggml.quantize_q8_1_x4.group_capacity",
+                                                   std::to_string(element_count / 128));
+        quantize.bindings.push_back({ reference_f32, 0, f32_bytes });
+        quantize.bindings.push_back({ reference_q8, 0, q8_bytes });
+        plan.dispatches.push_back(std::move(quantize));
+
+        ggml::hrx::Dispatch publish;
+        publish.kernel = ggml::hrx::make_kernel_specialization(ggml::hrx::kernel_catalog_ref(
+            "loom_libs", test.broadcast ? "ggml_binary_bc_f32_publish_q8_1_x4" :
+                                           "ggml_binary_f32_publish_q8_1_x4"));
+        publish.kernel.integer_parameters.emplace("token_count", test.tokens);
+        if (test.broadcast) {
+            publish.kernel.integer_parameters.emplace("hidden_size", test.hidden);
+            publish.kernel.integer_parameters.emplace("src0_element_count", element_count);
+            publish.kernel.integer_parameters.emplace("src1_element_count", rhs_count);
+            publish.kernel.compile_parameters = plan.dispatches.front().kernel.compile_parameters;
+        } else {
+            publish.kernel.compile_parameters = plan.dispatches.front().kernel.compile_parameters;
+        }
+        publish.bindings.push_back({ lhs_value, 0, ggml_nbytes(lhs) });
+        publish.bindings.push_back({ rhs_value, 0, ggml_nbytes(rhs) });
+        publish.bindings.push_back({ published_f32, 0, f32_bytes });
+        publish.bindings.push_back({ published_q8, 0, q8_bytes });
+        plan.dispatches.push_back(std::move(publish));
+
+        const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(graph, plan, corpus, target);
+        REQUIRE(commands.valid());
+        REQUIRE(ggml::hrx::verify_command_program(commands, corpus, target).valid());
+        const ggml::hrx::CommandProgramBindings bindings =
+            ggml::hrx::CommandProgramBindings::from_value_map(graph.values());
+        REQUIRE(bindings.valid());
+        const ggml::hrx::CommandProgramExecutionContext execution_context = {
+            backend_context->device->device,
+            backend_context->stream,
+            target,
+            &corpus,
+            &backend_context->kernel_executables,
+            &backend_context->transient_arena,
+            &backend_context->host_transfers,
+            &backend_context->host_weights,
+        };
+        REQUIRE(ggml::hrx::execute_command_program(execution_context, commands, bindings));
+        ggml_backend_synchronize(backend);
+
+        const auto arena = backend_context->transient_arena.current_allocation();
+        const auto * reference_f32_allocation =
+            ggml::hrx::find_transient_allocation(commands.transients, reference_f32);
+        const auto * reference_q8_allocation =
+            ggml::hrx::find_transient_allocation(commands.transients, reference_q8);
+        const auto * published_f32_allocation =
+            ggml::hrx::find_transient_allocation(commands.transients, published_f32);
+        const auto * published_q8_allocation =
+            ggml::hrx::find_transient_allocation(commands.transients, published_q8);
+        REQUIRE(reference_f32_allocation != nullptr && reference_q8_allocation != nullptr);
+        REQUIRE(published_f32_allocation != nullptr && published_q8_allocation != nullptr);
+        const auto reference_f32_bytes = read_transient_bytes(backend_context, arena, *reference_f32_allocation);
+        const auto reference_q8_bytes  = read_transient_bytes(backend_context, arena, *reference_q8_allocation);
+        const auto published_f32_bytes = read_transient_bytes(backend_context, arena, *published_f32_allocation);
+        const auto published_q8_bytes  = read_transient_bytes(backend_context, arena, *published_q8_allocation);
+        REQUIRE(reference_f32_bytes == published_f32_bytes);
+        REQUIRE(reference_q8_bytes == published_q8_bytes);
+        REQUIRE(reference_f32_bytes.size() == expected.size() * sizeof(float));
+        REQUIRE(std::memcmp(reference_f32_bytes.data(), expected.data(), reference_f32_bytes.size()) == 0);
+
+        ggml_backend_buffer_free(buffer);
+        ggml_free(ctx);
+    }
+    ggml_backend_free(backend);
+}
+
+static void register_hrx_backend_cases(test_runner::Suite & suite) {
+    register_hrx_backend_host_cases(suite);
+    register_hrx_backend_device_cases(suite);
+}
 
 static GatherAddRmsNormOutputs run_gather_add_rmsnorm_numerical_case(ggml_backend_t backend) {
     ggml_init_params params = {};
