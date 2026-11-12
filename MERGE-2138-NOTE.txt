@@ -257,3 +257,22 @@ Detector: grep -rn '^<<<<<<< [0-9a-f]*:' .
 The both-content hunks are a TEST-SUITE merge, not a hunk merge: ours holds the engine#444 and engine#1962 cases, theirs
 holds the gemma post-proj, GDN snapshot, vector-q8 publish and native-weight-binding cases. Taking a side deletes a set of
 coverage silently, so they need both suites kept and reconciled against the current API.
+
+## REMAINING WORK, TRIAGED AND MEASURED (27 files, ~160 hunks)
+Only ~6 hunks in the whole tree are decidable by the empty-side or superset rules. The rest fall into four named groups:
+
+1. THREE MODEL FILES, 83 hunks, EVERY ONE both-content (no empty side, no superset):
+     src/models/qwen4exp.cpp           44 hunks  (largest pairs 152L/72L, 99L/44L)
+     src/models/deepseek41.cpp         24 hunks  (all value/argument level; a tree-wide identifier check finds nothing
+                                                  decidable -- llama_prefetch_rows, n_kv_max, ggml_rope_ext_back and
+                                                  dsv41_prec_acc all exist elsewhere in the tree, so no side is missing)
+     src/llama-kv-cache-dsv4.cpp       15 hunks
+   These are renegotiations of OUR models against AMD's rebase. They need someone who knows what each model's graph must
+   compute -- a resolution here can be syntactically perfect and numerically wrong, which is the one failure this merge has
+   no automatic detector for.
+2. DISPATCH (cl-hrxkern): dispatch-mul-mat.cpp, dispatch-gated-mul-mat.cpp, dispatch-get-rows.cpp, corpus<->registration.
+3. SPECULATIVE DECODE (pi-attn / cl-856): common/speculative.cpp.
+4. THE PAIRED BUFFER-OWNERSHIP DECISION: llama-kv-cache.cpp + llama-memory-recurrent.cpp, and the Hadamard embedding path
+   in llama-graph.cpp hunk 5.
+Plus the test-suite merges (tests/hrx-ops-test.cpp, tests/test-llama-archs.cpp fixtures) which need both suites kept and
+reconciled against the current API.
