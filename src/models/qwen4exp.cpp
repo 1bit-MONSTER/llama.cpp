@@ -255,7 +255,6 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
                                            { hparams.ple_head_dim, ple_rows }, TENSOR_READ_LAZY);
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     const int mtp_flags = !ml.load_mtp ? TENSOR_SKIP : 0;
 
     for (int il = 0; il < (int) hparams.n_layer_all; ++il) {
@@ -264,12 +263,6 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         const int flags = il < n_layer ? trunk_flags : mtp_flags;
 
         const int64_t n_ff_exp   = hparams.n_ff_exp   ? hparams.n_ff_exp   : n_ff / n_expert_used;
-=======
-    auto load_block = [&](int il, int flags) {
-        auto & layer = layers[il];
-
-        const int64_t n_ff_exp   = hparams.n_ff_exp() ? hparams.n_ff_exp() : n_ff / n_expert_used;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
 
         const int64_t head_k_dim = hparams.ssm_d_state;
@@ -632,13 +625,9 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
                 model.layers[il].hc_ffn_down,
                 model.layers[il].hc_ffn_up,
                 model.layers[il].hc_ffn_inject,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                &inject, il);
-=======
                 model.layers[il].hc_ffn_down_inject,
                 il);
         cur = ffn_mix.cur;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
         cur = build_layer_ffn(cur, il);
         cb(cur, "ffn_out", il);
@@ -672,7 +661,6 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 
     ggml_build_forward_expand(gf, cur);
 }
@@ -698,32 +686,11 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_
     GGML_ASSERT(layer.nextn.enorm       && "MTP block missing nextn.enorm");
     GGML_ASSERT(layer.nextn.hnorm       && "MTP block missing nextn.hnorm");
     GGML_ASSERT(layer.nextn.hc_head_norm && "MTP block missing nextn.hc_head_norm");
-=======
-}
-
-llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
-    graph(model, params, no_build{}) {
-    GGML_ASSERT(hparams.n_layer_nextn == 1 && "qwen4exp MTP has a single block");
-    ASSERT_EMBD_OR_TOKEN(ubatch);
-
-    const int64_t hc = hparams.dsv4_hc_mult;
-    GGML_ASSERT(hparams.n_embd_out() == (uint32_t) (n_embd*hc) && "qwen4exp MTP hidden width mismatch");
-
-    const int il = hparams.n_layer();
-    const auto & layer = model.layers[il];
-
-    GGML_ASSERT(layer.nextn.eh_proj && layer.nextn.enorm && layer.nextn.hnorm && layer.nextn.hc_head_norm &&
-            "MTP block missing, load the model with MTP enabled");
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     int sections[4];
     std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    auto inp = std::make_unique<llm_graph_input_embd_h>(hc_dim);
-=======
     auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd_out());
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
@@ -1311,20 +1278,12 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
         ggml_tensor *             q_cur,
         ggml_tensor *             k_cur,
         ggml_tensor *             v_cur,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        ggml_tensor *             top_k,
-        float                     kq_scale,
-        int                       il) {
-    // rotate q/k/v before they reach a quantized cache, as the dense path does. the indexer
-    // has already scored with its own query in build_qsa_top_k, so top_k is unaffected.
-=======
         ggml_tensor *             sel,
         int64_t                   n_sel,
         float                     kq_scale,
         int                       il) {
     // rotate q/k/v before they reach a quantized cache, as the dense path does. the indexer
     // has already scored with its own query in build_qsa_sel, so the selection is unaffected.
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     if (inp->self_k_rot) {
         q_cur = llama_mul_mat_hadamard(ctx0, q_cur, inp->self_k_rot);
         k_cur = llama_mul_mat_hadamard(ctx0, k_cur, inp->self_k_rot);
@@ -1384,9 +1343,6 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    ggml_tensor * cur = build_attn_mha(q, k, v, nullptr, kq_mask_top_k, nullptr, nullptr, kq_scale, il);
-=======
     // the selection replaces the kq_mask: split it into the streams of the K view
     const int64_t n_stream = k->ne[3];
     GGML_ASSERT(sel->ne[0] == k->ne[2] && sel->ne[1] % n_stream == 0);
@@ -1394,7 +1350,6 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
     cb(sel, "kq_mask_qsa", il);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, nullptr, sel, nullptr, nullptr, n_sel, kq_scale, il);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     cb(cur, "kqv_out", il);
 
     // the rotation is its own inverse, so undo it on the value side of the output
@@ -1417,15 +1372,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     // indexer reads the same block input as q/k/v; no cache or no ratio means dense
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    const bool qsa = mctx_hyb->get_idx() != nullptr && hparams.dsv4_compress_ratios[il] > 0;
-
-    ggml_tensor * top_k = qsa ? build_qsa_top_k(mctx_hyb, cur, inp_pos, inp->get_kq_mask(), sections, il) : nullptr;
-=======
     const bool qsa = inp_kpool != nullptr && hparams.dsv4_compress_ratios[il] > 0;
 
     ggml_tensor * sel = qsa ? build_qsa_sel(mctx_hyb, inp_kpool, cur, inp_pos, sections, il) : nullptr;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // Qwen3Next uses a single Q projection that outputs query + gate
     ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s); // [ (n_embd_head * 2) * n_head, n_tokens ]
@@ -1637,11 +1586,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
     // gated normalization, as self.norm(core_attn_out, z) in the reference
     ggml_tensor * attn_out_norm = build_norm_gated(output, model.layers[il].ssm_norm, z_2d, il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    ggml_tensor * final_output = ggml_reshape_3d(ctx0, attn_out_norm, head_v_dim * num_v_heads, n_seq_tokens, n_seqs);
-=======
     ggml_tensor * final_output = ggml_reshape_2d(ctx0, attn_out_norm, head_v_dim * num_v_heads, n_seq_tokens * n_seqs);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     cb(final_output, "final_output", il);
 
     cur = build_lora_mm(model.layers[il].ssm_out, final_output, model.layers[il].ssm_out_s);
@@ -1729,11 +1674,7 @@ public:
 
     ggml_tensor * rows = nullptr;   // I32 [ple_n_heads * n_tokens]
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     const llama_model_qwen4exp & pmodel;
-=======
-    const llama_model & model;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     // the predecessor tokens live in the attention KV cells (ext.tok)
     const llama_kv_cache_context * mctx;
@@ -1881,12 +1822,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
     const int64_t n_heads = hparams.ple_n_heads;
 
     // the attention cells see every ubatch regardless of the layer types
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     auto ple_inp = std::make_unique<llm_graph_input_ple>(
             static_cast<const llama_model_qwen4exp &>(model), mctx_hyb->get_attn());
-=======
-    auto ple_inp = std::make_unique<llm_graph_input_qwen4exp_ple>(model, mctx_hyb->get_attn());
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     ple_inp->rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads * n_tokens);
     ggml_set_input(ple_inp->rows);
