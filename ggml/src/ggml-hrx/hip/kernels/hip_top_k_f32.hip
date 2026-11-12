@@ -89,8 +89,6 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
     __shared__ uint32_t lane_sum[kTopKLanes];
     __shared__ uint32_t bucket_found;
     __shared__ uint32_t take_found;
-    __shared__ uint32_t emitted;
-    __shared__ uint32_t emitted_eq;
     __shared__ uint32_t threshold_key;
     __shared__ uint32_t next_remaining;
 
@@ -183,39 +181,61 @@ extern "C" __global__ void __launch_bounds__(256) hip_top_k_f32(const float * __
         __syncthreads();
         threshold_key  = (prefix << bits) | bucket_found;
         next_remaining = take_found;
+        // engine #2146: every lane must have read bucket_found / take_found (and the shared threshold_key must be
+        // settled) before lane 0 resets them at the start of the next level. Without this barrier a fast lane 0 zeroes
+        // them under a slow lane, which then publishes a wrong threshold_key: invalid and run-to-run different rows.
+        __syncthreads();
 
         prefix      = threshold_key;          // already includes the bits of this level
         prefix_len += bits;
         remaining   = next_remaining;
     }
 
-    if (lane == 0u) {
-        emitted    = 0u;
-        emitted_eq = 0u;
-    }
-    __syncthreads();
-
-    // above_slots is `top_k - remaining` with remaining <= top_k by construction, so this cannot wrap; the guard below
-    // is kept as a cheap second line of defence rather than a load-bearing condition.
+    // above_slots is `top_k - remaining` with remaining <= top_k by construction, so this cannot wrap; the guards below
+    // are kept as a cheap second line of defence rather than a load-bearing condition.
     const uint32_t above_slots = top_k - remaining;
 
-    // Emit in ONE pass over the row instead of two (r1_d3). The split is known before the pass: the rank-k key was
-    // chosen so that exactly `top_k - remaining` elements are strictly above it, and `remaining` of them are equal to
-    // it, so the two groups get disjoint slot ranges without a second scan -- ">" into [0, above_slots) and the equal
-    // group into [above_slots, top_k). Order is not part of the contract (ggml's TOP_K contract is the index set), and
-    // the per-group slot guard is what keeps the result duplicate-free, which is the `ties` variant's requirement.
+    // Emit, deterministically (engine #2146). The ">" group goes into [0, above_slots) and the group equal to the
+    // rank-k key into [above_slots, top_k), as before. What changed is how a lane finds its slots: an atomicAdd per
+    // element made the order differ from run to run, and in the tie group it made the *set* differ too (whichever lanes
+    // got there first took the `remaining` slots). On Flash-Next the sparse-attention indexer picks 2051 of 2560 KV
+    // rows with this kernel, and identical requests gave different replies. Now each lane counts its two groups, an
+    // exclusive scan over lanes gives it fixed offsets, and a second pass writes in visit order. The result is a pure
+    // function of the row: same order every run, and ties go to the lowest (lane, visit) positions.
+    uint32_t n_gt = 0u, n_eq = 0u;
+    topk_visit(base, column_count, lane, [&](uint32_t i, float value) {
+        const uint32_t key = topk_key(value);
+        (void) i;
+        n_gt += key > threshold_key;
+        n_eq += key == threshold_key;
+    });
+    // forward inclusive scan of both counts over lanes, in LDS (hist is free after the levels): [0, 256) and [256, 512)
+    __syncthreads();
+    hist[lane]              = n_gt;
+    hist[kTopKLanes + lane] = n_eq;
+    __syncthreads();
+    for (uint32_t off = 1u; off < kTopKLanes; off <<= 1u) {
+        const uint32_t g = lane >= off ? hist[lane - off] : 0u;
+        const uint32_t e = lane >= off ? hist[kTopKLanes + lane - off] : 0u;
+        __syncthreads();
+        hist[lane] += g;
+        hist[kTopKLanes + lane] += e;
+        __syncthreads();
+    }
+    uint32_t slot_gt = hist[lane] - n_gt;
+    uint32_t slot_eq = hist[kTopKLanes + lane] - n_eq;
     topk_visit(base, column_count, lane, [&](uint32_t i, float value) {
         const uint32_t key = topk_key(value);
         if (key > threshold_key) {
-            const uint32_t slot = atomicAdd(&emitted, 1u);
-            if (slot < above_slots) {
-                out[slot] = (int32_t) i;
+            if (slot_gt < above_slots) {
+                out[slot_gt] = (int32_t) i;
             }
+            ++slot_gt;
         } else if (key == threshold_key) {
-            const uint32_t slot = atomicAdd(&emitted_eq, 1u);
-            if (slot < remaining) {
-                out[above_slots + slot] = (int32_t) i;
+            if (slot_eq < remaining) {
+                out[above_slots + slot_eq] = (int32_t) i;
             }
+            ++slot_eq;
         }
     });
 }
