@@ -4799,23 +4799,6 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
     REQUIRE(dispatch.bindings[3].value == query_raw_value->id);
     REQUIRE(dispatch.bindings[4].value == key_raw_value->id);
     REQUIRE(dispatch.bindings[5].value == value_raw_value->id);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    REQUIRE(dispatch.bindings[9].value == query_output_value->id);
-    REQUIRE(dispatch.bindings[10].value == key_cache_value->id);
-    REQUIRE(dispatch.bindings[11].value == value_cache_value->id);
-    if (expect_synthetic_inverse_frequencies) {
-        // engine #445: the q8 publication dispatch is gone, so is its transient.
-        REQUIRE(scheduler.plan().transients.size() == 1);
-        REQUIRE(scheduler.plan().constant_initializations.size() == 1);
-        REQUIRE(dispatch.bindings[8].value == scheduler.plan().transients.back().value);
-        REQUIRE(scheduler.plan().constant_initializations[0].value == dispatch.bindings[8].value);
-        REQUIRE(scheduler.plan().constant_initializations[0].data.size() ==
-                static_cast<size_t>(kQwenFlashHeadSize / 2) * sizeof(float));
-    } else {
-        // engine #445: no q8 publication transient any more.
-        REQUIRE(scheduler.plan().transients.empty());
-        REQUIRE(scheduler.plan().constant_initializations.empty());
-=======
     REQUIRE(dispatch.bindings[10].value == query_output_value->id);
     REQUIRE(dispatch.bindings[11].value == key_cache_value->id);
     REQUIRE(dispatch.bindings[12].value == value_cache_value->id);
@@ -4826,7 +4809,6 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
             static_cast<size_t>(kQwenFlashHeadSize / 2) * sizeof(float));
     if (expect_unit_frequency_factors) {
         REQUIRE(scheduler.plan().constant_initializations[1].value == dispatch.bindings[9].value);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
@@ -7752,15 +7734,9 @@ static void schedule_qwen_router_top8_command(ggml_context * ctx,
     REQUIRE(scheduler.plan().valid());
 
     const int64_t token_count        = output->ne[2];
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    // engine #445: bindings are described in elements, and the route ids by route_id_stride
-    // (route_ids->nb[1] / sizeof(int32_t)) since the expert-table builders consume them.
-    const size_t  route_id_length    = static_cast<size_t>(token_count) * (route_ids->nb[1] / sizeof(int32_t));
-=======
     const size_t  route_id_length    = static_cast<size_t>(token_count - 1) * route_ids->nb[1] +
                                        static_cast<size_t>(route_ids->ne[0]) * sizeof(int32_t);
     REQUIRE(route_ids_value->byte_count == route_id_length);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     const size_t  expert_table_bytes = qwen_expert_table_size(token_count, expected_expert_count);
     const size_t  partition_table_bytes =
         qwen_partition_table_size(token_count, expected_route_count, expected_expert_count);
@@ -7916,13 +7892,10 @@ static void schedule_qwen_router_top8_command(ggml_context * ctx,
     const ggml::hrx::TransientAllocation * route_ids_allocation =
         ggml::hrx::find_transient_allocation(commands.transients, route_ids_value->storage_root);
     REQUIRE(route_ids_allocation != nullptr);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // engine #445: the route-id allocation is described by route_id_stride and the expert-table
     // builders consume it; its size is not the plain tensor extent any more.
-=======
     REQUIRE(route_ids_allocation->size == static_cast<size_t>(token_count * expected_expert_count) * sizeof(int32_t));
     REQUIRE(dispatch.bindings[1].length <= route_ids_allocation->size);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     const ggml::hrx::TransientAllocation * expert_table_allocation =
         ggml::hrx::find_transient_allocation(commands.transients, expert_table_transient.value);
     REQUIRE(expert_table_allocation != nullptr);
@@ -8560,14 +8533,10 @@ static CommonMulMatIdPostOpsTensors build_common_mul_mat_id_postops_graph(ggml_c
                                                                           bool           include_bias,
                                                                           bool           include_residual,
                                                                           bool           include_rmsnorm,
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                                                                          ggml_type      weight_type = GGML_TYPE_Q4_K) {
-=======
                                                                           ggml_type      weight_type  = GGML_TYPE_Q4_K,
                                                                           int64_t        token_count  = 4,
                                                                           int64_t        input_size   = 256,
                                                                           int64_t        input_routes = 1) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     CommonMulMatIdPostOpsTensors tensors;
     constexpr int64_t            token_count  = 4;
     constexpr int64_t            route_count  = 8;
@@ -9822,12 +9791,6 @@ static void run_zero_output_scheduler_elision_checks() {
         REQUIRE(ids_value != nullptr);
         ggml::hrx::Command referenced;
         referenced.bindings.push_back({ "ids", ids_value->id });
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        for (auto * list : { &lookup.program->commands().initialization_commands,
-                            &lookup.program->commands().commands }) {
-            list->push_back(referenced);
-            const auto match = lookup.program->match_current_graph(*graph);
-=======
         auto make_program = [&](ggml::hrx::CommandProgram commands) {
             return std::make_unique<ggml::hrx::GraphProgram>(
                 lookup.program->uid(), lookup.program->target(),
@@ -9840,7 +9803,6 @@ static void run_zero_output_scheduler_elision_checks() {
             list.push_back(referenced);
             const auto referenced_program = make_program(std::move(commands));
             const auto match = referenced_program->match_current_graph(*graph);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             REQUIRE(match.valid());
             REQUIRE(match.external_bindings.size() == 2);
             REQUIRE(std::any_of(match.external_bindings.begin(), match.external_bindings.end(),
@@ -13035,45 +12997,6 @@ static void run_gdn_selected_rms_q8_dispatch_checks(bool rms_scale_norm = false)
     ggml_free(ctx);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-static void run_generic_swiglu_k16_publish_checks() {
-    ggml_init_params params = {};
-    params.mem_size         = 4 * 1024 * 1024;
-    params.no_alloc         = true;
-    ggml_context * ctx      = ggml_init(params);
-    REQUIRE(ctx != nullptr);
-
-    constexpr int64_t input_size  = 2048;
-    constexpr int64_t hidden_size = 8192;
-    constexpr int64_t output_size = 2048;
-    constexpr int64_t token_count = 512;
-    ggml_tensor * input       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
-    ggml_tensor * gate_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, input_size, hidden_size);
-    ggml_tensor * up_weight   = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, input_size, hidden_size);
-    ggml_tensor * gate        = ggml_mul_mat(ctx, gate_weight, input);
-    ggml_tensor * up          = ggml_mul_mat(ctx, up_weight, input);
-    ggml_tensor * glu         = ggml_swiglu_split(ctx, gate, up);
-    ggml_tensor * projection_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, hidden_size, output_size);
-    ggml_tensor * output            = ggml_mul_mat(ctx, projection_weight, glu);
-    REQUIRE(output != nullptr);
-
-    ggml_cgraph * graph = ggml_new_graph(ctx);
-    REQUIRE(graph != nullptr);
-    ggml_build_forward_expand(graph, output);
-    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
-    REQUIRE(imported.valid());
-    ggml::hrx::DispatchScheduler scheduler;
-    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
-    const ggml::hrx::CommandPlan & plan = scheduler.plan();
-    REQUIRE(plan.valid());
-
-    // engine #449: the fused publisher this row named (ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_k16)
-    // is not in the corpus. The line produces the swiglu in f32 and publishes the k16-major pack from its
-    // own copy dispatch (common.mul_mat_swiglu.k16_major_f16 -> ggml_copy_f16_k16_major). What the guard
-    // protects is that the pack is still published and still consumed by the f16 projection.
-    const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
-        return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma";
-=======
 static void run_rope_offset_import_checks() {
     ggml_init_params params = {};
     params.mem_size         = 256 * 1024;
@@ -13194,7 +13117,6 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("qwen_decode_rmsnorm_publication", [] { run_qwen_decode_rmsnorm_publication_checks(); });
     suite.host_case("qwen_decode_publication_consumer_qualification", [] {
         run_qwen_decode_publication_consumer_qualification_checks();
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     });
     REQUIRE(producer != plan.dispatches.end());
     const ggml::hrx::Value * glu_value = imported.graph.values().find_tensor(glu);
@@ -13207,12 +13129,6 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
         return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_copy_f16_k16_major" &&
                !dispatch.bindings.empty() && dispatch.bindings.back().value == packed->generated_value;
     });
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    REQUIRE(publisher != plan.dispatches.end());
-    const auto consumer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
-        return &dispatch != &*publisher && !dispatch.bindings.empty() &&
-               dispatch.bindings.front().value == packed->generated_value;
-=======
     suite.host_case("common_mul_mat_id_postops_dispatch", [] { run_common_mul_mat_id_postops_dispatch_checks(); });
     suite.host_case("amax_scale_fusion_dispatch", [] { run_amax_scale_fusion_dispatch_checks(); });
     suite.host_case("alias_value_import", [] { run_alias_value_import_checks(); });
@@ -13240,7 +13156,6 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("graph_executor_contract", [] { run_graph_executor_contract_checks(); });
     suite.host_case("loom_async_jit_environment", [] {
         REQUIRE(ggml::hrx::loom_async_jit_enabled_from_environment() == async_jit_expected_from_environment());
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     });
     REQUIRE(consumer != plan.dispatches.end());
 
@@ -14165,17 +14080,6 @@ static void run_gdn_rmsnorm_gate_dispatch_checks() {
     ggml_free(ctx);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-// One entry per case: the runner reports each one, so a red row is a row, not the end of the run.
-struct Case {
-    const char *          name;
-    std::function<void()> fn;
-    // "#449" / "#450": a known regression the ruling accepted as a finding, not as a fixed test. The
-    // case must FAIL while the regression stands, and the runner counts it apart; a pass is an error,
-    // because then the marker has to be retired on purpose.
-    const char *          known_fail = nullptr;
-};
-=======
 static void run_initializer_host_input_ownership() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -14344,7 +14248,6 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
                       [] { run_same_uid_distinct_graph_reuses_graph_program(true); });
     suite.device_case("unsupported_op_fails", [] { run_unsupported_op_fails(); });
 }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
 static int run_cases(const char * label, const std::vector<Case> & cases) {
     std::printf("%s: %zu case(s)\n", label, cases.size());
