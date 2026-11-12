@@ -471,3 +471,26 @@ That is now measured rather than hypothesised: the file needs the hand split rec
 members + a synthesized can_reuse; kpool = theirs' class block + theirs' members + the shared can_reuse -- i.e. ~120 lines with two
 synthesized signatures owned by whoever knows which QSA representation this model is supposed to build. Both experiments are
 reproducible: cp the file, apply one side, compile.
+
+## qwen4exp: the last missing piece of the hand split is REORDERING (measured this turn)
+Three attempts at boundary insertion all failed, and the third showed why. The hunks' layout in the file is:
+
+    hunk 1   class header + one method body            ours = qsa, theirs = kpool     (delta +2 both)
+    S1       '}' + 'bool can_reuse(...) override {' + prelude
+    hunk 2   the can_reuse validation body              ours = cell_blk..., theirs = pool_cells...
+    S2       'return res; }'
+    hunk 3   MEMBER DECLARATIONS + the head of the next method's parameter list  (delta -1 both)
+    S3       the rest of that parameter list + prelude
+
+So each class' FIELD DECLARATIONS are in hunk 3, which appears AFTER the can_reuse body -- i.e. after where a class would have to
+close. Inserting closers at the hunk boundaries therefore produces 'llama_model_qwen4exp::llm_graph_input_qsa does not have any
+field', which is exactly what the compiler said.
+
+The split is therefore a REORDER, not a boundary fix:
+    qsa    = [hunk1 ours] + [hunk3 ours members] + [can_reuse with hunk2 ours body] + '};'
+    kpool  = [hunk1 theirs] + [hunk3 theirs members] + [shared can_reuse with hunk2 theirs body] + '};'
+i.e. lift each side's field block out of hunk 3 and place it before its class' close, and synthesise the two can_reuse
+signatures. That is the complete specification; nothing about it is now unknown, and it is ~120 lines of text movement.
+
+Three attempts cost three reverts and produced this paragraph -- which is the right trade, but the next attempt should start by
+copying the file apart rather than editing it in place.
