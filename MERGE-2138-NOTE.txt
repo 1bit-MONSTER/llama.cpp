@@ -375,3 +375,17 @@ for rather than a conflict to resolve.
 
 Same lesson as server-context, one step further: markers == 0 is where the work starts, and for a test file the check is a compile
 with the tests-enabled flags (tests/CMakeFiles/<target>.dir/flags.make).
+
+## test-backend-ops.cpp: structural damage from a UNION, needs the class-region hand work
+State: 0 markers, but it does not compile. First error: 'expected } at end of input' at 14401, and once that is probed the next layer
+is 'in-class initialization of static data member const ggml_type all_types[]' at 10393 -- i.e. the section that should be at
+namespace scope is being parsed INSIDE a class.
+
+Cause: my resolution of that file's hunk 4 ("two NEW test classes at one point -> keep both") CONCATENATED two class definitions
+without accounting for which side owns the closing brace -- the same boundary trap as llama-model, dflash and qwen4exp. Two probes
+(brace `}` and `};` before the following section comment) moved the error but did not fix it, which means the missing brace is
+further up than the visible seam.
+
+Not worth another blind probe: the correct treatment is the class-region hand work -- identify where each of the two concatenated
+classes should end, close them, and then re-check with the tests-enabled flags. Recorded here so the next pass starts from the cause
+rather than repeating my two probes.
