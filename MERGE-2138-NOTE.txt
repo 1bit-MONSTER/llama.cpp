@@ -360,3 +360,18 @@ What the split is, concretely:
   3. hunk 4 (`reshape_4d` vs `view_4d`) is already decided: theirs (explicit strides are the safe superset).
 That is ~120 lines of hand work with two synthesized `can_reuse` signatures. It is the last thing standing between this file and a
 clean compile, and every piece of it is now named rather than guessed.
+
+## tests/hrx-loom-jit-test.cpp needs hand treatment: TWO mains and two undefined helpers
+Verified by compiling the TU (possible now that LLAMA_BUILD_TESTS=ON):
+  int main()                      at 463   <- ours (short: device.open() guard around three case calls)
+  int main(int argc, char**argv)  at 1153  <- AMD's suite-runner main
+and the case function around 1028 calls run_dynamic_cache_materialize_case and run_dynamic_export_reuse_case, which have ZERO
+definitions in this file (2 and 16 uses respectively, no definition).
+
+So the earlier resolution ("take AMD's main") was wrong in a way the marker count could not show: markers == 0 and the file does not
+compile. Correct treatment is a UNION: one main (AMD's suite version is the richer one, but the plain archs case is ours), plus the
+missing helper definitions -- which AMD's version of the file had and this merge does not carry, i.e. a REAL merge loss to account
+for rather than a conflict to resolve.
+
+Same lesson as server-context, one step further: markers == 0 is where the work starts, and for a test file the check is a compile
+with the tests-enabled flags (tests/CMakeFiles/<target>.dir/flags.make).
