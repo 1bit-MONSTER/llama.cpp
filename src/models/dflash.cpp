@@ -1247,21 +1247,8 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         ggml_tensor * cur = attn_hc.cur;
         cb(cur, "hc_attn_pre", il);
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        ggml_tensor * attn_dynamic = nullptr;
-        if (layer.dflash_attn_conv_proj) {
-            attn_dynamic = build_lora_mm(layer.dflash_attn_conv_proj, noise_norm);
-            noise_norm = build_dflash2_conv(*this, noise_norm, attn_dynamic, layer.dflash_attn_conv_base, 0);
-            cb(noise_norm, "attn_conv_in", il);
-        }
-
-        ggml_tensor * Qcur = build_lora_mm(layer.wq, noise_norm);
-        ggml_tensor * Kcur = build_lora_mm(layer.wk, noise_norm);
-        ggml_tensor * Vcur = build_lora_mm(layer.wv, noise_norm);
-=======
         cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
         cur = build_attention(model, inp_attn, cur, inp_pos, il);
 
