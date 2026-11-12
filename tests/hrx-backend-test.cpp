@@ -1,3 +1,4 @@
+#include "testing_suite.h"
 #include "ggml-cpu.h"
 #include "backend-buffer-binding.h"
 #include "backend-context.h"
@@ -11856,6 +11857,22 @@ static const char * common_mul_mat_id_postops_f32_kernel_name(int64_t token_coun
     }
     return token_count <= 5 ? "loom_libs:ggml_mul_mat_id_skinny_input_f32_postops_publish_f32" :
                               "loom_libs:ggml_mul_mat_id_tiled_input_f32_postops_publish_f32";
+}
+
+// AMD's template helpers, same story as the block below: uses kept, definitions dropped.
+template <typename Check> static void require_scheduled_command_program(ggml_cgraph * graph, Check && check) {
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+
+    const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+        imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(commands.valid());
+    REQUIRE(command_program_verifies(commands));
+    check(imported.graph, scheduler.plan(), commands);
 }
 
 // Restored from AMD's pin in one block: this file's merge dropped 32 of AMD's test definitions while keeping their uses.
