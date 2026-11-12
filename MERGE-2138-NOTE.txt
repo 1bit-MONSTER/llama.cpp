@@ -389,3 +389,14 @@ further up than the visible seam.
 Not worth another blind probe: the correct treatment is the class-region hand work -- identify where each of the two concatenated
 classes should end, close them, and then re-check with the tests-enabled flags. Recorded here so the next pass starts from the cause
 rather than repeating my two probes.
+
+## test-backend-ops: the remaining damage is inside lines 10266..13214
+Measured: at line 13214 the brace depth is 4, and the last struct declared at depth 0 is test_falcon at 10266. So the unclosed scope
+is somewhere in that ~3000-line range -- the same union damage, in a region I have not touched. Bisect it by depth: print the depth
+at each struct/class declaration between those lines; the first one whose depth is >1 is the region to rebuild verbatim from the
+parents (git show <rev>:tests/test-backend-ops.cpp + brace-match + splice), which is the recipe that worked for 9037..9108.
+
+The general rule this file has taught, at the cost of three probes: when a union of two CLASS bodies is resolved by concatenation,
+the damage is invisible to marker counts and shows up as a brace depth that never returns to 0 -- measure depth per top-level
+declaration rather than counting braces in the whole file (HEAD itself has a +5 imbalance from braces inside string literals, so a
+global count can never be 0 and is useless as a signal).
