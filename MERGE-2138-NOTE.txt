@@ -454,3 +454,20 @@ And it is the same subsystem as the other two dispatch failures, which is the us
 all three are AMD's activation-publication / tiled-pair / kpool refactors versus our line's dispatch vocabulary. That is ONE
 integration task for the dispatch owner (cl-hrxkern), not four, and the tests give it a precise acceptance signal: build the three
 test targets and watch them compile.
+
+## qwen4exp: MEASURED PROOF that the last three hunks need both classes complete
+Ran the two-sided experiment rather than arguing about it (compile with -fsyntax-only, project flags):
+
+  ALL-OURS (0 markers): 4 errors -- no declaration matches <our qsa definitions> at 804/948, incomplete type llm_graph_input_* at
+    1102, redeclaration of alpha at 1169
+  ALL-THEIRS (0 markers): 4 errors -- no declaration matches at 979, no matching call at 1133, redeclaration of alpha at 1200,
+    hparams not declared at 1383
+
+The error sets are DIFFERENT and COMPLEMENTARY: ours defines the qsa side but not kpool's, theirs defines kpool but not qsa's, and
+models.h declares BOTH (my earlier union). So neither side can be taken, and a concatenation cannot be made to work by brace
+balancing alone because the shared text between the hunks (one can_reuse opening, one class close) belongs to exactly one class.
+
+That is now measured rather than hypothesised: the file needs the hand split recorded earlier -- qsa = ours' class block + ours'
+members + a synthesized can_reuse; kpool = theirs' class block + theirs' members + the shared can_reuse -- i.e. ~120 lines with two
+synthesized signatures owned by whoever knows which QSA representation this model is supposed to build. Both experiments are
+reproducible: cp the file, apply one side, compile.
