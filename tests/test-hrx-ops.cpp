@@ -3429,7 +3429,7 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
 // value out of range is the one the refine kernel narrows); Large (every activation scaled up, so the activations and
 // the logits are both above 65504 and inside the prescaled window).
 enum class ShortlistArm { Ordinary, Spike, Large, Duplicates, NearTies };
-static void run_q6_k_token1_shortlist_case(float branch_scale, ShortlistArm arm) {
+static void run_q6_k_token1_shortlist_case(float branch_scale, ShortlistArm arm, int repeats = 1) {
     // The f16-range assertion belongs to the arms that deliberately cross 65504 (Spike, Large). Duplicates and
     // NearTies keep ordinary scale and stress the top-k BOUNDARY instead, so listing them here rather than saying
     // "not Ordinary" keeps a new arm from silently inheriting an assertion that is about something else.
@@ -3630,6 +3630,42 @@ static void run_q6_k_token1_shortlist_case(float branch_scale, ShortlistArm arm)
     // a degenerate input, not arithmetic; the arm checks that what is refined is finite and exact.
     if (arm != ShortlistArm::Spike) {
         REQUIRE(expected[actual_best] >= expected[expected_best] - 2.0e-3f * std::fabs(expected[expected_best]));
+    }
+
+    // engine #2150: the refine kernel handed each exact logit to its publishing workitem through global memory behind
+    // a barrier that fenced LDS only, so now and then a slot was published before the body's store was visible and
+    // carried the reduce kernel's coarse score instead (1543.49 = 64 x 24.12 here, where the exact logit is 29.15).
+    // One compute samples that window once, so this arm recomputes the same graph and requires every run's refined
+    // logits to stay as close to the CPU as the first run's. HRX_OPS_SHORTLIST_REPEATS overrides the count.
+    if (const char * env = std::getenv("HRX_OPS_SHORTLIST_REPEATS"); env != nullptr && repeats > 1) {
+        repeats = std::max(2, std::atoi(env));
+    }
+    int    bad_runs    = 0;
+    size_t bad_entries = 0;
+    float  first_bad   = 0.0f;
+    for (int run = 1; run < repeats; ++run) {
+        REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(hrx_backend);
+        const std::vector<float> again = get_f32_tensor(hrx_backend, hrx.logits);
+        size_t wrong = 0;
+        for (size_t i = 0; i < again.size(); ++i) {
+            if (!std::isfinite(again[i]) || again[i] < -1.0e30f) {
+                continue;
+            }
+            if (std::fabs(again[i] - expected[i]) > 1.0e-2f * std::fabs(expected[i]) + 1.0e-3f) {
+                if (wrong == 0 && bad_runs == 0) {
+                    first_bad = again[i];
+                }
+                ++wrong;
+            }
+        }
+        bad_runs += wrong > 0 ? 1 : 0;
+        bad_entries += wrong;
+    }
+    if (repeats > 1) {
+        std::fprintf(stderr, "q6_k shortlist repeat: runs=%d bad_runs=%d bad_entries=%zu first_bad=%g\n", repeats - 1,
+                     bad_runs, bad_entries, static_cast<double>(first_bad));
+        REQUIRE(bad_runs == 0);
     }
 
     ggml_backend_buffer_free(cpu_buffer);
@@ -5832,6 +5868,8 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_q6_k_token1_shortlist_case(1.0f, ShortlistArm::Duplicates); });
     add(suite, "mul_mat.q6_k.token1_shortlist.near_tie_rows",
         [=] { run_q6_k_token1_shortlist_case(1.0f, ShortlistArm::NearTies); });
+    add(suite, "mul_mat.q6_k.token1_shortlist.repeat",
+        [=] { run_q6_k_token1_shortlist_case(1.0f, ShortlistArm::Ordinary, 200); });
     // decode (1 to 8), small batch (16 to 128) and prefill (256, 512) token counts
     for (const int64_t tokens : { 1, 2, 4, 5, 8, 16, 64, 128, 256, 512 }) {
         // an input scale of 640 gives a gated maximum of 3.0e5 to 4.0e5
