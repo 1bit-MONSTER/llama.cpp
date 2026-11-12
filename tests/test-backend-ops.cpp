@@ -9088,6 +9088,9 @@ struct test_flash_attn_ext_pad_nan : public test_flash_attn_ext {
                 }
             }
         }
+    }
+};
+
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -9104,7 +9107,6 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     }
 };
 
-// GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
