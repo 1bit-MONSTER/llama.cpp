@@ -2105,6 +2105,84 @@ static void run_qwen_flash_attention_case() {
     ggml_backend_free(backend);
 }
 
+// engine#1536: the P*V accumulator is f16 and holds the UNNORMALISED sum, so its ceiling is n_ctx * max|V| rather than
+// the f16 maximum -- the division by the sum happens after the loop (`inverse_sum`), and the flash rescale makes every
+// weight <= 1 without normalising them. With Q = 0 every score is identical, so after subtracting the running maximum
+// every weight is exactly 1 and the accumulator holds n_ctx * V while the correct answer is V itself.
+//
+// That makes the defect deterministic and independent of any model: at kv = 1024 and V = 100 the accumulator must reach
+// 102,400, past 65,520, and the output is exactly 100 if the accumulation did not overflow. A f32 accumulator, or a
+// normalisation per block, returns 100; an f16 accumulator returns inf and then nan.
+static void run_flash_attention_accumulator_range_case(int64_t head_size, int64_t key_value_token_count,
+                                                       float value_magnitude) {
+    static constexpr const char * kDisableQwenDispatchEnv = "GGML_HRX_DISABLE_QWEN_DISPATCH";
+    const char *                  original_env            = std::getenv(kDisableQwenDispatchEnv);
+    const bool                    had_original_env        = original_env != nullptr;
+    const std::string             original_env_value      = had_original_env ? original_env : "";
+    REQUIRE(setenv(kDisableQwenDispatchEnv, "1", 1) == 0);
+
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    const int64_t query_token_count = 1;   // a decode step: one query against the whole context
+    const float   scale             = 1.0f / std::sqrt(static_cast<float>(head_size));
+
+    ggml_tensor * query = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, query_token_count, 1);
+    ggml_tensor * key   = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_value_token_count, 1);
+    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_value_token_count, 1);
+    ggml_tensor * mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_token_count, query_token_count);
+    REQUIRE(query != nullptr && key != nullptr && value != nullptr && mask != nullptr);
+
+    ggml_tensor * output = build_qwen_flash_attention_graph(ctx, query, key, value, mask, head_size, scale);
+    ggml_cgraph * graph  = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+
+    // Q = 0 and K = 0 make every score 0, so every softmax weight is exp(0 - 0) = 1 after the running maximum is
+    // subtracted, and the weighted average of a constant V is that constant whatever the context length.
+    std::vector<float>       query_data(static_cast<size_t>(head_size) * query_token_count, 0.0f);
+    std::vector<ggml_fp16_t> key_data(static_cast<size_t>(head_size) * key_value_token_count, ggml_fp32_to_fp16(0.0f));
+    std::vector<ggml_fp16_t> value_data(static_cast<size_t>(head_size) * key_value_token_count,
+                                        ggml_fp32_to_fp16(value_magnitude));
+    std::vector<ggml_fp16_t> mask_data(static_cast<size_t>(key_value_token_count) * query_token_count,
+                                       ggml_fp32_to_fp16(0.0f));
+
+    ggml_backend_tensor_set(query, query_data.data(), 0, query_data.size() * sizeof(float));
+    ggml_backend_tensor_set(key, key_data.data(), 0, key_data.size() * sizeof(ggml_fp16_t));
+    ggml_backend_tensor_set(value, value_data.data(), 0, value_data.size() * sizeof(ggml_fp16_t));
+    ggml_backend_tensor_set(mask, mask_data.data(), 0, mask_data.size() * sizeof(ggml_fp16_t));
+
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+
+    std::vector<float> actual(static_cast<size_t>(head_size), 0.0f);
+    ggml_backend_tensor_get(output, actual.data(), 0, actual.size() * sizeof(float));
+
+    size_t non_finite = 0;
+    for (float v : actual) {
+        if (!std::isfinite(v)) {
+            ++non_finite;
+        }
+    }
+    REQUIRE(non_finite == 0);   // the f16 accumulator reaches 102,400 here; see the comment above
+    for (float v : actual) {
+        REQUIRE(std::fabs(v - value_magnitude) <= 5.0e-2f);
+    }
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+    restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
+}
+
 static void run_common_flash_attention_cpu_reference_case(int64_t      head_size,
                                                           int64_t      query_token_count,
                                                           int64_t      key_value_token_count,
@@ -5956,6 +6034,13 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_router_top8_case(4); });
     add(suite, "qwen_flash_attention",
         [=] { run_qwen_flash_attention_case(); });
+    add(suite, "flash_attention.accumulator_range.128.1024.v100",
+        [=] { run_flash_attention_accumulator_range_case(128, 1024, 100.0f); });
+    // The same case with V at 60,000: an UNNORMALISED f16 accumulator would hold 1024 * 60,000 = 6.1e7 here and
+    // could not possibly return 60,000, so this arm separates "the accumulator grows with the context" from
+    // "it is normalised per block and bounded by max|V|" for good.
+    add(suite, "flash_attention.accumulator_range.128.1024.v60000",
+        [=] { run_flash_attention_accumulator_range_case(128, 1024, 60000.0f); });
     add(suite, "flash_attention.64.2.65.1/sqrt(static_cast<float>(64)).flash_attention_decode_split_f32_f16_wmma",
         [=] { run_common_flash_attention_cpu_reference_case(64,
                                    2,
