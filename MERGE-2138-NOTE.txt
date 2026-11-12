@@ -548,3 +548,19 @@ bookkeeping for "which consumers a publication serves".
 That is where I stop on this subsystem: the remaining pieces are mechanical but they are a block of registry plumbing, and I would
 rather hand over five named members than a half-wired builder. The test TU's error list is the acceptance signal and it is down to two
 items from the original six.
+
+## DANGER, recorded from a near-miss: never locate a fragment with a bare str.index()
+This turn I tried to fix the orphaned statement block by (a) replacing run_generic_swiglu_k16_publish_checks' body with the pin's and
+(b) deleting the 'orphan fragment' by slicing from the FIRST occurrence of
+    REQUIRE(producer != plan.dispatches.end());
+to the next 'suite.host_case("common_mul_mat_id_postops_dispatch"'. Both indices resolved to places ~9600 lines apart, because that
+assertion appears 13 times in the file -- so the slice DELETED 9646 LINES of the test file. Caught and reverted with git checkout
+(file back to 16057 lines, function present).
+
+Two rules from this, for any future edit on a large test file:
+  1. locate fragments by LINE NUMBER (sed -n 'A,Bp' / an explicit range), never by content index -- content is not unique in this file;
+  2. after ANY slice that removes or moves more than a handful of lines, print the line count before and after and refuse to continue if
+     the delta is not what was intended. My earlier bundle-inserts were safe only because they inserted rather than removed.
+
+Also: the pin's body and the merged body of run_generic_swiglu_k16_publish_checks are the SAME length (59 lines), so that function was
+never truncated -- my hypothesis about the orphan fragment's owner was wrong. The fragment's owner is still unidentified.
