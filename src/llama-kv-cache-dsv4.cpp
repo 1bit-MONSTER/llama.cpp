@@ -429,16 +429,8 @@ static void dsv4_state_read_k_cache(
         dsv4_state_read_tensor_streams(io, kv->get_k_storage(il), kv_size, n_rows_ref, s0, ns);
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // refill the mirrors from their source rows just read
     std::vector<uint8_t> buf;
-=======
-    if (n_rows_ref == 0) {
-        return;
-    }
-
-    // refill the mirrors from their sources; a mirror gets the same rows as its source, so a whole copy is exact
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     for (uint32_t il : kv->get_layer_ids()) {
         const int32_t src = kv_src[il];
         if (src == (int32_t) il) {
@@ -446,7 +438,6 @@ static void dsv4_state_read_k_cache(
         }
         ggml_tensor * t_src = kv->get_k_storage(src);
         ggml_tensor * t_dst = kv->get_k_storage(il);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         GGML_ASSERT(t_src->type == t_dst->type && t_src->ne[0] == t_dst->ne[0]);
 
         const size_t row_size      = ggml_row_size(t_src->type, t_src->ne[0]);
@@ -461,13 +452,6 @@ static void dsv4_state_read_k_cache(
             ggml_backend_tensor_get(t_src, buf.data(), offset, size);
             ggml_backend_tensor_set(t_dst, buf.data(), offset, size);
         }
-=======
-        if (t_src->type != t_dst->type || !ggml_are_same_shape(t_src, t_dst)) {
-            throw std::runtime_error("DSV4 K-cache mirror layout mismatch");
-        }
-
-        ggml_backend_tensor_copy(t_src, t_dst);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 }
 
