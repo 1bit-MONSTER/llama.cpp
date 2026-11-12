@@ -507,7 +507,7 @@ llama_context::llama_context(
         struct kv_share_scope {
             explicit kv_share_scope(bool enabled) { llama_kv_share_begin(enabled); }
             ~kv_share_scope() { llama_kv_share_end(); }
-        } kv_share(llama_kv_share_take_next(hparams.no_alloc));
+        } kv_share(llama_kv_share_take_next(model.no_alloc()));
 
         memory.reset(model.create_memory(params_mem, cparams));
     }

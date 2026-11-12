@@ -251,7 +251,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
     // optional: reduced-vocab drafts ship their own lm head, full-vocab drafts can share the target's via ctx_other
     // a draft with its own embeddings + head references no target tensors and can run on devices the target does not use (e.g. -devd with a tensor-split target)
-    const int64_t n_vocab_draft = n_vocab;
     output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab_draft }, TENSOR_NOT_REQUIRED);
 
     if (hparams.dsv4_hc_mult > 0) {

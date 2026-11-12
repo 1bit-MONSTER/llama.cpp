@@ -280,15 +280,6 @@ static ggml_tensor * dsv4_hc_affine(
 }
 
 // mean over the hc dim: the collapsed hidden state (t_layer_inp); V4.1's single-pass mHC reads it
-ggml_tensor * llama_model_deepseek4::graph::build_hc_mean(ggml_tensor * x) const {
-    const int64_t hc = x->ne[1];
-
-    ggml_tensor * acc = ggml_view_2d(ctx0, x, x->ne[0], x->ne[2], x->nb[2], 0);
-    for (int64_t s = 1; s < hc; ++s) {
-        acc = ggml_add(ctx0, acc, ggml_view_2d(ctx0, x, x->ne[0], x->ne[2], x->nb[2], s*x->nb[1]));
-    }
-    return ggml_scale(ctx0, acc, 1.0f/hc);
-}
 
 ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
         ggml_tensor * x,
