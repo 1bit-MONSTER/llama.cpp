@@ -418,3 +418,19 @@ this file.
 Remaining work for the next session: keep applying the verbatim rebuild at each successive first-error location. The file is ~14.5k
 lines and the damage is localised to the class regions my two-class unions touched, so this is a bounded loop, not open-ended -- but
 it is not something to finish with two probes and a depth counter, which is what I just spent this turn establishing.
+
+## test-backend-ops: localised to lines 12727..12794 with a STRING-AWARE scanner
+Wrote a proper scanner (strip // and /* */ and string/char literals, THEN count braces) -- the earlier counters were unusable because
+op_desc implementations contain braces inside string literals (HEAD itself reads 4788/4783). With the scanner:
+  final depth 2
+  last line at depth 1: 12726   -> after that the file never returns to 1
+  last line at depth 0: 10440   -> only make_test_cases_eval's opening returns to 0
+So TWO opens are unmatched inside make_test_cases_eval, and they are in the window 12727..12794: the nested loop battery that opens
+for(kv) / for(hs) / for(hs) / for(nh) / for(nr2) / for(nb) at 12727-12734 and closes only four levels (12736-12739), then re-opens
+another battery at 12741 that unwinds to depth 3 by 12794 and never gets back to 1.
+
+Next step (mechanical now): restore that window verbatim from the parents -- ours has this battery in 7a1f2b1, AMD in 9bf5871 -- and
+re-scan with the same scanner. The scanner is the instrument to keep: three naive counters failed on this file, this one localises.
+
+Scanner recipe: strip comments and literals first, then count; report the LAST line at each depth level; the unmatched opens are
+between the last depth-(n+1) crossing and the next open at that level.
