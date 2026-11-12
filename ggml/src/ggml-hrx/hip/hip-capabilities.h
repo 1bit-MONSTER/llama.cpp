@@ -48,7 +48,14 @@ bool hip_top_k_tensor_supported(const struct ggml_tensor * op);
 // A matcher registers a predicate while it registers itself, and device_supports_op returns true when one holds.
 // The predicate has to be no broader than its matcher: a claimed node no dispatch takes fails the whole graph
 // (engine #389). Builds without such a registration claim exactly what they claimed before.
-#define GGML_HRX_HIP_TENSOR_CLAIM 1
+//
+// GGML_HRX_HIP_TENSOR_CLAIM is 1 unless the build sets it: device_supports_op consults the predicates only when it is
+// non-zero, so -DGGML_HRX_HIP_TENSOR_CLAIM=0 builds the fork as it answered before this hook (the path-taken mutant
+// of tests/hrx-backend-test.cpp hip_tensor_claim, which then fails). An add-on tests `#ifdef` for the declaration,
+// which exists either way.
+#ifndef GGML_HRX_HIP_TENSOR_CLAIM
+#    define GGML_HRX_HIP_TENSOR_CLAIM 1
+#endif
 using HipTensorClaim = bool (*)(const struct ggml_tensor * op);
 void hip_declare_tensor_claim(HipTensorClaim claim);
 

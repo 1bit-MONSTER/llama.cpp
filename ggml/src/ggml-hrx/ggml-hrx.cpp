@@ -1509,9 +1509,11 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         return true;
     }
     // a node only a fused HIP dispatch executes, claimed by that matcher's own predicate (hip/hip-capabilities.h)
+#if GGML_HRX_HIP_TENSOR_CLAIM
     if (ggml::hrx::hip_tensor_claimed(op)) {
         return true;
     }
+#endif
     return eager_capability_declared(op->op) &&
            (ggml::hrx::fused_context_claim(
                 op, [device](const ggml_tensor * tensor) { return device_supports_op(device, tensor); }) ||

@@ -9070,7 +9070,9 @@ static void run_zero_output_scheduler_elision_checks() {
 // it has no dispatch, so supports_op says no and the scheduler puts it on the CPU, and hip.qsa_pool_blocks (the add-on
 // fusion rooted at it) never sees it in a model graph. A predicate claims exactly what it names and nothing else.
 static bool hip_tensor_claim_test_predicate(const ggml_tensor * op) {
-    return op != nullptr && op->op == GGML_OP_GET_ROWS && std::strcmp(op->name, "hip_tensor_claim_test.claimed") == 0;
+    return op != nullptr && op->op == GGML_OP_GET_ROWS &&
+           (std::strcmp(op->name, "hip_tensor_claim_test.claimed") == 0 ||
+            std::strcmp(op->name, "hip_tensor_claim_test.sched_claimed") == 0);
 }
 
 static void run_hip_tensor_claim_checks() {
@@ -9105,6 +9107,59 @@ static void run_hip_tensor_claim_checks() {
     REQUIRE(!ggml_backend_supports_op(backend, other));
 
     ggml_free(ctx);
+
+    // The constraint the hook documents, armed: a claim no dispatch takes fails the graph loudly (engine #389), it does
+    // not fall back. Through the scheduler, HRX0 + CPU, cache and cells in HRX memory: the unclaimed gather is placed
+    // on the CPU and computes; the same gather claimed (this predicate has no fusion behind it) is placed on HRX,
+    // where nothing executes it, and the compute returns an error.
+    ggml_backend_t cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    REQUIRE(cpu != nullptr);
+    for (const bool claimed : { false, true }) {
+        ggml_init_params gp = {};
+        gp.mem_size         = 512 * 1024;
+        gp.no_alloc         = true;
+        ggml_context * gctx = ggml_init(gp);
+        REQUIRE(gctx != nullptr);
+        ggml_tensor * gcache = ggml_new_tensor_2d(gctx, GGML_TYPE_F16, 128, 18944);
+        ggml_tensor * gcells = ggml_new_tensor_1d(gctx, GGML_TYPE_I32, 18944);
+        ggml_backend_buffer_t inputs = ggml_backend_alloc_ctx_tensors(gctx, backend);
+        REQUIRE(inputs != nullptr);
+        std::vector<ggml_fp16_t> hv((size_t) ggml_nelements(gcache), ggml_fp32_to_fp16(1.0f));
+        std::vector<int32_t>     iv((size_t) ggml_nelements(gcells));
+        for (size_t i = 0; i < iv.size(); ++i) {
+            iv[i] = (int32_t) i;
+        }
+        ggml_backend_tensor_set(gcache, hv.data(), 0, ggml_nbytes(gcache));
+        ggml_backend_tensor_set(gcells, iv.data(), 0, ggml_nbytes(gcells));
+
+        ggml_init_params cp = {};
+        cp.mem_size         = 512 * 1024;
+        cp.no_alloc         = true;
+        ggml_context * cctx = ggml_init(cp);
+        REQUIRE(cctx != nullptr);
+        ggml_tensor * gathered = ggml_get_rows(cctx, gcache, gcells);
+        ggml_set_name(gathered, claimed ? "hip_tensor_claim_test.sched_claimed" : "hip_tensor_claim_test.sched_free");
+        ggml_set_output(gathered);
+        ggml_cgraph * graph = ggml_new_graph(cctx);
+        ggml_build_forward_expand(graph, gathered);
+
+        ggml_backend_t       backends[2] = { backend, cpu };
+        ggml_backend_sched_t sched = ggml_backend_sched_new(backends, nullptr, 2, GGML_DEFAULT_GRAPH_SIZE, false, true);
+        REQUIRE(sched != nullptr);
+        REQUIRE(ggml_backend_sched_alloc_graph(sched, graph));
+        REQUIRE(ggml_backend_sched_get_tensor_backend(sched, gathered) == (claimed ? backend : cpu));
+        const ggml_status status = ggml_backend_sched_graph_compute(sched, graph);
+        if (claimed) {
+            REQUIRE(status != GGML_STATUS_SUCCESS);
+        } else {
+            REQUIRE(status == GGML_STATUS_SUCCESS);
+        }
+        ggml_backend_sched_free(sched);
+        ggml_free(cctx);
+        ggml_backend_buffer_free(inputs);
+        ggml_free(gctx);
+    }
+    ggml_backend_free(cpu);
     ggml_backend_free(backend);
 }
 
