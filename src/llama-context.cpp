@@ -4146,6 +4146,30 @@ llama_context * llama_init_from_model(
         }
     }
 
+    // 1BIT / engine#679 item 3a: the HRX add-on has no q4_0 SET_ROWS *writer* (gpu-kernels#75, open), so a
+    // `-ctv q4_0` run cannot work end to end: the matcher accepts the type (llama.cpp#335) and the hook then
+    // declines, which surfaced as "unsupported HRX node 28: SET_ROWS output=...q4_0" mid-graph -- and
+    // llama-perplexity then exits 0 having produced no output, which reads as a pass to any harness keyed on the
+    // exit code (measured on Qwen3-0.6B at gpu-kernels b0ed206, 2026-11-13). Refuse here instead, where the
+    // message can name the fix. Gated on the device so every other backend keeps its q4_0 V support.
+    // EXPIRY: remove this whole block when the READ path accepts a q4_0 V -- not when the writer lands. gpu-kernels#75
+    // adds `set_rows_q4_0`, and the FA matchers still require value->type == GGML_TYPE_F16
+    // (dispatch-flash-attention.cpp:238), so a run after #75 fails one node later, at attention, which is the same
+    // graph-failure-with-no-output shape this refusal exists to prevent. Two halves, two conditions.
+    if (params.type_v == GGML_TYPE_Q4_0) {
+        bool on_hrx = false;
+        for (uint32_t il = 0; il < model->hparams.n_layer() && !on_hrx; ++il) {
+            ggml_backend_dev_t dev = model->dev_layer(il);
+            const char * name = dev ? ggml_backend_dev_name(dev) : nullptr;
+            on_hrx = name != nullptr && std::strncmp(name, "HRX", 3) == 0;
+        }
+        if (on_hrx) {
+            LLAMA_LOG_ERROR("%s: the HRX backend cannot write a q4_0 V cache (no SET_ROWS writer: gpu-kernels#75, "
+                            "engine#679); use -ctv q8_0 or f16\n", __func__);
+            return nullptr;
+        }
+    }
+
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_v)) {
         const uint32_t blck_size = ggml_blck_size(params.type_v);
         for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
