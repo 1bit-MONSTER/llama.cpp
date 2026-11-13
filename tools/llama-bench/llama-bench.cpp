@@ -364,7 +364,6 @@ struct cmd_params {
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
     std::vector<bool>                no_host;
-    bool                             fused_cross_device;
     std::vector<bool>                repack;
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
@@ -377,6 +376,7 @@ struct cmd_params {
     bool                             no_warmup;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
+    bool                             fused_cross_device;  // #201: keep a fused op when only its layer's placement disagrees
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -411,7 +411,6 @@ static const cmd_params cmd_params_defaults = {
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
     /* no_host              */ { false },
-    /* fused_cross_device   */ false,
     /* repack               */ { llama_model_default_params().use_extra_bufts },
     /* fit_params_target    */ { 0 },
     /* fit_params_min_ctx   */ { 0 },
@@ -424,6 +423,7 @@ static const cmd_params cmd_params_defaults = {
     /* no_warmup            */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
+    /* fused_cross_device   */ false,
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -481,19 +481,17 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -dev, --device <dev0/dev1/...>                    (default: auto)\n");
     printf("  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
     printf("  -lzm, --lazy-mode <on|auto|off>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.lazy_mode, lazy_mode_str), ",").c_str());
-    printf("  -mmp, --mmap <0|1>                                (DEPRECATED IN FAVOUR OF --load-mode)\n");
-    printf("  -dio, --direct-io <0|1>                           (DEPRECATED IN FAVOUR OF --load-mode)\n");
     printf("  -embd, --embeddings <0|1>                         (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>                  (default: 0)\n");
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                                    (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                      (default: 0)\n");
     printf("  --no-host <0|1>                                   (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
+    printf("  --repack <0|1>                                    (default: %s)\n", join(cmd_params_defaults.repack, ",").c_str());
     printf("  -fcd, --fused-cross-device, -no-fcd, --no-fused-cross-device\n");
     printf("                                                    keep a fused op enabled when only its layer's\n");
     printf("                                                    placement disagrees (default: %s)\n",
            cmd_params_defaults.fused_cross_device ? "enabled" : "disabled");
-    printf("  --repack <0|1>                                    (default: %s)\n", join(cmd_params_defaults.repack, ",").c_str());
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -545,6 +543,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.prio                 = cmd_params_defaults.prio;
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
+    params.fused_cross_device   = cmd_params_defaults.fused_cross_device;
     params.no_warmup            = cmd_params_defaults.no_warmup;
     params.offline              = cmd_params_defaults.offline;
 
@@ -1266,10 +1265,6 @@ struct cmd_params_instance {
         mparams.tensor_split  = tensor_split.data();
         mparams.no_host       = no_host;
         mparams.use_extra_bufts = repack;
-        // LLAMA_BENCH_NO_REPACK=1: no CPU repack copies (big file-backed tensors stay mapped)
-        if (const char * e = getenv("LLAMA_BENCH_NO_REPACK"); e != nullptr && atoi(e) != 0) {
-            mparams.use_extra_bufts = false;
-        }
 
         if (n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {
@@ -1331,8 +1326,8 @@ struct cmd_params_instance {
         cparams.flash_attn_type = flash_attn;
         cparams.embeddings      = embeddings;
         cparams.op_offload      = !no_op_offload;
-        cparams.swa_full        = false;
         cparams.fused_cross_device = fused_cross_device;
+        cparams.swa_full        = false;
 
         return cparams;
     }
@@ -1526,7 +1521,6 @@ struct test {
     bool                     repack;
     size_t                   fit_target;
     uint32_t                 fit_min_ctx;
-    bool                     fused_cross_device;
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
@@ -1568,7 +1562,6 @@ struct test {
         repack         = inst.repack;
         fit_target     = inst.fit_target;
         fit_min_ctx    = inst.fit_min_ctx;
-        fused_cross_device = inst.fused_cross_device;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
         n_depth        = inst.n_depth;
@@ -1627,7 +1620,7 @@ struct test {
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "load_mode",     "lazy_mode",
             "embeddings",
-            "no_op_offload",  "no_host",        "repack",        "fused_cross_device", "fit_target",    "fit_min_ctx",
+            "no_op_offload",  "no_host",        "repack",        "fit_target",    "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
@@ -1645,7 +1638,7 @@ struct test {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" ||
-            field == "embeddings" || field == "no_host" || field == "repack" || field == "fused_cross_device") {
+            field == "embeddings" || field == "no_host" || field == "repack") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1726,7 +1719,6 @@ struct test {
                                             std::to_string(no_op_offload),
                                             std::to_string(no_host),
                                             std::to_string(repack),
-                                            std::to_string(fused_cross_device),
                                             std::to_string(fit_target),
                                             std::to_string(fit_min_ctx),
                                             std::to_string(n_prompt),
@@ -1735,8 +1727,8 @@ struct test {
                                             test_time,
                                             std::to_string(avg_ns()),
                                             std::to_string(stdev_ns()),
-                                            string_format("%f", avg_ts()), // std::to_string format before C++26
-                                            string_format("%f", stdev_ts()) };
+                                            std::to_string(avg_ts()),
+                                            std::to_string(stdev_ts()) };
         return values;
     }
 
@@ -2056,8 +2048,6 @@ struct markdown_printer : public printer {
         if (params.no_host.size() > 1 || params.no_host != cmd_params_defaults.no_host) {
             fields.emplace_back("no_host");
         }
-        if (params.fused_cross_device != cmd_params_defaults.fused_cross_device) {
-            fields.emplace_back("fused_cross_device");
         if (params.repack.size() > 1 || params.repack != cmd_params_defaults.repack) {
             fields.emplace_back("repack");
         }
@@ -2248,11 +2238,9 @@ static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
 }
 
 static void llama_null_log_callback(enum ggml_log_level level, const char * text, void * user_data) {
-    // keep errors (and their continuation lines) without -v, so a failed decode says why
-    static bool in_error = false;
-    in_error = level == GGML_LOG_LEVEL_ERROR || (level == GGML_LOG_LEVEL_CONT && in_error);
-    if (in_error) {
-        fputs(text, stderr);
+    if (level == GGML_LOG_LEVEL_ERROR) {
+        fprintf(stderr, "%s", text);
+        return;
     }
     (void) user_data;
 }
