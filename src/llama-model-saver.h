@@ -10,10 +10,13 @@
 
 struct llama_model_saver {
     struct gguf_context * gguf_ctx = nullptr;
+    const bool gguf_ctx_owned = true;   // ours: only free a context this saver created
     const struct llama_model * model;
     const struct LLM_KV llm_kv;
 
     llama_model_saver(const struct llama_model * model);
+    // ours: build a saver over an empty gguf context (test-lora-inplace uses it)
+    llama_model_saver(enum llm_arch arch, struct gguf_context * gguf_ctx);
     ~llama_model_saver();
 
     void add_kv(enum llm_kv key, uint32_t     value);
