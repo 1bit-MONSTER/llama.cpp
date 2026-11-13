@@ -1,3 +1,4 @@
+#include "dispatch_registration/common/dispatch-moe-routing-layout.h"   // engine#2381: one layout, not two
 #include "testing_suite.h"
 #include "ggml-cpu.h"
 #include "backend-buffer-binding.h"
@@ -357,7 +358,13 @@ static std::vector<int32_t> make_qwen_partition_table_reference(const std::vecto
             if (row_count > 32) {
                 row_count = 32;
             }
-            const int32_t descriptor = static_cast<int32_t>(expert) | (partition << 9) | ((row_count - 1) << 15);
+            // engine#2381: share the router's own layout instead of re-deriving it. The router emits the Qwen layout
+            // (shift 7/13) at <= 128 experts because that is what the qwen3_moe routed kernels decode; hard-coding the
+            // common layout (9/15) here made every entry of a 128-expert table disagree with a correct device result.
+            const ggml::hrx::MoeRoutingDescriptorLayout layout = ggml::hrx::moe_router_descriptor_layout(expert_count);
+            const int32_t descriptor = static_cast<int32_t>(expert) |
+                                       (partition << std::atoi(layout.partition_shift)) |
+                                       ((row_count - 1) << std::atoi(layout.row_count_shift));
             partition_table[static_cast<size_t>(1 + partition_count)] = descriptor;
             ++partition_count;
         }
