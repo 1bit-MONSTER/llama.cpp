@@ -814,3 +814,19 @@ edit this file by hand, at file scope, with the helper pasted between two functi
 
 So: 5 hunks, 2 known edits (helper at file scope + managed_weight local), one file-scope paste. That is the recipe; it does not need another
 investigation, and it should not be attempted again with a script.
+
+## command-program-executor: FOUR named items left (each measured, none a puzzle)
+With AMD's collect_weight_demands pasted at file scope and managed_weight declared locally, the file is down to exactly four errors, all inside
+our block, all with a named fix:
+  1. `same_weight_request` (call at merged line 652) -- AMD's static helper at AMD line 741-750, comparing CommandBinding value/layout/transformation;
+     port it to file scope next to collect_weight_demands.
+  2. `demands` (line 755) -- needs `const CommandProgramWeightDemands demands = collect_weight_demands(commands, bindings, <access map>);`
+     hoisted into our block; the producer is now present, so this is one line plus the right access map expression.
+  3. `prepared.resident_host_weights.push_back(std::move(resident.lease))` (line 779) -- THE ONE TYPE CHANGE: the merged member holds
+     HostWeightBinding, ours pushes a lease. Either wrap the lease into the HostWeightBinding the member expects, or change the member's type; needs the
+     struct's shape in view, and it is the only item here that is not a paste.
+  4. `wait_stream_commands(context, "wait for direct HRX command program")` (line 2354) -- the merged definition takes a THIRD argument
+     (`const void * work`, merged line 1265-1266) which our call does not pass; take the merged signature's third argument from the neighbouring calls.
+So: two pastes, one hoist, one call-site argument, and one type decision (item 3). That is the whole remaining work on this file -- and the reason it
+defeated five scripted attempts is that four of those attempts were re-deriving these four items instead of using them.
+Reverted; file clean; 13 hunks / 2 files remain in the row.
