@@ -184,6 +184,13 @@ json op_params_json(const OpParams & params) {
                     { "kind", "mul_mat"  },
                     { "hint", value.hint }
                 };
+            } else if constexpr (std::is_same_v<T, Pool1DParams>) {
+                return {
+                    { "op",      static_cast<int>(value.op) },
+                    { "kernel",  value.kernel              },
+                    { "stride",  value.stride              },
+                    { "padding", value.padding             }
+                };
             } else if constexpr (std::is_same_v<T, RopeParams>) {
                 return {
                     { "kind",        "rope"            },
