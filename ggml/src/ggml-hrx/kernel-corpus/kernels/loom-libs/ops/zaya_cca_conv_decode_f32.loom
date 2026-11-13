@@ -266,7 +266,7 @@ check.case public @ggml_zaya_cca_conv_decode_random_case {
   %expected_state = check.generate.fill value(7.0) : tensor<512xf32>
   kernel.launch @ggml_zaya_cca_conv_decode_reference_f32[](%qraw, %kraw, %state, %dw, %dw_bias, %weight, %grp_bias, %expected, %expected_state) : [](tensor<160xf32>, tensor<96xf32>, tensor<512xf32>, tensor<512xf32>, tensor<256xf32>, tensor<65536xf16>, tensor<256xf32>, tensor<256xf32>, tensor<512xf32>)
   kernel.launch @ggml_zaya_cca_conv_decode_f32[](%qraw, %kraw, %state, %dw, %dw_bias, %weight, %grp_bias, %output, %new_state) : [](tensor<160xf32>, tensor<96xf32>, tensor<512xf32>, tensor<512xf32>, tensor<256xf32>, tensor<65536xf16>, tensor<256xf32>, tensor<256xf32>, tensor<512xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(1.0e-4) rtol(1.0e-4) nan(same) : tensor<256xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(1.0e-4) rtol(1.0e-4) nan(same) : tensor<256xf32>, tensor<256xf32>
   check.expect.equal actual(%new_state) expected(%expected_state) : tensor<512xf32>
   check.return
 }

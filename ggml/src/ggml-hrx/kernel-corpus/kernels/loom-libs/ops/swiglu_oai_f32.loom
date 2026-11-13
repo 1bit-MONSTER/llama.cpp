@@ -55,7 +55,7 @@ kernel.def target(@ggml_swiglu_oai_gfx11_wave32) export("ggml_swiglu_oai_f32") @
   %c4 = index.constant 4 : index
   %c1024 = index.constant 1024 : index
   %c0_offset = index.constant 0 : offset
-  %zero4 = vector.constant 0.0 : vector<4xf32>
+  %zero4 = vector.splatf 0.0 : vector<4xf32>
   %alpha = config.get @ggml.swiglu_oai.alpha : f32
   %limit = config.get @ggml.swiglu_oai.limit : f32
   %group = kernel.workgroup.id<x> : index
@@ -136,6 +136,6 @@ check.case public @ggml_swiglu_oai_f32_case {
   %expected = check.generate.fill value(7.0) : tensor<2050xf32>
   kernel.launch @ggml_swiglu_oai_reference_f32[%count](%count, %gate, %up, %expected) : [index](index, tensor<2050xf32>, tensor<2050xf32>, tensor<2050xf32>)
   kernel.launch @ggml_swiglu_oai_f32[%count](%count, %gate, %up, %output) : [index](index, tensor<2050xf32>, tensor<2050xf32>, tensor<2050xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(1.0e-6) rtol(1.0e-6) nan(same) : tensor<2050xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(1.0e-6) rtol(1.0e-6) nan(same) : tensor<2050xf32>, tensor<2050xf32>
   check.return
 }

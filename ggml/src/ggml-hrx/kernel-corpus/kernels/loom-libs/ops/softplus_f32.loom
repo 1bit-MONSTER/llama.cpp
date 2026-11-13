@@ -89,6 +89,6 @@ check.case public @ggml_softplus_f32_case {
   %expected = check.generate.fill value(7.0) : tensor<128xf32>
   kernel.launch @ggml_softplus_reference_f32[%count](%count, %input, %expected) : [index](index, tensor<128xf32>, tensor<128xf32>)
   kernel.launch @ggml_softplus_f32[%count](%count, %input, %output) : [index](index, tensor<128xf32>, tensor<128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(1.0e-6) rtol(1.0e-5) nan(same) : tensor<128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(1.0e-6) rtol(1.0e-5) nan(same) : tensor<128xf32>, tensor<128xf32>
   check.return
 }

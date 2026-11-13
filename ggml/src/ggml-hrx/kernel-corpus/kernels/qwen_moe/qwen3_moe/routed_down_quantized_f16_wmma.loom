@@ -78,10 +78,10 @@ func.def inline @qwen3_moe_q6k_wmma_load_half_codes(%weight: buffer, %weight_row
 func.def inline @qwen3_moe_q6k_wmma_vector4_from_scale_codes(%q6_group: index, %scale_i8: i8, %d_f16: f16, %ql_word: vector<1xi32>, %qh_word: vector<1xi32>) -> (vector<4xf16>) {
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
-  %c4_i32v = vector.constant 4 : vector<1xi32>
-  %nibble_mask = vector.constant 252645135 : vector<1xi32>
-  %high_mask = vector.constant 50529027 : vector<1xi32>
-  %c32_f32v = vector.constant 32.0 : vector<4xf32>
+  %c4_i32v = vector.splati 4 : vector<1xi32>
+  %nibble_mask = vector.splati 252645135 : vector<1xi32>
+  %high_mask = vector.splati 50529027 : vector<1xi32>
+  %c32_f32v = vector.splatf 32.0 : vector<4xf32>
   %bounded_group = index.assume %q6_group [range(%q6_group, 0, 7)] : index
   %group_in_half = index.rem %bounded_group, %c4 : index
   %nibble = index.div %group_in_half, %c2 : index
@@ -181,10 +181,10 @@ template.def<@qwen3_moe.routed_down.quantized_prefill.body> device @qwen3_moe_ro
   %result_stage_bytes = index.constant 1024 : offset
   %c0_i32 = scalar.constant 0 : i32
   %cn1_i32 = scalar.constant -1 : i32
-  %c0_i32x1 = vector.constant 0 : vector<1xi32>
-  %c0_i32x4 = vector.constant 0 : vector<4xi32>
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %zero_accumulator = vector.constant 0.0 : vector<8xf16>
+  %c0_i32x1 = vector.splati 0 : vector<1xi32>
+  %c0_i32x4 = vector.splati 0 : vector<4xi32>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
+  %zero_accumulator = vector.splatf 0.0 : vector<8xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -572,8 +572,8 @@ kernel.def target(@qwen3_moe_routed_down_gfx11_wave64) @qwen3_moe_routed_down_we
   %c4 = index.constant 4 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %assignment_count = index.mul %token_count, %bounded_route_count : index
   %channel_tile_base = index.mul %channel_tile, %c256 : index
   %lane_channel_add = index.mul %lane, %c4 : index
@@ -594,7 +594,7 @@ kernel.def target(@qwen3_moe_routed_down_gfx11_wave64) @qwen3_moe_routed_down_we
       %routed = vector.load.mask %routed_output_view[%assignment, %channel], %mask, %c0_f16x4 : view<[%assignment_count]x[%bounded_output_size]xf16>, vector<4xi1>, vector<4xf16>
       // engine #2186: the routed down plane is stored at 2^-6 (see mul_mat_id_swiglu_f16_f16_wmma_body.loom)
       %stored = vector.extf %routed : vector<4xf16> to vector<4xf32>
-      %plane_unscale = vector.constant 64.0 : vector<4xf32>
+      %plane_unscale = vector.splatf 64.0 : vector<4xf32>
       %wide = vector.mulf %stored, %plane_unscale : vector<4xf32>
       %route_weight = view.load %route_weight_view[%token, %route] : view<[%token_count]x[%bounded_route_count]xf32> -> f32
       %route_weight_x4 = vector.splat %route_weight : vector<4xf32>
@@ -647,7 +647,7 @@ check.case public @qwen3_moe_expert_mlp_q4k_f16_handoff_differential_case {
   kernel.launch @qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma[%token_count](%token_count, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %actual_gate_output) : [index](index, tensor<67x512xf32>, tensor<272xi32>, tensor<10xi32>, tensor<4x256x2x144xi8>, tensor<4x256x2x144xi8>, tensor<67x2x256xf16>)
   kernel.launch @qwen3_moe_routed_down_q4k_f16_wmma_grouped[%token_count](%token_count, %actual_gate_output, %expert_table, %down_weight, %actual_routed_output) : [index](index, tensor<67x2x256xf16>, tensor<272xi32>, tensor<4x33x1x144xi8>, tensor<67x2x33xf16>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %actual_routed_output, %actual_output, %actual_output) : [index](index, tensor<67x2xf32>, tensor<67x2x33xf16>, tensor<67x33xf32>, tensor<67x33xf32>)
-  check.expect.close actual(%actual_output) expected(%expected_output) atol(0.5) rtol(0.05) nan(same) : tensor<67x33xf32>
+  check.expect.approximate actual(%actual_output) expected(%expected_output) atol(0.5) rtol(0.05) nan(same) : tensor<67x33xf32>, tensor<67x33xf32>
   check.return
 }
 
@@ -686,7 +686,7 @@ check.case public @qwen3_moe_expert_mlp_q6k_f16_handoff_differential_case {
   kernel.launch @qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma[%token_count](%token_count, %input, %expert_table, %partition_table, %gate_weight, %up_weight, %actual_gate_output) : [index](index, tensor<67x512xf32>, tensor<272xi32>, tensor<10xi32>, tensor<4x256x2x144xi8>, tensor<4x256x2x144xi8>, tensor<67x2x256xf16>)
   kernel.launch @qwen3_moe_routed_down_q6k_f16_wmma_grouped[%token_count](%token_count, %actual_gate_output, %expert_table, %down_weight, %actual_routed_output) : [index](index, tensor<67x2x256xf16>, tensor<272xi32>, tensor<4x33x1x210xi8>, tensor<67x2x33xf16>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %actual_routed_output, %actual_output, %actual_output) : [index](index, tensor<67x2xf32>, tensor<67x2x33xf16>, tensor<67x33xf32>, tensor<67x33xf32>)
-  check.expect.close actual(%actual_output) expected(%expected_output) atol(0.5) rtol(0.05) nan(same) : tensor<67x33xf32>
+  check.expect.approximate actual(%actual_output) expected(%expected_output) atol(0.5) rtol(0.05) nan(same) : tensor<67x33xf32>, tensor<67x33xf32>
   check.return
 }
 
@@ -717,7 +717,7 @@ check.case public @qwen3_moe_routed_down_q4k_f16_wmma_differential_case {
   kernel.launch @qwen3_moe_build_expert_table[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expert_table) : [index, index, index, index](index, index, index, index, tensor<67x4xi32>, tensor<272xi32>)
   kernel.launch @qwen3_moe_routed_down_q4k_f16_wmma_grouped[%token_count](%token_count, %input_f16, %expert_table, %weight, %routed_output) : [index](index, tensor<67x2x512xf16>, tensor<272xi32>, tensor<4x33x2x144xi8>, tensor<67x2x33xf16>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %routed_output, %actual, %actual) : [index](index, tensor<67x2xf32>, tensor<67x2x33xf16>, tensor<67x33xf32>, tensor<67x33xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(0.5) rtol(0.01) nan(same) : tensor<67x33xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(0.5) rtol(0.01) nan(same) : tensor<67x33xf32>, tensor<67x33xf32>
   check.return
 }
 
@@ -747,7 +747,7 @@ check.case public @qwen3_moe_routed_down_q6k_f16_wmma_differential_case {
   kernel.launch @qwen3_moe_build_expert_table[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expert_table) : [index, index, index, index](index, index, index, index, tensor<67x4xi32>, tensor<272xi32>)
   kernel.launch @qwen3_moe_routed_down_q6k_f16_wmma_grouped[%token_count](%token_count, %input_f16, %expert_table, %weight, %routed_output) : [index](index, tensor<67x2x512xf16>, tensor<272xi32>, tensor<4x33x2x210xi8>, tensor<67x2x33xf16>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %routed_output, %actual, %actual) : [index](index, tensor<67x2xf32>, tensor<67x2x33xf16>, tensor<67x33xf32>, tensor<67x33xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(0.5) rtol(0.01) nan(same) : tensor<67x33xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(0.5) rtol(0.01) nan(same) : tensor<67x33xf32>, tensor<67x33xf32>
   check.return
 }
 
@@ -767,7 +767,7 @@ check.case public @qwen3_moe_routed_down_q4k_f16_wmma_benchmark_case {
   kernel.launch @qwen3_moe_build_expert_table[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expert_table) : [index, index, index, index](index, index, index, index, tensor<[%token_count]x128xi32>, tensor<65664xi32>)
   kernel.launch @qwen3_moe_routed_down_q4k_f16_wmma_grouped[%token_count](%token_count, %input, %expert_table, %weight, %routed_output) : [index](index, tensor<[%token_count]x8x768xf16>, tensor<65664xi32>, tensor<128x2048x3x144xi8>, tensor<[%token_count]x8x2048xf16>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %routed_output, %output, %output) : [index](index, tensor<[%token_count]x8xf32>, tensor<[%token_count]x8x2048xf16>, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>
   check.return
 }
 
@@ -787,7 +787,7 @@ check.case public @qwen3_moe_routed_down_q6k_f16_wmma_benchmark_case {
   kernel.launch @qwen3_moe_build_expert_table[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expert_table) : [index, index, index, index](index, index, index, index, tensor<[%token_count]x128xi32>, tensor<65664xi32>)
   kernel.launch @qwen3_moe_routed_down_q6k_f16_wmma_grouped[%token_count](%token_count, %input, %expert_table, %weight, %routed_output) : [index](index, tensor<[%token_count]x8x768xf16>, tensor<65664xi32>, tensor<128x2048x3x210xi8>, tensor<[%token_count]x8x2048xf16>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %routed_output, %output, %output) : [index](index, tensor<[%token_count]x8xf32>, tensor<[%token_count]x8x2048xf16>, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>
   check.return
 }
 
@@ -809,7 +809,7 @@ check.case public @qwen3_moe_routed_down_q4k_f16_wmma_diverse_benchmark_case {
   kernel.launch @qwen3_moe_build_expert_table[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expert_table) : [index, index, index, index](index, index, index, index, tensor<[%token_count]x8xi32>, tensor<65664xi32>)
   kernel.launch @qwen3_moe_routed_down_q4k_f16_wmma_grouped[%token_count](%token_count, %input, %expert_table, %weight, %routed_output) : [index](index, tensor<[%token_count]x8x768xf16>, tensor<65664xi32>, tensor<128x2048x3x144xi8>, tensor<[%token_count]x8x2048xf16>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %routed_output, %output, %output) : [index](index, tensor<[%token_count]x8xf32>, tensor<[%token_count]x8x2048xf16>, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>
   check.return
 }
 
@@ -829,7 +829,7 @@ check.case public @qwen3_moe_routed_down_q6k_f16_wmma_diverse_benchmark_case {
   kernel.launch @qwen3_moe_build_expert_table[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expert_table) : [index, index, index, index](index, index, index, index, tensor<[%token_count]x8xi32>, tensor<65664xi32>)
   kernel.launch @qwen3_moe_routed_down_q6k_f16_wmma_grouped[%token_count](%token_count, %input, %expert_table, %weight, %routed_output) : [index](index, tensor<[%token_count]x8x768xf16>, tensor<65664xi32>, tensor<128x2048x3x210xi8>, tensor<[%token_count]x8x2048xf16>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %routed_output, %output, %output) : [index](index, tensor<[%token_count]x8xf32>, tensor<[%token_count]x8x2048xf16>, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>
   check.return
 }
 

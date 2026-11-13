@@ -12,7 +12,7 @@ func.def inline @ggml_q1_0_f32_x4_row_lane(%input_size: index, %input: buffer, %
   %c128 = index.constant 128 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf32>
   %iteration_count = index.div %bounded_input_size, %c128 : index
   %lane_k = index.mul %bounded_lane, %c4 : index
@@ -42,7 +42,7 @@ func.def inline @ggml_q1_0_f32_x8_row_lane(%input_size: index, %input: buffer, %
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf32>
   %iteration_count = index.div %bounded_input_size, %c256 : index
   %lane_k = index.mul %bounded_lane, %c8 : index
@@ -80,7 +80,7 @@ func.def inline @ggml_q1_0_f16_x8_row_lane(%input_size: index, %input: buffer, %
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf16>
   %iteration_count = index.div %bounded_input_size, %c256 : index
   %lane_k = index.mul %bounded_lane, %c8 : index
@@ -120,7 +120,7 @@ func.def inline @ggml_q1_0_f16_x8_rows2_lane(%input_size: index, %input: buffer,
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf16>
   %iteration_count = index.div %bounded_input_size, %c256 : index
   %lane_k = index.mul %bounded_lane, %c8 : index
@@ -168,7 +168,7 @@ func.def inline @ggml_q1_0_f16_x8_rows4_lane(%input_size: index, %input: buffer,
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf16>
   %iteration_count = index.div %bounded_input_size, %c256 : index
   %lane_k = index.mul %bounded_lane, %c8 : index
@@ -406,10 +406,10 @@ check.case public @ggml_q1_0_vector_schedule_2560x4096_differential {
   kernel.launch @ggml_q1_0_f16_x8_rows1[%input_size, %output_size](%input_size, %output_size, %input_f16, %weight, %f16_x8) : [index, index](index, index, tensor<2560xf16>, tensor<4096x20x18xi8>, tensor<4096xf32>)
   kernel.launch @ggml_q1_0_f16_x8_rows2[%input_size, %output_size](%input_size, %output_size, %input_f16, %weight, %f16_rows2) : [index, index](index, index, tensor<2560xf16>, tensor<4096x20x18xi8>, tensor<4096xf32>)
   kernel.launch @ggml_q1_0_f16_x8_rows4[%input_size, %output_size](%input_size, %output_size, %input_f16, %weight, %f16_rows4) : [index, index](index, index, tensor<2560xf16>, tensor<4096x20x18xi8>, tensor<4096xf32>)
-  check.expect.close actual(%f32_x8) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>
-  check.expect.close actual(%f16_x8) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>
-  check.expect.close actual(%f16_rows2) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>
-  check.expect.close actual(%f16_rows4) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>
+  check.expect.approximate actual(%f32_x8) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>, tensor<4096xf32>
+  check.expect.approximate actual(%f16_x8) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>, tensor<4096xf32>
+  check.expect.approximate actual(%f16_rows2) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>, tensor<4096xf32>
+  check.expect.approximate actual(%f16_rows4) expected(%reference) atol(0.10000000000000001) rtol(0.0001) nan(same) : tensor<4096xf32>, tensor<4096xf32>
   check.return
 }
 

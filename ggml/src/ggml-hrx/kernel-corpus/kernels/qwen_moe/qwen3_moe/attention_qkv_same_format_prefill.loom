@@ -162,7 +162,7 @@ check.case public @qwen3_moe_attention_qkv_q4_prefill_512_differential_case {
   kernel.launch @qwen3_moe_attention_key_q4_aggregate_prefill_512[%token_count](%token_count, %input, %combined_weight, %expected) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
   kernel.launch @qwen3_moe_attention_value_q4_aggregate_prefill_512[%token_count](%token_count, %input, %combined_weight, %expected) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
   kernel.launch @qwen3_moe_attention_qkv_q4_prefill_512[%token_count](%token_count, %input, %combined_weight, %actual) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<512x5120xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<512x5120xf32>, tensor<512x5120xf32>
   check.return
 }
 

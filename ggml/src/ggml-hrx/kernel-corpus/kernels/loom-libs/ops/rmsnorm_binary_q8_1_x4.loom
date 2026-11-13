@@ -59,7 +59,7 @@ kernel.def target(@ggml_rmsnorm_binary_q8_1_x4_gfx11_wave32) export("ggml_rmsnor
   %scratch_d_byte_add = index.constant 1024 : offset
   %scratch_bytes = index.constant 1152 : offset
   %c0_offset = index.constant 0 : offset
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %input_noalias, %rhs_noalias, %output_noalias, %q8_output_noalias = buffer.assume.noalias %input, %rhs, %output, %q8_output : buffer, buffer, buffer, buffer
   %row_scale, %token, %launch_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden_size, %hidden_size, %epsilon, %input_noalias) : (index, index, index, index, f32, buffer) -> (f32, index, index, i1)
   %row_scale_vector = vector.splat %row_scale : vector<4xf32>

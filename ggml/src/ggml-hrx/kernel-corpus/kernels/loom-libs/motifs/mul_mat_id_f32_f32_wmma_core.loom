@@ -75,7 +75,7 @@ template.def<@ggml.mul_mat_id_f32_f32_wmma.core> device @ggml_mul_mat_id_f32_f32
   %result_stage_bytes = index.constant 2048 : offset
   %c0_i32 = scalar.constant 0 : i32
   %cn1_i32 = scalar.constant -1 : i32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   // engine #1539: the activations go through f16 for the matrix multiply, and f16 ends at 65504. An expert's
   // down-projection reads the SwiGLU output, which is not normalised: flint's layer 46 reaches +-9.1e4 on an ordinary
   // prompt, the narrowing made that inf, the route sum inf - inf = NaN, and the NaN was stored as that token's keys and
@@ -84,9 +84,9 @@ template.def<@ggml.mul_mat_id_f32_f32_wmma.core> device @ggml_mul_mat_id_f32_f32
   // normal f16: the representable window moves from [6.1e-5, 6.55e4] to [3.9e-3, 4.19e6]. Below 3.9e-3 an element is
   // rounded to a multiple of 3.8e-6 instead of keeping 11 bits, which is far under the rounding already applied to the
   // order-1 elements it is summed with (4.9e-4 at 1.0).
-  %activation_prescale = vector.constant 0.015625 : vector<4xf32>
-  %result_unscale = vector.constant 64.0 : vector<4xf32>
-  %zero_accumulator = vector.constant 0.0 : vector<4xf32>
+  %activation_prescale = vector.splatf 0.015625 : vector<4xf32>
+  %result_unscale = vector.splatf 64.0 : vector<4xf32>
+  %zero_accumulator = vector.splatf 0.0 : vector<4xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -100,7 +100,7 @@ template.def<@ggml.mul_mat_id_f32_f32_wmma.core> device @ggml_mul_mat_id_f32_f32
   %launch_partition_count = scf.select %has_more_assignment_partitions, %assignment_partition_count, %bounded_expert_count : index
   %assignment_table_byte_base = index.scale %bounded_expert_count, %c4_bytes : index, offset -> offset
   %c255 = index.constant 255 : index
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %padded_input_size = index.add %input_size, %c255 : index
   %quant_block_count = index.div %padded_input_size, %c256 : index
   %weight_row_bytes = func.call @ggml_dequant_weight_row_bytes(%weight_format, %input_size) : (index, index) -> (offset)

@@ -276,7 +276,7 @@ check.case public @ggml_attention_sink_prefill_case {
   kernel.launch @ggml_attention_sink_reference_f32[%tokens, %keys, %keys, %no_sink](%tokens, %keys, %keys, %no_sink, %query, %key, %value, %mask, %sinks, %actual) : [index, index, index, index](index, index, index, index, tensor<1536xf32>, tensor<38400xf16>, tensor<38400xf16>, tensor<900xf16>, tensor<8xf32>, tensor<1536xf32>)
   kernel.launch @ggml_attention_sink_f32[%tokens, %keys, %keys](%tokens, %keys, %keys, %query, %key, %mask, %sinks, %actual) : [index, index, index](index, index, index, tensor<1536xf32>, tensor<38400xf16>, tensor<900xf16>, tensor<8xf32>, tensor<1536xf32>)
   kernel.launch @ggml_attention_sink_reference_f32[%tokens, %keys, %keys, %sink](%tokens, %keys, %keys, %sink, %query, %key, %value, %mask, %sinks, %expected) : [index, index, index, index](index, index, index, index, tensor<1536xf32>, tensor<38400xf16>, tensor<38400xf16>, tensor<900xf16>, tensor<8xf32>, tensor<1536xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<1536xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<1536xf32>, tensor<1536xf32>
   check.return
 }
 
@@ -300,7 +300,7 @@ check.case public @ggml_attention_sink_decode_case {
   kernel.launch @ggml_attention_sink_reference_f32[%tokens, %keys, %keys, %no_sink](%tokens, %keys, %keys, %no_sink, %query, %key, %value, %mask, %sinks, %actual) : [index, index, index, index](index, index, index, index, tensor<512xf32>, tensor<128000xf16>, tensor<128000xf16>, tensor<1000xf16>, tensor<8xf32>, tensor<512xf32>)
   kernel.launch @ggml_attention_sink_f32[%tokens, %keys, %keys](%tokens, %keys, %keys, %query, %key, %mask, %sinks, %actual) : [index, index, index](index, index, index, tensor<512xf32>, tensor<128000xf16>, tensor<1000xf16>, tensor<8xf32>, tensor<512xf32>)
   kernel.launch @ggml_attention_sink_reference_f32[%tokens, %keys, %keys, %sink](%tokens, %keys, %keys, %sink, %query, %key, %value, %mask, %sinks, %expected) : [index, index, index, index](index, index, index, index, tensor<512xf32>, tensor<128000xf16>, tensor<128000xf16>, tensor<1000xf16>, tensor<8xf32>, tensor<512xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<512xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<512xf32>, tensor<512xf32>
   check.return
 }
 
@@ -324,6 +324,6 @@ check.case public @ggml_attention_sink_masked_case {
   kernel.launch @ggml_attention_sink_reference_f32[%tokens, %keys, %keys, %no_sink](%tokens, %keys, %keys, %no_sink, %query, %key, %value, %mask, %sinks, %actual) : [index, index, index, index](index, index, index, index, tensor<1024xf32>, tensor<5120xf16>, tensor<5120xf16>, tensor<80xf16>, tensor<8xf32>, tensor<1024xf32>)
   kernel.launch @ggml_attention_sink_f32[%tokens, %keys, %keys](%tokens, %keys, %keys, %query, %key, %mask, %sinks, %actual) : [index, index, index](index, index, index, tensor<1024xf32>, tensor<5120xf16>, tensor<80xf16>, tensor<8xf32>, tensor<1024xf32>)
   kernel.launch @ggml_attention_sink_reference_f32[%tokens, %keys, %keys, %sink](%tokens, %keys, %keys, %sink, %query, %key, %value, %mask, %sinks, %expected) : [index, index, index, index](index, index, index, index, tensor<1024xf32>, tensor<5120xf16>, tensor<5120xf16>, tensor<80xf16>, tensor<8xf32>, tensor<1024xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<1024xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<1024xf32>, tensor<1024xf32>
   check.return
 }

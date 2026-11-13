@@ -70,8 +70,8 @@ template.def<@qwen3_moe.attention.decode_split.produce_partials.active> device @
   %head_size_f32 = scalar.constant 128.0 : f32
   %attention_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %head_size_f32 : f32
   %c0_f16 = scalar.constant 0.0 : f16
-  %c0_f16x8 = vector.constant 0.0 : vector<8xf16>
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f16x8 = vector.splatf 0.0 : vector<8xf16>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -154,7 +154,7 @@ template.def<@qwen3_moe.attention.decode_split.produce_partials.active> device @
     view.store %query_value, %query_stage_view[%local_query_row, %query_channel] : f16, view<16x136xf16>
   }
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-  %score_init_values = vector.constant 0.0 : vector<4xf32>
+  %score_init_values = vector.splatf 0.0 : vector<4xf32>
   %score_init = vector.fragment<init> %score_init_values shape [%m, %n] : vector<4xf32>
   %score_fragment = scf.if %is_full_block -> (vector<4xf32>) {
     %full_score_fragment = scf.for %head_tile = [%c0 to %c128 step %c16](%score_accumulator = %score_init : vector<4xf32>) -> (vector<4xf32>) unroll {
@@ -380,7 +380,7 @@ template.def<@qwen3_moe.attention.decode_split.produce_partials> device @qwen3_m
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
   %negative_large = scalar.constant -1e+30 : f32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %key_value_token_capacity = config.get @qwen3_moe.attention.key_value_token_capacity : index
   %c63 = index.constant 63 : index
   %padded_key_value_token_capacity = index.add %key_value_token_capacity, %c63 : index
@@ -549,7 +549,7 @@ template.def<@qwen3_moe.attention.decode_split.reduce_completed.cooperative> dev
   %scale_stage_bytes = index.constant 1024 : offset
   %c0_f32 = scalar.constant 0.0 : f32
   %negative_large = scalar.constant -1e+30 : f32
-  %c0_f32x2 = vector.constant 0.0 : vector<2xf32>
+  %c0_f32x2 = vector.splatf 0.0 : vector<2xf32>
   %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
   %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
   %query_head_base = index.mul %key_value_head, %query_heads_per_key_value_head : index
@@ -690,7 +690,7 @@ template.def<@qwen3_moe.attention.decode_split.pack_completed_q8> device @qwen3_
   %c0_f32 = scalar.constant 0.0 : f32
   %c1_f32 = scalar.constant 1.0 : f32
   %c127 = scalar.constant 127.0 : f32
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %output_noalias, %q8_output_noalias = buffer.assume.noalias %output, %q8_output : buffer, buffer
   %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
   %q8_output_aligned = buffer.assume.alignment %q8_output_noalias {minimum_alignment = 16} : buffer
@@ -1077,7 +1077,7 @@ check.case public @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_case {
   %output = check.generate.fill value(-1.0) : tensor<32x128xf32>
   %expected = check.generate.fill value(2.0) : tensor<32x128xf32>
   kernel.launch @qwen3_moe_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output) : [index](index, tensor<32x128xf32>, tensor<256x4x128xf16>, tensor<256x4x128xf16>, tensor<256xf16>, tensor<4x4x16xf32>, tensor<4x4x16xf32>, tensor<4x4x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>, tensor<32x128xf32>
   check.return
 }
 
@@ -1098,7 +1098,7 @@ check.case public @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_masked_bl
   %output = check.generate.fill value(-1.0) : tensor<32x128xf32>
   %expected = check.generate.fill value(2.0) : tensor<32x128xf32>
   kernel.launch @qwen3_moe_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output) : [index](index, tensor<32x128xf32>, tensor<256x4x128xf16>, tensor<256x4x128xf16>, tensor<256xf16>, tensor<4x4x16xf32>, tensor<4x4x16xf32>, tensor<4x4x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>, tensor<32x128xf32>
   check.return
 }
 
@@ -1125,8 +1125,8 @@ check.case public @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_decode_51
   %expected1 = check.generate.fill value(3.0) : tensor<32x128xf32>
   kernel.launch @qwen3_moe_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value0, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output0) : [index](index, tensor<32x128xf32>, tensor<513x4x128xf16>, tensor<513x4x128xf16>, tensor<513xf16>, tensor<4x9x16xf32>, tensor<4x9x16xf32>, tensor<4x9x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
   kernel.launch @qwen3_moe_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value1, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output1) : [index](index, tensor<32x128xf32>, tensor<513x4x128xf16>, tensor<513x4x128xf16>, tensor<513xf16>, tensor<4x9x16xf32>, tensor<4x9x16xf32>, tensor<4x9x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
-  check.expect.close actual(%output0) expected(%expected0) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>
-  check.expect.close actual(%output1) expected(%expected1) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>
+  check.expect.approximate actual(%output0) expected(%expected0) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>, tensor<32x128xf32>
+  check.expect.approximate actual(%output1) expected(%expected1) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>, tensor<32x128xf32>
   check.return
 }
 
@@ -1146,7 +1146,7 @@ check.case public @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_tail_case
   %output = check.generate.fill value(-1.0) : tensor<1x128xf32>
   %expected = check.generate.iota offset(1024.0) step(0.125) : tensor<1x128xf32>
   kernel.launch @qwen3_moe_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output) : [index](index, tensor<1x128xf32>, tensor<65x1x128xf16>, tensor<65x1x128xf16>, tensor<65xf16>, tensor<1x2x16xf32>, tensor<1x2x16xf32>, tensor<1x2x16x128xf16>, tensor<1xi32>, tensor<1x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x128xf32>, tensor<1x128xf32>
   check.return
 }
 
@@ -1165,7 +1165,7 @@ check.case public @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_long_case
   %expected = check.generate.fill value(0.0) : tensor<32x128xf32>
   kernel.launch @qwen3_moe_flash_attention_decode_split_produce_partials_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : [index](index, tensor<32x128xf32>, tensor<2048x4x128xf16>, tensor<2048x4x128xf16>, tensor<2048xf16>, tensor<4x32x16xf32>, tensor<4x32x16xf32>, tensor<4x32x16x128xf16>)
   kernel.launch @qwen3_moe_flash_attention_decode_split_reduce_f32[%key_value_token_count](%key_value_token_count, %partial_max, %partial_sum, %partial_output, %output) : [index](index, tensor<4x32x16xf32>, tensor<4x32x16xf32>, tensor<4x32x16x128xf16>, tensor<32x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<32x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<32x128xf32>, tensor<32x128xf32>
   check.return
 }
 
@@ -1184,7 +1184,7 @@ check.case public @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_benchmark
   %output = check.generate.fill value(1.0) : tensor<32x128xf32>
   %expected = check.generate.fill value(0.0) : tensor<32x128xf32>
   kernel.launch @qwen3_moe_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output, %completion_counter, %output) : [index](index, tensor<32x128xf32>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]xf16>, tensor<4x512x16xf32>, tensor<4x512x16xf32>, tensor<4x512x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<32x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<32x128xf32>, tensor<32x128xf32>
   check.return
 }
 
@@ -1204,7 +1204,7 @@ check.case public @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_long_benc
   %expected = check.generate.fill value(0.0) : tensor<32x128xf32>
   kernel.launch @qwen3_moe_flash_attention_decode_split_produce_partials_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %partial_max, %partial_sum, %partial_output) : [index](index, tensor<32x128xf32>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]xf16>, tensor<4x512x16xf32>, tensor<4x512x16xf32>, tensor<4x512x16x128xf16>)
   kernel.launch @qwen3_moe_flash_attention_decode_split_reduce_f32[%key_value_token_count](%key_value_token_count, %partial_max, %partial_sum, %partial_output, %output) : [index](index, tensor<4x512x16xf32>, tensor<4x512x16xf32>, tensor<4x512x16x128xf16>, tensor<32x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<32x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<32x128xf32>, tensor<32x128xf32>
   check.return
 }
 

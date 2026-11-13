@@ -66,7 +66,7 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.body> device @ggml_mul_mat_id_swigl
   %result_stage_bytes = index.constant 4096 : offset
   %c0_i32 = scalar.constant 0 : i32
   %cn1_i32 = scalar.constant -1 : i32
-  %zero_accumulator = vector.constant 0.0 : vector<16xf16>
+  %zero_accumulator = vector.splatf 0.0 : vector<16xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %assignment_count = index.mul %token_count, %bounded_route_count : index
@@ -176,7 +176,7 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.body> device @ggml_mul_mat_id_swigl
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
     %gate_values = vector.load %result_physical_view[%publish_route, %publish_channel_add] : view<16x16xf16> -> vector<8xf16>
     // engine #2127: the projections narrowed the input at 2^-6, so the gate and up sums are at 2^-6 too; undo it in f32
-    %sum_rescale = vector.constant 64.0 : vector<8xf32>
+    %sum_rescale = vector.splatf 64.0 : vector<8xf32>
     %gate_prescaled = vector.extf %gate_values : vector<8xf16> to vector<8xf32>
     %gate_wide = vector.mulf %gate_prescaled, %sum_rescale : vector<8xf32>
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
@@ -192,7 +192,7 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.body> device @ggml_mul_mat_id_swigl
       // products up to 2.6e4 the down sums already overflowed and 770 of 2048 outputs were inf). The plane is
       // published at 2^-6; the down projection is linear and carries the factor; the weighted reduce, which widens to
       // f32, multiplies it back. The plan records the factor on both planes (scale_log2).
-      %product_prescale = vector.constant 0.015625 : vector<8xf32>
+      %product_prescale = vector.splatf 0.015625 : vector<8xf32>
       %scaled_values = vector.mulf %wide_values, %product_prescale : vector<8xf32>
       %values = vector.fptrunc %scaled_values : vector<8xf32> to vector<8xf16>
       %mask = vector.mask.range [%channel to %bounded_output_size step %c1] : index -> vector<8xi1>

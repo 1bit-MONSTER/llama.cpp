@@ -60,8 +60,8 @@ func.def inline @ggml_moe_unpack_expert_partition_descriptor(%descriptor: i32) -
 }
 
 template.def<@ggml.mul_mat_id_swiglu.apply_vector4> device @ggml_mul_mat_id_swiglu_apply_vector4(%gate: vector<4xf32>, %up: vector<4xf32>) -> (vector<4xf32>) {
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
-  %c1_f32x4 = vector.constant 1.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
+  %c1_f32x4 = vector.splatf 1.0 : vector<4xf32>
   %negative_gate = vector.subf %c0_f32x4, %gate : vector<4xf32>
   %gate_exp = vector.expf<afn> %negative_gate : vector<4xf32>
   %denominator = vector.addf %c1_f32x4, %gate_exp : vector<4xf32>
@@ -104,9 +104,9 @@ template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f3
   %result_stage_bytes = index.constant 2048 : offset
   %c0_i32 = scalar.constant 0 : i32
   %cn1_i32 = scalar.constant -1 : i32
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %zero_accumulator = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
+  %zero_accumulator = vector.splatf 0.0 : vector<4xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index

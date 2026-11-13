@@ -43,7 +43,7 @@ kernel.def target(@qwen3_moe_routed_down_next_norm_gfx11_wave32) @qwen3_moe_rout
   %scratch_bytes = index.constant 32 : offset
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f32x8 = vector.constant 0.0 : vector<8xf32>
+  %c0_f32x8 = vector.splatf 0.0 : vector<8xf32>
   %active_token = index.cmp ult, %token0, %token_count : index
   %safe_token0 = scf.select %active_token, %token0, %c0 : index
   %token, %launch_token_count = index.assume %safe_token0, %token_count [lt(%safe_token0, %token_count)] : index, index
@@ -67,7 +67,7 @@ kernel.def target(@qwen3_moe_routed_down_next_norm_gfx11_wave32) @qwen3_moe_rout
       %routed_f16 = vector.load %routed_output_view[%assignment, %channel] : view<[%assignment_count]x[%output_size]xf16> -> vector<8xf16>
       // engine #2186: the routed down plane is stored at 2^-6 (see mul_mat_id_swiglu_f16_f16_wmma_body.loom)
       %routed_stored = vector.extf %routed_f16 : vector<8xf16> to vector<8xf32>
-      %plane_unscale = vector.constant 64.0 : vector<8xf32>
+      %plane_unscale = vector.splatf 64.0 : vector<8xf32>
       %routed = vector.mulf %routed_stored, %plane_unscale : vector<8xf32>
       %route_weight = view.load %route_weights_view[%token, %route] : view<[%launch_token_count]x[%route_count]xf32> -> f32
       %route_weight_x8 = vector.splat %route_weight : vector<8xf32>
@@ -130,8 +130,8 @@ check.case public @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_differ
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %routed_output, %expected_hidden_state, %expected_hidden_state) : [index](index, tensor<512x8xf32>, tensor<512x8x2048xf16>, tensor<512x2048xf32>, tensor<512x2048xf32>)
   kernel.launch @qwen3_moe_rmsnorm_f32[%token_count](%token_count, %expected_hidden_state, %next_norm_weight, %expected_next_projection_input) : [index](index, tensor<512x2048xf32>, tensor<2048xf32>, tensor<512x2048xf32>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32[%token_count](%token_count, %route_weights, %routed_output, %actual_hidden_state, %next_norm_weight, %actual_next_projection_input) : [index](index, tensor<512x8xf32>, tensor<512x8x2048xf16>, tensor<512x2048xf32>, tensor<2048xf32>, tensor<512x2048xf32>)
-  check.expect.close actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<512x2048xf32>
-  check.expect.close actual(%actual_next_projection_input) expected(%expected_next_projection_input) atol(0.001) rtol(0.001) nan(same) : tensor<512x2048xf32>
+  check.expect.approximate actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<512x2048xf32>, tensor<512x2048xf32>
+  check.expect.approximate actual(%actual_next_projection_input) expected(%expected_next_projection_input) atol(0.001) rtol(0.001) nan(same) : tensor<512x2048xf32>, tensor<512x2048xf32>
   check.return
 }
 

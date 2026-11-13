@@ -102,6 +102,6 @@ check.case public @ggml_add_id_f32_case {
   %expected = check.generate.fill value(7.0) : tensor<3600xf32>
   kernel.launch @ggml_add_id_reference_f32[%width, %rows, %tokens, %ids_stride, %experts](%width, %rows, %tokens, %ids_stride, %experts, %input, %bias, %ids, %expected) : [index, index, index, index, index](index, index, index, index, index, tensor<3600xf32>, tensor<2400xf32>, tensor<24xi32>, tensor<3600xf32>)
   kernel.launch @ggml_add_id_f32[%width, %rows, %tokens, %ids_stride, %experts](%width, %rows, %tokens, %ids_stride, %experts, %input, %bias, %ids, %output) : [index, index, index, index, index](index, index, index, index, index, tensor<3600xf32>, tensor<2400xf32>, tensor<24xi32>, tensor<3600xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<3600xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<3600xf32>, tensor<3600xf32>
   check.return
 }

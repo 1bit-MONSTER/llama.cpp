@@ -137,14 +137,14 @@ func.def inline @ggml_q6k_f32_block_row(%input_size: index, %row: index, %block:
   %c210_bytes = index.constant 210 : offset
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
-  %c4_i32v = vector.constant 4 : vector<1xi32>
-  %c2_i32v = vector.constant 2 : vector<1xi32>
-  %nibble_mask = vector.constant 252645135 : vector<1xi32>
-  %high0_mask = vector.constant 50529027 : vector<1xi32>
-  %high2_mask = vector.constant 202116108 : vector<1xi32>
-  %high4_mask = vector.constant 808464432 : vector<1xi32>
-  %high6_mask = vector.constant -1061109568 : vector<1xi32>
-  %c32_f32v = vector.constant 32.0 : vector<4xf32>
+  %c4_i32v = vector.splati 4 : vector<1xi32>
+  %c2_i32v = vector.splati 2 : vector<1xi32>
+  %nibble_mask = vector.splati 252645135 : vector<1xi32>
+  %high0_mask = vector.splati 50529027 : vector<1xi32>
+  %high2_mask = vector.splati 202116108 : vector<1xi32>
+  %high4_mask = vector.splati 808464432 : vector<1xi32>
+  %high6_mask = vector.splati -1061109568 : vector<1xi32>
+  %c32_f32v = vector.splatf 32.0 : vector<4xf32>
   %c0_f32 = scalar.constant 0.0 : f32
   %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
   %block_count = index.div %input_size, %c256 : index
@@ -375,8 +375,8 @@ check.case public @ggml_linear_q6k_f32_differential_case {
   kernel.launch @ggml_linear_q6k_q8_1_x4[%token_count, %input_size, %output_size](%token_count, %input_size, %output_size, %q8_input, %weight, %expected) : [index, index, index](index, index, index, tensor<2x2304xi8>, tensor<9x8x210xi8>, tensor<2x9xf32>)
   kernel.launch @ggml_linear_q6k_f32_wave64[%token_count, %input_size, %output_size](%token_count, %input_size, %output_size, %input, %weight, %actual_wave64) : [index, index, index](index, index, index, tensor<2x2048xf32>, tensor<9x8x210xi8>, tensor<2x9xf32>)
   kernel.launch @ggml_linear_q6k_f32_wave32[%token_count, %input_size, %output_size](%token_count, %input_size, %output_size, %input, %weight, %actual_wave32) : [index, index, index](index, index, index, tensor<2x2048xf32>, tensor<9x8x210xi8>, tensor<2x9xf32>)
-  check.expect.close actual(%actual_wave64) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<2x9xf32>
-  check.expect.close actual(%actual_wave32) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<2x9xf32>
+  check.expect.approximate actual(%actual_wave64) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<2x9xf32>, tensor<2x9xf32>
+  check.expect.approximate actual(%actual_wave32) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<2x9xf32>, tensor<2x9xf32>
   check.return
 }
 
@@ -389,7 +389,7 @@ check.case public @ggml_linear_q6k_f32_wave64_dense_v_benchmark_case {
   %output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
   %expected = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
   kernel.launch @ggml_linear_q6k_f32_wave64[%token_count, %input_size, %output_size](%token_count, %input_size, %output_size, %input, %weight, %output) : [index, index, index](index, index, index, tensor<[%token_count]x2048xf32>, tensor<512x8x210xi8>, tensor<[%token_count]x512xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>, tensor<[%token_count]x512xf32>
   check.return
 }
 
@@ -402,7 +402,7 @@ check.case public @ggml_linear_q6k_f32_wave32_dense_v_benchmark_case {
   %output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
   %expected = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
   kernel.launch @ggml_linear_q6k_f32_wave32[%token_count, %input_size, %output_size](%token_count, %input_size, %output_size, %input, %weight, %output) : [index, index, index](index, index, index, tensor<[%token_count]x2048xf32>, tensor<512x8x210xi8>, tensor<[%token_count]x512xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>, tensor<[%token_count]x512xf32>
   check.return
 }
 

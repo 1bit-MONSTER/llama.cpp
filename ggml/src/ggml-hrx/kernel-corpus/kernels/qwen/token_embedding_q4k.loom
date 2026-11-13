@@ -34,9 +34,9 @@ kernel.def target(@qwen_token_embedding_gfx11_wave64) export("qwen_token_embeddi
   %row_bytes = index.constant 1152 : offset
   %c2_i32 = scalar.constant 2 : i32
   %c4_i32 = scalar.constant 4 : i32
-  %c15 = vector.constant 15 : vector<1xi32>
-  %c48 = vector.constant 48 : vector<1xi32>
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %c15 = vector.splati 15 : vector<1xi32>
+  %c48 = vector.splati 48 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %packet0 = index.madd %workgroup, %c256, %workitem : index
   %packet_count = index.mul %token_count, %packets_per_token : index
   %packet, %launch_packet_count = index.assume %packet0, %packet_count [lt(%packet0, %packet_count)] : index, index
@@ -150,7 +150,7 @@ check.case public @qwen_token_embedding_q4k_decode_case {
   %output = check.generate.fill value(0.0) : tensor<1x2048xf32>
   %expected = check.generate.fill value(7166.25) : tensor<1x2048xf32>
   kernel.launch @qwen_token_embedding_q4k[%token_count, %vocabulary_count](%token_count, %vocabulary_count, %token_ids, %weight, %output) : [index, index](index, index, tensor<1xi32>, tensor<1x8x144xi8>, tensor<1x2048xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>, tensor<1x2048xf32>
   check.return
 }
 
@@ -164,7 +164,7 @@ check.case public @qwen_token_embedding_q4k_row_access_case {
   %output = check.generate.fill value(1.0) : tensor<3x2048xf32>
   %expected = check.generate.fill value(0.0) : tensor<3x2048xf32>
   kernel.launch @qwen_token_embedding_q4k[%token_count, %vocabulary_count](%token_count, %vocabulary_count, %token_ids, %weight, %output) : [index, index](index, index, tensor<3xi32>, tensor<3x8x144xi8>, tensor<3x2048xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<3x2048xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<3x2048xf32>, tensor<3x2048xf32>
   check.return
 }
 
@@ -176,7 +176,7 @@ check.case public @qwen_token_embedding_q4k_benchmark_case {
   %output = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
   %expected = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
   kernel.launch @qwen_token_embedding_q4k[%token_count, %vocabulary_count](%token_count, %vocabulary_count, %token_ids, %weight, %output) : [index, index](index, index, tensor<[%token_count]xi32>, tensor<151936x8x144xi8>, tensor<[%token_count]x2048xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>
   check.return
 }
 
