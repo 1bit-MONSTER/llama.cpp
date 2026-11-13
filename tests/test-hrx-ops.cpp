@@ -5201,7 +5201,14 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
     const bool gate_up_routed =
         test_sequence_has(sequence, "qwen3_moe:qwen3_moe_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8") ||
         test_sequence_has(sequence, "qwen3_moe:qwen3_moe_routed_gate_up_swiglu_q4k_q8") ||
-        test_sequence_has(sequence, "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma");
+        test_sequence_has(sequence, "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma") ||
+        // engine#2374: after #118 factored the monolith into composable kernels, the registration
+        // "common.mul_mat_id_swiglu.f32_f32_wmma" selects the tiled/skinny *pair-input publish* kernels
+        // (see mul_mat_id_swiglu_f32_kernel(): skinny at token_count <= 5, tiled above). Those are the same
+        // routed gate/up SwiGLU computation under the composable names, so the intent of this check --
+        // "a routed mul_mat_id SwiGLU kernel is in the plan" -- is satisfied by either naming.
+        test_sequence_has(sequence, "loom_libs:ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32") ||
+        test_sequence_has(sequence, "loom_libs:ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32");
     REQUIRE(gate_up_routed);
     require_kernel_subsequence(sequence,
                                { "qwen3_moe:qwen3_moe_router_projection_top8_fused_decode_f32",
