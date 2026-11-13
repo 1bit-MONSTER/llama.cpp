@@ -3251,11 +3251,7 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix1 {
           %snapshot_index1 = index.sub %snapshot_last, %k1 : index
           %snapshot_slot1 = index.mul %snapshot_stride, %snapshot_index1 : index
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops/gated_delta_net_f32_wmma.loom
           %p10_log = scalar.subf<nnan|ninf|nsz> %lc1, %lc0 : f32
-=======
-          %p10_log = scalar.subf<nnan|ninf|nsz> %snapshot_log1, %snapshot_log0 : f32
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/motifs/gated_delta_net/scan_state_head128.loom
           %p10 = scalar.expf<afn> %p10_log : f32
           %p1d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p10 : f32
           %p1d0 = scalar.fptrunc %p1d0f : f32 to f16
@@ -3273,15 +3269,9 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix2 {
           %snapshot_index2 = index.sub %snapshot_last, %k2 : index
           %snapshot_slot2 = index.mul %snapshot_stride, %snapshot_index2 : index
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops/gated_delta_net_f32_wmma.loom
           %p20_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc0 : f32
           %p20 = scalar.expf<afn> %p20_log : f32
           %p21_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc1 : f32
-=======
-          %p20_log = scalar.subf<nnan|ninf|nsz> %snapshot_log2, %snapshot_log0 : f32
-          %p20 = scalar.expf<afn> %p20_log : f32
-          %p21_log = scalar.subf<nnan|ninf|nsz> %snapshot_log2, %snapshot_log1 : f32
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/motifs/gated_delta_net/scan_state_head128.loom
           %p21 = scalar.expf<afn> %p21_log : f32
           %p2d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p20 : f32
           %p2d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p21 : f32
@@ -3301,19 +3291,11 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix3 {
           %snapshot_index3 = index.sub %snapshot_last, %k3 : index
           %snapshot_slot3 = index.mul %snapshot_stride, %snapshot_index3 : index
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops/gated_delta_net_f32_wmma.loom
           %p30_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc0 : f32
           %p30 = scalar.expf<afn> %p30_log : f32
           %p31_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc1 : f32
           %p31 = scalar.expf<afn> %p31_log : f32
           %p32_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc2 : f32
-=======
-          %p30_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log0 : f32
-          %p30 = scalar.expf<afn> %p30_log : f32
-          %p31_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log1 : f32
-          %p31 = scalar.expf<afn> %p31_log : f32
-          %p32_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log2 : f32
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/motifs/gated_delta_net/scan_state_head128.loom
           %p32 = scalar.expf<afn> %p32_log : f32
           %p3d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p30 : f32
           %p3d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p31 : f32
@@ -3366,11 +3348,7 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix1 {
           %snapshot_index1 = index.sub %snapshot_last, %k1 : index
           %snapshot_slot1 = index.mul %snapshot_stride, %snapshot_index1 : index
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops/gated_delta_net_f32_wmma.loom
           %p10_log = scalar.subf<nnan|ninf|nsz> %lc1, %lc0 : f32
-=======
-          %p10_log = scalar.subf<nnan|ninf|nsz> %snapshot_log1, %snapshot_log0 : f32
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/motifs/gated_delta_net/scan_state_head128.loom
           %p10 = scalar.expf<afn> %p10_log : f32
           %p1d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p10 : f32
           %p1d0 = scalar.fptrunc %p1d0f : f32 to f16
@@ -3388,15 +3366,9 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix2 {
           %snapshot_index2 = index.sub %snapshot_last, %k2 : index
           %snapshot_slot2 = index.mul %snapshot_stride, %snapshot_index2 : index
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops/gated_delta_net_f32_wmma.loom
           %p20_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc0 : f32
           %p20 = scalar.expf<afn> %p20_log : f32
           %p21_log = scalar.subf<nnan|ninf|nsz> %lc2, %lc1 : f32
-=======
-          %p20_log = scalar.subf<nnan|ninf|nsz> %snapshot_log2, %snapshot_log0 : f32
-          %p20 = scalar.expf<afn> %p20_log : f32
-          %p21_log = scalar.subf<nnan|ninf|nsz> %snapshot_log2, %snapshot_log1 : f32
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/motifs/gated_delta_net/scan_state_head128.loom
           %p21 = scalar.expf<afn> %p21_log : f32
           %p2d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p20 : f32
           %p2d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p21 : f32
@@ -3416,19 +3388,11 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
         scf.if %has_prefix3 {
           %snapshot_index3 = index.sub %snapshot_last, %k3 : index
           %snapshot_slot3 = index.mul %snapshot_stride, %snapshot_index3 : index
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops/gated_delta_net_f32_wmma.loom
           %p30_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc0 : f32
           %p30 = scalar.expf<afn> %p30_log : f32
           %p31_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc1 : f32
           %p31 = scalar.expf<afn> %p31_log : f32
           %p32_log = scalar.subf<nnan|ninf|nsz> %lc3, %lc2 : f32
-=======
-          %p30_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log0 : f32
-          %p30 = scalar.expf<afn> %p30_log : f32
-          %p31_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log1 : f32
-          %p31 = scalar.expf<afn> %p31_log : f32
-          %p32_log = scalar.subf<nnan|ninf|nsz> %snapshot_log3, %snapshot_log2 : f32
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27:ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/motifs/gated_delta_net/scan_state_head128.loom
           %p32 = scalar.expf<afn> %p32_log : f32
           %p3d0f = scalar.mulf<nnan|ninf|nsz> %dl0, %p30 : f32
           %p3d1f = scalar.mulf<nnan|ninf|nsz> %dl1, %p31 : f32
