@@ -20,6 +20,7 @@ namespace {
 
 HipAttentionSinkHook g_attention_sink_hook = nullptr;
 HipSetRowsHook g_set_rows_hook = nullptr;
+HipRoutedDownHook g_routed_down_hook = nullptr;
 
 }  // namespace
 
@@ -50,6 +51,14 @@ bool hip_set_rows_hook_installed() {
 
 bool hip_set_rows_dispatch(const HipSetRowsArgs & args, DispatchMatch & match) {
     return g_set_rows_hook != nullptr && g_set_rows_hook(args, match);
+}
+
+void set_hip_routed_down_hook(HipRoutedDownHook hook) {
+    g_routed_down_hook = hook;
+}
+
+bool hip_routed_down_dispatch(const HipRoutedDownArgs & args, Dispatch & dispatch) {
+    return g_routed_down_hook != nullptr && g_routed_down_hook(args, dispatch);
 }
 
 }  // namespace ggml::hrx

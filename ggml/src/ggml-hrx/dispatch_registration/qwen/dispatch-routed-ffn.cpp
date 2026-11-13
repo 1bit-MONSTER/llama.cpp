@@ -6,6 +6,7 @@
 #include "dispatch_registration/common/dispatch-q8-publication.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
+#include "hip/hip-dispatches.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cstdint>
@@ -1140,6 +1141,11 @@ static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchCon
         { match.reduce.next_rmsnorm.norm_weight->id, 0, match.reduce.next_rmsnorm.norm_weight->byte_count });
     dispatch.bindings.push_back({ completion_counter_value, 0, sizeof(int32_t) });
     dispatch.bindings.push_back({ q8_output, 0, q8_output_bytes });
+    // A HIP kernel add-on may take the kernel (hip/hip-dispatches.h).
+    hip_routed_down_dispatch({ match.weight->type, match.input_is_q8, match.token_count, kRoutedFfnExpertHiddenSize,
+                               kRoutedFfnRouteCount, match.route_stride, kRoutedFfnExpertCount, kRoutedFfnInputSize,
+                               1e-6f },
+                             dispatch);
 
     dispatch_match.value_aliases.push_back({ match.reduce.residual_input->id, match.output->id });
     dispatch_match.completion_counter_requests.push_back({
