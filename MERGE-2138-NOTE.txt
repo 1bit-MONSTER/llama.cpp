@@ -772,3 +772,15 @@ following one diagnostic at a time (which is what I did here, and it produced tw
 FINAL STATE OF THE ROW (25 hunks / 5 files, all runtime, all needing this same per-file pass):
   speculative 8, prepared-command-program-cache 5, graph-executor 5, command-program-executor 5, graph-program-cache 2
 Compiling: dispatch layer (10 TUs), four manifests, ggml-cpu, corpus, qwen4exp, graph-diagnostics, host-memory, dispatch-*.
+
+## command-program-executor.cpp: whole-struct pass done, and it revealed the real size
+Replacing GraphValueAccess with ours' full definition (13 lines vs the merged 3) moved the error set from "four field errors" to five errors that name
+OUR SUBSYSTEM rather than our fields:
+    managed_weight not declared; demands not declared; collect_weight_demands not declared;
+    push_back(HostWeightBinding) has no matching overload; wait_stream_commands called with too few arguments
+and, in the other direction, the union also needs the merged struct's main_write field which ours does not have.
+So this file is not a type reconciliation at all: our side carries a weight-demand collection subsystem (demands -> HostWeightBinding -> wait_stream_commands)
+that AMD's file does not have, and the merged file's helpers have moved on in signature. That is a port of roughly a subsystem, and it is the same
+question the row has been circling all day -- whose runtime, with the other side's features re-expressed on it -- finally with a size attached:
+one subsystem in this file, the device-source path in host-memory (already done), and has_prepared_program's ownership model in graph-program-cache.
+Reverted. 25 hunks / 5 files, tree clean.
