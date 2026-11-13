@@ -18,8 +18,6 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr KernelCatalogRef kMulMatIdSwiGLUF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_swiglu_f32_f32_wmma");
 
 // AMD's tiled/skinny pair-input SWIGLU refs: their registrations below name them, and the merge kept the uses
 // while dropping the declarations from this file's header block.
@@ -232,9 +230,11 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
     }
 
     Dispatch dispatch;
+    // IQ3S table decode is ours (engine #572 item 4); the tiled/skinny choice is AMD's selector, which replaced the
+    // single f32_f32 kernel when the corpus was factored into composable kernels (#118).
     dispatch.kernel = make_kernel_specialization(iq3s_table_decode_selected(match.gate_format, match.up_format)
                                                      ? kMulMatIdSwiGLUF32F32WmmaIq3sTableKernel
-                                                     : kMulMatIdSwiGLUF32F32WmmaKernel);
+                                                     : mul_mat_id_swiglu_f32_kernel(match));
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
                                                common_mul_mat_id_to_config_value(match.token_count));
