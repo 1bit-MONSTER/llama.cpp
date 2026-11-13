@@ -737,21 +737,6 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
     return ggml_mul(ctx0, normalized, gated);
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-// QSA attends to a budget of whole blocks of compress_ratio tokens, plus the incomplete tail
-// one mean-pooled indexer key scores each block; set_input resolves the cache layout
-class llama_model_qwen4exp::llm_graph_input_qsa : public llm_graph_input_i {
-public:
-    llm_graph_input_qsa(const llama_memory_hybrid_idx_context * mctx, uint32_t ratio, bool blk_bias, bool dense = false, int64_t width_max = 0) :
-        mctx(mctx), ratio(ratio), blk_bias(blk_bias), dense(dense), width_max(width_max) {}
-    virtual ~llm_graph_input_qsa() = default;
-
-    void set_input(const llama_ubatch * ubatch) override {
-        mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
-        if (!dense) {
-            mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio, blk_bias);
-        }
-=======
 // QSA k-pool inputs, shared by the QSA layers: blocks of compress_ratio cells in sequence order, see llama_memory_hybrid_idx
 class llama_model_qwen4exp::llm_graph_input_kpool : public llm_graph_input_i {
 public:
@@ -762,7 +747,6 @@ public:
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
         mctx->set_input_kpool(pool_cells, pool_idxs, pool_mask, tail_idxs, nullptr, new_pool_idxs, new_pool_rep,
                               ubatch, new_pool_pos);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     bool can_reuse(const llm_graph_params & params) override {
@@ -773,27 +757,6 @@ public:
             return false;
         }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        const int64_t n_kv     = idx->get_n_kv();
-        const int64_t n_stream = mctx->get_n_stream();
-        const int64_t n_blocks = (n_kv + ratio - 1)/ratio;
-
-        bool res = true;
-
-        res &= params.ubatch.n_tokens % n_stream == 0;
-
-        res &= k_idxs->ne[0]    == params.ubatch.n_tokens;
-        if (dense) {
-            return res && n_kv <= width_max;
-        }
-        res &= n_kv > width_max;
-        res &= cell_blk->ne[0]  == n_kv;
-        res &= cell_blk->ne[1]  == n_stream;
-        res &= blk_cells->ne[0] == (int64_t) ratio*n_blocks;
-        res &= blk_pos->ne[0]   == 4*n_blocks*n_stream;
-        res &= bias->ne[0]      == (blk_bias ? n_blocks : n_kv);
-        res &= bias->ne[1]      == params.ubatch.n_tokens/n_stream;
-=======
         bool res = true;
 
         res &= k_idxs->ne[0]     == params.ubatch.n_tokens;
@@ -803,36 +766,10 @@ public:
         // the scatter mask shape follows n_kv
         res &= n_kv              == idx->get_n_kv();
         res &= n_new             == mctx->get_n_kpool_new();
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
         return res;
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    // per stream: a cell index names a different token in each stream
-    ggml_tensor * k_idxs    = nullptr;   // I32 [n_tokens]
-    ggml_tensor * cell_blk  = nullptr;   // I32 [n_kv, n_stream]
-    ggml_tensor * blk_cells = nullptr;   // I32 [ratio*n_blocks, n_stream]
-    ggml_tensor * blk_pos   = nullptr;   // I32 [4*n_blocks*n_stream]
-    ggml_tensor * bias      = nullptr;   // F32 [n_blocks or n_kv, n_tokens/n_stream, n_stream]
-
-    const llama_memory_hybrid_idx_context * mctx;
-    const uint32_t ratio;
-
-    // the per-cell half of the bias is the attention mask, so only the per-block half is uploaded
-    const bool blk_bias;
-
-    // dense: every cell is selected (n_kv <= indexer_top_k + ratio - 1), so only the indexer keys are written
-    const bool    dense;
-    const int64_t width_max;
-};
-
-ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
-        const llama_memory_hybrid_idx_context * mctx_hyb,
-        ggml_tensor *                           cur,
-        ggml_tensor *                           inp_pos,
-        ggml_tensor *                           kq_mask,
-=======
     ggml_tensor * k_idxs        = nullptr; // I64 [n_tokens]
     ggml_tensor * pool_cells    = nullptr; // I32 [n_pool]         cell caching each block's pooled key
     ggml_tensor * pool_idxs     = nullptr; // I32 [kpool, n_pool]  member cells per block, n_kv sentinel for the padded blocks
@@ -900,7 +837,6 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
         llm_graph_input_kpool *                 inp_kpool,
         ggml_tensor *                           cur,
         ggml_tensor *                           inp_pos,
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         int *                                   sections,
         int                                     il) {
     const llama_kv_cache_context * mctx_idx = mctx_hyb->get_idx();
@@ -1088,16 +1024,16 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
     kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3], kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
 
     // reshape top_k indices: [n_top_k, n_batch, 1, n_stream] -> [n_top_k, n_batch, n_stream, 1]
-    ggml_tensor * top_k_3d = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], top_k->ne[3], 1, top_k->nb[1], top_k->nb[2], top_k->ne[3]*top_k->nb[3], 0);
+    ggml_tensor * sel_3d = ggml_view_4d(ctx0, sel, sel->ne[0], sel->ne[1], sel->ne[3], 1, sel->nb[1], sel->nb[2], sel->ne[3]*sel->nb[3], 0);
 
     // prepare zero-filled tensor with rows of size 1: [1, n_top_k, n_batch, n_stream]
     // this will be our source of zero values for unmasking top k mask elements
-    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
+    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, sel_3d->ne[0], sel_3d->ne[1], sel_3d->ne[2]);
     zeros = ggml_fill(ctx0, zeros, 0.0f);
 
     // modify KQ mask by unmasking elements that are in top_k indices
     // ggml_set_rows([1, n_kv, n_batch, n_stream], [1, n_top_k, n_batch, n_stream], [n_top_k, n_batch, n_stream, 1])
-    ggml_tensor * kq_mask_top_k = ggml_set_rows(ctx0, kq_mask_all, zeros, top_k_3d);
+    ggml_tensor * kq_mask_top_k = ggml_set_rows(ctx0, kq_mask_all, zeros, sel_3d);
 
     // reshape to restore the original shape of KQ mask:
     // [1, n_kv, n_batch, n_stream] -> [n_kv, n_batch, 1, n_stream]
@@ -1261,7 +1197,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
     beta = ggml_sigmoid(ctx0, beta);
     cb(beta, "beta_sigmoid", il);
 
-    ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur, model.layers[il].ssm_alpha_s);
+    alpha = build_lora_mm(model.layers[il].ssm_alpha, cur, model.layers[il].ssm_alpha_s);
     alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
     cb(alpha, "alpha", il);
 
@@ -1439,24 +1375,23 @@ public:
 };
 
 void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
-    const auto & hp = pmodel.hparams;
 
     // an image arrives as an embd batch, so ubatch->token is null, but every position still needs a row for ggml_get_rows
     // stand in the image token id that the reference hashes, or EOS if the file has no such key
     // gemma3n and gemma4 do the same with a hardcoded row 0 of per_layer_token_embd.
-    const llama_token img_tok = hparams.ple_image_token_id != 0
-        ? (llama_token) hparams.ple_image_token_id
-        : (llama_token) hparams.ple_eos_token_id;
+    const llama_token img_tok = pmodel.hparams.ple_image_token_id != 0
+        ? (llama_token) pmodel.hparams.ple_image_token_id
+        : (llama_token) pmodel.hparams.ple_eos_token_id;
     auto tok_of = [&](int64_t k) -> llama_token {
         const bool is_embd = !ubatch->token || (ubatch->is_mixed() && ubatch->type[k]);
         return is_embd ? img_tok : ubatch->token[k];
     };
 
     const int64_t n_tokens = ubatch->n_tokens;
-    const int64_t n_gram   = hparams.ple_ngram_size;
-    const int64_t n_heads  = hparams.ple_n_heads;
-    const int64_t per_gram = hparams.ple_heads_per_ngram;
-    const int64_t eos      = hparams.ple_eos_token_id;
+    const int64_t n_gram   = pmodel.hparams.ple_ngram_size;
+    const int64_t n_heads  = pmodel.hparams.ple_n_heads;
+    const int64_t per_gram = pmodel.hparams.ple_heads_per_ngram;
+    const int64_t eos      = pmodel.hparams.ple_eos_token_id;
     const int64_t n_prev   = n_gram - 1;
 
     std::vector<int32_t> idx(n_heads * n_tokens);
@@ -1486,23 +1421,23 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
         }
 
         for (int64_t n = 2; n <= n_gram; ++n) {
-            uint64_t mixed = (uint64_t) ctx[0] * hparams.ple_layer_multipliers[0];
+            uint64_t mixed = (uint64_t) ctx[0] * pmodel.hparams.ple_layer_multipliers[0];
             for (int64_t j = 1; j < n; ++j) {
-                mixed ^= (uint64_t) ctx[j] * hparams.ple_layer_multipliers[j];
+                mixed ^= (uint64_t) ctx[j] * pmodel.hparams.ple_layer_multipliers[j];
             }
             const int64_t base = (n - 2) * per_gram;
             for (int64_t g = 0; g < per_gram; ++g) {
                 const int64_t h_i = base + g;
                 idx[i * n_heads + h_i] =
-                    (int32_t) (mixed % hparams.ple_head_vocab_sizes[h_i] + hparams.ple_head_offsets[h_i]);
+                    (int32_t) (mixed % pmodel.hparams.ple_head_vocab_sizes[h_i] + pmodel.hparams.ple_head_offsets[h_i]);
             }
         }
     }
 
     {
-        ggml_tensor * ple = model.per_layer_tok_embd;
+        ggml_tensor * ple = pmodel.per_layer_tok_embd;
 
-        const bool prefetch = model.can_prefetch.count(ple);
+        const bool prefetch = pmodel.can_prefetch.count(ple);
         if (prefetch) {
             llama_prefetch_rows(ple, idx.data(), idx.size());
         }
