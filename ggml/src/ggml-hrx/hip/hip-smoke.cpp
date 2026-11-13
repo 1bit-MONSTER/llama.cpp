@@ -38,10 +38,42 @@
         }                                                                             \
     } while (0)
 
+// The first provisioned queue that can dispatch and transfer (as runtime/hrx-queue.cpp picks it).
+static hrx_queue_t smoke_queue(hrx_device_t device) {
+    for (uint32_t i = 0; i < hrx_device_queue_family_count(device); ++i) {
+        hrx_queue_family_info_t info = {};
+        hrx_status_t            s    = hrx_device_query_queue_family(device, i, &info);
+        if (!hrx_status_is_ok(s)) {
+            hrx_status_ignore(s);
+            continue;
+        }
+        const hrx_queue_role_flags_t needed = HRX_QUEUE_ROLE_DISPATCH | HRX_QUEUE_ROLE_TRANSFER;
+        if ((info.roles & needed) == needed && info.provisioned_queue_count > 0) {
+            return hrx_device_get_queue(device, i, 0);
+        }
+    }
+    return nullptr;
+}
+
 int main() {
-    CHECK(hrx_gpu_initialize(0));
-    hrx_device_t device = nullptr;
-    CHECK(hrx_gpu_device_get(0, &device));
+    hrx_runtime_options_t options = {};
+    options.event_sink            = hrx_device_event_sink_discard();
+    hrx_runtime_t runtime         = nullptr;
+    CHECK(hrx_runtime_create(&options, hrx_host_allocator_system(), &runtime));
+    size_t              info_count = 0;
+    hrx_device_info_t * infos      = nullptr;
+    CHECK(hrx_runtime_query_available_devices(runtime, "amdgpu", hrx_host_allocator_system(), &info_count, &infos));
+    if (info_count == 0) {
+        std::fprintf(stderr, "FAIL no amdgpu device\n");
+        return 1;
+    }
+    hrx_device_create_params_t params = {};
+    params.uri                        = infos[0].uri;
+    params.completion_wait_flags      = HRX_WAIT_FLAG_YIELD;
+    hrx_device_group_t group          = nullptr;
+    CHECK(hrx_device_group_create(runtime, 1, &params, &group));
+    hrx_host_allocator_free(hrx_host_allocator_system(), infos);
+    hrx_device_t device = hrx_device_group_get_device(group, 0);
     char arch[64] = {};
     CHECK(hrx_device_get_property(device, HRX_DEVICE_PROPERTY_ARCHITECTURE, arch, sizeof(arch)));
     size_t       size = 0;
@@ -64,7 +96,7 @@ int main() {
     }
 
     hrx_stream_t stream = nullptr;
-    CHECK(hrx_stream_create(device, 0, &stream));
+    CHECK(hrx_stream_create(smoke_queue(device), 0, &stream));
     const uint32_t n = 1000003, blocks = (n + 255) / 256;
     hrx_buffer_t   x = nullptr, y = nullptr, out = nullptr;
     const hrx_memory_type_t mem = HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE;
@@ -120,6 +152,8 @@ int main() {
     hrx_buffer_release(out);
     hrx_stream_release(stream);
     hrx_executable_release(executable);
+    hrx_device_group_release(group);
+    hrx_runtime_release(runtime);
     const bool pass = bad == 0 && max_err < 1e-5;
     std::printf("%s\n", pass ? "PASS" : "FAIL");
     return pass ? 0 : 1;

@@ -12065,7 +12065,7 @@ static std::vector<int32_t> read_transient_i32(ggml_backend_hrx_context *       
     REQUIRE(arena.buffer != nullptr);
     REQUIRE(allocation.size % sizeof(int32_t) == 0);
     std::vector<int32_t> data(allocation.size / sizeof(int32_t));
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, arena.buffer, allocation.arena_offset, data.data(),
+    require_hrx_status(hrx_synchronous_d2h(context->device->queue, arena.buffer, allocation.arena_offset, data.data(),
                                            allocation.size));
     return data;
 }
@@ -12078,7 +12078,7 @@ static void write_transient_i32_value(ggml_backend_hrx_context *             con
     REQUIRE(arena.buffer != nullptr);
     REQUIRE(allocation.size >= sizeof(value));
     require_hrx_status(
-        hrx_synchronous_h2d(context->device->device, &value, arena.buffer, allocation.arena_offset, sizeof(value)));
+        hrx_synchronous_h2d(context->device->queue, &value, arena.buffer, allocation.arena_offset, sizeof(value)));
 }
 
 static void run_qwen_expert_table_partition_prefill_512_execution() {
@@ -13692,7 +13692,7 @@ static std::vector<uint8_t> read_transient_bytes(ggml_backend_hrx_context *     
     REQUIRE(context != nullptr);
     REQUIRE(arena.buffer != nullptr);
     std::vector<uint8_t> data(allocation.size);
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, arena.buffer, allocation.arena_offset, data.data(),
+    require_hrx_status(hrx_synchronous_d2h(context->device->queue, arena.buffer, allocation.arena_offset, data.data(),
                                            allocation.size));
     return data;
 }

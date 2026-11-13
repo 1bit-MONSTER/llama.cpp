@@ -42,6 +42,8 @@ struct ggml_backend_hrx_buffer_context {
 
 struct ggml_backend_hrx_device_context {
     hrx_device_t                                   device = nullptr;
+    // The device's dispatch+transfer queue (runtime/hrx-queue.h), borrowed from the device.
+    hrx_queue_t                                    queue  = nullptr;
     std::string                                    name;
     std::string                                    description;
     std::string                                    architecture;
@@ -89,7 +91,9 @@ struct ggml_backend_hrx_context {
 };
 
 struct ggml_backend_hrx_reg_context {
-    bool                                                          initialized = false;
+    // The runtime and the device group that owns every HRX device of this backend.
+    hrx_runtime_t                                                 runtime     = nullptr;
+    hrx_device_group_t                                            group       = nullptr;
     std::vector<std::unique_ptr<ggml_backend_hrx_device_context>> device_contexts;
     std::vector<ggml_backend_device>                              devices;
 

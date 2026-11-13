@@ -35,30 +35,42 @@ class HrxTestDevice {
         if (device != nullptr) {
             hrx_device_release(device);
         }
+        if (group != nullptr) {
+            hrx_device_group_release(group);
+        }
+        if (runtime != nullptr) {
+            hrx_runtime_release(runtime);
+        }
     }
 
     bool open() {
-        hrx_status_t init_status = hrx_gpu_initialize(0);
-        if (!hrx_status_is_ok(init_status)) {
-            if (hrx_status_code(init_status) == HRX_STATUS_ALREADY_EXISTS) {
-                hrx_status_ignore(init_status);
-            } else {
-                hrx_status_ignore(init_status);
-                return false;
-            }
+        size_t              info_count = 0;
+        hrx_device_info_t * infos      = nullptr;
+        hrx_runtime_options_t options  = {};
+        options.event_sink             = hrx_device_event_sink_discard();
+        hrx_status_t status = hrx_runtime_create(&options, hrx_host_allocator_system(), &runtime);
+        if (hrx_status_is_ok(status)) {
+            status = hrx_runtime_query_available_devices(runtime, "amdgpu", hrx_host_allocator_system(), &info_count,
+                                                         &infos);
         }
-
-        int count = 0;
-        if (ggml::hrx::ErrorResult error = ggml::hrx::take_status(hrx_gpu_device_count(&count))) {
-            std::fprintf(stderr, "skip executable cache materialization: device count failed: %s\n", error->c_str());
+        if (hrx_status_is_ok(status) && info_count > 0) {
+            std::vector<hrx_device_create_params_t> params(info_count);
+            for (size_t i = 0; i < info_count; ++i) {
+                params[i].uri                   = infos[i].uri;
+                params[i].completion_wait_flags = HRX_WAIT_FLAG_YIELD;
+            }
+            status = hrx_device_group_create(runtime, info_count, params.data(), &group);
+        }
+        if (infos != nullptr) {
+            hrx_host_allocator_free(hrx_host_allocator_system(), infos);
+        }
+        if (ggml::hrx::ErrorResult error = ggml::hrx::take_status(status)) {
+            std::fprintf(stderr, "skip executable cache materialization: no HRX device group: %s\n", error->c_str());
             return false;
         }
-        for (int i = 0; i < count; ++i) {
-            hrx_device_t candidate = nullptr;
-            if (ggml::hrx::ErrorResult error = ggml::hrx::take_status(hrx_gpu_device_get(i, &candidate))) {
-                std::fprintf(stderr, "skip HRX device %d: %s\n", i, error->c_str());
-                continue;
-            }
+        const size_t count = group != nullptr ? hrx_device_group_device_count(group) : 0;
+        for (size_t i = 0; i < count; ++i) {
+            hrx_device_t candidate = hrx_device_group_get_device(group, i);
             if (candidate == nullptr) {
                 continue;
             }
@@ -76,8 +88,10 @@ class HrxTestDevice {
         return false;
     }
 
-    hrx_device_t device = nullptr;
-    std::string  architecture;
+    hrx_runtime_t      runtime = nullptr;
+    hrx_device_group_t group   = nullptr;
+    hrx_device_t       device  = nullptr;
+    std::string        architecture;
 
   private:
     static std::optional<std::string> read_string_property(hrx_device_t device, hrx_device_property_t property) {

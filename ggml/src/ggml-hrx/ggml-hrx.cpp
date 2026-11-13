@@ -19,6 +19,7 @@
 #include "hrx_runtime.h"
 #include "kernel-corpus/kernel-corpus.h"
 #include "loom-jit.h"
+#include "runtime/hrx-queue.h"
 #include "runtime/hrx-sleeping-wait.h"
 #include "runtime/host-memory.h"
 #include "runtime/graph-executor.h"
@@ -105,11 +106,11 @@ ggml_backend_hrx_reg_context::~ggml_backend_hrx_reg_context() {
             hrx_device_release(context->device);
         }
     }
-    if (initialized) {
-        hrx_status_t status = hrx_gpu_shutdown();
-        if (!hrx_status_is_ok(status)) {
-            hrx_status_ignore(status);
-        }
+    if (group != nullptr) {
+        hrx_device_group_release(group);
+    }
+    if (runtime != nullptr) {
+        hrx_runtime_release(runtime);
     }
 }
 
@@ -383,12 +384,12 @@ static bool buffer_copy(ggml_backend_buffer_t buffer, const ggml_tensor * source
     if (both_imported) {
         std::memmove(destination_context->base + destination_offset, source_context->base + source_offset, size);
     } else if (source_imported) {
-        if (!HRX_CHECK(hrx_synchronous_h2d(destination_context->device->device, source_context->base + source_offset,
+        if (!HRX_CHECK(hrx_synchronous_h2d(destination_context->device->queue, source_context->base + source_offset,
                                            destination_context->buffer, destination_offset, size))) {
             return false;
         }
     } else if (destination_imported) {
-        if (!HRX_CHECK(hrx_synchronous_d2h(source_context->device->device, source_context->buffer, source_offset,
+        if (!HRX_CHECK(hrx_synchronous_d2h(source_context->device->queue, source_context->buffer, source_offset,
                                            destination_context->base + destination_offset, size))) {
             return false;
         }
@@ -456,7 +457,6 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         host_visible ?
             HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED | HRX_BUFFER_USAGE_MAPPING_PERSISTENT :
             HRX_BUFFER_USAGE_DEFAULT,
-        0,
     };
     // one call into our safety layer: charge the pool, and say no when it would not fit
     if (size > 0 && !ggml::hrx::onebit::pool_reserve(type_context->device->memory_budget, size,
@@ -1043,7 +1043,7 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
     GGML_UNUSED(parameters);
     auto *       device_ctx = device_context(device);
     hrx_stream_t stream     = nullptr;
-    if (!HRX_CHECK(hrx_stream_create(device_ctx->device, 0, &stream))) {
+    if (!HRX_CHECK(hrx_stream_create(device_ctx->queue, 0, &stream))) {
         return nullptr;
     }
     auto * context = new (std::nothrow) ggml_backend_hrx_context;
@@ -1716,7 +1716,8 @@ static ggml_backend_dev_t registry_device(ggml_backend_reg_t registry, size_t in
 static bool ggml_backend_hrx_buffer_export_dmabuf(ggml_backend_buffer_t buffer, int * fd, size_t * offset) {
     void * device_ptr = nullptr;
     return buffer != nullptr && buffer->iface.get_base == ggml_backend_hrx_buffer_base &&
-           HRX_CHECK(hrx_buffer_get_device_ptr(buffer_context(buffer)->buffer, &device_ptr)) &&
+           ggml::hrx::buffer_device_address(buffer_context(buffer)->device->device, buffer_context(buffer)->buffer,
+                                            &device_ptr) &&
            ggml::hrx::export_dmabuf(device_ptr, buffer->size, fd, offset);
 }
 
@@ -1732,40 +1733,50 @@ static void * registry_proc(ggml_backend_reg_t registry, const char * name) {
 static const ggml_backend_reg_i registry_i = { registry_name, registry_device_count, registry_device, registry_proc };
 
 static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
-    auto         context = std::make_unique<ggml_backend_hrx_reg_context>();
+    auto                  context = std::make_unique<ggml_backend_hrx_reg_context>();
+    hrx_runtime_options_t options = {};
+    options.event_sink            = hrx_device_event_sink_discard();
     if (environment_flag_enabled("GGML_HRX_LOG_DEVICE_EVENTS")) {
-        hrx_device_event_sink_t sink = { log_hrx_device_event, nullptr };
-        if (!HRX_CHECK(hrx_runtime_set_device_event_sink(sink))) {
-            return context;
-        }
+        options.event_sink = { log_hrx_device_event, nullptr };
     }
-    hrx_status_t status  = hrx_gpu_initialize(0);
+    // HRX_GPU_DRIVER picks the native device scheme as the HIP binding does: amdgpu (default), rdna or cdna.
+    const char * driver = std::getenv("HRX_GPU_DRIVER");
+    driver              = driver != nullptr && driver[0] != '\0' ? driver : "amdgpu";
+    size_t              info_count = 0;
+    hrx_device_info_t * infos      = nullptr;
+    hrx_status_t        status     = hrx_runtime_create(&options, hrx_host_allocator_system(), &context->runtime);
     if (hrx_status_is_ok(status)) {
-        context->initialized = true;
-    } else if (hrx_status_code(status) == HRX_STATUS_ALREADY_EXISTS) {
-        hrx_status_ignore(status);
-    } else {
+        status = hrx_runtime_query_available_devices(context->runtime, driver, hrx_host_allocator_system(), &info_count,
+                                                     &infos);
+    }
+    if (hrx_status_is_ok(status) && info_count > 0) {
+        std::vector<hrx_device_create_params_t> params(info_count);
+        for (size_t i = 0; i < info_count; ++i) {
+            params[i].uri                   = infos[i].uri;
+            params[i].completion_wait_flags = HRX_WAIT_FLAG_YIELD;
+        }
+        status = hrx_device_group_create(context->runtime, info_count, params.data(), &context->group);
+    }
+    if (infos != nullptr) {
+        hrx_host_allocator_free(hrx_host_allocator_system(), infos);
+    }
+    if (!hrx_status_is_ok(status)) {
         // NOT silent (engine #1766): a failed init registers zero devices, and then every downstream symptom points at
         // something else -- `llama-bench --list-devices` prints "(none)", and `--device HRX0` is rejected as "invalid
         // device: HRX0", a complaint about the CLI argument rather than about a runtime that never initialised. The
-        // status goes through hrx_check() so the line reads like every other HRX failure in this file (same
-        // file:line:expression prefix, same status consumption); the first attempt found the cause to be a ROCr whose
-        // libhsa-runtime64 does not export hsa_amd_queue_create, which that message names by symbol.
-        hrx_check(status, "hrx_gpu_initialize(0)", __FILE__, __LINE__);
+        // status goes through hrx_check() so the line reads like every other HRX failure in this file.
+        hrx_check(status, "create the HRX runtime and device group", __FILE__, __LINE__);
         GGML_LOG_ERROR("ggml_hrx: the HRX runtime did not initialise, so this backend registers no devices: "
                        "--list-devices will print none and --device HRX0 will be rejected as an invalid device. "
                        "The line above is the reason (engine #1766)\n");
         return context;
     }
-    int count = 0;
-    if (!HRX_CHECK(hrx_gpu_device_count(&count))) {
-        return context;
-    }
+    const int count = context->group != nullptr ? static_cast<int>(hrx_device_group_device_count(context->group)) : 0;
     context->device_contexts.reserve(count);
     context->devices.reserve(count);
     for (int i = 0; i < count; ++i) {
-        hrx_device_t hrx_device = nullptr;
-        if (!HRX_CHECK(hrx_gpu_device_get(i, &hrx_device)) || hrx_device == nullptr) {
+        hrx_device_t hrx_device = hrx_device_group_get_device(context->group, static_cast<size_t>(i));
+        if (hrx_device == nullptr) {
             continue;
         }
         hrx_device_retain(hrx_device);
@@ -1790,7 +1801,14 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             hrx_device_release(hrx_device);
             continue;
         }
-        if (!HRX_CHECK(hrx_stream_create(hrx_device, 0, &device_ctx->buffer_stream))) {
+        device_ctx->queue = ggml::hrx::device_queue(hrx_device);
+        if (device_ctx->queue == nullptr) {
+            GGML_LOG_ERROR("ggml_hrx: %s has no queue family that can both dispatch and transfer\n",
+                           device_ctx->name.c_str());
+            hrx_device_release(hrx_device);
+            continue;
+        }
+        if (!HRX_CHECK(hrx_stream_create(device_ctx->queue, 0, &device_ctx->buffer_stream))) {
             hrx_device_release(hrx_device);
             continue;
         }

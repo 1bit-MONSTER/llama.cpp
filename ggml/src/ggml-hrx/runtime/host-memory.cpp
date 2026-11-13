@@ -1,5 +1,6 @@
 #include "host-memory.h"
 
+#include "hrx-queue.h"
 #include "model-buffer-from-mmap.h"
 
 #include "ggml-impl.h"
@@ -1226,7 +1227,6 @@ static Status allocate_device_buffer(hrx_device_t device, size_t size, hrx_buffe
         HRX_MEMORY_TYPE_DEVICE_LOCAL,
         HRX_MEMORY_ACCESS_ALL,
         HRX_BUFFER_USAGE_DEFAULT,
-        0,
     };
     if (ErrorResult error =
             take_status(hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, size, &buffer))) {
@@ -1254,7 +1254,6 @@ Status allocate_mapped_host_staging_buffer(hrx_device_t device, size_t size, hrx
         HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE | HRX_MEMORY_TYPE_HOST_COHERENT,
         HRX_MEMORY_ACCESS_ALL,
         HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED | HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
-        0,
     };
     if (ErrorResult error =
             take_status(hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, size, &buffer))) {
@@ -1291,7 +1290,7 @@ Status HostTransferManager::upload_synchronous(hrx_stream_t stream,
         status.log("synchronize before HRX host upload failed: %s", error->c_str());
         return status;
     }
-    if (ErrorResult error = take_status(hrx_synchronous_h2d(device, host_source, destination, offset, size))) {
+    if (ErrorResult error = take_status(hrx_synchronous_h2d(ggml::hrx::device_queue(device), host_source, destination, offset, size))) {
         status.log("synchronous HRX host upload failed: %s", error->c_str());
         return status;
     }
@@ -1362,7 +1361,7 @@ Status HostTransferManager::download_synchronous(hrx_stream_t stream,
         status.log("synchronize before HRX host download failed: %s", error->c_str());
         return status;
     }
-    if (ErrorResult error = take_status(hrx_synchronous_d2h(device, source, offset, host_destination, size))) {
+    if (ErrorResult error = take_status(hrx_synchronous_d2h(ggml::hrx::device_queue(device), source, offset, host_destination, size))) {
         status.log("synchronous HRX host download failed: %s", error->c_str());
         return status;
     }
