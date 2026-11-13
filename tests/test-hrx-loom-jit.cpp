@@ -609,6 +609,32 @@ int main() {
 
     std::printf("async Loom JIT compiled %zu kernels\n", refs.size());
 
+    // engine#2138: the routed gate/up pair kernels the dispatch selects (dispatch-gated-mul-mat-id.cpp: skinny at
+    // <= 5 tokens, tiled above) link the motifs/dequant.loom codebook and preload functions. The #327 merge left
+    // those declared and undefined, so every MoE model failed here with "unresolved exact declaration" while the
+    // rest of this suite passed. The configs are the ones the dispatch emits; 28 is this line's IQ3_XXS code.
+    for (const char * pair_kernel : { "ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32",
+                                      "ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32" }) {
+        const ggml::hrx::KernelDefinition & pair   = find_kernel(pair_kernel);
+        const bool                          skinny = std::strstr(pair_kernel, "skinny") != nullptr;
+        const int64_t                       tokens = skinny ? 1 : 16;
+        for (const char * format : { "4", "6", "28" }) {
+            const std::string key = std::string(skinny ? "pair-skinny-" : "pair-tiled-") + format;
+            require_compiled_kernel(compile_kernel(*sync_jit, key, pair, token_count_workload(tokens),
+                                                   {
+                                                       { "ggml.workload.token_capacity", std::to_string(tokens) },
+                                                       { "ggml.mul_mat_id_swiglu.input_size", "2048" },
+                                                       { "ggml.mul_mat_id_swiglu.output_size", "768" },
+                                                       { "ggml.mul_mat_id_swiglu.expert_count", "128" },
+                                                       { "ggml.mul_mat_id_swiglu.route_count", "8" },
+                                                       { "ggml.mul_mat_id_swiglu.input_route_count", "1" },
+                                                       { "ggml.mul_mat_id_swiglu.gate_weight_format", format },
+                                                       { "ggml.mul_mat_id_swiglu.up_weight_format", format },
+                                                   }));
+            std::printf("Loom JIT linked %s with weight format %s\n", pair_kernel, format);
+        }
+    }
+
     const auto & q6_prefill = find_kernel("ggml_mul_mat_q6_k_f16_wmma_prefill_wave32");
     const struct {
         int64_t tokens;

@@ -94,7 +94,8 @@ template.def<@ggml.mul_mat_id_swiglu.body> device @ggml_mul_mat_id_swiglu_f32_f3
   %c64 = index.constant 64 : index
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
-  %iq3_xxs_format = index.constant 18 : index
+  // engine#2138: this line's IQ3_XXS code is 28 (dispatch-mul-mat-weight-format.h); AMD's file numbers it 18.
+  %iq3_xxs_format = index.constant 28 : index
   %c0_offset = index.constant 0 : offset
   %c4_bytes = index.constant 4 : offset
   %weight_stage_bytes = index.constant 5120 : offset
