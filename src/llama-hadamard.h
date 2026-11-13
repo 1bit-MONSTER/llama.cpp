@@ -75,6 +75,17 @@ struct llama_hadamard_transform {
     // > 1: the activation arrives with its features in tiled head order [hd, nk, rep] and the
     // fold was computed in grouped order [hd, rep, nk] (prism.hadamard.gdn_v_grouped, ssm_out)
     int64_t perm_hd = 0, perm_nk = 0, perm_rep = 0;
+    // ssm_out of a gated delta net gets its value heads in tiled order, but the fold used grouped order
+    // record the head geometry for that permutation, return false if it does not match the input width
+    bool set_gdn_v_perm(int64_t n_in, int64_t n_v, int64_t n_k) {
+        if (n_k <= 0 || n_v <= 0 || n_v % n_k != 0 || n_in % n_v != 0) {
+            return false;
+        }
+        perm_hd  = n_in / n_v;
+        perm_nk  = n_k;
+        perm_rep = n_v / n_k;
+        return true;
+    }
 };
 
 // per-graph cache: several weights reading the same activation share one transform
@@ -90,10 +101,11 @@ struct llama_hadamard {
     bool onebit_q4_0   = false;  // from onebit.hadamard_q4_0: the Q4_0 matmul weights, MTP ones only if loaded
 
     // bound to the model's tensors (setup)
-    std::unordered_map<const ggml_tensor *, llama_hadamard_transform> rotations;
-    std::unordered_map<const ggml_tensor *, llama_hadamard_transform> inverses;
+    std::unordered_map<const ggml_tensor *, llama_hadamard_transform> rot;
+    std::unordered_map<const ggml_tensor *, llama_hadamard_transform> inverses;  // ours: the lookup-side tables
+    std::unordered_map<const ggml_tensor *, llama_hadamard_transform> inv;
 
-    bool empty() const { return rotations.empty() && inverses.empty(); }
+    bool empty() const { return rot.empty() && inv.empty(); }
 
     // reads prism.hadamard.*; throws on anything this implementation does not verify
     void load_keys(llama_model_loader & ml, llm_arch arch);

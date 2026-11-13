@@ -134,7 +134,7 @@ void llama_model_deepseek41::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t q_lora_rank     = hparams.n_lora_q;
-    const int64_t n_ff_exp        = hparams.n_ff_exp;
+    const int64_t n_ff_exp        = hparams.n_ff_exp();
     const int64_t n_expert_shared = hparams.n_expert_shared;
     const int64_t n_embd_head     = hparams.n_embd_head_k();
     const int64_t o_groups        = hparams.dsv4_o_group_count;
@@ -282,6 +282,7 @@ void llama_model_deepseek41::engram_hash(int e, const llama_ubatch & ubatch, con
 
 // cand_pin: +1e30 (the reference uses +inf) on the block holding each query's newest compressed row, so a partly
 // filled block always survives; a finite pin keeps fully masked blocks at -inf instead of NaN
+// cand_pin: +1e30 on the block with the newest compressed row of each query, so a partly filled block is always kept; the reference uses +inf, but a finite pin keeps fully masked blocks at -inf instead of NaN
 class llm_graph_input_dsv41 : public llm_graph_input_i {
 public:
     llm_graph_input_dsv41(const llama_model_deepseek41 & model, const llama_kv_cache_dsv4_context * mctx) :
@@ -309,10 +310,15 @@ void llm_graph_input_dsv41::set_input(const llama_ubatch * ubatch) {
         // a token shared by several sequences has the same history in each, so its first sequence resolves it
         std::vector<llama_token> prev;
         mctx->get_raw()->get_prev_tokens(*ubatch, model.hparams.ple_ngram_size - 1, prev);
-        // hash every Engram layer up front, then hand the whole set of rows to the backend in one go
+        // hash all Engram layers first so a lazily read table gets one batched readahead before the first gather
         std::vector<std::vector<int32_t>> ids(engram_ids.size());
+        std::vector<int32_t> all;
         for (size_t e = 0; e < engram_ids.size(); ++e) {
             model.engram_hash((int) e, *ubatch, prev, ids[e]);
+            all.insert(all.end(), ids[e].begin(), ids[e].end());
+        }
+        if (model.can_prefetch.count(model.per_layer_tok_embd)) {
+            llama_prefetch_rows(model.per_layer_tok_embd, all.data(), all.size());
         }
         for (size_t e = 0; e < engram_ids.size(); ++e) {
             if (engram_ids[e]->buffer) {
@@ -532,6 +538,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                     comp_all->nb[1], comp_all->nb[2], comp_all->nb[3], ggml_row_size(comp_all->type, n_embd_head));
             // the fused indexer reads the strided view in place, the unfused path needs it contiguous; quantized
             // caches are dequantized straight from the strided view (CUDA has no same-type copy of quantized views)
+            // the fused indexer reads the strided view in place, the unfused path needs it contiguous; CUDA has no same-type copy of quantized views, so dequantize them
             const bool fused_idx = sparse && cparams.fused_lid && ci.kq_mask->type == GGML_TYPE_F16;
             if (ggml_is_quantized(ik->type)) {
                 ik = ggml_cast(ctx0, ik, GGML_TYPE_F32);
@@ -548,6 +555,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
 
             // chunk queries so the [n_ih, tokens, n_comp] scores stay near 2^26 elements (at most 64 chunks); the fused
             // indexer has no such intermediate and runs as one chunk
+            // chunk queries so the [n_ih, tokens, n_comp] scores stay near 2^26 elements (at most 64 chunks); the fused indexer runs as one chunk
             const int64_t n_tok = nt/n_stream;
             GGML_ASSERT(ci.kq_mask->ne[1] == n_tok);
             const int64_t chunk = fused_idx ? n_tok :
@@ -653,12 +661,14 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
 
         // few queries per stream: gather each query's top-k rows and attend over [window | selected], one FA stream
         // per query, instead of a full n_comp mask per layer. same keys and mask as dense, different key order
+        // few queries per stream: attend over [window | top-k rows of the query], one FA stream per query; same keys and mask as dense, different key order
         const bool gather = sparse && cparams.flash_attn && raw_mask->type == GGML_TYPE_F16 && ci.kq_mask->type == GGML_TYPE_F16 &&
                 ((n_stream == 1 && nt <= 32) || nt == n_stream);
 
         if (gather) {
             // ggml_top_k returns the rows in no particular order (CUB DeviceTopK can vary between runs) and FA sums the
             // gathered keys in that order: sort the rows once per top-k source so the result is deterministic
+            // ggml_top_k returns the rows in no fixed order and FA sums the keys in that order: sort them so the result is deterministic
             ggml_tensor *& sel = gather_sel_of[topk_src];
             if (!sel) {
                 GGML_ASSERT(n_comp <= (INT64_C(1) << 24)); // row ids are exact in F32
@@ -711,6 +721,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
 
             // mask: window row, then comp mask at the selected rows (-inf where top-k picked an invisible row);
             // one per top-k source, shared by its layers
+            // window mask, then the comp mask at the selected rows (-inf where top-k picked an invisible row); one per top-k source
             ggml_tensor *& kq_mask = gather_mask_of[topk_src];
             if (!kq_mask) {
                 ggml_tensor * sel_mask = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, ci.kq_mask, 1, n_comp, nt), sel);
@@ -719,7 +730,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                 cb(kq_mask, "comp_kq_mask_sel", il);
             }
 
-            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, kq_scale, il);
+            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, 0, kq_scale, il);
         } else {
             // dense attention over [window | all compressed rows], selection applied as a mask
             ggml_tensor * comp_k = ggml_view_4d(ctx0, comp_all, n_embd_head, 1, n_comp, n_stream,
@@ -745,7 +756,9 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
             ggml_tensor * kq_mask  = ggml_concat(ctx0, raw_mask, sel_mask, 0);
             cb(kq_mask, "comp_kq_mask", il);
 
-            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, kq_scale, il);
+            // at most window + top-k visible columns per query: lets CUDA FA gather only those
+            const int64_t n_kv_max = sparse ? std::min<int64_t>(raw_mask->ne[0], hparams.n_swa) + k_sel : 0;
+            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, n_kv_max, kq_scale, il);
         }
         if (k_rot) {
             out = llama_mul_mat_hadamard(ctx0, out, k_rot);
@@ -852,10 +865,7 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
         }
 
         ggml_tensor * residual = inpL;
-        ggml_tensor * post = nullptr;
-        ggml_tensor * comb = nullptr;
-
-        ggml_tensor * attn_pre = build_hc_mixes(inpL, layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, &post, &comb, true, il);
+        const hc_mixes attn_mix = build_hc_mixes(inpL, layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, il);
 
         // the first layer's attention collapses with the identity pre-mix: copy 0
         cur = pre_prev ? build_hc_pre(inpL, pre_prev, il) : ggml_cont(ctx0, ggml_view_2d(ctx0, inpL, n_embd, n_tokens, inpL->nb[2], 0));
@@ -866,18 +876,19 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
 
         cur = build_attention41(model, inp_dsv4, cur, inp_pos, cand_pin, il);
 
-        inpL = build_hc_post(cur, residual, post, comb, il);
+        inpL = build_hc_post(cur, residual, attn_mix.post, attn_mix.comb, il);
         cb(inpL, "hc_attn_post", il);
 
         residual = inpL;
-        pre_prev = build_hc_mixes(inpL, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, true, il);
+        const hc_mixes ffn_mix = build_hc_mixes(inpL, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, il);
+        pre_prev = ffn_mix.pre;
 
-        cur = build_hc_pre(inpL, attn_pre, il);
+        cur = build_hc_pre(inpL, attn_mix.pre, il);
         cb(cur, "hc_ffn_pre", il);
 
         ggml_build_forward_expand(gf, residual);
-        ggml_build_forward_expand(gf, post);
-        ggml_build_forward_expand(gf, comb);
+        ggml_build_forward_expand(gf, ffn_mix.post);
+        ggml_build_forward_expand(gf, ffn_mix.comb);
 
         cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
@@ -903,8 +914,8 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
                 layer.ffn_gate_exps,
                 layer.ffn_down_exps,
                 exp_probs_b,
-                n_expert, hparams.n_expert_used,
-                LLM_FFN_SILU, hparams.expert_weights_norm && hparams.n_expert_used > 1,
+                n_expert, hparams.n_expert_used(),
+                LLM_FFN_SILU, hparams.expert_weights_norm && hparams.n_expert_used() > 1,
                 hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il, logits);
@@ -920,7 +931,7 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
         cur = ggml_add(ctx0, moe_out, ffn_shexp);
         cb(cur, "ffn_out", il);
 
-        inpL = build_hc_post(cur, residual, post, comb, il);
+        inpL = build_hc_post(cur, residual, ffn_mix.post, ffn_mix.comb, il);
         inpL = build_cvec(inpL, il);
         cb(inpL, "l_out", il);
     }

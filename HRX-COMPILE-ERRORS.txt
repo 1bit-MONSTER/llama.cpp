@@ -1,0 +1,11 @@
+ggml/src/ggml-hrx/dispatch_registration/common/dispatch-gated-mul-mat.cpp -> a function-definition is not allowed here before ‘{’ token
+ggml/src/ggml-hrx/dispatch_registration/common/dispatch-gated-mul-mat.cpp -> expected ‘}’ at end of input
+ggml/src/ggml-hrx/dispatch_registration/common/dispatch-gated-mul-mat.cpp -> version control conflict marker in file
+ggml/src/ggml-hrx/dispatch_registration/common/dispatch-gated-mul-mat-id.cpp -> ‘kMulMatIdSkinnySwiGLUF32F32Kernel’ was not declared in this scope; did you mean ‘kMulMatIdSwiGLUF32F32WmmaKernel’?
+ggml/src/ggml-hrx/dispatch_registration/common/dispatch-gated-mul-mat-id.cpp -> ‘kMulMatIdTiledSwiGLUF32F32Kernel’ was not declared in this scope; did you mean ‘kMulMatIdSwiGLUF32F32WmmaKernel’?
+ggml/src/ggml-hrx/dispatch_registration/common/dispatch-get-rows.cpp -> cannot convert ‘<brace-enclosed initializer list>’ to ‘ggml::hrx::DispatchRegistration’
+ggml/src/ggml-hrx/dispatch_registration/common/dispatch-get-rows.cpp -> ‘match_get_rows_rmsnorm_binary_dispatch’ was not declared in this scope
+ggml/src/ggml-hrx/dispatch_registration/common/dispatch-get-rows.cpp -> ‘match_get_rows_scale_f32_dispatch’ was not declared in this scope
+ggml/src/ggml-hrx/dispatch_registration/common/dispatch-get-rows.cpp -> ‘struct ggml::hrx::KernelSpecialization’ has no member named ‘workload_specialization’
+ggml/src/ggml-hrx/dispatch_registration/common/dispatch-get-rows.cpp -> ‘WorkloadSpecialization’ has not been declared; did you mean ‘KernelSpecialization’?
+ggml/src/ggml-hrx/./kernel-corpus/kernel-corpus-catalog-verify.h -> static assertion failed: unknown HRX kernel catalog entry

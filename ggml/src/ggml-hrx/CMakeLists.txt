@@ -15,7 +15,14 @@ if(HRX_SOURCE_DIR)
     set(GGML_LOOMC_LIB "${GGML_HRX_BUILD_DIR}/loom/binding/c/${CMAKE_SHARED_LIBRARY_PREFIX}loomc${CMAKE_SHARED_LIBRARY_SUFFIX}")
     set(GGML_HRX_LOOM_LINK "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-link/loom-link${CMAKE_EXECUTABLE_SUFFIX}")
     set(GGML_HRX_LOOM_FORMAT "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-format/loom-format${CMAKE_EXECUTABLE_SUFFIX}")
-    set(GGML_HRX_IREE_BENCHMARK_LOOM "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/iree-benchmark-loom/iree-benchmark-loom${CMAKE_EXECUTABLE_SUFFIX}")
+    # AMD's line builds loom-benchmark too; the hrx-system this line holds (engine config/hrx-system-hold.config) has
+    # no such tool, and nothing in this build uses it, so it is built only where the source tree has it.
+    set(GGML_HRX_LOOM_BENCHMARK_TARGET "")
+    set(GGML_HRX_LOOM_BENCHMARK "")
+    if(EXISTS "${HRX_SOURCE_DIR}/loom/src/loom/tools/loom-benchmark")
+        set(GGML_HRX_LOOM_BENCHMARK_TARGET loom_tools_loom-benchmark_loom-benchmark)
+        set(GGML_HRX_LOOM_BENCHMARK "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-benchmark/loom-benchmark${CMAKE_EXECUTABLE_SUFFIX}")
+    endif()
     set(GGML_HRX_DEPS_TARGET ggml-hrx-deps)
 
     set(GGML_HRX_CMAKE_ARGS
@@ -85,9 +92,9 @@ if(HRX_SOURCE_DIR)
         PREFIX "${GGML_HRX_PREFIX}"
         CMAKE_ARGS ${GGML_HRX_CMAKE_ARGS}
         BUILD_ALWAYS TRUE
-        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target hrx loomc_shared loom_tools_loom-link_loom-link loom_tools_loom-format_loom-format loom_tools_iree-benchmark-loom_iree-benchmark-loom --config ${CMAKE_BUILD_TYPE}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target hrx loomc_shared loom_tools_loom-link_loom-link loom_tools_loom-format_loom-format ${GGML_HRX_LOOM_BENCHMARK_TARGET} --config ${CMAKE_BUILD_TYPE}
         INSTALL_COMMAND ""
-        BUILD_BYPRODUCTS "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" "${GGML_HRX_LOOM_LINK}" "${GGML_HRX_LOOM_FORMAT}" "${GGML_HRX_IREE_BENCHMARK_LOOM}"
+        BUILD_BYPRODUCTS "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" "${GGML_HRX_LOOM_LINK}" "${GGML_HRX_LOOM_FORMAT}" ${GGML_HRX_LOOM_BENCHMARK}
         UPDATE_COMMAND ""
     )
 
@@ -108,7 +115,7 @@ else()
     find_package(loomc CONFIG REQUIRED)
     find_program(GGML_HRX_LOOM_LINK NAMES loom-link)
     find_program(GGML_HRX_LOOM_FORMAT NAMES loom-format)
-    find_program(GGML_HRX_IREE_BENCHMARK_LOOM NAMES iree-benchmark-loom)
+    find_program(GGML_HRX_LOOM_BENCHMARK NAMES loom-benchmark)
 endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -234,6 +241,9 @@ ggml_add_backend_library(ggml-hrx
     dispatch/transient-allocator.h
     dispatch/transient-reuse-guard.cpp
     dispatch/transient-reuse-guard.h
+    dispatch_registration/common/dispatch-activation-publication.cpp
+    dispatch_registration/common/iq-codebook-resource.cpp
+    dispatch_registration/immutable-program-resource.cpp
     dispatch_registration/common/dispatch-binary.cpp
     dispatch_registration/common/dispatch-binary.h
     dispatch_registration/common/dispatch-common.cpp
@@ -266,6 +276,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-mul-mat-common.h
     dispatch_registration/common/dispatch-mul-mat-weight-format.h
     dispatch_registration/common/dispatch-mul-mat.h
+    dispatch_registration/common/dispatch-amax-scale.cpp
+    dispatch_registration/common/dispatch-amax-scale.h
     dispatch_registration/common/dispatch-rope-set-rows.cpp
     dispatch_registration/common/dispatch-rope-set-rows.h
     dispatch_registration/common/dispatch-rope-utils.h
@@ -356,6 +368,8 @@ ggml_add_backend_library(ggml-hrx
     runtime/hrx-sleeping-wait.cpp
     runtime/hrx-sleeping-wait.h
     runtime/command-program-executor.h
+    runtime/compile-trace.cpp
+    runtime/compile-trace.h
     runtime/graph-executor.cpp
     runtime/graph-executor.h
     runtime/graph-program-cache.cpp

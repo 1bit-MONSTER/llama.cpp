@@ -117,7 +117,9 @@ bool buffer_is_file_mapped(ggml_backend_buffer_t buffer) {
 void model_buffer_from_mmap_init_type(ggml_backend_hrx_device_context * device) {
     device->mapped_buft_context = { device, device->name + "_Mapped", true };
     device->mapped_buft         = {
-        { mapped_type_name, mapped_type_alloc, mapped_type_alignment, nullptr, nullptr, mapped_type_is_host },
+        // designated: the merged ggml interface also has alloc_buffer_n and get_alloc_size_n (left null)
+        { .get_name = mapped_type_name, .alloc_buffer = mapped_type_alloc, .get_alignment = mapped_type_alignment,
+          .get_max_size = nullptr, .get_alloc_size = nullptr, .is_host = mapped_type_is_host },
         nullptr,
         &device->mapped_buft_context,
     };

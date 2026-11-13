@@ -183,7 +183,7 @@ ggml_tensor * llama_model_zamba::graph::build_zamba_mamba(llm_graph_input_rs * i
 
     auto get_ssm_rows = [&](ggml_context * ctx, ggml_tensor * states, ggml_tensor * ids) {
         ggml_tensor * ssm = ggml_reshape_4d(ctx, states, d_state, 1, d_inner, mctx_cur->get_size());
-        return ggml_ssm_scan(ctx, ssm, x, dt, layer.ssm_a, B, C, ids);
+        return ggml_ssm_scan(ctx, ssm, x, dt, layer.ssm_a, B, C, ids, /*K=*/1);
     };
     ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs, get_ssm_rows);
 

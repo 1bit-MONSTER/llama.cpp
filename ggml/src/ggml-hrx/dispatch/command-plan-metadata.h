@@ -25,6 +25,11 @@ enum class CommandPlanResourceMetadataKind {
     MoeRoutingResource,
 };
 
+// Shared partition ABI: 9 expert bits, 6 partition bits, 5 bits for row count minus one.
+constexpr int32_t kMoePartitionExpertMask = 511;
+constexpr int32_t kMoePartitionShift = 9;
+constexpr int32_t kMoePartitionRowCountShift = 15;
+
 struct MoeRoutingResourceMetadata {
     int64_t token_count  = 0;
     int64_t route_count  = 0;
@@ -91,6 +96,18 @@ struct CommandPlanAlternateValue {
     int         scale_log2 = 0;
 };
 
+// AMD's activation-publication diagnostics: the merge dropped the type while keeping its readers.
+struct CommandPlanActivationPublicationDiagnostic {
+    ValueId     source_value;
+    ValueId     alternate_value;
+    ValueId     consumer_value;
+    std::string requested_format;
+    std::string publication_name;
+    std::string publication_stage;
+    std::string fallback_reason;
+    size_t      alias_depth  = 0;
+    bool        mixed_fanout = false;
+};
 struct CommandPlanMoeRoutingBundle {
     ValueId route_ids;
     ValueId route_weights;
@@ -114,6 +131,8 @@ class CommandPlanMetadata {
 
     bool append_alternate_value(CommandPlanAlternateValue alternate, Status & status);
 
+    void append_activation_publication_diagnostic(CommandPlanActivationPublicationDiagnostic diagnostic);
+
     bool append_moe_routing_bundle(CommandPlanMoeRoutingBundle bundle, Status & status);
 
     const CommandPlanGeneratedResource * find_generated_resource(ValueId               source_value,
@@ -130,6 +149,10 @@ class CommandPlanMetadata {
 
     const std::vector<CommandPlanGeneratedResource> & generated_resources() const { return generated_resources_; }
 
+    const std::vector<CommandPlanActivationPublicationDiagnostic> & activation_publication_diagnostics() const {
+        return activation_publication_diagnostics_;
+    }
+
     const std::vector<CommandPlanAlternateValue> & alternate_values() const { return alternate_values_; }
 
     const std::vector<CommandPlanMoeRoutingBundle> & moe_routing_bundles() const { return moe_routing_bundles_; }
@@ -137,6 +160,7 @@ class CommandPlanMetadata {
   private:
     std::vector<CommandPlanGeneratedResource> generated_resources_;
     std::vector<CommandPlanAlternateValue>    alternate_values_;
+    std::vector<CommandPlanActivationPublicationDiagnostic> activation_publication_diagnostics_;
     std::vector<CommandPlanMoeRoutingBundle>  moe_routing_bundles_;
 };
 

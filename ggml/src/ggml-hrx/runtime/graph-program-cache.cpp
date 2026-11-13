@@ -1,15 +1,18 @@
 #include "graph-program-cache.h"
 
+#include "backend-buffer-binding.h"
 #include "dispatch/command-program-dump.h"
 #include "dispatch/dispatch-scheduler.h"
 #include "ggml-impl.h"
 #include "ggml.h"
 #include "runtime/host-gap-profile.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
 #include <optional>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
 
 namespace ggml::hrx {
@@ -137,21 +140,6 @@ static bool environment_flag_enabled(const char * name) {
     return value != nullptr && value[0] != '\0' && value[0] != '0';
 }
 
-static void apply_graph_replay_result(PreparedCommandProgramCacheExecutionResult & result,
-                                      const RecordedCommandGraphExecutionResult &  replay) {
-    result.graph_replay_event                        = replay.event;
-    result.graph_replay_ineligible_reason            = replay.ineligible_reason;
-    result.graph_replay_build_ns                     = replay.build_ns;
-    result.graph_replay_launch_ns                    = replay.launch_ns;
-    result.graph_replay_total_ns                     = replay.total_ns();
-    result.graph_replay_dispatches                   = replay.dispatch_count;
-    result.graph_replay_transient_allocation_changed = replay.transient_allocation_changed;
-}
-
-static bool graph_replay_should_fallback(HrxGraphReplayEvent event) {
-    return event == HrxGraphReplayEvent::Ineligible || event == HrxGraphReplayEvent::BuildFailed;
-}
-
 static void collect_command_graph_values(const std::vector<Command> & commands, std::vector<uint8_t> & values) {
     for (const Command & command : commands) {
         for (const CommandBinding & binding : command.bindings) {
@@ -185,38 +173,26 @@ static bool can_skip_external_binding(const Value & value,
 
 class TensorValueIndex {
   public:
-    explicit TensorValueIndex(size_t maximum_size) : maximum_size_(maximum_size) {}
-    ~TensorValueIndex() { ggml_hash_set_free(&tensors_); }
+    explicit TensorValueIndex(size_t maximum_size) { values_.reserve(maximum_size); }
 
     TensorValueIndex(const TensorValueIndex &) = delete;
     TensorValueIndex & operator=(const TensorValueIndex &) = delete;
 
     std::optional<int32_t> find(const ggml_tensor * tensor) const {
-        if (tensors_.size == 0) {
+        const auto entry = values_.find(tensor);
+        if (entry == values_.end()) {
             return std::nullopt;
         }
-        const size_t index = ggml_hash_find(&tensors_, tensor);
-        if (index == GGML_HASHSET_FULL || !ggml_bitset_get(tensors_.used, index)) {
-            return std::nullopt;
-        }
-        return values_[index];
+        return entry->second;
     }
 
     void emplace(const ggml_tensor * tensor, int32_t value) {
-        if (tensors_.size == 0) {
-            GGML_ASSERT(maximum_size_ <= SIZE_MAX / 2);
-            tensors_ = ggml_hash_set_new(2 * maximum_size_);
-            values_.resize(tensors_.size);
-        }
-        const size_t index = ggml_hash_insert(&tensors_, const_cast<ggml_tensor *>(tensor));
-        GGML_ASSERT(index != GGML_HASHSET_ALREADY_EXISTS);
-        values_[index] = value;
+        const bool inserted = values_.emplace(tensor, value).second;
+        GGML_ASSERT(inserted);
     }
 
   private:
-    size_t maximum_size_;
-    ggml_hash_set tensors_ = {};
-    std::vector<int32_t> values_;
+    std::unordered_map<const ggml_tensor *, int32_t> values_;
 };
 
 static Status bind_current_value(const ValueMap &                                   values,
@@ -376,6 +352,19 @@ GraphProgramMatch GraphProgram::match_trusted_graph(const ggml_cgraph & current_
             return result;
         }
     }
+    // The scheduler can retain node slots while changing which select branch computes.
+    for (size_t i = 0; i < graph_->nodes().size(); ++i) {
+        const ggml_tensor * node = current_graph.nodes[i];
+        if (node == nullptr) {
+            result.status.log("current graph node %zu is null", i);
+            return result;
+        }
+        const bool compute = (node->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+        if (compute != graph_->nodes()[i].compute) {
+            result.status.log("node %zu compute mask does not match cached HRX graph", i);
+            return result;
+        }
+    }
     if (!bind_external) {
         return result;
     }
@@ -383,6 +372,10 @@ GraphProgramMatch GraphProgram::match_trusted_graph(const ggml_cgraph & current_
     for (const GraphProgramExternalSlot & slot : external_slots_) {
         const ggml_tensor * tensor = resolve_external_slot(current_graph, slot, result.status);
         if (tensor == nullptr) {
+            return result;
+        }
+        if (ggml_backend_hrx_weight_layout_eligible(tensor) != slot.weight_layout_eligible) {
+            result.status.log("external weight source class changed for value %d", slot.value.value);
             return result;
         }
         result.external_bindings.push_back({ slot.value, tensor });
@@ -393,12 +386,14 @@ GraphProgramMatch GraphProgram::match_trusted_graph(const ggml_cgraph & current_
 GraphProgramMatch GraphProgram::match_host_staging_graph(const ggml_cgraph & current_graph) const {
     GraphProgramMatch           result;
     std::lock_guard<std::mutex> lock(prepared_mutex_);
-    if (!has_prepared_) {
+    if (prepared_entry_ == nullptr) {
         result.status.log("missing prepared HRX command program");
         return result;
     }
-    result.external_bindings.reserve(prepared_.host_staging.size());
-    for (const HostStagingBuffer & staging : prepared_.host_staging) {
+    std::lock_guard<std::mutex> entry_lock(prepared_entry_->mutex);
+    const auto & staging_buffers = prepared_entry_->prepared.host_staging;
+    result.external_bindings.reserve(staging_buffers.size());
+    for (const HostStagingBuffer & staging : staging_buffers) {
         const GraphProgramExternalSlot * slot = find_external_slot(ValueId(staging.value));
         if (slot == nullptr) {
             result.status.log("prepared host staging value %d has no external graph slot", staging.value);
@@ -417,15 +412,18 @@ Status GraphProgram::capture_external_slots(const ggml_cgraph & graph, const Gra
     Status status;
     external_slots_.clear();
     external_slot_by_value_.clear();
-    fast_path_nodes_ = graph.nodes;
     external_slots_.reserve(match.external_bindings.size());
     for (const GraphProgramExternalBinding & binding : match.external_bindings) {
         GraphProgramExternalSlot slot;
         slot.value = binding.value;
+        slot.weight_layout_eligible = ggml_backend_hrx_weight_layout_eligible(binding.tensor);
         bool found = false;
         for (int i = 0; i < graph.n_nodes && !found; ++i) {
             const ggml_tensor * node = graph.nodes[i];
             if (node == nullptr) {
+                continue;
+            }
+            if (!graph_->nodes()[static_cast<size_t>(i)].compute) {
                 continue;
             }
             if (node == binding.tensor) {
@@ -454,85 +452,62 @@ Status GraphProgram::capture_external_slots(const ggml_cgraph & graph, const Gra
     return status;
 }
 
-bool GraphProgram::has_prepared_program() const {
+std::shared_ptr<PreparedCommandProgramCacheEntry> GraphProgram::prepared_entry() const {
     std::lock_guard<std::mutex> lock(prepared_mutex_);
-    return has_prepared_;
+    return prepared_entry_;
+}
+
+void GraphProgram::bind_prepared_graph(const ggml_cgraph & graph, const GraphProgramMatch & match,
+                                       const CommandProgramBindings & bindings,
+                                       std::shared_ptr<PreparedCommandProgramCacheEntry> entry) {
+    std::lock_guard<std::mutex> lock(prepared_mutex_);
+    mutable_source_watches_.clear();
+    // Successful external binding preserves match order and already resolved every physical source.
+    for (size_t i = 0; i < match.external_bindings.size(); ++i) {
+        const CommandProgramBinding & binding = bindings.bindings()[i];
+        const bool mutable_source = !binding.weight;
+        const bool host_source = binding.source_host_data != nullptr;
+        const bool retained_source = mutable_source && host_source;
+        if (retained_source) {
+            // Mutable inputs may rebind under one graph UID; immutable weight bindings are trusted.
+            mutable_source_watches_.push_back({ match.external_bindings[i].tensor, binding.identity,
+                                               binding.offset, binding.length });
+        }
+    }
+    // The full binding lookup established this graph instance's physical resources.
+    prepared_entry_ = std::move(entry);
+    fast_path_uid_ = graph.uid;
+    fast_path_nodes_ = graph.nodes;
 }
 
 bool GraphProgram::can_use_prepared_fast_path(const ggml_cgraph & graph) const {
+    std::lock_guard<std::mutex> lock(prepared_mutex_);
     // The UID prevents graph-arena address reuse from passing the fast path.
-    return graph.uid == uid_ && graph.nodes == fast_path_nodes_;
+    const bool allocated_graph = graph.uid != 0;
+    const bool same_uid = graph.uid == fast_path_uid_;
+    const bool same_nodes = graph.nodes == fast_path_nodes_;
+    return allocated_graph && same_uid && same_nodes;
 }
 
-PreparedCommandProgramCacheStats GraphProgram::prepared_stats() const {
+bool GraphProgram::mutable_sources_current() const {
     std::lock_guard<std::mutex> lock(prepared_mutex_);
-    return prepared_stats_;
-}
-
-PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
-    const CommandProgramExecutionContext & context,
-    const CommandProgramBindings &         bindings) {
-    PreparedCommandProgramCacheExecutionResult result;
-    if (commands_ == nullptr || !commands_->valid() || !bindings.valid()) {
-        result.graph_replay_event             = HrxGraphReplayEvent::Ineligible;
-        result.graph_replay_ineligible_reason = "invalid_graph_program";
-        if (commands_ == nullptr) {
-            result.status.log("missing cached HRX command program");
+    for (const MutableSourceWatch & watch : mutable_source_watches_) {
+        ggml_backend_hrx_retained_region region = {};
+        if (!ggml_backend_hrx_get_retained_region(watch.tensor, region)) {
+            return false;
         }
-        result.status.append(bindings.status);
-        return result;
-    }
-
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    if (!has_prepared_) {
-        // engine #572: preparing a graph shape's command program is host-side work that used to be invisible.
-        const HostGapScope scope("prep.prepare");
-        prepared_ = prepare_command_program(context, *commands_, bindings);
-        if (!prepared_.valid()) {
-            result.status.append(prepared_.status);
-            return result;
+        const bool same_identity   = region.identity == watch.identity;
+        const bool same_offset = region.offset == watch.offset;
+        const bool same_length = region.length == watch.length;
+        const bool identity_changed = !same_identity;
+        const bool offset_changed = !same_offset;
+        const bool length_changed = !same_length;
+        const bool source_changed = identity_changed || offset_changed || length_changed;
+        if (source_changed) {
+            return false;
         }
-        has_prepared_ = true;
-        ++prepared_stats_.builds;
-    } else {
-        ++prepared_stats_.hits;
     }
-
-    if (environment_flag_enabled("GGML_HRX_DISABLE_GRAPH_REPLAY") || debug_serial_command_execution_enabled()) {
-        result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
-        result.graph_replay_ineligible_reason = debug_serial_command_execution_enabled() ?
-                                                    "debug_serial_execution" :
-                                                    "disabled_by_environment";
-        result.success = bind_and_execute_prepared_command_program(context, *commands_, bindings, prepared_);
-        if (!result.success) {
-            result.status.log("execute cached HRX command program failed");
-        }
-        return result;
-    }
-
-    if (environment_flag_enabled("GGML_HRX_REBUILD_GRAPH_REPLAY")) {
-        recorded_ = {};
-    }
-
-    const RecordedCommandGraphExecutionResult replay =
-        bind_and_launch_recorded_command_graph(context, *commands_, bindings, prepared_, recorded_);
-    apply_graph_replay_result(result, replay);
-    if (replay.success) {
-        result.success = true;
-        return result;
-    }
-    if (!graph_replay_should_fallback(replay.event)) {
-        result.status.append(replay.status);
-        if (result.status.success()) {
-            result.status.log("execute cached HRX graph replay failed");
-        }
-        return result;
-    }
-    result.success = bind_and_execute_prepared_command_program(context, *commands_, bindings, prepared_);
-    if (!result.success) {
-        result.status.log("execute cached HRX command program failed");
-    }
-    return result;
+    return true;
 }
 
 GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_graph) const {
@@ -566,6 +541,14 @@ GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_
             result.status.log("node %zu cached op %s does not match current op %s", node_index,
                               ggml_op_name(cached_node.op), ggml_op_name(current_node->op));
             return result;
+        }
+        const bool compute = (current_node->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+        if (compute != cached_node.compute) {
+            result.status.log("node %zu compute mask does not match cached HRX graph", node_index);
+            return result;
+        }
+        if (!compute) {
+            continue;
         }
         if (!graph_node_params_match(cached_node, current_node)) {
             result.status.log("node %zu cached op params do not match current graph", node_index);
@@ -619,7 +602,16 @@ GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_
         if (can_skip_external_binding(*value, *commands_, values.size(), command_graph_values)) {
             continue;
         }
-        result.external_bindings.push_back({ id, tensor_by_value[static_cast<size_t>(id.value)] });
+        const ggml_tensor * tensor = tensor_by_value[static_cast<size_t>(id.value)];
+        const GraphProgramExternalSlot * slot = find_external_slot(id);
+        const bool has_slot = slot != nullptr;
+        const bool current_layout_eligible = ggml_backend_hrx_weight_layout_eligible(tensor);
+        const bool source_class_changed = has_slot && current_layout_eligible != slot->weight_layout_eligible;
+        if (source_class_changed) {
+            result.status.log("external weight source class changed for value %d", id.value);
+            return result;
+        }
+        result.external_bindings.push_back({ id, tensor });
     }
     return result;
 }
@@ -735,7 +727,7 @@ GraphProgramLookup GraphProgramCache::get_or_build_impl(const ggml_cgraph &  gra
         }
         if (cached_program != nullptr) {
             const bool bind_external =
-                !cached_program->has_prepared_program() || !cached_program->can_use_prepared_fast_path(graph);
+                !cached_program->can_use_prepared_fast_path(graph);
             GraphProgramMatch match = disable_fast_path || validate_fast_path ?
                                           cached_program->match_current_graph(graph) :
                                           cached_program->match_trusted_graph(graph, bind_external);
@@ -799,37 +791,15 @@ GraphProgramLookup GraphProgramCache::get_or_build_impl(const ggml_cgraph &  gra
 }
 
 size_t GraphProgram::retained_bytes() const {
-    // The arena plus this program's own prepared command program (engine #841). The prepared programs the executor
-    // caches for this uid live in PreparedCommandProgramCache and are added at trim time, which is where the
-    // budget is actually consulted.
-    size_t bytes = commands_ != nullptr ? commands_->transients.arena_size : 0;
-    // prepared_/has_prepared_ are guarded by prepared_mutex_; no caller holds it across a graph-cache lock, so this
-    // order (graph cache -> prepared) is the only one that exists.
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    if (has_prepared_) {
-        bytes += prepared_.retained_bytes();
-    }
-    return bytes;
+    // The arena only (engine #841). A program's prepared entry is an entry of PreparedCommandProgramCache, whose
+    // bytes are charged to this uid there and added at trim time (retally_retained_bytes), which is where the
+    // budget is consulted; counting the entry here as well would charge it twice.
+    return commands_ != nullptr ? commands_->transients.arena_size : 0;
 }
 
 GraphProgramCacheStats GraphProgramCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    // stats_ carries the programs this cache has already dropped (folded in at every erase), and the live ones are
-    // added here, so the totals only ever grow: a trim cannot make the counter go backwards (engine #841 - a
-    // per-request rebuild delta read -1 the moment a program was evicted).
-    GraphProgramCacheStats      stats = stats_;
-    for (const auto & entry : programs_) {
-        const PreparedCommandProgramCacheStats prepared = entry.second->prepared_stats();
-        stats.prepared_program_builds += prepared.builds;
-        stats.prepared_program_hits += prepared.hits;
-    }
-    return stats;
-}
-
-void GraphProgramCache::fold_prepared_stats(const GraphProgram & program) {
-    const PreparedCommandProgramCacheStats prepared = program.prepared_stats();
-    stats_.prepared_program_builds += prepared.builds;
-    stats_.prepared_program_hits += prepared.hits;
+    return stats_;
 }
 
 size_t GraphProgramCache::size() const {
@@ -867,7 +837,6 @@ void GraphProgramCache::drop_program(uint64_t uid) {
     if (found == programs_.end()) {
         return;
     }
-    fold_prepared_stats(*found->second);
     if (last_program_ == found->second.get()) {
         last_program_ = nullptr;
     }
@@ -907,9 +876,6 @@ void GraphProgramCache::retain_only(const GraphProgram * keep) {
 
 void GraphProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (const auto & entry : programs_) {
-        fold_prepared_stats(*entry.second);
-    }
     validated_matches_.clear();
     programs_.clear();
     budget_       = GraphProgramBudget{};

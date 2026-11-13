@@ -711,7 +711,10 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
     const bool pack_q4 = match.token_count <= 5 && match.output_size % 64 == 0 &&
                          match.gate_weight->alias_source.value < 0 && match.up_weight->alias_source.value < 0 &&
                          match.gate_format == CommonMulMatWeightFormat::Q4K &&
-                         match.up_format == CommonMulMatWeightFormat::Q4K;
+                         match.up_format == CommonMulMatWeightFormat::Q4K &&
+                         // AMD: the row64 repack needs weights whose buffer can take a transformed layout
+                         dispatch_weight_layout_eligible(*match.gate_weight) &&
+                         dispatch_weight_layout_eligible(*match.up_weight);
     const bool use_q8 = pack_q4;
     const bool publish_q8 = use_q8 && has_qualified_swiglu_q8_consumer(context.graph, match);
     DispatchBinding activation = { match.input->id, 0, match.input->byte_count };

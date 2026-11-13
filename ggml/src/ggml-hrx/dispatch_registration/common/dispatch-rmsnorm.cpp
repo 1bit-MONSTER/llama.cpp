@@ -321,6 +321,10 @@ static RmsNormMulRopeMatch match_rmsnorm_mul_rope_f32(const Graph & graph, const
         }
     }
 
+    if (rope_params->n_offs != 0) {
+        return {};
+    }
+
     const bool sectioned_mode = rope_params->mode == GGML_ROPE_TYPE_MROPE || rope_params->mode == GGML_ROPE_TYPE_IMROPE;
     int64_t    section_count  = 0;
     for (int section : rope_params->sections) {

@@ -19,6 +19,7 @@ class llama_memory_recurrent : public llama_memory_i {
 public:
     llama_memory_recurrent(
             const llama_model & model,
+                         bool   no_alloc,
                     ggml_type   type_r,
                     ggml_type   type_s,
                          bool   offload,
@@ -140,8 +141,11 @@ private:
 
     const uint32_t n_seq_max = 1;
 
-    // ggml contexts for the KV cache along with the allocated backend buffers:
-    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    // ggml contexts for the RS cache along with the allocated backend buffers:
+    llama_memory_bufs ctxs_bufs;
+
+    // true if no layers - can happen if the layer filter removes all layers
+    bool is_empty() const;
 
     // [1bit] exported regions of this memory's buffers, owner side (llama-kv-share.cpp)
     std::vector<std::vector<llama_kv_shared_region>> shared_; // per buffer: its chunks
@@ -157,6 +161,8 @@ private:
 
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+
+    void state_clear(llama_seq_id seq_id, uint32_t cell_head, uint32_t cell_count);
 };
 
 class llama_memory_recurrent_context : public llama_memory_context_i {

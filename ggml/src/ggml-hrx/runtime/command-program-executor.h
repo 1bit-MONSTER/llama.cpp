@@ -24,6 +24,7 @@ struct ggml_hrx_loom_jit_amdgpu;
 namespace ggml::hrx {
 
 class KernelExecutableCache;
+struct CompileTraceExecution;
 struct KernelExecutable;
 class TransientArena;
 class HostBufferRegistry;
@@ -69,7 +70,24 @@ struct CommandProgramExecutionContext {
     // size is unknown, in which case the arena keeps the old uncharged behaviour (and pool_reserve() would not have
     // added to the ledger either, so a paired release would unbalance it).
     size_t                  pool_budget        = 0;
+    CompileTraceExecution * compile_trace = nullptr;
 };
+
+struct CommandProgramWeightDemand {
+    CommandBinding   request;
+    HostWeightSource source;
+    bool             requires_materialization = false;
+};
+
+struct CommandProgramWeightDemands {
+    std::vector<CommandProgramWeightDemand> weights;
+    Status                                  status;
+
+    bool valid() const { return status.success(); }
+};
+
+CommandProgramWeightDemands collect_command_program_weight_demands(const CommandProgram &         commands,
+                                                                  const CommandProgramBindings & bindings);
 
 struct PreparedCommandBinding {
     CommandBinding    binding;

@@ -4,6 +4,7 @@
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
+#include "ggml-impl.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 #include "hrx-1bit-safety.h"            // engine#1711: pool_reserve/pool_release
@@ -18,6 +19,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <sstream>
 #include <thread>
@@ -1890,10 +1892,16 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         result.status.log("host weight residency requires an HRX stream");
         return result;
     }
-    const bool has_host_source   = source.host_data != nullptr;
+    const bool has_host_source = source.host_data != nullptr;
+    // ours (aadd60251): a weight may also come from a device buffer, downloaded once to be transformed
     const bool has_device_source = source.device_buffer != nullptr;
-    if (has_host_source == has_device_source || source.identity == 0 || source.generation == 0 || source.length == 0 ||
-        source.offset > source.capacity || source.length > source.capacity - source.offset) {
+    const bool has_identity = source.identity != 0;
+    const bool has_generation = source.generation != 0;
+    const bool has_length = source.length != 0;
+    const bool offset_fits = source.offset <= source.capacity;
+    const bool length_fits = offset_fits && source.length <= source.capacity - source.offset;
+    const bool valid_source = has_host_source != has_device_source && has_identity && has_generation && has_length && length_fits;
+    if (!valid_source) {
         result.status.log("invalid host weight source");
         return result;
     }
@@ -1909,9 +1917,12 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         return result;
     }
 
-    const SourceKey key{ source.identity,   source.generation,   source.capacity, source.offset,
-                         source.length,     materialized_length, source.layout,   source.source_type,
-                         source.input_size, source.output_size };
+    // Native residency copies this byte range verbatim. Only transformed layouts interpret its type and shape.
+    const bool native_layout = source.layout == kNativeWeightLayout;
+    const SourceKey key{ source.identity, source.generation, source.capacity, source.offset,
+                         source.length, materialized_length, source.layout,
+                         native_layout ? GGML_TYPE_COUNT : source.source_type,
+                         native_layout ? 0 : source.input_size, native_layout ? 0 : source.output_size };
     {
         std::lock_guard<std::mutex> lock(mutex_);
         resolve_limit();
@@ -1928,6 +1939,32 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
             result.status.log("host weight %zu MiB exceeds the %zu MiB residency limit (GGML_HRX_HOST_WEIGHT_LIMIT_MB)",
                               materialized_length / (1024 * 1024), limit_ / (1024 * 1024));
             return result;
+        }
+        if (fail_cold_after_ == 0) {
+            fail_cold_after_ = SIZE_MAX;
+            result.status.log("injected host weight acquisition failure");
+            return result;
+        }
+        if (fail_cold_after_ != SIZE_MAX) {
+            --fail_cold_after_;
+        }
+    }
+
+    // engine #2137: a device copy in the stored layout is about to be made of a host weight; matchers that can read
+    // the weight either way ask for this before adding a packed copy (model-buffer-from-mmap.h).
+    if (source.host_data != nullptr && source.layout == kNativeWeightLayout) {
+        note_stored_device_copy(static_cast<const uint8_t *>(source.host_data) + source.offset);
+    }
+
+    // GGML_HRX_HOST_WEIGHT_TRACE=2: one line per device copy made (a cache miss), so the copies of a run can be counted
+    // per weight and per layout (engine #2137: a weight read in two layouts shows up as two lines with one id/off).
+    // At ERROR because the CLI tools drop INFO.
+    if (const char * trace = std::getenv("GGML_HRX_HOST_WEIGHT_TRACE")) {
+        if (std::atoi(trace) >= 2) {
+            GGML_LOG_ERROR("hrx weight copy: id=%llu off=%zu len=%zu layout=%s type=%s in=%lld out=%lld bytes=%zu\n",
+                           (unsigned long long) source.identity, source.offset, source.length, source.layout.c_str(),
+                           source.source_type < GGML_TYPE_COUNT ? ggml_type_name(source.source_type) : "-",
+                           (long long) source.input_size, (long long) source.output_size, materialized_length);
         }
     }
 
@@ -2072,10 +2109,12 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
             result.lease   = HostWeightLease(inserted.first->second);
             return result;
         }
+        report_new_representation(key, *entry);
         ++stats_.misses;
         last_use_[key]          = ++use_clock_;
         stats_.allocation_count = entries_.size();
         stats_.resident_bytes += materialized_length;
+        stats_.materialized_bytes += materialized_length;
         resident_bytes_ += materialized_length;
         // engine #669: the limit is off by default, so nothing stops the residents growing to the size of the model and
         // the box dies with no line saying why. One warning, naming the size and the flag, once they pass what the box
@@ -2100,6 +2139,42 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
 HostWeightCacheStats HostWeightCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return stats_;
+}
+
+void HostWeightCache::report_new_representation(const SourceKey & key, const HostWeightLease::Entry & entry) {
+    // Report representations of the same source byte range; partially overlapping ranges are independent.
+    bool distinct_layout = false;
+    size_t total_bytes = 0;
+    std::ostringstream details;
+    for (const auto & [resident_key, resident] : entries_) {
+        const bool same_identity = resident_key.identity == key.identity;
+        const bool same_generation = resident_key.generation == key.generation;
+        const bool same_capacity = resident_key.capacity == key.capacity;
+        const bool same_offset = resident_key.offset == key.offset;
+        const bool same_length = resident_key.length == key.length;
+        const bool same_region = same_identity && same_generation && same_capacity && same_offset &&
+                                 same_length;
+        if (!same_region) {
+            continue;
+        }
+        distinct_layout |= resident_key.layout != key.layout;
+        details << (total_bytes == 0 ? "" : ", ") << resident_key.layout << "=" << resident->length << "B";
+        total_bytes += resident->length;
+    }
+    if (!distinct_layout) {
+        return;
+    }
+    ++stats_.duplicate_warnings;
+    GGML_LOG_WARN("HRX weight residency: source=%llu generation=%llu region=[%zu,%zu) layouts={%s}"
+                  " new_layout=%s new_bytes=%zu resident_bytes=%zu\n",
+                  static_cast<unsigned long long>(key.identity), static_cast<unsigned long long>(key.generation),
+                  key.offset, key.offset + key.length, details.str().c_str(), key.layout.c_str(),
+                  entry.length, total_bytes);
+}
+
+void HostWeightCache::fail_cold_acquire_after_for_test(size_t successful_acquires) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fail_cold_after_ = successful_acquires;
 }
 
 void HostWeightCache::clear() {

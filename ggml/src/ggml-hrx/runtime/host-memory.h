@@ -46,7 +46,6 @@ class HostTransferManager {
                                 size_t       offset,
                                 void *       host_destination,
                                 size_t       size);
-
     HostTransferStats stats() const;
     void              clear();
 
@@ -70,12 +69,15 @@ struct HostWeightSource {
     int64_t      output_size         = 0;
 };
 
+// Residency counts cache-owned representations, not buffers retained after an explicit clear.
 struct HostWeightCacheStats {
     uint64_t hits             = 0;
     uint64_t misses           = 0;
     uint64_t evictions        = 0;
+    size_t   materialized_bytes = 0;
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
+    uint64_t duplicate_warnings = 0;
 };
 
 // The pairing every pooled allocation in this file needs (engine #1711/#1823): charge before the allocation, return
@@ -142,6 +144,7 @@ struct HostWeightAcquireResult {
     bool valid() const { return lease.valid() && status.success(); }
 };
 
+// Owns each immutable source representation until explicit clearing or backend teardown.
 class HostWeightCache {
   public:
     HostWeightCache() = default;
@@ -156,6 +159,8 @@ class HostWeightCache {
                                     const HostWeightSource & source,
                                     size_t                   pool_budget = 0);
     HostWeightCacheStats    stats() const;
+    void fail_cold_acquire_after_for_test(size_t successful_acquires);
+    // Clears cache residency; existing leases remain valid and cumulative diagnostics are preserved.
     void                    clear();
 
     // Bytes of materialized host weights the cache may keep resident (GGML_HRX_HOST_WEIGHT_LIMIT_MB, default 0 =
@@ -198,12 +203,16 @@ class HostWeightCache {
         size_t operator()(const SourceKey & key) const;
     };
 
+    void report_new_representation(const SourceKey & key, const HostWeightLease::Entry & entry);
+
     mutable std::mutex                                                                    mutex_;
     std::unordered_map<SourceKey, std::shared_ptr<HostWeightLease::Entry>, SourceKeyHash> entries_;
     std::unordered_map<SourceKey, uint64_t, SourceKeyHash>                                last_use_;
     HostWeightCacheStats                                                                  stats_;
     size_t                                                                                limit_          = 0;
     size_t                                                                                resident_bytes_ = 0;
+    // test hook (fail_cold_acquire_after_for_test): SIZE_MAX = off, otherwise the cold acquires left before one fails
+    size_t fail_cold_after_ = SIZE_MAX;
     uint64_t                                                                              use_clock_      = 0;
     bool                                                                                  limit_resolved_ = false;
     // engine #669: with the limit unset (the default) nothing bounds host-weight residency, so an OOM reads like an

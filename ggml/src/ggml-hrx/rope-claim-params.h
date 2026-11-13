@@ -45,6 +45,10 @@ namespace ggml::hrx {
 
 // llm/dispatch-attention-qkv.cpp: the per-head rotation consumed by the attention fusions.
 inline bool rope_params_supported_by_attention_fusion(const RopeParams & params, int64_t head_size) {
+    // AMD's rebase added the n_offs guard to the matcher's inlined copy; it belongs HERE, in the predicate the
+    // claim shares with the matcher, so the claim cannot assert a rotation the matcher now declines (engine#1467:
+    // a claim broader than its matcher says yes and the node is then refused at dispatch build).
+    if (params.n_offs != 0) { return false; }
     return params.n_dims == head_size && params.mode == GGML_ROPE_TYPE_NORMAL && std::isfinite(params.freq_base) &&
            params.freq_base > 0.0f && std::isfinite(params.freq_scale) && params.freq_scale > 0.0f &&
            params.ext_factor == 0.0f && params.attn_factor == 1.0f;
@@ -52,6 +56,8 @@ inline bool rope_params_supported_by_attention_fusion(const RopeParams & params,
 
 // common/dispatch-rope-set-rows.cpp: the rotation that registration builds a theta table for.
 inline bool rope_params_supported_by_rope_set_rows(const RopeParams & params, int64_t head_size) {
+    // the same n_offs guard as the attention predicate above: neither rope kernel on this line applies an offset
+    if (params.n_offs != 0) { return false; }
     const bool supported_mode = params.mode == GGML_ROPE_TYPE_NORMAL || params.mode == GGML_ROPE_TYPE_NEOX ||
                                 rope_mode_is_collapsible_imrope(params) || rope_mode_is_sectioned_imrope(params);
     return params.n_dims >= 4 && params.n_dims <= head_size && params.n_dims % 4 == 0 && supported_mode &&

@@ -8,6 +8,8 @@
 #include "ggml-backend.h"
 #include "ggml-impl.h"
 
+#include "backend-buffer-binding.h"
+
 #include "common/dispatch-common.h"
 #include "llm/dispatch-attention-qkv.h"
 #include "llm/dispatch-gated-delta-net.h"
@@ -45,6 +47,27 @@ static bool qwen_dispatch_disabled_from_environment() {
     }
     return std::strcmp(value, "0") != 0 && std::strcmp(value, "false") != 0 && std::strcmp(value, "FALSE") != 0 &&
            std::strcmp(value, "off") != 0 && std::strcmp(value, "OFF") != 0;
+}
+
+static bool dispatch_has_eligible_weight_layouts(const DispatchMatchContext & context, const DispatchMatch & match) {
+    auto eligible = [&](const std::vector<Dispatch> & dispatches) {
+        for (const Dispatch & dispatch : dispatches) {
+            for (const DispatchBinding & binding : dispatch.bindings) {
+                if (binding.layout == kNativeWeightLayout) {
+                    continue;
+                }
+                const Value * value = context.graph.values().find(binding.value);
+                const bool has_graph_value = value != nullptr;
+                const bool layout_is_eligible = !has_graph_value || dispatch_weight_layout_eligible(*value);
+                const bool has_ineligible_weight = has_graph_value && !layout_is_eligible;
+                if (has_ineligible_weight) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    return eligible(match.initialization_dispatches) && eligible(match.dispatches);
 }
 
 static DispatchRegistry build_registry(bool include_qwen) {
@@ -249,6 +272,10 @@ static bool match_requests_packed_layout_of_natively_read_weight(const DispatchM
     return false;
 }
 
+bool dispatch_weight_layout_eligible(const Value & value) {
+    return ggml_backend_hrx_weight_layout_eligible(value.tensor);
+}
+
 bool DispatchRegistry::match(const DispatchMatchContext & context, DispatchMatch & match) const {
     return this->match(context, match, nullptr);
 }
@@ -273,6 +300,10 @@ bool DispatchRegistry::match(const DispatchMatchContext & context,
         bool          matched = registration.matcher != nullptr && registration.matcher(context, candidate);
         if (matched && match_requests_packed_layout_of_natively_read_weight(context, candidate, registration.name)) {
             // engine #1316: see the helper - the next registration for this root op gets the node instead.
+            matched = false;
+        }
+        // AMD: a match whose weights cannot take the layout it asks for declines, so a narrower registration gets the node
+        if (matched && !dispatch_has_eligible_weight_layouts(context, candidate)) {
             matched = false;
         }
         const size_t  covered_output = matched ? first_covered_requested_output(context, candidate) : kNoNode;
@@ -341,6 +372,9 @@ void DispatchRegistryBuilder::add(DispatchRegistration registration) {
     if (registry_.registrations_by_root_.empty()) {
         registry_.registrations_by_root_.resize(kOpCount);
     }
+    if (registry_.activation_consumers_by_root_.empty()) {
+        registry_.activation_consumers_by_root_.resize(kOpCount);
+    }
     DispatchRegistry::RegistrationGroup & group =
         registry_.registrations_by_root_[static_cast<size_t>(registration.root_op)];
     if (registration.kind == DispatchMatchKind::Fused) {
@@ -349,6 +383,29 @@ void DispatchRegistryBuilder::add(DispatchRegistration registration) {
         group.single_op.push_back(registration);
         registry_.single_op_registrations_.push_back(std::move(registration));
     }
+}
+
+
+static const std::vector<DispatchActivationConsumerRegistration> kEmptyActivationConsumers;
+
+const std::vector<DispatchActivationConsumerRegistration> &
+DispatchRegistry::activation_consumers_for_root(ggml_op root_op) const {
+    if (!valid_root_op(root_op) || activation_consumers_by_root_.empty()) {
+        return kEmptyActivationConsumers;
+    }
+    return activation_consumers_by_root_[static_cast<size_t>(root_op)];
+}
+
+void DispatchRegistryBuilder::add_activation_consumer(DispatchActivationConsumerRegistration registration) {
+    if (!valid_root_op(registration.root_op) || registration.accepts == nullptr ||
+        registration.accepted_formats == DispatchActivationInputNone) {
+        return;
+    }
+    if (registry_.activation_consumers_by_root_.empty()) {
+        registry_.activation_consumers_by_root_.resize(kOpCount);
+    }
+    registry_.activation_consumers_by_root_[static_cast<size_t>(registration.root_op)].push_back(
+        std::move(registration));
 }
 
 DispatchRegistry DispatchRegistryBuilder::build() {
