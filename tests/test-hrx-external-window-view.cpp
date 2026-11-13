@@ -150,6 +150,7 @@ static std::vector<float> compute(ggml_backend_t backend, int slice) {
 }
 
 int main() {
+    bool skipped = false;
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
     int failures = 0;
 
@@ -175,6 +176,7 @@ int main() {
     }
     if (device == nullptr) {
         std::printf("test-hrx-external-window-view: no HRX0 device, the value check is skipped\n");
+        skipped = true;
     } else {
         ggml_backend_t hrx = ggml_backend_dev_init(device, nullptr);
         ggml_backend_t cpu = ggml_backend_cpu_init();
@@ -200,5 +202,5 @@ int main() {
 
     std::printf("test-hrx-external-window-view: %d failures\n", failures);
     REQUIRE(failures == 0);
-    return 0;
+    return skipped ? 77 : 0;
 }

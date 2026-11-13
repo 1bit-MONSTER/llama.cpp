@@ -516,6 +516,7 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-external-window-view PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-external-window-view PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-external-window-view COMMAND test-hrx-external-window-view)
+    set_tests_properties(test-hrx-external-window-view PROPERTIES SKIP_RETURN_CODE 77)
 
     # the fused GATED_DELTA_NET pattern when the scheduler has already elided one of its layout aliases (the state
     # RESHAPE visited before the L2_NORM root, engine #1925): host only
@@ -534,31 +535,37 @@ if (TARGET ggml-hrx)
     add_executable(test-hrx-hadamard test-hrx-hadamard.cpp)
     target_link_libraries(test-hrx-hadamard PRIVATE ggml)
     add_test(NAME test-hrx-hadamard COMMAND test-hrx-hadamard)
+    set_tests_properties(test-hrx-hadamard PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test-hrx-mxfp4 test-hrx-mxfp4.cpp)
     target_link_libraries(test-hrx-mxfp4 PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-mxfp4 PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-mxfp4 COMMAND test-hrx-mxfp4)
+    set_tests_properties(test-hrx-mxfp4 PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test-hrx-nvfp4 test-hrx-nvfp4.cpp)
     target_link_libraries(test-hrx-nvfp4 PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-nvfp4 PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-nvfp4 COMMAND test-hrx-nvfp4)
+    set_tests_properties(test-hrx-nvfp4 PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test-hrx-q2_0 test-hrx-q2_0.cpp)
     target_link_libraries(test-hrx-q2_0 PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-q2_0 PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-q2_0 COMMAND test-hrx-q2_0)
+    set_tests_properties(test-hrx-q2_0 PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test-hrx-get-rows-iq test-hrx-get-rows-iq.cpp)
     target_link_libraries(test-hrx-get-rows-iq PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-get-rows-iq PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-get-rows-iq COMMAND test-hrx-get-rows-iq)
+    set_tests_properties(test-hrx-get-rows-iq PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test-hrx-decode-stride test-hrx-decode-stride.cpp)
     target_link_libraries(test-hrx-decode-stride PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-decode-stride PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-decode-stride COMMAND test-hrx-decode-stride)
+    set_tests_properties(test-hrx-decode-stride PROPERTIES SKIP_RETURN_CODE 77)
 
     # prefill FLASH_ATTN_EXT through the transposed V at 256+ query tokens: values against the CPU and the launch plan
     # (engine #1989); skips without HRX0
@@ -566,26 +573,31 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-fa-transposed-value PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-fa-transposed-value PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-fa-transposed-value COMMAND test-hrx-fa-transposed-value)
+    set_tests_properties(test-hrx-fa-transposed-value PROPERTIES SKIP_RETURN_CODE 77)
 
     # the fused Q projection at one token on head sizes that are not a power of two (engine #1926); skips without HRX0
     add_executable(test-hrx-attention-q-decode-head-size test-hrx-attention-q-decode-head-size.cpp)
     target_link_libraries(test-hrx-attention-q-decode-head-size PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-attention-q-decode-head-size PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-attention-q-decode-head-size COMMAND test-hrx-attention-q-decode-head-size)
+    set_tests_properties(test-hrx-attention-q-decode-head-size PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test-hrx-mul-mat-id-k32 test-hrx-mul-mat-id-k32.cpp)
     target_link_libraries(test-hrx-mul-mat-id-k32 PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-mul-mat-id-k32 PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-mul-mat-id-k32 COMMAND test-hrx-mul-mat-id-k32)
+    set_tests_properties(test-hrx-mul-mat-id-k32 PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test-hrx-moe-split test-hrx-moe-split.cpp)
     target_link_libraries(test-hrx-moe-split PRIVATE ggml)
     add_test(NAME test-hrx-moe-split COMMAND test-hrx-moe-split)
+    set_tests_properties(test-hrx-moe-split PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test-hrx-fa-masked-v test-hrx-fa-masked-v.cpp)
     target_link_libraries(test-hrx-fa-masked-v PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-fa-masked-v PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-fa-masked-v COMMAND test-hrx-fa-masked-v)
+    set_tests_properties(test-hrx-fa-masked-v PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test-hrx-attention-sink test-hrx-attention-sink.cpp)
     target_link_libraries(test-hrx-attention-sink PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
@@ -607,7 +619,9 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-top-k-repeat PRIVATE ggml)
     target_include_directories(test-hrx-top-k-repeat PRIVATE ../ggml/include)
     add_test(NAME test-hrx-top-k-repeat COMMAND test-hrx-top-k-repeat)
+    set_tests_properties(test-hrx-top-k-repeat PROPERTIES SKIP_RETURN_CODE 77)
     # the same cases with the kernel switched off: TOP_K must fall back to the CPU, not fail the graph (engine #2146)
     add_test(NAME test-hrx-top-k-declined COMMAND test-hrx-top-k-repeat)
+    set_tests_properties(test-hrx-top-k-declined PROPERTIES SKIP_RETURN_CODE 77)
     set_tests_properties(test-hrx-top-k-declined PROPERTIES ENVIRONMENT "GGML_HRX_DISABLE_DISPATCH=top_k")
 endif()

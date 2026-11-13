@@ -89,7 +89,7 @@ int main() {
     ggml_backend_dev_t dev = ggml_backend_dev_by_name("HRX0");
     if (dev == nullptr) {
         printf("test-hrx-hadamard: no HRX0 device, skipped\n");
-        return 0;
+        return 77;
     }
     ggml_backend_t hrx = ggml_backend_dev_init(dev, nullptr);
     ggml_backend_t cpu = ggml_backend_cpu_init();
