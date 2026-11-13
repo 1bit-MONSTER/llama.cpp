@@ -667,58 +667,11 @@ static bool has_qualified_swiglu_q8_consumer(const Graph & graph, const MulMatSw
         !distinct_storage(graph, *match.up_weight, *match.output)) {
         return false;
     }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     for (const GraphNode * consumer : graph.index().consumers(match.output->id)) {
         CommonMulMatMatch projection =
             common_match_mul_mat_any_format(graph, consumer, kMulMatSwiGLUQ4Q8OutputKernel, true);
         if (!projection.matched()) {
             projection = common_match_mul_mat_any_format(graph, consumer, kMulMatSwiGLUQ4Q8OutputKernel, false);
-=======
-
-    const bool has_few_tokens = match.token_count <= 5;
-    const bool has_aligned_output = match.output_size % 64 == 0;
-    const bool has_direct_gate = match.gate_weight->alias_source.value < 0;
-    const bool has_direct_up = match.up_weight->alias_source.value < 0;
-    const bool has_q4_gate = match.gate_format == CommonMulMatWeightFormat::Q4K;
-    const bool has_q4_up = match.up_format == CommonMulMatWeightFormat::Q4K;
-    const bool can_transform_gate = dispatch_weight_layout_eligible(*match.gate_weight);
-    const bool can_transform_up = dispatch_weight_layout_eligible(*match.up_weight);
-    const bool pack_q4 = has_few_tokens && has_aligned_output && has_direct_gate && has_direct_up &&
-                         has_q4_gate && has_q4_up && can_transform_gate && can_transform_up;
-    const bool use_q8 = pack_q4;
-    const bool use_direct_dot = match.token_count <= 5 && match.input_size % 256 == 0;
-    return !use_q8 && !use_direct_dot && match.token_count >= 2;
-}
-
-static CommonActivationPublicationDemand select_swiglu_k16_publication(const DispatchMatchContext & context,
-                                                                       const MulMatSwiGLUMatch &    match) {
-    if (match.op != BinaryKind::SwiGLU || match.output == nullptr || match.output->ne[1] != match.token_count ||
-        match.output->ne[2] != 1 || match.output->ne[3] != 1) {
-        return {};
-    }
-    const CommonActivationPublicationCapabilities capabilities = {
-        DispatchActivationInputF16K16Major,
-        DispatchActivationInputNone,
-        DispatchActivationProducerRequirementPackedK16Economy,
-    };
-    const CommonActivationPublicationPlan publication_plan =
-        common_select_activation_publication_plan(context, *match.output, capabilities);
-    return publication_plan.matched() ? publication_plan.preferred() : CommonActivationPublicationDemand{};
-}
-
-static MulMatSwiGLUPostOpsMatch match_mul_mat_swiglu_postops(const DispatchMatchContext & context) {
-    MulMatSwiGLUPostOpsMatch match;
-    match.root = match_mul_mat_swiglu(context);
-    if (!common_mul_mat_swiglu_is_generic_tiled_pair_route(match.root) || !context.graph.has_index()) {
-        return {};
-    }
-
-    const Value * current = match.root.output;
-    for (int add_index = 0; add_index < 2; ++add_index) {
-        const GraphNode * add_node = common_find_only_consumer_with_op(context.graph, current->id, GGML_OP_ADD);
-        if (add_node == nullptr || !common_binary_node_is_add(*add_node)) {
-            break;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         }
         if (projection.matched() && projection.input->id == match.output->id &&
             projection.weight->alias_source.value < 0 && projection.output_size >= 64 &&
