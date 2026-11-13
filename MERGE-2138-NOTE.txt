@@ -861,3 +861,16 @@ Sizes: ours 1189 lines, merged 1060 -- the files share ancestry, so the union is
 So the answer to my own ORCH line is now specific: keep BOTH in json-schema-to-grammar.{h,cpp} (the two builders are overloads, not rivals), and the
 work is porting our converter/schema_info into AMD's file rather than choosing a side. Everything else in the row still builds; this is the only
 remaining item and it is one file pair.
+
+## The chat blocker in one line: `json` means different types on the two sides
+  ours:    common/chat.h:20            using json = nlohmann::ordered_json;
+  merged:  common/chat-auto-parser.h:15 using json = common_json;   (and common/parsers/parsers.h:18)
+That one alias explains the whole 74-error set: our chat.cpp passes `const json &` into our builder's std::function<void(ordered_json&)>, which cannot bind
+when json is common_json -- hence "no match for call" x17 and "invalid initialization of reference" x17. The += and .save errors are the same story for
+common_chat_prompt and common_peg_arena (our methods, AMD's changed types).
+Blast radius measured: common_json is referenced by 23 files; our chat.cpp has 21 call sites into the ordered_json builder. So the two real options are:
+  (a) keep ours' ordered_json alias -- 23 files to check, several of them AMD's new ones (chat-auto-parser, parsers/) that were written for common_json;
+  (b) adapt our 21 chat.cpp call sites to common_json -- smaller, but it changes the type our chat features are expressed in.
+(b) is the smaller blast radius and the type AMD's newer code already assumes; (a) protects our code but fights 23 files. Still the chat owner's call, because
+either way the public chat API's JSON type changes for our features. Reverted my experiment (appending our converter costs nothing on its own -- json-schema-
+to-grammar.cpp compiled clean with 844 lines of it added -- but it does not move chat.cpp while the alias differs).
