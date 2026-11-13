@@ -732,3 +732,17 @@ So the remaining files split into two kinds, and it is worth saying which is whi
     graph-program-cache -- missing types/includes/ordering, no semantics.
   * SEMANTIC (needs the runtime owner): graph-executor (what has_prepared_program means), speculative.cpp (budget trace re-expressed on the
     common_batch wrapper).
+
+## graph-diagnostics.cpp: 1 error, and it is not a dropped statement
+"no return statement in 'constexpr' function returning non-void" at 202:9, pointing at the `},` that closes the std::visit lambda. The whole
+enclosing region (lines 140-205) is BYTE-IDENTICAL between our tip and the merged tree, so the merge did not delete a return here: the lambda's
+constexpr-ness or the variant's member set differs upstream of it, which makes a branch that "always returns" no longer provably return. That is a
+type-level difference, not a merge casualty -- the next step is to diff the OpParams variant declaration between the two sides, which I have not done.
+Leaving it rather than adding an `else { return {}; }` that would silence the diagnostic and change what an unknown parameter set parses to.
+
+## State at the end of this pass (25 hunks / 5 files)
+Dispatch layer: ALL clean. dispatch-qwen-matmul, dispatch-routed-ffn, dispatch-mul-mat, dispatch-get-rows, dispatch-gated-mul-mat,
+dispatch-gated-mul-mat-id, dispatch-mul-mat-id, dispatch-registry, dispatch-rope-set-rows, dispatch-moe-router -- zero diagnostics.
+Runtime: speculative (8), prepared-command-program-cache (5), graph-executor (5), command-program-executor (5), graph-program-cache (2) -- the
+semantic half, still marked.
+Manifests: all four reconciled (loom-libs 224 exports, qwen_moe 71), which is what unblocked the dispatch layer.
