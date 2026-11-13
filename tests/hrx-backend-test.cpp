@@ -12088,7 +12088,7 @@ static void write_transient_i32_value(ggml_backend_hrx_context *             con
         hrx_synchronous_h2d(context->device->device, &value, arena.buffer, allocation.arena_offset, sizeof(value)));
 }
 
-static void run_qwen_expert_table_partition_prefill_512_execution() {
+static void run_qwen_expert_table_partition_prefill_512_execution(bool skewed_routes) {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
     auto * backend_context = static_cast<ggml_backend_hrx_context *>(backend->context);
@@ -12110,8 +12110,15 @@ static void run_qwen_expert_table_partition_prefill_512_execution() {
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(buffer != nullptr);
 
-    const std::vector<int32_t> route_ids =
-        make_qwen_route_ids_iota(token_count, route_count, route_stride, expert_count);
+    std::vector<int32_t> route_ids = make_qwen_route_ids_iota(token_count, route_count, route_stride, expert_count);
+    if (skewed_routes) {
+        // every token picks experts 0-7: 512 rows and 16 partitions per used expert
+        for (int64_t token = 0; token < token_count; ++token) {
+            for (int64_t route = 0; route < route_count; ++route) {
+                route_ids[static_cast<size_t>(token * route_stride + route)] = static_cast<int32_t>(route);
+            }
+        }
+    }
     const std::vector<int32_t> expected_expert_table =
         make_qwen_expert_table_reference(route_ids, token_count, route_count, route_stride, expert_count);
     const std::vector<int32_t> expected_partition_table =
@@ -15976,7 +15983,8 @@ int main(int argc, char ** argv) {
         { "zero_output_device_support", [] { run_zero_output_device_support_checks(); } },
         { "hip_tensor_claim", [] { run_hip_tensor_claim_checks(); } },
         { "scale_f32_device_support", [] { run_scale_f32_device_support_checks(); } },
-        { "qwen_expert_table_partition_prefill_512_execution", [] { run_qwen_expert_table_partition_prefill_512_execution(); } },
+        { "qwen_expert_table_partition_prefill_512_execution", [] { run_qwen_expert_table_partition_prefill_512_execution(false); } },
+        { "qwen_expert_table_partition_prefill_512_skewed_execution", [] { run_qwen_expert_table_partition_prefill_512_execution(true); } },
         { "add_f32", [] { run_add_f32(); } },
         { "scale_f32", [] { run_scale_f32(); } },
         { "scale_f32_inplace", [] { run_scale_f32_inplace(); } },
