@@ -1879,6 +1879,58 @@ static void run_unmatched_graph_diagnostics_checks() {
     ggml_free(ctx);
 }
 
+// A write through a transient view whose storage the scheduler also exposes as an external value (a split output: the
+// consumer runs on another backend) is retargeted to that external value. The retarget's offset already includes the
+// binding's own offset, so it must replace it, not add to it: adding it put every slice of a batched SET_ROWS into the
+// QSA mask at twice its offset and overran the mask binding (engine #679, qwen4exp's mask chain with the fill on HRX and
+// the add on the CPU).
+static void run_external_write_retarget_offset_checks() {
+    ggml_init_params params = { ggml_tensor_overhead() * 8, nullptr, true };
+    ggml_context *   ctx    = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * base     = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 64);
+    ggml_tensor * view     = ggml_view_1d(ctx, base, 64, 0);
+    ggml_tensor * external = ggml_view_1d(ctx, base, 64, 0);
+    REQUIRE(base != nullptr && view != nullptr && external != nullptr);
+
+    ggml::hrx::Graph           graph;
+    ggml::hrx::ValueMap &      values   = graph.values();
+    const ggml::hrx::ValueId   base_id  = values.get_or_add_tensor_value(base, ggml::hrx::ValueKind::Transient);
+    const ggml::hrx::ValueId   view_id  = values.get_or_add_tensor_value(view, ggml::hrx::ValueKind::Transient);
+    const ggml::hrx::ValueId   ext_id   = values.get_or_add_tensor_value(external, ggml::hrx::ValueKind::External);
+    const ggml::hrx::Value *   view_val = values.find(view_id);
+    const ggml::hrx::Value *   ext_val  = values.find(ext_id);
+    REQUIRE(view_val != nullptr && ext_val != nullptr);
+    REQUIRE(view_val->kind == ggml::hrx::ValueKind::Transient);
+    REQUIRE(ext_val->kind == ggml::hrx::ValueKind::External);
+    REQUIRE(view_val->storage == ext_val->storage);
+
+    // 16 floats written at byte 128 of the view: the external value covers that range at storage offset 0
+    ggml::hrx::CommandPlan plan;
+    ggml::hrx::Dispatch    dispatch;
+    dispatch.kernel =
+        ggml::hrx::make_kernel_specialization(ggml::hrx::kernel_catalog_ref("loom_libs", "ggml_binary_f32"));
+    add_binary_f32_exact_dispatch_params(dispatch, 16);
+    dispatch.bindings.push_back({ ext_id, 0, 64 });
+    dispatch.bindings.push_back({ ext_id, 64, 64 });
+    dispatch.bindings.push_back({ view_id, 128, 64 });
+    plan.dispatches.push_back(std::move(dispatch));
+
+    const ggml::hrx::CommandProgram commands =
+        ggml::hrx::build_command_program(graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(commands.commands.size() == 1);
+    const ggml::hrx::CommandBinding & output = commands.commands.front().bindings.at(2);
+    // retargeted to an external value of the same storage (the promoted root or the view: both cover the range)
+    REQUIRE(output.value == ext_id || output.value == base_id);
+    REQUIRE(output.origin == ggml::hrx::CommandBindingOrigin::GraphValue);
+    REQUIRE(output.offset == 128);
+    REQUIRE(output.length == 64);
+    REQUIRE(commands.valid());
+    REQUIRE(command_program_verifies(commands));
+
+    ggml_free(ctx);
+}
+
 static void run_completion_counter_plan_checks() {
     ggml::hrx::Graph         graph;
     ggml::hrx::CommandPlan   plan;
@@ -12181,6 +12233,7 @@ int main(int argc, char ** argv) {
         { "graph_snapshot_diagnostics", [] { run_graph_snapshot_diagnostics_checks(); } },
         { "unmatched_graph_diagnostics", [] { run_unmatched_graph_diagnostics_checks(); } },
         { "completion_counter_plan", [] { run_completion_counter_plan_checks(); } },
+        { "external_write_retarget_offset", [] { run_external_write_retarget_offset_checks(); } },
         { "graph_index", [] { run_graph_index_checks(); } },
         { "rope_set_rows_dispatch", [] { run_rope_set_rows_dispatch_checks(); } },
         { "graph_traversal", [] { run_graph_traversal_checks(); } },

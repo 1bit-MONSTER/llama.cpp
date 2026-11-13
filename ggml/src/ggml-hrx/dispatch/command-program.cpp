@@ -39,6 +39,9 @@ static CommandBindingOrigin command_binding_origin(const Graph & graph, const Va
 struct StorageBindingTarget {
     ValueId value;
     size_t  offset = 0;
+    // true when |offset| is already the binding's whole offset into |value| (it folds in the binding's own offset),
+    // false when it is the alias's offset into its storage root, to which the binding's own offset still adds
+    bool    absolute = false;
 };
 
 static bool resource_access_writes(ResourceAccess access) {
@@ -96,8 +99,9 @@ static StorageBindingTarget storage_binding_target(const Graph &  graph,
         const Value * external_target =
             find_external_storage_binding_target(graph, *graph_value, binding_offset, binding_length);
         if (external_target != nullptr) {
-            target.value  = external_target->id;
-            target.offset = graph_value->storage_offset + binding_offset - external_target->storage_offset;
+            target.value    = external_target->id;
+            target.offset   = graph_value->storage_offset + binding_offset - external_target->storage_offset;
+            target.absolute = true;
             return target;
         }
     }
@@ -184,7 +188,12 @@ static void append_command(const Graph &          graph,
         const StorageBindingTarget binding_target = storage_binding_target(
             graph, command_binding.value, command_binding.offset, command_binding.length, command_binding.access);
         command_binding.value = binding_target.value;
-        if (binding_target.offset > 0) {
+        if (binding_target.absolute) {
+            // a write retargeted to the external value that covers it (a split output the scheduler owns): the offset
+            // already includes command_binding.offset, so adding it again would place every slice past its own - a
+            // batched SET_ROWS into the QSA mask landed slice k at 2k * row bytes and overran the binding (engine #679)
+            command_binding.offset = binding_target.offset;
+        } else if (binding_target.offset > 0) {
             if (binding_target.offset > std::numeric_limits<size_t>::max() - command_binding.offset) {
                 status.log("command %u binding %zu storage alias offset overflows", command.ordinal, binding_index);
             } else {
