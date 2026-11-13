@@ -183,6 +183,16 @@ static bool supported_token_count(int64_t token_count) {
     return token_count >= 1 && token_count <= 2048;
 }
 
+// The kernel is compiled per capacity CLASS, not per exact token count: a 3-token rope and a 4-token rope must share
+// one compiled program, which is what the capacity parameter means (and what hrx-backend-test expects: 3 -> 4).
+static int64_t token_capacity_class(int64_t token_count) {
+    int64_t capacity = 1;
+    while (capacity < token_count) {
+        capacity *= 2;
+    }
+    return capacity;
+}
+
 static bool supported_cache_row_count(int64_t row_count) {
     return row_count >= 1 && row_count <= 1048576;
 }
@@ -467,7 +477,7 @@ static void add_rope_compile_parameters(Dispatch & dispatch, const RopeMatch & m
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.head_size", to_config_value(match.head_size));
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.n_dims", to_config_value(match.n_dims));
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.head_count", to_config_value(match.head_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.token_capacity", to_config_value(match.token_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.token_capacity", to_config_value(token_capacity_class(match.token_count)));
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_stride1", to_config_value(match.input_stride1));
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_stride2", to_config_value(match.input_stride2));
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.mscale", rope_mscale_config_value(match.rope_mscale));
@@ -792,7 +802,7 @@ static bool match_rope_f32_dispatch(const DispatchMatchContext & context, Dispat
                 part.kernel.compile_parameters["ggml.rope_f32.token_base"] = to_config_value(first_token);
             }
             first_token += count;
-            part.kernel.compile_parameters["ggml.rope_f32.token_capacity"] = to_config_value(count);
+            part.kernel.compile_parameters["ggml.rope_f32.token_capacity"] = to_config_value(token_capacity_class(count));
             part.kernel.compile_parameters["ggml.rope_f32.input_span"] =
                 to_config_value(static_cast<int64_t>((count - 1) * match.input_stride2) + static_cast<int64_t>(head_span));
         },
