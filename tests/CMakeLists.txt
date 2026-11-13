@@ -518,6 +518,12 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-gdn-passed-alias PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-gdn-passed-alias COMMAND test-hrx-gdn-passed-alias)
 
+    # our line's HRX op suite (#2150's q6_k shortlist .repeat among its cases); AMD's hrx-ops-test is a different file
+    add_executable(test-hrx-ops test-hrx-ops.cpp)
+    target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-ops PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-ops COMMAND test-hrx-ops)
+
 
     add_executable(test-hrx-hadamard test-hrx-hadamard.cpp)
     target_link_libraries(test-hrx-hadamard PRIVATE ggml)
