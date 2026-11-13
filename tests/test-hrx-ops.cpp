@@ -2344,8 +2344,6 @@ static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t 
     constexpr int64_t kQueryHeadCount    = 32;
     constexpr int64_t kKeyValueHeadCount = 4;
     constexpr int64_t kFullCacheRowCount = 40960;
-    const size_t      active_mask_byte_count =
-        static_cast<size_t>(token_count) * static_cast<size_t>(token_count) * sizeof(ggml_fp16_t);
 
     ggml_init_params params = {};
     params.mem_size         = 128 * 1024 * 1024;
@@ -2387,38 +2385,40 @@ static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t 
     match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes,
                             producer_index_for_tensor(imported.graph, flash_output), flash_match);
 
+    // engine#2374 item 3: since the engine#2138 merge (#327) the postprocess match no longer publishes a compact
+    // [tokens x tokens] F16 mask through a qwen_attention_metadata initialisation dispatch. The flash attention reads
+    // the graph's own mask over the whole key/value view, one query chunk at a time, each chunk binding its own rows.
+    // A real graph's view is llama_kv_cache::get_n_kv() (the used cells padded to 256), so the full-capacity view
+    // this case builds only occurs in the reserve graph or a full cache, where every row is needed anyway.
     const ggml::hrx::Value * mask_value = imported.graph.values().find_tensor(attention.attention_mask);
     REQUIRE(mask_value != nullptr);
-    const ggml::hrx::CommandPlanAlternateValue * compact_mask =
-        ggml::hrx::find_alternate_value(plan, mask_value->id, GGML_TYPE_F16, active_mask_byte_count);
-    REQUIRE(compact_mask != nullptr);
+    REQUIRE(mask_value->ne[0] == kFullCacheRowCount);
+    REQUIRE(mask_value->ne[1] == token_count);
+    const size_t mask_row_bytes = static_cast<size_t>(kFullCacheRowCount) * sizeof(ggml_fp16_t);
 
-    const ggml::hrx::Dispatch * metadata_dispatch = nullptr;
     for (const ggml::hrx::Dispatch & dispatch : plan.initialization_dispatches) {
-        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:qwen_attention_metadata") {
-            metadata_dispatch = &dispatch;
-        }
+        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) != "qwen3_moe:qwen_attention_metadata");
     }
-    REQUIRE(metadata_dispatch != nullptr);
-    REQUIRE(metadata_dispatch->kernel.integer_parameters.at("token_count") == token_count);
-    REQUIRE(metadata_dispatch->kernel.integer_parameters.at("context_capacity") == token_count);
-    REQUIRE(metadata_dispatch->bindings.size() == 5);
-    REQUIRE(metadata_dispatch->bindings[4].value == compact_mask->alternate_value);
-    REQUIRE(metadata_dispatch->bindings[4].length == active_mask_byte_count);
 
-    const ggml::hrx::Dispatch * flash_dispatch = nullptr;
+    int64_t covered_query_tokens = 0;
+    size_t  flash_dispatch_count = 0;
     for (const ggml::hrx::Dispatch & dispatch : plan.dispatches) {
-        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_flash_attention_f32_f16_wmma") {
-            flash_dispatch = &dispatch;
+        if (kernel_name_for_id(dispatch.kernel.kernel_id) != "loom_libs:ggml_flash_attention_f32_f16_wmma") {
+            continue;
         }
+        ++flash_dispatch_count;
+        const int64_t chunk_tokens = dispatch.kernel.integer_parameters.at("query_token_count");
+        REQUIRE(chunk_tokens > 0);
+        REQUIRE(dispatch.kernel.integer_parameters.at("key_value_token_count") == kFullCacheRowCount);
+        REQUIRE(dispatch.bindings.size() == 6);
+        REQUIRE(dispatch.kernel.compile_parameters.at("ggml.flash_attention.apply_gate") == "0");
+        REQUIRE(dispatch.bindings[3].value == mask_value->id);
+        REQUIRE(dispatch.bindings[3].offset == static_cast<size_t>(covered_query_tokens) * mask_row_bytes);
+        REQUIRE(dispatch.bindings[3].length == static_cast<size_t>(chunk_tokens) * mask_row_bytes);
+        covered_query_tokens += chunk_tokens;
     }
-    REQUIRE(flash_dispatch != nullptr);
-    REQUIRE(flash_dispatch->kernel.integer_parameters.at("query_token_count") == token_count);
-    REQUIRE(flash_dispatch->kernel.integer_parameters.at("key_value_token_count") == token_count);
-    REQUIRE(flash_dispatch->bindings.size() == 6);
-    REQUIRE(flash_dispatch->kernel.compile_parameters.at("ggml.flash_attention.apply_gate") == "0");
-    REQUIRE(flash_dispatch->bindings[3].value == compact_mask->alternate_value);
-    REQUIRE(flash_dispatch->bindings[3].length == active_mask_byte_count);
+    REQUIRE(flash_dispatch_count > 0);
+    REQUIRE(covered_query_tokens == token_count);
 
     ggml_free(ctx);
 }
