@@ -793,59 +793,6 @@
       ]
     },
     {
-      "name": "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8",
-      "symbol": "qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8",
-      "source": "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom",
-      "workload_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "bindings": [
-        "route_weights",
-        "routed_output",
-        "hidden_state",
-        "next_norm_weight",
-        "next_projection_input",
-        "q8_output"
-      ],
-      "binding_access": [
-        "read",
-        "read",
-        "read_write",
-        "read",
-        "write",
-        "write"
-      ],
-      "target_selector": "",
-      "compile_recipe": {
-        "mode": "archive",
-        "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked",
-        "primary_sources": [
-          "qwen3_moe/routed_down_weighted_reduce_next_rmsnorm_f32.loom"
-        ],
-        "library_sources": [
-          "../loom-libs/motifs/routing/weighted_reduce_next_rmsnorm_f32.loom",
-          "../loom-libs/motifs/quantize_q8_1_x4.loom",
-          "ggml/quantize_q8_1_x4.loom",
-          "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "../loom-libs/motifs/routing/weighted_reduce_next_rmsnorm_f32.loom",
-        "../loom-libs/motifs/quantize_q8_1_x4.loom",
-        "ggml/quantize_q8_1_x4.loom",
-        "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
-      ]
-    },
-    {
       "name": "qwen3_moe_router_projection_f32_four_row_wave32",
       "symbol": "qwen3_moe_router_projection_f32_four_row_wave32",
       "source": "qwen3_moe/router_projection_f32.loom",
