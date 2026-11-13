@@ -847,3 +847,17 @@ Two ways out, and they are not merge mechanics:
   (b) port our chat.cpp onto AMD's common_chat_schema builder -- no duplicate APIs, but it rewrites our chat features against a type we did not write.
 My read: (a) is smaller and keeps both feature sets, but it puts two schema abstractions in one header, and that is the chat owner's call rather than a
 merge decision. Everything else in the row is done and committed; this is the only item that needs a name on it.
+
+## ORCH follow-up: the chat/schema question, measured -- it is a UNION OF TWO FILES, not a choice
+Tried both single-sided answers to size option (a) and (b):
+  * take OURS' json-schema-to-grammar.{h,cpp} wholesale: chat.cpp 77 errors (worse than 74), peg-parser.cpp 3 NEW errors;
+  * take MERGED (AMD's) as-is: chat.cpp 74 errors, because common_schema_info, common_schema_converter and
+    common_grammar_builder::resolve_refs simply do not exist there (grep: 0 for each in AMD's .cpp).
+Consumers measured: chat.cpp wants our ordered_json builder (builder.resolve_refs x17, schema_info.resolve_refs x2, resolves_to_string x2);
+chat-auto-parser-generator.cpp is clean against ours; peg-parser.cpp wants AMD's common_chat_schema support.
+Sizes: ours 1189 lines, merged 1060 -- the files share ancestry, so the union is a few hundred lines, not a rewrite:
+  ours supplies common_schema_converter + common_schema_info + common_grammar_builder::resolve_refs/add_schema(ordered_json);
+  AMD's supplies common_chat_schema + the peg-parser bridge.
+So the answer to my own ORCH line is now specific: keep BOTH in json-schema-to-grammar.{h,cpp} (the two builders are overloads, not rivals), and the
+work is porting our converter/schema_info into AMD's file rather than choosing a side. Everything else in the row still builds; this is the only
+remaining item and it is one file pair.
