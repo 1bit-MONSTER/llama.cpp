@@ -687,3 +687,26 @@ neighbourhood, so a 28-line append becomes a 100+ line port. Reverted; the marke
 dispatch-mul-mat.cpp.
 Scoreboard this session: files resolved 7 (qwen4exp, corpus .loom x3, ggml-cpu, get-rows, rope-set-rows, mul-mat-id, registry) -> hunks
 60 -> 37. Remaining 37 in 9 files, all of which share one property: the fix is not per-hunk but per-API-generation.
+
+## host-memory.cpp: ours needs OURS' header, and that is the runtime-side twin of the dispatch wall
+Took all three hunks to ours (44/34/17 lines vs AMD's 20/7/2: ours carries a mutex around the entry insert plus the richer bookkeeping).
+It failed on OUR OWN symbols -- has_device_source, fail_cold_after_, HostWeightSource::<member> -- because those live in our version of the
+header and the merged tree carries AMD's. So the runtime group has the same property as the dispatch group, one level up: .cpp and header
+generations pair up, and neither group can be finished file-by-file. Reverted.
+File-level scoreboard for the merge row, so the next person starts from the truth:
+  RESOLVED this session: qwen4exp, kernel-corpus .loom x3 (15 hunks), ggml-cpu, dispatch-get-rows, dispatch-rope-set-rows,
+                        dispatch-mul-mat-id, dispatch-registry, dispatch-moe-router + 2 ours-kernel manifest entries
+  REMAINING 34 hunks / 8 files: speculative (8), prepared-command-program-cache (5), graph-executor (5), command-program-executor (5),
+                        dispatch-mul-mat (5), host-memory (3), graph-program-cache (2)  [gated-mul-mat resolved to 1 hunk pending?] -- and
+                        the runtime set needs the header decision exactly like the dispatch set does.
+
+## host-memory.cpp: the header decision now has a NAMED blocker (not an impression)
+The merged file contains a mixed resolution inside one function: AMD's validation block (has_host_source && has_identity && ...) followed by
+OURS' device-source materialization branch (`if (has_device_source) { ... }`), which never declares the flag. So the file is neither side, and
+the fix needs both: ours' validation rule (exactly one of host/device) AND a `device_buffer` member on HostWeightSource -- which the merged
+header does not have ("has no member named 'device_buffer'").
+That is the runtime twin of the dispatch wall, stated concretely: finishing host-memory requires our HostWeightSource, i.e. our
+runtime header generation. The same will hold for the other five runtime files.
+For whoever takes it: the decision is one sentence -- do the runtime headers come from ours (keeping device-resident weight sources, which our
+host-memory code exists to support) or from AMD's (in which case the device-source path and its ~40 lines go, and the merge must say so out
+loud rather than leave a half-resolved function).
