@@ -874,3 +874,16 @@ Blast radius measured: common_json is referenced by 23 files; our chat.cpp has 2
 (b) is the smaller blast radius and the type AMD's newer code already assumes; (a) protects our code but fights 23 files. Still the chat owner's call, because
 either way the public chat API's JSON type changes for our features. Reverted my experiment (appending our converter costs nothing on its own -- json-schema-
 to-grammar.cpp compiled clean with 844 lines of it added -- but it does not move chat.cpp while the alias differs).
+
+## chat.cpp: option (b) measured down to four items, three of them small and one that is not
+Adapted what was mechanical and re-measured (then reverted, because the file cannot compile until item 4 is decided):
+  1. `data.prompt += X` -> `data.prompt.append(X)`: the member CHANGED TYPE (ours `std::string prompt`, merged `common_chat_prompt`), and the merged type
+     offers append()/replace_last()/str(). 5 sites, mechanical.
+  2. the rfind+replace pair -> `prompt.str().rfind(...)` + `prompt.replace_last(...)`. 1 site, mechanical.
+  3. `parser.save()` x10 -- common_peg_arena is AMD's type and has no save(); ours does. Porting the method is mechanical IF ours' arena state matches.
+  4. `builder.resolve_refs` x17 (+17 initialisation errors that follow from it): this is the one that is NOT mechanical. Our builder member is
+     `std::function<void(nlohmann::ordered_json &)>`; chat.cpp now passes a `common_json` (because the merged `json` alias is common_json, and common_json
+     is a STANDALONE class in common/json.h, 433-line implementation -- AMD replaced nlohmann, it is not an alias). So either our converter is ported to
+     common_json, or a bridge converts common_json -> ordered_json -> resolve -> back.
+So option (b) is: items 1-3 mechanical (16 sites), item 4 a JSON-library boundary decision. That is the honest size, and it is why my earlier "21 call
+sites vs 23 files" framing was too optimistic: the call sites are cheap, the type boundary is not.
