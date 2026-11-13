@@ -341,6 +341,10 @@ static std::vector<int32_t> make_qwen_expert_table_reference(const std::vector<i
     return expert_table;
 }
 
+// engine#2381: bit positions of the qwen partition descriptor's fields, as the backend writes them.
+static constexpr int32_t kPartitionFieldShift = 9;   // bits 9-12
+static constexpr int32_t kRowCountFieldShift  = 13;  // bits 13-18, holding row_count - 1
+
 static std::vector<int32_t> make_qwen_partition_table_reference(const std::vector<int32_t> & expert_table,
                                                                 int64_t                      token_count,
                                                                 int64_t                      route_count,
@@ -357,7 +361,12 @@ static std::vector<int32_t> make_qwen_partition_table_reference(const std::vecto
             if (row_count > 32) {
                 row_count = 32;
             }
-            const int32_t descriptor = static_cast<int32_t>(expert) | (partition << 9) | ((row_count - 1) << 15);
+            // engine#2381: the descriptor packs expert in bits 0-8, partition in bits 9-12 and
+            // row_count-1 in bits 13-18. This reference used to put row_count-1 at bit 15, which
+            // disagreed with every descriptor the backend writes by a constant, and made this case the
+            // only failing device case. The bit layout is the backend's, so the reference follows it.
+            const int32_t descriptor = static_cast<int32_t>(expert) | (partition << kPartitionFieldShift) |
+                                       ((row_count - 1) << kRowCountFieldShift);
             partition_table[static_cast<size_t>(1 + partition_count)] = descriptor;
             ++partition_count;
         }
