@@ -656,3 +656,23 @@ Our file is 317 lines, AMD's 533, and the gap is a REFACTOR, not a feature we la
      CommonMulMatIdMatch (AMD's selector takes that), so the selector needs an adapter or the call site needs the routed match.
 Reverted: the file is back to its committed state (521 lines, marker-free, refs still wrong). Doing this by line-surgery in one pass is what
 went wrong twice; the next attempt should copy AMD's block wholesale and then delete ours' duplicates, rather than insert piecewise.
+
+## The dispatch wall, now proved by construction rather than argued
+Inserted all seven AMD functions the get-rows file lacks (match_get_rows_scale_f32 + _dispatch, match_get_rows_rmsnorm_binary +
+_dispatch, match_get_rows_scalar_3d_f32_dispatch, match_repeat_scalar_3d_f32_input + _dispatch). All seven landed; the file then failed on
+TYPES instead:
+    'GetRowsRmsNormMatch' does not name a type
+    'CommonActivationPublicationCap...' does not name a type
+Those are declared in AMD's dispatch headers, which the merged tree carries from our side. So the wall is real and it is one level above the
+.cpp files: **the .cpp set and the header set have to move together.** Adding functions one at a time cannot work, no matter how carefully the
+insertions are placed -- which is why the last four attempts each got measurably closer and then hit the same wall.
+
+## The discriminator that replaces every heuristic I tried (one command, two verified refs)
+    git show <amd>:F > /tmp/a; git show <ours>:F > /tmp/o
+    comm -23 <(fnset /tmp/o) <(fnset /tmp/a)   # functions only our side has
+Measured for all ten remaining files, and none is zero:
+    speculative.cpp 26/43   mul_mat 38/64   rope-set-rows 25/18   registry 32/6   moe-router 9/3
+    gated-mul-mat 9/15      command-program-executor 31/37   graph-executor 12/8   graph-program-cache 41/10
+    host-memory 59/5        prepared-command-program-cache 4/3          (only-ours / only-amd)
+So there is no file left where taking one side is licensed, and the "AMD-only/truncation" family of shortcuts is dead -- correctly, since it was
+born from a broken ref. Every remaining file is a genuine union whose resolution needs the header set decided first.
