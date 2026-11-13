@@ -1445,6 +1445,7 @@ struct llama_model_deepseek4 : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
 
     struct graph : public llm_graph_context {
+        ggml_tensor * build_hc_mean(ggml_tensor * cur) const;  // ours: hidden-context mean
         graph(const llama_model & model, const llm_graph_params & params);
         // helpers only: no graph built (base of the DSpark drafters, dflash.cpp)
         explicit graph(const llm_graph_params & params) : llm_graph_context(params) {}
