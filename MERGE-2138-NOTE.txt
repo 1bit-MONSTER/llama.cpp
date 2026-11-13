@@ -719,3 +719,16 @@ loud rather than leave a half-resolved function).
    replay, fallback...). The hunk boundaries in this file are not function boundaries, unlike get-rows/registry/moe-router where they were.
 So this file needs per-hunk reading with the function scanned top to bottom, not a side choice -- the same reason gated-mul-mat could not be finished
 by appending. Reverted both files; markers intact (31 hunks).
+
+## graph-executor.cpp: needs a METHOD BODY, so it stops here deliberately
+Taking our hunks gives three errors that name the missing API: `use_graph_prepared` (our local, declared in a region the merge took from AMD) and
+`GraphProgram::has_prepared_program()` -- which exists only in OUR graph-program-cache.h, not in the merged or AMD's.
+Declaring it is easy; DEFINING it is not: the body decides what "has a prepared program" means for this class, and every plausible body
+(prepared_entry_ != nullptr / !prepared_shape_hash_.empty() / the cache's own predicate) is a different answer. I wrote one, saw it was a guess,
+and reverted -- a guessed body here would compile and then silently choose the wrong execution path, which is the failure mode this whole row exists
+to prevent.
+So the remaining files split into two kinds, and it is worth saying which is which for whoever picks this up:
+  * MECHANICAL (needs the compiler and nothing else): prepared-command-program-cache (Entry alias), command-program-executor, dispatch-mul-mat,
+    graph-program-cache -- missing types/includes/ordering, no semantics.
+  * SEMANTIC (needs the runtime owner): graph-executor (what has_prepared_program means), speculative.cpp (budget trace re-expressed on the
+    common_batch wrapper).
