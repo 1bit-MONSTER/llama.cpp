@@ -4152,8 +4152,10 @@ llama_context * llama_init_from_model(
     // llama-perplexity then exits 0 having produced no output, which reads as a pass to any harness keyed on the
     // exit code (measured on Qwen3-0.6B at gpu-kernels b0ed206, 2026-11-13). Refuse here instead, where the
     // message can name the fix. Gated on the device so every other backend keeps its q4_0 V support.
-    // EXPIRY: remove this whole block when gpu-kernels#75 lands -- the refusal is keyed on the device, but its
-    // reason is a missing kernel, and the moment the writer exists the refusal becomes wrong rather than early.
+    // EXPIRY: remove this whole block when the READ path accepts a q4_0 V -- not when the writer lands. gpu-kernels#75
+    // adds `set_rows_q4_0`, and the FA matchers still require value->type == GGML_TYPE_F16
+    // (dispatch-flash-attention.cpp:238), so a run after #75 fails one node later, at attention, which is the same
+    // graph-failure-with-no-output shape this refusal exists to prevent. Two halves, two conditions.
     if (params.type_v == GGML_TYPE_Q4_0) {
         bool on_hrx = false;
         for (uint32_t il = 0; il < model->hparams.n_layer() && !on_hrx; ++il) {
