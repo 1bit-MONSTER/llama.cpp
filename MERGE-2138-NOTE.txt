@@ -757,3 +757,18 @@ branch depends on the answer.
 Snapshot for the hand-off (5 files, 25 hunks, all runtime):
   speculative.cpp 8   prepared-command-program-cache 5   graph-executor 5   command-program-executor 5   graph-program-cache 2
 Everything else in the tree compiles: the whole dispatch layer, all four manifests, ggml-cpu, corpus, qwen4exp.
+
+## command-program-executor.cpp: attempted, measured, reverted -- but with the shape of the answer recorded
+Taking our five hunks leaves four errors, and each names a LOCAL type difference rather than a merge casualty:
+  * GraphValueAccess (file-local, anonymous namespace) in the merged file has read/write/main_write; ours also carries transformed_read and
+    layout_conflict, which our hunks' code reads. Adding the two fields is not enough -- the compiler still reports no such member on the same
+    struct, so there is a second access-record type in play (the anonymous-namespace one in the diagnostic is not the one I edited).
+  * "redefinition of GraphReplayStreamState::has_pending_host_writebacks" with exactly ONE definition in the .cpp, so its DECLARATION appears twice
+    across the two headers the merge kept, which is a different fix (dedupe at the header).
+So this file is the same shape as the others in the runtime group: our hunks and our local types travel together, and the merged file has AMD's
+local types. The work is per-file type reconciliation -- mechanical, but it has to be done with the whole file's types in view rather than by
+following one diagnostic at a time (which is what I did here, and it produced two dead ends before I stopped).
+
+FINAL STATE OF THE ROW (25 hunks / 5 files, all runtime, all needing this same per-file pass):
+  speculative 8, prepared-command-program-cache 5, graph-executor 5, command-program-executor 5, graph-program-cache 2
+Compiling: dispatch layer (10 TUs), four manifests, ggml-cpu, corpus, qwen4exp, graph-diagnostics, host-memory, dispatch-*.
