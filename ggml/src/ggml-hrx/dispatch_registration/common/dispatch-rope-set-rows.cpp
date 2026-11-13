@@ -730,7 +730,7 @@ static bool match_set_rows_scatter_dispatch(const DispatchMatchContext & context
     return true;
 }
 
-// A cache format outside the public table (q8_0: the quantized KV cache) goes to the HIP add-on's hook, which
+// A cache format outside the public table (q8_0 / q4_0: the quantized KV cache) goes to the HIP add-on's hook, which
 // owns the shape contract too: test-backend-ops' SET_ROWS cases are 4-D and batched over dims 2 and 3, while
 // llama.cpp's KV writes are 2-D, and the hook emits one dispatch per batch slice. Without an add-on nothing
 // reaches this point and the node stays unmatched, exactly as before.
@@ -746,7 +746,7 @@ static bool match_set_rows_addon(const DispatchMatchContext & context, DispatchM
     const Value * output  = graph_value(context.graph, node->output);
     if (rows == nullptr || indices == nullptr || cache == nullptr || output == nullptr || !cache->contiguous ||
         !same_shape(*cache, *output) || !context.graph.values().same_storage(cache->id, output->id) ||
-        output->type != GGML_TYPE_Q8_0 || rows->type != GGML_TYPE_F32 ||
+        (output->type != GGML_TYPE_Q8_0 && output->type != GGML_TYPE_Q4_0) || rows->type != GGML_TYPE_F32 ||
         (indices->type != GGML_TYPE_I64 && indices->type != GGML_TYPE_I32) || rows->nb[0] != sizeof(float)) {
         return false;
     }
