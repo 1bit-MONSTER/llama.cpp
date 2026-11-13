@@ -6565,6 +6565,38 @@ struct test_mul_mat_vec_fusion : public test_case {
     }
 };
 
+// Dense gate/up + SwiGLU (MUL_MAT_VEC_FUSION) whose activations exceed the f16 range (engine #2293): the same fill as
+// test_mul_mat_large_activation on the shared input, so a fused gate/up kernel that narrows the activations (or a
+// per-block sum of them) to f16 is checked against the CPU. The input is the one F32 tensor of shape [k, m].
+struct test_mul_mat_vec_fusion_large_activation : public test_mul_mat_vec_fusion {
+    const float magnitude;
+
+    std::string vars() override {
+        return test_mul_mat_vec_fusion::vars() + ",magnitude=" + var_to_str(magnitude);
+    }
+
+    test_mul_mat_vec_fusion_large_activation(ggml_type type, int64_t m, int64_t n, int64_t k, float magnitude)
+        : test_mul_mat_vec_fusion(type, GGML_GLU_OP_SWIGLU, m, n, k, false, 1, 1, false, false, true, false, {1, 1}),
+          magnitude(magnitude) {}
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type != GGML_TYPE_F32 || t->op != GGML_OP_NONE || t->ne[0] != k || t->ne[1] != m) {
+                continue;
+            }
+            std::vector<float> data(ggml_nelements(t));
+            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+            for (int64_t token = 0; token < t->ne[1]; token += 4) {
+                for (int64_t i = 0; i < t->ne[0]; i += 64) {
+                    data[token * t->ne[0] + i] = ((i / 64 + token / 4) % 2 == 0) ? magnitude : -magnitude;
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+        }
+    }
+};
+
 // GGML_OP_SUM
 struct test_sum : public test_case {
     const ggml_type type;
@@ -9527,6 +9559,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         for (int64_t n : { 1, 8, 22 }) {
             test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, n, 4096, 9.1e4f));
             test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, n,  512, 9.1e4f));
+        }
+    }
+    // engine #2293: the 9..16-token K-quant paths, which read the activations' per-block sums (q8_1_x4 s = d * sum(q),
+    // stored in f16): the token loop at 12 tokens, and gate/up + SwiGLU at 12 and 16 tokens (the WMMA body).
+    for (ggml_type type_a : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K }) {
+        test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, 12, 4096, 9.1e4f));
+        for (int64_t tokens : { 12, 16 }) {
+            test_cases.emplace_back(new test_mul_mat_vec_fusion_large_activation(type_a, tokens, 2048, 4096, 9.1e4f));
         }
     }
     test_cases.emplace_back(new test_mul_mat_large_activation(GGML_TYPE_Q6_K, 2048, 22, 4096, 9.1e4f));
