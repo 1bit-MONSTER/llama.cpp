@@ -291,7 +291,15 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   %raw_probability = vector.expf<afn> %score_delta : vector<4xf32>
   %probability = vector.select %query_valid, %raw_probability, %c0_f32x4 : vector<4xf32>
   %block_sum = kernel.subgroup.reduce<addf> %probability : vector<4xf32>
-  %probability_f16 = vector.fptrunc %probability : vector<4xf32> to vector<4xf16>
+  // engine#2374: P.V accumulates in f16, and a 64-token block of unnormalised weights summed past 65,504 once |V|
+  // was above ~1k under flat attention. Normalising the weights by their block sum first makes the accumulator a
+  // convex combination of V, bounded by max|V|. A valid row's sum is >= 1 (its maximum contributes exp(0)); an
+  // invalid row's weights and sum are 0, so dividing by max(sum, 1) leaves it 0. The partial is published
+  // normalised and every reducer weighs it by s_b * exp(m_b - M).
+  %c1_f32x4_normaliser = vector.constant 1.0 : vector<4xf32>
+  %block_sum_divisor = vector.maxnumf %block_sum, %c1_f32x4_normaliser : vector<4xf32>
+  %normalised_probability = vector.divf %probability, %block_sum_divisor : vector<4xf32>
+  %probability_f16 = vector.fptrunc %normalised_probability : vector<4xf32> to vector<4xf16>
   %probability0 = vector.extract %probability_f16[0] : vector<4xf16> -> f16
   %probability1 = vector.extract %probability_f16[1] : vector<4xf16> -> f16
   %probability2 = vector.extract %probability_f16[2] : vector<4xf16> -> f16
@@ -761,7 +769,8 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.direct> device 
         %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %scaled_sum : f32
         %block_output_f16 = view.load %partial_output_view[%key_value_head, %block, %query_row, %output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> f16
         %block_output = scalar.extf %block_output_f16 : f16 to f32
-        %scaled_output = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_output, %scale : f32
+        // engine#2374: partials are normalised by their block sum, so a block weighs s_b * exp(m_b - M).
+        %scaled_output = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_output, %scaled_sum : f32
         %next_output = scalar.addf<reassoc|nnan|ninf|nsz> %running_output, %scaled_output : f32
         scf.yield %next_sum, %next_output : f32, f32
       }
@@ -860,7 +869,8 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> de
       %scale = scalar.expf<afn> %delta : f32
       %block_sum = view.load %partial_sum_view[%key_value_head, %lane, %query_row0] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
       %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
-      scf.yield %scaled_sum, %scale : f32, f32
+      // engine#2374: partials are normalised by their block sum, so a block weighs s_b * exp(m_b - M).
+      scf.yield %scaled_sum, %scaled_sum : f32, f32
     } else {
       scf.yield %c0_f32, %c0_f32 : f32, f32
     }
@@ -870,7 +880,8 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> de
       %scale = scalar.expf<afn> %delta : f32
       %block_sum = view.load %partial_sum_view[%key_value_head, %lane, %query_row1] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
       %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
-      scf.yield %scaled_sum, %scale : f32, f32
+      // engine#2374: partials are normalised by their block sum, so a block weighs s_b * exp(m_b - M).
+      scf.yield %scaled_sum, %scaled_sum : f32, f32
     } else {
       scf.yield %c0_f32, %c0_f32 : f32, f32
     }
@@ -1082,9 +1093,10 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
         %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
         %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
         %scale = scalar.expf<afn> %delta : f32
-        view.store %scale, %scale_stage_view[%query_row, %block] : f32, view<[%query_heads_per_key_value_head]x[%active_block_count]xf32>
         %block_sum = view.load %partial_sum_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
         %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
+        // engine#2374: partials are normalised by their block sum, so a block weighs s_b * exp(m_b - M).
+        view.store %scaled_sum, %scale_stage_view[%query_row, %block] : f32, view<[%query_heads_per_key_value_head]x[%active_block_count]xf32>
         %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %scaled_sum : f32
         scf.yield %next_sum : f32
       }
@@ -1425,9 +1437,10 @@ kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_a
       %block_maximum = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%key_value_block_count]x16xf32> -> f32
       %delta = scalar.subf<reassoc|nnan|ninf|nsz> %block_maximum, %maximum : f32
       %scale = scalar.expf<afn> %delta : f32
-      view.store %scale, %partial_max_view[%key_value_head, %block, %query_row] : f32, view<[%key_value_head_count]x[%key_value_block_count]x16xf32>
       %block_sum = view.load %partial_sum_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%key_value_block_count]x16xf32> -> f32
       %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
+      // engine#2374: partials are normalised by their block sum, so a block weighs s_b * exp(m_b - M).
+      view.store %scaled_sum, %partial_max_view[%key_value_head, %block, %query_row] : f32, view<[%key_value_head_count]x[%key_value_block_count]x16xf32>
       %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %scaled_sum : f32
       scf.yield %next_sum : f32
     }

@@ -2181,8 +2181,18 @@ static void run_flash_attention_accumulator_range_case(int64_t head_size, int64_
         }
     }
     REQUIRE(non_finite == 0);   // the f16 accumulator reaches 102,400 here; see the comment above
+    float max_error = 0.0f;
     for (float v : actual) {
-        REQUIRE(std::fabs(v - value_magnitude) <= 5.0e-2f);
+        max_error = std::max(max_error, std::fabs(v - value_magnitude));
+    }
+    std::printf("accumulator_range V=%g: max |out - V| = %g\n", value_magnitude, max_error);
+    std::fflush(stdout);
+    // engine#2374: P.V accumulates in f16 over a block of probabilities normalised by their block sum, so the result
+    // carries f16 accumulation error relative to |V|: measured 0 at V = 100 and 160 (2.7e-3) at V = 60000 on gfx1151.
+    // The bound is relative; the overflow this case exists for is the non-finite check above.
+    const float tolerance = std::max(5.0e-2f, 4.0e-3f * std::fabs(value_magnitude));
+    for (float v : actual) {
+        REQUIRE(std::fabs(v - value_magnitude) <= tolerance);
     }
 
     ggml_backend_buffer_free(buffer);
