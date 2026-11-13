@@ -375,6 +375,15 @@ inline int run_cases_parallel(const Config &            config,
             if (index >= selected_cases.size()) {
                 return;
             }
+            // Announce BEFORE the child runs. The summary line below is printed only once a case has finished,
+            // so a case that wedges the device (a GPU protection fault that hangs the queue, as hrx-ops-test did
+            // at 13:14Z) printed nothing at all and the fault could not be attributed to a case. One flushed line
+            // per case makes the wedging case the last one named.
+            {
+                std::lock_guard<std::mutex> lock(print_mutex);
+                std::printf("[ RUN  ] %4zu/%zu %s\n", index + 1, selected_cases.size(), selected_cases[index].name.c_str());
+                std::fflush(stdout);
+            }
             Result       result = run_single_case_child(config, options, selected_cases[index]);
             const size_t done   = finished.fetch_add(1) + 1;
             {
