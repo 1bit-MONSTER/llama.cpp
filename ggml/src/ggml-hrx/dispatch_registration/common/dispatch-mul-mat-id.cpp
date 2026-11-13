@@ -14,20 +14,22 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr KernelCatalogRef kMulMatIdF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_f32_f32_wmma");
-static constexpr KernelCatalogRef kMulMatIdPostOpsF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_postops_f32_f32_wmma");
-static constexpr KernelCatalogRef kMulMatIdPostOpsNextRmsNormF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_postops_next_rmsnorm_f32_f32_wmma");
-
-// AMD's rebase also declared the tiled/skinny post-ops refs; their matchers do not survive into this merge
-// (those matcher bodies in this file resolve to our side), so only the refs something still names are kept --
-// an unreferenced static constexpr here is -Wunused-const-variable under -Werror. They come back with the matchers.
+static constexpr KernelCatalogRef kMulMatIdTiledF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdSkinnyF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_publish_f32");
 static constexpr KernelCatalogRef kMulMatIdTiledScaledF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32");
 static constexpr KernelCatalogRef kMulMatIdSkinnyScaledF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdTiledPostOpsF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_postops_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdSkinnyPostOpsF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_postops_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdTiledPostOpsNextRmsNormF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_postops_next_rmsnorm_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdSkinnyPostOpsNextRmsNormF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_postops_next_rmsnorm_publish_f32");
 
 static bool requires_unsupported_routed_codebook(CommonMulMatWeightFormat format) {
     switch (format) {
@@ -89,6 +91,23 @@ static bool is_bias_shape(const Value & value, int64_t output_size) {
         }
     }
     return true;
+}
+
+static bool common_mul_mat_id_is_skinny_route(const CommonMulMatIdMatch & match) {
+    return match.matched() && match.token_count <= 5;
+}
+
+static KernelCatalogRef common_mul_mat_id_f32_kernel(const CommonMulMatIdMatch & match) {
+    return common_mul_mat_id_is_skinny_route(match) ? kMulMatIdSkinnyF32F32Kernel : kMulMatIdTiledF32F32Kernel;
+}
+
+static KernelCatalogRef common_mul_mat_id_postops_f32_kernel(const CommonMulMatIdMatch & match, bool has_rmsnorm) {
+    if (has_rmsnorm) {
+        return common_mul_mat_id_is_skinny_route(match) ? kMulMatIdSkinnyPostOpsNextRmsNormF32F32Kernel :
+                                                          kMulMatIdTiledPostOpsNextRmsNormF32F32Kernel;
+    }
+    return common_mul_mat_id_is_skinny_route(match) ? kMulMatIdSkinnyPostOpsF32F32Kernel :
+                                                      kMulMatIdTiledPostOpsF32F32Kernel;
 }
 
 static MulMatIdPostOpsMatch match_mul_mat_id_postops(const DispatchMatchContext & context) {
@@ -186,7 +205,7 @@ static MulMatIdPostOpsMatch match_mul_mat_id_postops(const DispatchMatchContext 
     }
 
     match.root   = root;
-    match.kernel = match.has_rmsnorm ? kMulMatIdPostOpsNextRmsNormF32F32WmmaKernel : kMulMatIdPostOpsF32F32WmmaKernel;
+    match.kernel = common_mul_mat_id_postops_f32_kernel(root, match.has_rmsnorm);
     return match;
 }
 
@@ -208,7 +227,7 @@ static bool match_mul_mat_id_dispatch(const DispatchMatchContext & context, Disp
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kMulMatIdF32F32WmmaKernel);
+    dispatch.kernel = make_kernel_specialization(common_mul_mat_id_f32_kernel(match));
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
                                                common_mul_mat_id_to_config_value(match.token_count));
@@ -440,22 +459,15 @@ static bool match_mul_mat_id_postops_dispatch(const DispatchMatchContext & conte
     dispatch.bindings.push_back({ routing_bundle.expert_table, 0, routing_bundle.expert_table_byte_count });
     dispatch.bindings.push_back({ routing_bundle.partition_table, 0, routing_bundle.partition_table_byte_count });
     dispatch.bindings.push_back({ match.root.weight->id, 0, match.root.weight->byte_count });
-    // The exports declare the bias and residual slots with read access whether or not the kernel uses
-    // them; the kernel only loads them when has_bias / has_residual is set, so an absent slot is
-    // filled with a read-only value the programme reads anyway. Binding the output transient here
-    // instead made the command-program verifier reject the plan ("reads transient value N before
-    // write", engine #533): the slot is declared read, and nothing writes the output before this
-    // command does.
-    const Value & absent_slot = *match.root.weight;
     if (match.has_bias) {
         dispatch.bindings.push_back({ match.bias->id, 0, match.bias->byte_count });
     } else {
-        dispatch.bindings.push_back({ absent_slot.id, 0, absent_slot.byte_count });
+        dispatch.bindings.push_back({ match.residual_output->id, 0, match.residual_output->byte_count });
     }
     if (match.has_residual) {
         dispatch.bindings.push_back({ match.residual_input->id, 0, match.residual_input->byte_count });
     } else {
-        dispatch.bindings.push_back({ absent_slot.id, 0, absent_slot.byte_count });
+        dispatch.bindings.push_back({ match.residual_output->id, 0, match.residual_output->byte_count });
     }
     dispatch.bindings.push_back({ match.residual_output->id, 0, match.residual_output->byte_count });
     if (match.has_rmsnorm) {
