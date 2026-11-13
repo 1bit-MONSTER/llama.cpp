@@ -496,7 +496,26 @@ bool GraphProgram::mutable_sources_current() const {
         if (!ggml_backend_hrx_get_retained_region(watch.tensor, region)) {
             return false;
         }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
+        const bool same_identity = region.identity == watch.identity;
+        const bool same_offset   = region.offset == watch.offset;
+        const bool same_length   = region.length == watch.length;
+        if (!same_identity || !same_offset || !same_length) {
+            return false;
+        }
+    }
+    return true;
+}
+
+PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
+    const CommandProgramExecutionContext & context,
+    const CommandProgramBindings &         bindings) {
+    PreparedCommandProgramCacheExecutionResult result;
+    if (commands_ == nullptr || !commands_->valid() || !bindings.valid()) {
+        result.graph_replay_event             = HrxGraphReplayEvent::Ineligible;
+        result.graph_replay_ineligible_reason = "invalid_graph_program";
+        if (commands_ == nullptr) {
+            result.status.log("missing cached HRX command program");
+        }
         result.status.append(bindings.status);
         return result;
     }
@@ -509,20 +528,10 @@ bool GraphProgram::mutable_sources_current() const {
         if (!prepared_.valid()) {
             result.status.append(prepared_.status);
             return result;
-=======
-        const bool same_identity   = region.identity == watch.identity;
-        const bool same_offset = region.offset == watch.offset;
-        const bool same_length = region.length == watch.length;
-        const bool identity_changed = !same_identity;
-        const bool offset_changed = !same_offset;
-        const bool length_changed = !same_length;
-        const bool source_changed = identity_changed || offset_changed || length_changed;
-        if (source_changed) {
-            return false;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         }
+        has_prepared_ = true;
     }
-    return true;
+    return result;
 }
 
 GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_graph) const {
@@ -821,7 +830,6 @@ size_t GraphProgram::retained_bytes() const {
 
 GraphProgramCacheStats GraphProgramCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // stats_ carries the programs this cache has already dropped (folded in at every erase), and the live ones are
     // added here, so the totals only ever grow: a trim cannot make the counter go backwards (engine #841 - a
     // per-request rebuild delta read -1 the moment a program was evicted).
@@ -832,9 +840,6 @@ GraphProgramCacheStats GraphProgramCache::stats() const {
         stats.prepared_program_hits += prepared.hits;
     }
     return stats;
-=======
-    return stats_;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 
 void GraphProgramCache::fold_prepared_stats(const GraphProgram & program) {
@@ -973,6 +978,16 @@ bool can_execute_standalone_op_as_graph(const ggml_tensor * op, const std::strin
         return false;
     }
     return DispatchScheduler::supports_node(graph, &node, { target });
+}
+
+PreparedCommandProgramCacheStats GraphProgram::prepared_stats() const {
+    std::lock_guard<std::mutex> lock(prepared_mutex_);
+    return prepared_stats_;
+}
+
+bool GraphProgram::has_prepared_program() const {
+    std::lock_guard<std::mutex> lock(prepared_mutex_);
+    return has_prepared_;
 }
 
 }  // namespace ggml::hrx

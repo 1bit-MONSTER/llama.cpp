@@ -80,7 +80,14 @@ class GraphProgram {
 
     bool can_use_prepared_fast_path(const ggml_cgraph & graph) const;
     bool mutable_sources_current() const;
+    bool has_prepared_program() const;
+    PreparedCommandProgramCacheStats prepared_stats() const;   // ours
+
+    PreparedCommandProgramCacheExecutionResult execute_with_result(
+        const CommandProgramExecutionContext & context,
+        const CommandProgramBindings &         bindings);
     std::shared_ptr<PreparedCommandProgramCacheEntry> prepared_entry() const;
+
     void bind_prepared_graph(const ggml_cgraph & graph, const GraphProgramMatch & match,
                              const CommandProgramBindings & bindings,
                              std::shared_ptr<PreparedCommandProgramCacheEntry> entry);
@@ -111,6 +118,9 @@ class GraphProgram {
     const ggml_tensor * const *           fast_path_nodes_ = nullptr;
     mutable std::mutex                    prepared_mutex_;
     std::shared_ptr<PreparedCommandProgramCacheEntry> prepared_entry_;
+    PreparedCommandProgram                prepared_;          // ours: the prepared program this graph built
+    bool                                  has_prepared_ = false;  // ours
+    mutable PreparedCommandProgramCacheStats prepared_stats_;   // ours: folded programme statistics
 };
 
 struct GraphProgramCacheStats {
