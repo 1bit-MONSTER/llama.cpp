@@ -7,11 +7,18 @@ template.def<@ggml.flash_attention.online_softmax.prefill> device @ggml_flash_at
   %probability_stage_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_layout>
   %block_max = kernel.subgroup.reduce<maxnumf> %masked_scores : vector<4xf32>
   %next_max = vector.maxnumf %current_max, %block_max : vector<4xf32>
+  // engine#2374 item 2: a fully masked block leaves both %current_max and %block_max at -inf, and
+  // %current_max - %next_max is then -inf - -inf = NaN, which %old_scale exponentiates into the running
+  // sum. Flooring the max at a large NEGATIVE finite value keeps the ordinary path identical (a finite
+  // next_max is unchanged by maxnumf) and makes the fully-masked case give exp(-inf) = 0: a first block
+  // contributes nothing to a sum that is already zero, which is the correct answer rather than NaN.
+  %next_max_floor = vector.constant -3.400000e+38 : vector<4xf32>
+  %next_max_safe = vector.maxnumf %next_max, %next_max_floor : vector<4xf32>
   %score_delta = vector.subf<reassoc|nnan|nsz> %masked_scores, %next_max : vector<4xf32>
   %raw_probability = vector.expf<afn> %score_delta : vector<4xf32>
   %probability = vector.select %valid, %raw_probability, %c0_f32x4 : vector<4xf32>
   %block_sum = kernel.subgroup.reduce<addf> %probability : vector<4xf32>
-  %old_delta = vector.subf<reassoc|nnan|ninf|nsz> %current_max, %next_max : vector<4xf32>
+  %old_delta = vector.subf<reassoc|nnan|nsz> %current_max, %next_max_safe : vector<4xf32>
   %old_scale = vector.expf<afn> %old_delta : vector<4xf32>
   %scaled_current_sum = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_sum, %old_scale : vector<4xf32>
   %next_sum = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_sum, %block_sum : vector<4xf32>
