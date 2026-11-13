@@ -227,6 +227,7 @@ ggml_add_backend_library(ggml-hrx
     dispatch/command-program-bindings.cpp
     dispatch/command-program-bindings.h
     dispatch/command-program-dump.cpp
+    dispatch/dispatch-shape-log.cpp
     dispatch/command-program-dump.h
     dispatch/command-program-diagnostics.cpp
     dispatch/command-program-diagnostics.h

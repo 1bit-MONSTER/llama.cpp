@@ -7,6 +7,7 @@
 #include "dispatch/command-program-resolver.h"
 #include "dispatch/command-program.h"
 #include "dispatch/dispatch-scheduler.h"
+#include "dispatch/dispatch-shape-log.h"
 #include "dispatch_registration/common/dispatch-gather-add.h"
 #include "dispatch_registration/dispatch-registry.h"
 #include "ggml-alloc.h"
@@ -2023,6 +2024,65 @@ static void run_external_write_retarget_offset_checks() {
     REQUIRE(commands.valid());
     REQUIRE(command_program_verifies(commands));
 
+    ggml_free(ctx);
+}
+
+// GGML_HRX_DISPATCH_SHAPE_LOG line for one scheduled ADD: the command names its export symbol and its match, the match
+// names its node with shapes. tools/hyperloom/hrx2kineto.py --shapes reads these fields (engine #679).
+static void run_dispatch_shape_log_line_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * a   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
+    ggml_tensor * b   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
+    ggml_tensor * out = ggml_add(ctx, a, b);
+    REQUIRE(a != nullptr && b != nullptr && out != nullptr);
+    ggml_set_name(out, "shape_log_sum");
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, out);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    REQUIRE(imported.graph.nodes().size() == 1);
+    const ggml::hrx::Value * a_value   = imported.graph.values().find_tensor(a);
+    const ggml::hrx::Value * b_value   = imported.graph.values().find_tensor(b);
+    const ggml::hrx::Value * out_value = imported.graph.values().find_tensor(out);
+    REQUIRE(a_value != nullptr && b_value != nullptr && out_value != nullptr);
+
+    // the plan the binary f32 matcher builds for this node, and the match record the scheduler keeps with the log on
+    ggml::hrx::CommandPlan plan;
+    ggml::hrx::Dispatch    dispatch;
+    dispatch.kernel =
+        ggml::hrx::make_kernel_specialization(ggml::hrx::kernel_catalog_ref("loom_libs", "ggml_binary_f32"));
+    add_binary_f32_exact_dispatch_params(dispatch, 8);
+    dispatch.bindings.push_back({ a_value->id, 0, a_value->byte_count });
+    dispatch.bindings.push_back({ b_value->id, 0, b_value->byte_count });
+    dispatch.bindings.push_back({ out_value->id, 0, out_value->byte_count });
+    plan.dispatches.push_back(std::move(dispatch));
+    plan.match_records = { { { 0 }, 0, 0, 0, 1 } };
+
+    const ggml::hrx::CommandProgram commands =
+        ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(commands.valid());
+    REQUIRE(commands.commands.size() == 1);
+    const std::string line = ggml::hrx::format_command_program_shape_line(
+        imported.graph, plan, commands, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151", 77, 5);
+    REQUIRE(line.rfind("{\"type\":\"hrx_command_program\",\"program\":5,\"graph_uid\":77,", 0) == 0);
+    REQUIRE(string_contains(line, "\"phase\":\"main\",\"ordinal\":0,"));
+    REQUIRE(string_contains(line, "\"symbol\":\"ggml_binary_f32\",\"match\":0}"));
+    REQUIRE(string_contains(line, "\"op\":\"ADD\",\"index\":0,"));
+    REQUIRE(string_contains(line, "\"name\":\"shape_log_sum\",\"type\":\"f32\",\"ne\":[8,1,1,1],\"nb\":[4,32,32,32]"));
+    REQUIRE(line.back() == '}');
+
+    // a command no recorded match emitted says so
+    plan.match_records.clear();
+    const std::string unmatched = ggml::hrx::format_command_program_shape_line(
+        imported.graph, plan, commands, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151", 77, 6);
+    REQUIRE(string_contains(unmatched, "\"match\":-1}"));
+    REQUIRE(string_contains(unmatched, "\"matches\":[]}"));
     ggml_free(ctx);
 }
 
@@ -15790,6 +15850,7 @@ int main(int argc, char ** argv) {
         { "graph_snapshot_diagnostics", [] { run_graph_snapshot_diagnostics_checks(); } },
         { "unmatched_graph_diagnostics", [] { run_unmatched_graph_diagnostics_checks(); } },
         { "completion_counter_plan", [] { run_completion_counter_plan_checks(); } },
+        { "dispatch_shape_log_line", [] { run_dispatch_shape_log_line_checks(); } },
         { "external_write_retarget_offset", [] { run_external_write_retarget_offset_checks(); } },
         { "graph_index", [] { run_graph_index_checks(); } },
         { "rope_set_rows_dispatch", [] { run_rope_set_rows_dispatch_checks(); } },

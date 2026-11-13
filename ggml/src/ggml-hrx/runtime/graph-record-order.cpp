@@ -15,6 +15,8 @@
 
 #include "runtime/graph-record-order.h"
 
+#include "dispatch/dispatch-shape-log.h"
+
 #include "ggml-impl.h"
 
 #include <algorithm>
@@ -34,7 +36,8 @@ constexpr size_t kMaxTransientExtent = size_t{ 16 } << 20;
 bool level_order_enabled() {
     static const bool enabled = [] {
         const char * value = std::getenv("GGML_HRX_GRAPH_ORDER");
-        return value == nullptr || std::strcmp(value, "program") != 0;
+        // the shape log lists commands in program order; hrx2kineto matches it against the recorded order
+        return (value == nullptr || std::strcmp(value, "program") != 0) && !dispatch_shape_log_enabled();
     }();
     return enabled;
 }

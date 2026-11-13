@@ -2,6 +2,7 @@
 
 #include "backend-buffer-binding.h"
 #include "dispatch/command-program-dump.h"
+#include "dispatch/dispatch-shape-log.h"
 #include "dispatch/dispatch-scheduler.h"
 #include "ggml-impl.h"
 #include "ggml.h"
@@ -899,6 +900,7 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
         return nullptr;
     }
 
+    write_command_program_shape_log_if_requested(imported_graph, scheduler.plan(), commands, corpus, target, uid);
     std::string command_shape = command_program_shape_key(commands);
     Status      dump_status   = dump_command_program_kernels_if_requested(commands, corpus, target, command_shape);
     for (const std::string & error : dump_status.errors()) {
