@@ -200,7 +200,7 @@ int main() {
     }
     if (device == nullptr) {
         std::printf("test-hrx-moe-split: no HRX0 device, skipped\n");
-        return 0;
+        return 77;
     }
     ggml_backend_t hrx = ggml_backend_dev_init(device, nullptr);
     ggml_backend_t cpu = ggml_backend_cpu_init();

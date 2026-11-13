@@ -101,7 +101,7 @@ int main() {
     }
     if (device == nullptr) {
         std::printf("test-hrx-mxfp4: no HRX0 device, skipped\n");
-        return 0;
+        return 77;
     }
     ggml_backend_t backend = ggml_backend_dev_init(device, nullptr);
     REQUIRE(backend != nullptr);
