@@ -676,3 +676,14 @@ Measured for all ten remaining files, and none is zero:
     host-memory 59/5        prepared-command-program-cache 4/3          (only-ours / only-amd)
 So there is no file left where taking one side is licensed, and the "AMD-only/truncation" family of shortcuts is dead -- correctly, since it was
 born from a broken ref. Every remaining file is a genuine union whose resolution needs the header set decided first.
+
+## dispatch-gated-mul-mat.cpp (1 hunk) -- attempted and reverted; the cascade is the finding
+The single hunk is not one conflict but three things stacked: (a) the tail of the CURRENT function, where ours continues into a consumer
+scan that closes after the hunk and theirs computes pack_q4/use_q8/use_direct_dot flags and returns; (b) two NEW functions AMD added after it
+(select_swiglu_k16_publication, match_mul_mat_swiglu_postops); (c) the file-local types those need (MulMatSwiGLUPostOpsMatch) and AMD
+helpers (common_mul_mat_swiglu_is_generic_tiled_pair_route) plus a header (dispatch-activation-publication.h).
+Keeping our ending and appending AMD's two functions got to 3 errors, all inside the appended code: each function AMD adds expects its helper
+neighbourhood, so a 28-line append becomes a 100+ line port. Reverted; the marker stays and this file belongs with the same set-decision as
+dispatch-mul-mat.cpp.
+Scoreboard this session: files resolved 7 (qwen4exp, corpus .loom x3, ggml-cpu, get-rows, rope-set-rows, mul-mat-id, registry) -> hunks
+60 -> 37. Remaining 37 in 9 files, all of which share one property: the fix is not per-hunk but per-API-generation.

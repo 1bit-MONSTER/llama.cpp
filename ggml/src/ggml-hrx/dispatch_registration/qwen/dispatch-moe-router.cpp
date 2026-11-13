@@ -376,7 +376,6 @@ static void add_moe_routing_compile_parameters(Dispatch & dispatch, const Router
                                                to_config_value(router_match.route_count));
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.expert_count",
                                                to_config_value(router_match.expert_count));
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // the descriptor layout depends on the expert count (dispatch-moe-routing-layout.h)
     const MoeRoutingDescriptorLayout layout = moe_router_descriptor_layout(router_match.expert_count);
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_expert_mask", layout.expert_mask);
@@ -384,16 +383,6 @@ static void add_moe_routing_compile_parameters(Dispatch & dispatch, const Router
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_row_count_shift", layout.row_count_shift);
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.partition_workgroup_size",
                                                layout.partition_workgroup_size);
-=======
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_expert_mask",
-                                               std::to_string(kMoePartitionExpertMask));
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_partition_shift",
-                                               std::to_string(kMoePartitionShift));
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_row_count_shift",
-                                               std::to_string(kMoePartitionRowCountShift));
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.partition_workgroup_size",
-                                               to_config_value(router_match.expert_count));
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 
 struct RouterProjectionTop8Match {
@@ -554,16 +543,12 @@ static bool match_moe_router_projection_top8_fused_decode_dispatch(const Dispatc
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
                                                to_config_value(match.top8.token_count));
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // The ids view is a graph output when the experts are on another device, and its buffer ends at
     // (token_count - 1) * route_stride + route_count ids, not token_count * route_stride (#95 uses the same bound
     // for MUL_MAT_ID's route ids: dispatch-mul-mat-id-common.h).
     const size_t route_id_length =
         static_cast<size_t>((match.top8.token_count - 1) * match.top8.route_stride + match.top8.route_count) *
         sizeof(int32_t);
-=======
-    const size_t route_id_length = match.top8.route_ids->byte_count;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     dispatch.bindings.push_back({ match.logits->id, 0, match.logits->byte_count });
@@ -602,15 +587,11 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
                                                to_config_value(router_match.token_count));
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // Same bound as above: a graph-output ids view's buffer ends at (token_count - 1) * route_stride +
     // route_count, not token_count * route_stride.
     const size_t route_id_length =
         static_cast<size_t>((router_match.token_count - 1) * router_match.route_stride + router_match.route_count) *
         sizeof(int32_t);
-=======
-    const size_t route_id_length = router_match.route_ids->byte_count;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     dispatch.bindings.push_back({ router_match.logits->id, 0, router_match.logits->byte_count });
     dispatch.bindings.push_back({ router_match.route_ids->id, 0, route_id_length });
     dispatch.bindings.push_back({ router_match.route_weights->id, 0, router_match.route_weights->byte_count });
