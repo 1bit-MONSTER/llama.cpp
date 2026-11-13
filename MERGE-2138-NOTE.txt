@@ -710,3 +710,12 @@ runtime header generation. The same will hold for the other five runtime files.
 For whoever takes it: the decision is one sentence -- do the runtime headers come from ours (keeping device-resident weight sources, which our
 host-memory code exists to support) or from AMD's (in which case the device-source path and its ~40 lines go, and the merge must say so out
 loud rather than leave a half-resolved function).
+
+## prepared-command-program-cache.cpp: two lessons, one revert
+1. TYPE NAMING: the merged header has AMD's namespace-level `struct PreparedCommandProgramCacheEntry`; our .cpp says `Entry` (ours nested it inside the
+   class). The bridge is one line -- `using Entry = PreparedCommandProgramCacheEntry;` inside the class -- and with it the type errors vanish.
+2. BUT a blanket "all hunks to ours" does NOT work here, and that is the real finding: our hunk text is a MID-FUNCTION slice, so taking it leaves the
+   enclosing function unclosed (braces 53/52), and closing it by hand lands inside the body (the body continues: rebuild_setting, HostGapScope
+   replay, fallback...). The hunk boundaries in this file are not function boundaries, unlike get-rows/registry/moe-router where they were.
+So this file needs per-hunk reading with the function scanned top to bottom, not a side choice -- the same reason gated-mul-mat could not be finished
+by appending. Reverted both files; markers intact (31 hunks).
