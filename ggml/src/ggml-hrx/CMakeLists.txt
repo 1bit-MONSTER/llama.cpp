@@ -15,7 +15,14 @@ if(HRX_SOURCE_DIR)
     set(GGML_LOOMC_LIB "${GGML_HRX_BUILD_DIR}/loom/binding/c/${CMAKE_SHARED_LIBRARY_PREFIX}loomc${CMAKE_SHARED_LIBRARY_SUFFIX}")
     set(GGML_HRX_LOOM_LINK "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-link/loom-link${CMAKE_EXECUTABLE_SUFFIX}")
     set(GGML_HRX_LOOM_FORMAT "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-format/loom-format${CMAKE_EXECUTABLE_SUFFIX}")
-    set(GGML_HRX_LOOM_BENCHMARK "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-benchmark/loom-benchmark${CMAKE_EXECUTABLE_SUFFIX}")
+    # AMD's line builds loom-benchmark too; the hrx-system this line holds (engine config/hrx-system-hold.config) has
+    # no such tool, and nothing in this build uses it, so it is built only where the source tree has it.
+    set(GGML_HRX_LOOM_BENCHMARK_TARGET "")
+    set(GGML_HRX_LOOM_BENCHMARK "")
+    if(EXISTS "${HRX_SOURCE_DIR}/loom/src/loom/tools/loom-benchmark")
+        set(GGML_HRX_LOOM_BENCHMARK_TARGET loom_tools_loom-benchmark_loom-benchmark)
+        set(GGML_HRX_LOOM_BENCHMARK "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-benchmark/loom-benchmark${CMAKE_EXECUTABLE_SUFFIX}")
+    endif()
     set(GGML_HRX_DEPS_TARGET ggml-hrx-deps)
 
     set(GGML_HRX_CMAKE_ARGS
@@ -85,9 +92,9 @@ if(HRX_SOURCE_DIR)
         PREFIX "${GGML_HRX_PREFIX}"
         CMAKE_ARGS ${GGML_HRX_CMAKE_ARGS}
         BUILD_ALWAYS TRUE
-        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target hrx loomc_shared loom_tools_loom-link_loom-link loom_tools_loom-format_loom-format loom_tools_loom-benchmark_loom-benchmark --config ${CMAKE_BUILD_TYPE}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target hrx loomc_shared loom_tools_loom-link_loom-link loom_tools_loom-format_loom-format ${GGML_HRX_LOOM_BENCHMARK_TARGET} --config ${CMAKE_BUILD_TYPE}
         INSTALL_COMMAND ""
-        BUILD_BYPRODUCTS "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" "${GGML_HRX_LOOM_LINK}" "${GGML_HRX_LOOM_FORMAT}" "${GGML_HRX_LOOM_BENCHMARK}"
+        BUILD_BYPRODUCTS "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" "${GGML_HRX_LOOM_LINK}" "${GGML_HRX_LOOM_FORMAT}" ${GGML_HRX_LOOM_BENCHMARK}
         UPDATE_COMMAND ""
     )
 
