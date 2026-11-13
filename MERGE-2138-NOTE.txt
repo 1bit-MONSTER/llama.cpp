@@ -621,3 +621,23 @@ and the definitions did not: the merge took our file body and AMD's registry blo
 Both kernels ARE in the generated catalog, so the corpus side is fine -- this is purely the missing code block.
 Fix shape: bring AMD's block (helpers + match builder + both *_dispatch functions, lines ~446-560 at 9bf5871) into the merged file,
 keeping our registry entries. Mechanical, but it is dispatch code and it belongs with the same hand-off as the 34 hunks.
+
+## WHY per-file fixes stop here: AMD's dispatch .cpp files need AMD's dispatch HEADERS (measured)
+Both remaining big dispatch files are AMD-only (0 lines at our tip) and shorter than AMD's copy, so I applied the truncation rule and took
+AMD's whole file. The build then failed differently, which is the informative part:
+    dispatch-mul-mat.cpp: 'common_accepts_q8_1_x4_prefill_mul_mat' was not declared, 'CommonMulMatActivationConsumerMatch' does not name a type
+Those live in AMD's common dispatch headers, and the merged tree carries OUR versions of those headers. So the dispatch layer is not a set of
+independent files: **the .cpp files and their headers must come from the same side.** Picking per file produces either stale refs (our
+naming) or missing helpers (their naming) -- both ways it fails, for different reasons. 29 errors after AMD's file, 20 before.
+Reverted both files to the marked state so the hand-off list stays true. The decision cl-hrxkern has to make is therefore one level up:
+take AMD's whole dispatch layer (files + headers) or ours, then port the other's distinct features on top -- and the IQ3S table decode is
+the one concrete feature that must survive being on whichever side loses.
+
+## Scoreboard for the "build, don't triage" loop (5 defects in files with ZERO markers)
+  1. ggml-cpu.c duplicate SET_ROWS arm                        -> fixed (9af10bf47f)
+  2. dispatch-gated-mul-mat-id.cpp two refs to kernels that do not exist (one removed by #118, one ours never in the manifest)
+                                                              -> fixed (2d2e279168: IQ3S kept via an explicit manifest entry, AMD's
+                                                                 tiled/skinny selector composed as the fallback)
+  3. dispatch-get-rows.cpp truncated AMD file, registrations without definitions -> fixed by taking AMD's (628 lines)
+  4. dispatch-mul-mat-id.cpp truncated AMD file, three PRE-#118 ref names         -> fixed by taking AMD's (533 lines)
+  5. dispatch-mul-mat.cpp / dispatch-gated-mul-mat.cpp truncation                 -> NOT free: needs the header set too (above)
