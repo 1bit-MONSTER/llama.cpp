@@ -887,3 +887,16 @@ Adapted what was mechanical and re-measured (then reverted, because the file can
      common_json, or a bridge converts common_json -> ordered_json -> resolve -> back.
 So option (b) is: items 1-3 mechanical (16 sites), item 4 a JSON-library boundary decision. That is the honest size, and it is why my earlier "21 call
 sites vs 23 files" framing was too optimistic: the call sites are cheap, the type boundary is not.
+
+## The JSON bridge is the right answer and is 3 edits from working (measured, then reverted)
+Tried it: `common_grammar_builder::resolve_refs` retyped to `common_json &`, with the conversion confined to the ONE place that knows both libraries
+(build_grammar's lambda): parse -> our converter -> dump -> back. Results: chat.cpp 74 -> 60 errors immediately, which confirms the 17+17 resolve_refs
+errors were exactly this boundary and nothing else.
+What it still needs (all measured):
+  * `#include "json.h"` in json-schema-to-grammar.h (common_json is declared in common/json.h; without it the header alone has 8 errors, 4 after adding);
+  * the converter's own resolve_refs signature and any `json` uses inside the appended block must agree on nlohmann, since the block came from our file;
+  * then the remaining chat.cpp errors are the mechanical ones already listed (prompt append x5, replace_last x1, arena.save x10).
+RISK to state plainly for the owner: the bridge serialises and re-parses the schema, so number formatting, key order and any non-JSON-representable state make
+the round trip lossy in principle. It is a merge-level bridge to get both sides' code compiling, not a design anyone would choose; if the chat layer is going to
+live on common_json, porting the converter is the better end state and this is a stopgap.
+Reverted so the tree stays as the merge produced it. Everything else builds; this is the last item and a fresh session should start from this note.
