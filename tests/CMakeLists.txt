@@ -491,6 +491,12 @@ if (TARGET ggml-hrx)
     # our line's hrx-backend-test takes case names as its only arguments (no test_runner::Suite flags)
     add_test(NAME hrx-backend-test COMMAND hrx-backend-test)
 
+    # our line's Loom JIT suite (the base's ctest row); AMD's hrx-loom-jit-test is a different file
+    add_executable(test-hrx-loom-jit test-hrx-loom-jit.cpp)
+    target_link_libraries(test-hrx-loom-jit PRIVATE ggml-hrx ggml-hrx-kernel-corpus hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-loom-jit PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-loom-jit COMMAND test-hrx-loom-jit)
+
     add_executable(hrx-loom-jit-test hrx-loom-jit-test.cpp)
     target_link_libraries(hrx-loom-jit-test PRIVATE ggml-hrx ggml-hrx-kernel-corpus hrx::hrx loomc::loomc)
     target_include_directories(hrx-loom-jit-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
