@@ -27,7 +27,9 @@ struct PreparedCommandProgramCacheEntry {
     // Release recorded handles before the prepared bindings they reference.
     PreparedCommandProgram prepared;
     RecordedCommandGraph   recorded;
-    bool                   ready = false;
+    bool                   ready     = false;
+    // The graph program this entry was prepared for, so a build can be charged to it (engine #841).
+    uint64_t               graph_uid = 0;
 };
 
 struct PreparedCommandProgramCacheExecutionResult {

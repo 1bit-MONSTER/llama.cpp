@@ -14434,27 +14434,30 @@ static void run_prepared_stats_survive_eviction() {
     compute_add(4101, 1024);
     compute_add(4102, 2048);
 
-    const ggml::hrx::GraphProgramCacheStats before = backend_context->graph_programs.stats();
+    // The prepared counts are lifetime totals of the shared prepared-program cache (one entry per shape), so a
+    // graph-program eviction or clear cannot make them go backwards (engine #841: a per-request rebuild delta
+    // read -1 the moment a program was evicted).
+    const ggml::hrx::GraphProgramCacheStats            before          = backend_context->graph_programs.stats();
+    const ggml::hrx::PreparedCommandProgramCacheStats prepared_before = backend_context->prepared_programs.stats();
     REQUIRE(before.builds == 2);
-    REQUIRE(before.prepared_program_builds == 2); // one preparation per shape, as the counters are meant to read
+    REQUIRE(prepared_before.builds == 2); // one preparation per shape, as the counters are meant to read
 
-    // evicting one program must carry its counts into the cache instead of deleting them with it
     backend_context->graph_programs.evict({ 4101 });
-    const ggml::hrx::GraphProgramCacheStats after = backend_context->graph_programs.stats();
-    REQUIRE(after.prepared_program_builds == before.prepared_program_builds);
-    REQUIRE(after.prepared_program_hits == before.prepared_program_hits);
-    REQUIRE(after.builds == before.builds);
+    const ggml::hrx::PreparedCommandProgramCacheStats after = backend_context->prepared_programs.stats();
+    REQUIRE(after.builds == prepared_before.builds);
+    REQUIRE(after.hits == prepared_before.hits);
+    REQUIRE(backend_context->graph_programs.stats().builds == before.builds);
 
-    // and it is idempotent: the same uid twice cannot be folded twice
+    // and it is idempotent: the same uid twice changes nothing
     backend_context->graph_programs.evict({ 4101 });
-    const ggml::hrx::GraphProgramCacheStats repeated = backend_context->graph_programs.stats();
-    REQUIRE(repeated.prepared_program_builds == before.prepared_program_builds);
+    REQUIRE(backend_context->prepared_programs.stats().builds == prepared_before.builds);
 
-    // dropping everything (the backend-free path) keeps the lifetime totals as well
+    // dropping everything (the backend-free path and a trim) keeps the lifetime totals as well
     backend_context->graph_programs.clear();
-    const ggml::hrx::GraphProgramCacheStats cleared = backend_context->graph_programs.stats();
-    REQUIRE(cleared.prepared_program_builds == before.prepared_program_builds);
-    REQUIRE(cleared.prepared_program_hits == before.prepared_program_hits);
+    backend_context->prepared_programs.clear();
+    const ggml::hrx::PreparedCommandProgramCacheStats cleared = backend_context->prepared_programs.stats();
+    REQUIRE(cleared.builds == prepared_before.builds);
+    REQUIRE(cleared.hits == prepared_before.hits);
 
     ggml_backend_free(backend);
 }
@@ -15351,153 +15354,94 @@ static int run_cases(const char * label, const std::vector<Case> & cases) {
 }
 
 
-static void append_match_to_plan(ggml::hrx::CommandPlan &   plan,
-                                 ggml::hrx::DispatchMatch & match,
-                                 std::vector<bool> &        covered_nodes,
-                                 ggml::hrx::Graph *         graph) {
-    if (graph != nullptr) {
-        for (const ggml::hrx::DispatchValueAliasRequest & alias : match.value_aliases) {
-            ggml::hrx::Status status = graph->values().alias_storage(alias.target_value, alias.source_value);
-            REQUIRE(status.success());
-        }
-    }
-    for (ggml::hrx::Dispatch & dispatch : match.initialization_dispatches) {
-        plan.initialization_dispatches.push_back(std::move(dispatch));
-    }
-    for (ggml::hrx::Dispatch & dispatch : match.dispatches) {
-        plan.dispatches.push_back(std::move(dispatch));
-    }
-    for (ggml::hrx::CommandPlanTransient & transient : match.transients) {
-        plan.transients.push_back(std::move(transient));
-    }
-    for (ggml::hrx::CommandPlanConstantInitialization & initialization : match.constant_initializations) {
-        plan.constant_initializations.push_back(std::move(initialization));
-    }
-    for (ggml::hrx::CommandPlanCompletionCounterRequest & request : match.completion_counter_requests) {
-        plan.completion_counter_requests.push_back(std::move(request));
-    }
-    REQUIRE(plan.metadata.append(std::move(match.metadata), plan.status));
-    for (const size_t covered_node : match.covered_nodes) {
-        REQUIRE(covered_node < covered_nodes.size());
-        REQUIRE(!covered_nodes[covered_node]);
-        covered_nodes[covered_node] = true;
-    }
-}
-
-static bool match_dispatch_at_index(const ggml::hrx::Graph &       graph,
-                                    const ggml::hrx::CommandPlan & plan,
-                                    const std::vector<bool> &      covered_nodes,
-                                    size_t                         node_index,
-                                    ggml::hrx::DispatchMatch &     match) {
-    REQUIRE(node_index < graph.nodes().size());
-    const ggml::hrx::DispatchMatchContext context = {
-        graph,
-        &graph.nodes()[node_index],
-        node_index,
-        covered_nodes,
-        plan,
-        ggml::hrx::ValueId(static_cast<int32_t>(graph.values().size() + plan.transients.size() +
-                                                plan.completion_counter_requests.size())),
-    };
-    return test_dispatch_registry().match(context, match);
-}
-
-static void run_gdn_rmsnorm_gate_dispatch_checks() {
-    ggml_init_params params = {};
-    params.mem_size = 4 * 1024 * 1024;
-    params.no_alloc = true;
-    ggml_context * ctx = ggml_init(params);
-    REQUIRE(ctx != nullptr);
-
+// 2138 merge: restored from our line; the merge kept the declaration and its callers but dropped this definition
+static void run_symmetric_i4_consumer_qualification_checks() {
     const struct {
-        ggml_type type;
-        int64_t tokens;
-        bool side_use;
-        bool attention_output;
-        bool gdn_output;
-        bool fused;
+        bool direct_consumer;
+        bool reshape_consumer;
+        bool strided_consumer;
+        bool q8_publication;
     } cases[] = {
-        { GGML_TYPE_Q4_K, 512, false, false, false, true },
-        { GGML_TYPE_Q6_K, 512, false, false, false, true },
-        { GGML_TYPE_Q4_K, 512, true, false, false, false },
-        { GGML_TYPE_Q4_K, 256, false, false, false, false },
-        { GGML_TYPE_Q4_K, 512, false, true, false, false },
-        { GGML_TYPE_Q4_K, 512, false, false, true, false },
+        { true,  false, false, true  },
+        { false, true,  false, true  },
+        { false, false, true,  false },
+        { false, false, false, false },
     };
-
     for (const auto & test : cases) {
-        const int64_t width = 128;
-        const int64_t heads = 2;
-        const int64_t channels = width * heads;
-        const int64_t state_elements = width * channels;
-        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, width, 1, test.tokens, 1);
-        ggml_tensor * k = ggml_dup_tensor(ctx, q);
-        ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, width, heads, test.tokens, 1);
-        ggml_tensor * g = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, heads, test.tokens, 1);
-        ggml_tensor * beta = ggml_dup_tensor(ctx, g);
-        ggml_tensor * state = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, width, width, heads, 1);
-        ggml_tensor * gdn = ggml_gated_delta_net(ctx, q, k, v, g, beta, state, 1);
-        ggml_tensor * attention      = ggml_view_4d(ctx, gdn, width, heads, test.tokens, 1, width * sizeof(float),
-                                                    channels * sizeof(float), channels * test.tokens * sizeof(float), 0);
-        if (test.attention_output) {
-            ggml_set_output(attention);
+        ggml_init_params params = {};
+        params.mem_size         = 4 * 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+
+        constexpr int64_t hidden = 2048;
+        constexpr int64_t tokens = 2;
+        const int64_t producer_hidden = test.strided_consumer ? hidden + 128 : hidden;
+        ggml_tensor * input      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, producer_hidden, tokens);
+        ggml_tensor * weight     = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, producer_hidden);
+        ggml_tensor * normalized = ggml_mul(ctx, ggml_rms_norm(ctx, input, 1.0e-6f), weight);
+        ggml_cgraph * graph      = ggml_new_graph(ctx);
+        ggml_tensor * consumer_input = normalized;
+        if (test.reshape_consumer) {
+            consumer_input = ggml_reshape_2d(ctx, normalized, hidden, tokens);
+        } else if (test.strided_consumer) {
+            consumer_input = ggml_view_2d(
+                ctx, normalized, hidden, tokens, static_cast<size_t>(producer_hidden) * sizeof(float), 0);
         }
-        if (test.gdn_output) {
-            ggml_set_output(gdn);
+        if (test.direct_consumer || test.reshape_consumer || test.strided_consumer) {
+            ggml_tensor * i4_projection = ggml_new_tensor_2d(ctx, GGML_TYPE_Q5_K, hidden, hidden);
+            ggml_tensor * i4_projected  = ggml_mul_mat(ctx, i4_projection, consumer_input);
+            ggml_build_forward_expand(graph, ggml_scale(ctx, i4_projected, 0.5f));
+            if (!test.strided_consumer) {
+                ggml_tensor * q8_projection = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, hidden, 512);
+                ggml_tensor * q8_projected  = ggml_mul_mat(ctx, q8_projection, consumer_input);
+                ggml_build_forward_expand(graph, ggml_scale(ctx, q8_projected, 0.5f));
+            }
+        } else {
+            ggml_build_forward_expand(graph, ggml_scale(ctx, normalized, 0.5f));
         }
-        ggml_tensor * new_state  = ggml_view_2d(ctx, gdn, state_elements, 1, state_elements * sizeof(float),
-                                              channels * test.tokens * sizeof(float));
-        ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, state_elements, 1);
-        ggml_tensor * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, width);
-        ggml_tensor * gate = ggml_dup_tensor(ctx, attention);
-        ggml_tensor * norm = ggml_mul(ctx, ggml_rms_norm(ctx, attention, 2.0e-6f), weight);
-        ggml_tensor * gated = ggml_mul(ctx, norm, ggml_silu(ctx, gate));
-        ggml_tensor * input = ggml_reshape_2d(ctx, gated, channels, test.tokens);
-        ggml_tensor * projection = ggml_new_tensor_2d(ctx, test.type, channels, 4096);
-        ggml_cgraph * graph = ggml_new_graph(ctx);
-        ggml_build_forward_expand(graph, ggml_cpy(ctx, new_state, cache));
-        ggml_build_forward_expand(graph, ggml_mul_mat(ctx, projection, input));
-        if (test.side_use) {
-            ggml_build_forward_expand(graph, ggml_scale(ctx, attention, 0.5f));
-        }
+
         auto imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
+        const ggml::hrx::Value * normalized_value = imported.graph.values().find_tensor(normalized);
+        REQUIRE(normalized_value != nullptr);
+        // adapted to compile: common_symmetric_i4_lowrow_mul_mat_eligible() lived in
+        // dispatch-symmetric-i4.h, which f2099e9b deleted with the route switch it guarded. The
+        // dispatch-level checks below are the ones this case exists for.
+        if (test.strided_consumer) {
+            ggml_free(ctx);
+            continue;
+        }
         ggml::hrx::DispatchScheduler scheduler;
         REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
         const auto & plan = scheduler.plan();
         REQUIRE(plan.valid());
-        const auto fused = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
+        const auto symmetric_producer =
+            std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
             return kernel_name_for_id(dispatch.kernel.kernel_id) ==
-                   "loom_libs:llm_gated_delta_net_f32_wmma_head128_rmsnorm_gate";
+                   "loom_libs:ggml_rmsnorm_binary_symmetric_i4_k32";
         });
-        REQUIRE((fused != plan.dispatches.end()) == test.fused);
-        // The fused path publishes the packed f16 from inside its own dispatch; the unfused path hands
-        // the norm-gate tail to ggml_rmsnorm_gate_f32_f16, which publishes it the same way for the
-        // projection consumer. The pre-re-head producer this once named, ggml_rmsnorm_gate_f32_publish,
-        // is not in the corpus: this family is served by ggml_rmsnorm_gate_f32_f16 and _q8_1_x4, both
-        // of which run the same publish_body and carry the publish selection as a compile parameter
-        // (engine #449, seen in the plan: rmsnorm_gate_f32_f16 + generated F16K16Major consumed by
-        // ggml_mul_mat_q4_k_f16_wmma_prefill_wave32 with f16_input_layout=1).
-        REQUIRE(std::count_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
-            return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_rmsnorm_gate_f32_f16";
-        }) == (test.fused ? 0 : 1));
-        if (test.fused) {
-            REQUIRE(fused->bindings.size() == 11);
-            const auto * projected = imported.graph.values().find_tensor(input);
-            REQUIRE(projected != nullptr);
-            const auto * packed =
-                plan.metadata.find_generated_resource(projected->id, ggml::hrx::GeneratedResourceRole::F16K16Major);
-            REQUIRE(packed != nullptr && fused->bindings.back().value == packed->generated_value);
-            require_compile_parameter(*fused, "ggml.rmsnorm_gate_f32.rms_epsilon", "1.99999999e-06");
-        }
-        const auto commands =
-            ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        // engine #450, re-measured on hardware (2026-10-18): the symmetric-i4 consumer route is not a
+        // regression on AMD's current kernels. On Qwen3-4B-Q5_K_M (gfx1151) route-on vs route-off is
+        // pp512 3033 vs 2991 tok/s, pp2048 2648 vs 2613, tg64 65.65 vs 63.61 (route faster, well
+        // outside the error bars), held-out Gutenberg text KLD 0.000000 +- 0.000000 over 5 chunks
+        // (max 0.000056, max delta-p 0.005 %) and three 64-token greedy completions byte-identical
+        // between the arms. So a qualifying graph (a Q5_K/IQ4_XS weight consuming the normalised value,
+        // directly or through a reshape) selects the route, and a graph with no such consumer does not.
+        const bool qualifies = test.direct_consumer || test.reshape_consumer;
+        REQUIRE((symmetric_producer != plan.dispatches.end()) == qualifies);
+        // The q8 publication this case used to check next to the route is engine #449's territory:
+        // ggml_rmsnorm_binary_q8_1_x4_publish went with f2099e9b, and the guards for that live in the
+        // #449 rows. Keeping it here would fail this case for a publication reason, not a route one.
+        const auto commands = ggml::hrx::build_command_program(
+            imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
         REQUIRE(commands.valid());
         REQUIRE(command_program_verifies(commands));
+        ggml_free(ctx);
     }
-    ggml_free(ctx);
 }
 
+// 2138 merge: restored from our line; the merge kept the declaration and its callers but dropped this definition
 static void run_qwen_decode_publication_consumer_qualification_checks() {
     enum class ConsumerCase {
         Dense,
@@ -15607,89 +15551,153 @@ static void run_qwen_decode_publication_consumer_qualification_checks() {
     }
 }
 
-static void run_symmetric_i4_consumer_qualification_checks() {
+// 2138 merge: restored from our line; the merge kept the declaration and its callers but dropped this definition
+static void run_gdn_rmsnorm_gate_dispatch_checks() {
+    ggml_init_params params = {};
+    params.mem_size = 4 * 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
     const struct {
-        bool direct_consumer;
-        bool reshape_consumer;
-        bool strided_consumer;
-        bool q8_publication;
+        ggml_type type;
+        int64_t tokens;
+        bool side_use;
+        bool attention_output;
+        bool gdn_output;
+        bool fused;
     } cases[] = {
-        { true,  false, false, true  },
-        { false, true,  false, true  },
-        { false, false, true,  false },
-        { false, false, false, false },
+        { GGML_TYPE_Q4_K, 512, false, false, false, true },
+        { GGML_TYPE_Q6_K, 512, false, false, false, true },
+        { GGML_TYPE_Q4_K, 512, true, false, false, false },
+        { GGML_TYPE_Q4_K, 256, false, false, false, false },
+        { GGML_TYPE_Q4_K, 512, false, true, false, false },
+        { GGML_TYPE_Q4_K, 512, false, false, true, false },
     };
+
     for (const auto & test : cases) {
-        ggml_init_params params = {};
-        params.mem_size         = 4 * 1024 * 1024;
-        params.no_alloc         = true;
-        ggml_context * ctx      = ggml_init(params);
-        REQUIRE(ctx != nullptr);
-
-        constexpr int64_t hidden = 2048;
-        constexpr int64_t tokens = 2;
-        const int64_t producer_hidden = test.strided_consumer ? hidden + 128 : hidden;
-        ggml_tensor * input      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, producer_hidden, tokens);
-        ggml_tensor * weight     = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, producer_hidden);
-        ggml_tensor * normalized = ggml_mul(ctx, ggml_rms_norm(ctx, input, 1.0e-6f), weight);
-        ggml_cgraph * graph      = ggml_new_graph(ctx);
-        ggml_tensor * consumer_input = normalized;
-        if (test.reshape_consumer) {
-            consumer_input = ggml_reshape_2d(ctx, normalized, hidden, tokens);
-        } else if (test.strided_consumer) {
-            consumer_input = ggml_view_2d(
-                ctx, normalized, hidden, tokens, static_cast<size_t>(producer_hidden) * sizeof(float), 0);
+        const int64_t width = 128;
+        const int64_t heads = 2;
+        const int64_t channels = width * heads;
+        const int64_t state_elements = width * channels;
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, width, 1, test.tokens, 1);
+        ggml_tensor * k = ggml_dup_tensor(ctx, q);
+        ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, width, heads, test.tokens, 1);
+        ggml_tensor * g = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, heads, test.tokens, 1);
+        ggml_tensor * beta = ggml_dup_tensor(ctx, g);
+        ggml_tensor * state = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, width, width, heads, 1);
+        ggml_tensor * gdn = ggml_gated_delta_net(ctx, q, k, v, g, beta, state, 1);
+        ggml_tensor * attention      = ggml_view_4d(ctx, gdn, width, heads, test.tokens, 1, width * sizeof(float),
+                                                    channels * sizeof(float), channels * test.tokens * sizeof(float), 0);
+        if (test.attention_output) {
+            ggml_set_output(attention);
         }
-        if (test.direct_consumer || test.reshape_consumer || test.strided_consumer) {
-            ggml_tensor * i4_projection = ggml_new_tensor_2d(ctx, GGML_TYPE_Q5_K, hidden, hidden);
-            ggml_tensor * i4_projected  = ggml_mul_mat(ctx, i4_projection, consumer_input);
-            ggml_build_forward_expand(graph, ggml_scale(ctx, i4_projected, 0.5f));
-            if (!test.strided_consumer) {
-                ggml_tensor * q8_projection = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, hidden, 512);
-                ggml_tensor * q8_projected  = ggml_mul_mat(ctx, q8_projection, consumer_input);
-                ggml_build_forward_expand(graph, ggml_scale(ctx, q8_projected, 0.5f));
-            }
-        } else {
-            ggml_build_forward_expand(graph, ggml_scale(ctx, normalized, 0.5f));
+        if (test.gdn_output) {
+            ggml_set_output(gdn);
         }
-
+        ggml_tensor * new_state  = ggml_view_2d(ctx, gdn, state_elements, 1, state_elements * sizeof(float),
+                                              channels * test.tokens * sizeof(float));
+        ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, state_elements, 1);
+        ggml_tensor * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, width);
+        ggml_tensor * gate = ggml_dup_tensor(ctx, attention);
+        ggml_tensor * norm = ggml_mul(ctx, ggml_rms_norm(ctx, attention, 2.0e-6f), weight);
+        ggml_tensor * gated = ggml_mul(ctx, norm, ggml_silu(ctx, gate));
+        ggml_tensor * input = ggml_reshape_2d(ctx, gated, channels, test.tokens);
+        ggml_tensor * projection = ggml_new_tensor_2d(ctx, test.type, channels, 4096);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, new_state, cache));
+        ggml_build_forward_expand(graph, ggml_mul_mat(ctx, projection, input));
+        if (test.side_use) {
+            ggml_build_forward_expand(graph, ggml_scale(ctx, attention, 0.5f));
+        }
         auto imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
-        const ggml::hrx::Value * normalized_value = imported.graph.values().find_tensor(normalized);
-        REQUIRE(normalized_value != nullptr);
-        // adapted to compile: common_symmetric_i4_lowrow_mul_mat_eligible() lived in
-        // dispatch-symmetric-i4.h, which f2099e9b deleted with the route switch it guarded. The
-        // dispatch-level checks below are the ones this case exists for.
-        if (test.strided_consumer) {
-            ggml_free(ctx);
-            continue;
-        }
         ggml::hrx::DispatchScheduler scheduler;
         REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
         const auto & plan = scheduler.plan();
         REQUIRE(plan.valid());
-        const auto symmetric_producer =
-            std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
+        const auto fused = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
             return kernel_name_for_id(dispatch.kernel.kernel_id) ==
-                   "loom_libs:ggml_rmsnorm_binary_symmetric_i4_k32";
+                   "loom_libs:llm_gated_delta_net_f32_wmma_head128_rmsnorm_gate";
         });
-        // engine #450, re-measured on hardware (2026-10-18): the symmetric-i4 consumer route is not a
-        // regression on AMD's current kernels. On Qwen3-4B-Q5_K_M (gfx1151) route-on vs route-off is
-        // pp512 3033 vs 2991 tok/s, pp2048 2648 vs 2613, tg64 65.65 vs 63.61 (route faster, well
-        // outside the error bars), held-out Gutenberg text KLD 0.000000 +- 0.000000 over 5 chunks
-        // (max 0.000056, max delta-p 0.005 %) and three 64-token greedy completions byte-identical
-        // between the arms. So a qualifying graph (a Q5_K/IQ4_XS weight consuming the normalised value,
-        // directly or through a reshape) selects the route, and a graph with no such consumer does not.
-        const bool qualifies = test.direct_consumer || test.reshape_consumer;
-        REQUIRE((symmetric_producer != plan.dispatches.end()) == qualifies);
-        // The q8 publication this case used to check next to the route is engine #449's territory:
-        // ggml_rmsnorm_binary_q8_1_x4_publish went with f2099e9b, and the guards for that live in the
-        // #449 rows. Keeping it here would fail this case for a publication reason, not a route one.
-        const auto commands = ggml::hrx::build_command_program(
-            imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        REQUIRE((fused != plan.dispatches.end()) == test.fused);
+        // The fused path publishes the packed f16 from inside its own dispatch; the unfused path hands
+        // the norm-gate tail to ggml_rmsnorm_gate_f32_f16, which publishes it the same way for the
+        // projection consumer. The pre-re-head producer this once named, ggml_rmsnorm_gate_f32_publish,
+        // is not in the corpus: this family is served by ggml_rmsnorm_gate_f32_f16 and _q8_1_x4, both
+        // of which run the same publish_body and carry the publish selection as a compile parameter
+        // (engine #449, seen in the plan: rmsnorm_gate_f32_f16 + generated F16K16Major consumed by
+        // ggml_mul_mat_q4_k_f16_wmma_prefill_wave32 with f16_input_layout=1).
+        REQUIRE(std::count_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
+            return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_rmsnorm_gate_f32_f16";
+        }) == (test.fused ? 0 : 1));
+        if (test.fused) {
+            REQUIRE(fused->bindings.size() == 11);
+            const auto * projected = imported.graph.values().find_tensor(input);
+            REQUIRE(projected != nullptr);
+            const auto * packed =
+                plan.metadata.find_generated_resource(projected->id, ggml::hrx::GeneratedResourceRole::F16K16Major);
+            REQUIRE(packed != nullptr && fused->bindings.back().value == packed->generated_value);
+            require_compile_parameter(*fused, "ggml.rmsnorm_gate_f32.rms_epsilon", "1.99999999e-06");
+        }
+        const auto commands =
+            ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
         REQUIRE(commands.valid());
         REQUIRE(command_program_verifies(commands));
-        ggml_free(ctx);
+    }
+    ggml_free(ctx);
+}
+
+// 2138 merge: restored from our line; the merge kept the declaration and its callers but dropped this definition
+static bool match_dispatch_at_index(const ggml::hrx::Graph &       graph,
+                                    const ggml::hrx::CommandPlan & plan,
+                                    const std::vector<bool> &      covered_nodes,
+                                    size_t                         node_index,
+                                    ggml::hrx::DispatchMatch &     match) {
+    REQUIRE(node_index < graph.nodes().size());
+    const ggml::hrx::DispatchMatchContext context = {
+        graph,
+        &graph.nodes()[node_index],
+        node_index,
+        covered_nodes,
+        plan,
+        ggml::hrx::ValueId(static_cast<int32_t>(graph.values().size() + plan.transients.size() +
+                                                plan.completion_counter_requests.size())),
+    };
+    return test_dispatch_registry().match(context, match);
+}
+
+// 2138 merge: restored from our line; the merge kept the declaration and its callers but dropped this definition
+static void append_match_to_plan(ggml::hrx::CommandPlan &   plan,
+                                 ggml::hrx::DispatchMatch & match,
+                                 std::vector<bool> &        covered_nodes,
+                                 ggml::hrx::Graph *         graph) {
+    if (graph != nullptr) {
+        for (const ggml::hrx::DispatchValueAliasRequest & alias : match.value_aliases) {
+            ggml::hrx::Status status = graph->values().alias_storage(alias.target_value, alias.source_value);
+            REQUIRE(status.success());
+        }
+    }
+    for (ggml::hrx::Dispatch & dispatch : match.initialization_dispatches) {
+        plan.initialization_dispatches.push_back(std::move(dispatch));
+    }
+    for (ggml::hrx::Dispatch & dispatch : match.dispatches) {
+        plan.dispatches.push_back(std::move(dispatch));
+    }
+    for (ggml::hrx::CommandPlanTransient & transient : match.transients) {
+        plan.transients.push_back(std::move(transient));
+    }
+    for (ggml::hrx::CommandPlanConstantInitialization & initialization : match.constant_initializations) {
+        plan.constant_initializations.push_back(std::move(initialization));
+    }
+    for (ggml::hrx::CommandPlanCompletionCounterRequest & request : match.completion_counter_requests) {
+        plan.completion_counter_requests.push_back(std::move(request));
+    }
+    REQUIRE(plan.metadata.append(std::move(match.metadata), plan.status));
+    for (const size_t covered_node : match.covered_nodes) {
+        REQUIRE(covered_node < covered_nodes.size());
+        REQUIRE(!covered_nodes[covered_node]);
+        covered_nodes[covered_node] = true;
     }
 }
 

@@ -931,7 +931,8 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
     const bool stored_q4 = match.weight_format == CommonMulMatWeightFormat::Q4K &&
                            q4k_aligned_prefill_reads_stored(*match.weight);
     const bool use_f16 = !split_tail && !stored_q4 && match.weight->type == GGML_TYPE_Q4_K &&
-                         match.weight->alias_source.value < 0 && match.output_size >= match.input_size / 4;
+                         match.weight->alias_source.value < 0 && match.output_size >= match.input_size / 4 &&
+                         dispatch_weight_layout_eligible(*match.weight);  // AMD: layout eligibility
     DispatchBinding activation;
     int             activation_scale_log2 = 0;
     const bool packed_input = use_f16 && common_mul_mat_uses_k16_major_f16(
@@ -968,7 +969,7 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
                                                          "ggml.mul_mat_q8_1_x4.token_capacity",
                                                common_to_config_value(q8_tokens));
     const bool pack_q4 = match.weight_format == CommonMulMatWeightFormat::Q4K &&
-                         match.weight->alias_source.value < 0 && !stored_q4;
+                         match.weight->alias_source.value < 0 && !stored_q4 && dispatch_weight_layout_eligible(*match.weight);
     if (use_f16) {
         dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", packed_input ? "1" : "0");
         common_set_f16_prefill_activation_scale(dispatch, activation_scale_log2);
@@ -1182,7 +1183,8 @@ static bool build_mul_mat_dispatch(const DispatchMatchContext & context,
     // strided source. Element-wise weights never pack, so this only rules out an untested combination.
     const bool pack_rows = match.token_count <= 5 && match.output_size % 64 == 0 &&
                            match.weight->alias_source.value < 0 && !match.strided_activation &&
-                           !weight_has_native_layout_reader(context.graph, *match.weight);
+                           !weight_has_native_layout_reader(context.graph, *match.weight) &&
+                           dispatch_weight_layout_eligible(*match.weight);  // AMD
     const bool can_pack_q4 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q4K;
     const bool can_pack_q6 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q6K;
     bool       pack_q4     = false;
@@ -1320,7 +1322,7 @@ static bool match_mul_mat_postops_dispatch(const DispatchMatchContext & context,
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_postops.output_size",
                                                common_to_config_value(match.output_size));
     const bool pack_rows = match.token_count <= 5 && match.output_size % 64 == 0 &&
-                           match.weight->alias_source.value < 0;
+                           match.weight->alias_source.value < 0 && dispatch_weight_layout_eligible(*match.weight);  // AMD: layout eligibility
     const bool can_pack_q4 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q4K;
     const bool can_pack_q6 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q6K;
     bool       pack_q4     = false;

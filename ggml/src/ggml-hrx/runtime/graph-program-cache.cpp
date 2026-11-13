@@ -496,42 +496,18 @@ bool GraphProgram::mutable_sources_current() const {
         if (!ggml_backend_hrx_get_retained_region(watch.tensor, region)) {
             return false;
         }
-        const bool same_identity = region.identity == watch.identity;
-        const bool same_offset   = region.offset == watch.offset;
-        const bool same_length   = region.length == watch.length;
-        if (!same_identity || !same_offset || !same_length) {
+        const bool same_identity   = region.identity == watch.identity;
+        const bool same_offset = region.offset == watch.offset;
+        const bool same_length = region.length == watch.length;
+        const bool identity_changed = !same_identity;
+        const bool offset_changed = !same_offset;
+        const bool length_changed = !same_length;
+        const bool source_changed = identity_changed || offset_changed || length_changed;
+        if (source_changed) {
             return false;
         }
     }
     return true;
-}
-
-PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
-    const CommandProgramExecutionContext & context,
-    const CommandProgramBindings &         bindings) {
-    PreparedCommandProgramCacheExecutionResult result;
-    if (commands_ == nullptr || !commands_->valid() || !bindings.valid()) {
-        result.graph_replay_event             = HrxGraphReplayEvent::Ineligible;
-        result.graph_replay_ineligible_reason = "invalid_graph_program";
-        if (commands_ == nullptr) {
-            result.status.log("missing cached HRX command program");
-        }
-        result.status.append(bindings.status);
-        return result;
-    }
-
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    if (!has_prepared_) {
-        // engine #572: preparing a graph shape's command program is host-side work that used to be invisible.
-        const HostGapScope scope("prep.prepare");
-        prepared_ = prepare_command_program(context, *commands_, bindings);
-        if (!prepared_.valid()) {
-            result.status.append(prepared_.status);
-            return result;
-        }
-        has_prepared_ = true;
-    }
-    return result;
 }
 
 GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_graph) const {
@@ -815,37 +791,15 @@ GraphProgramLookup GraphProgramCache::get_or_build_impl(const ggml_cgraph &  gra
 }
 
 size_t GraphProgram::retained_bytes() const {
-    // The arena plus this program's own prepared command program (engine #841). The prepared programs the executor
-    // caches for this uid live in PreparedCommandProgramCache and are added at trim time, which is where the
-    // budget is actually consulted.
-    size_t bytes = commands_ != nullptr ? commands_->transients.arena_size : 0;
-    // prepared_/has_prepared_ are guarded by prepared_mutex_; no caller holds it across a graph-cache lock, so this
-    // order (graph cache -> prepared) is the only one that exists.
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    if (has_prepared_) {
-        bytes += prepared_.retained_bytes();
-    }
-    return bytes;
+    // The arena only (engine #841). A program's prepared entry is an entry of PreparedCommandProgramCache, whose
+    // bytes are charged to this uid there and added at trim time (retally_retained_bytes), which is where the
+    // budget is consulted; counting the entry here as well would charge it twice.
+    return commands_ != nullptr ? commands_->transients.arena_size : 0;
 }
 
 GraphProgramCacheStats GraphProgramCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    // stats_ carries the programs this cache has already dropped (folded in at every erase), and the live ones are
-    // added here, so the totals only ever grow: a trim cannot make the counter go backwards (engine #841 - a
-    // per-request rebuild delta read -1 the moment a program was evicted).
-    GraphProgramCacheStats      stats = stats_;
-    for (const auto & entry : programs_) {
-        const PreparedCommandProgramCacheStats prepared = entry.second->prepared_stats();
-        stats.prepared_program_builds += prepared.builds;
-        stats.prepared_program_hits += prepared.hits;
-    }
-    return stats;
-}
-
-void GraphProgramCache::fold_prepared_stats(const GraphProgram & program) {
-    const PreparedCommandProgramCacheStats prepared = program.prepared_stats();
-    stats_.prepared_program_builds += prepared.builds;
-    stats_.prepared_program_hits += prepared.hits;
+    return stats_;
 }
 
 size_t GraphProgramCache::size() const {
@@ -883,7 +837,6 @@ void GraphProgramCache::drop_program(uint64_t uid) {
     if (found == programs_.end()) {
         return;
     }
-    fold_prepared_stats(*found->second);
     if (last_program_ == found->second.get()) {
         last_program_ = nullptr;
     }
@@ -923,9 +876,6 @@ void GraphProgramCache::retain_only(const GraphProgram * keep) {
 
 void GraphProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (const auto & entry : programs_) {
-        fold_prepared_stats(*entry.second);
-    }
     validated_matches_.clear();
     programs_.clear();
     budget_       = GraphProgramBudget{};
@@ -978,16 +928,6 @@ bool can_execute_standalone_op_as_graph(const ggml_tensor * op, const std::strin
         return false;
     }
     return DispatchScheduler::supports_node(graph, &node, { target });
-}
-
-PreparedCommandProgramCacheStats GraphProgram::prepared_stats() const {
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    return prepared_stats_;
-}
-
-bool GraphProgram::has_prepared_program() const {
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    return has_prepared_;
 }
 
 }  // namespace ggml::hrx

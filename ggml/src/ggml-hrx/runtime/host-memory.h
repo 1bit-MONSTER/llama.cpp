@@ -56,7 +56,7 @@ class HostTransferManager {
 
 struct HostWeightSource {
     const void * host_data  = nullptr;
-    hrx_buffer_t device_buffer = nullptr; // ours: device-resident weight sources (host-memory.cpp)
+    hrx_buffer_t device_buffer       = nullptr;
     uint64_t     identity   = 0;
     uint64_t     generation = 0;
     size_t       capacity   = 0;
@@ -211,6 +211,8 @@ class HostWeightCache {
     HostWeightCacheStats                                                                  stats_;
     size_t                                                                                limit_          = 0;
     size_t                                                                                resident_bytes_ = 0;
+    // test hook (fail_cold_acquire_after_for_test): SIZE_MAX = off, otherwise the cold acquires left before one fails
+    size_t fail_cold_after_ = SIZE_MAX;
     uint64_t                                                                              use_clock_      = 0;
     bool                                                                                  limit_resolved_ = false;
     // engine #669: with the limit unset (the default) nothing bounds host-weight residency, so an OOM reads like an
@@ -270,7 +272,6 @@ class HostWeightCache {
     // synchronizes the stream before freeing anything, because a dispatch from an earlier command program may
     // still be reading the buffer.
     void        evict_for(hrx_stream_t stream, size_t needed);
-    size_t fail_cold_after_ = SIZE_MAX;
 };
 
 // RAII over HostWeightCache::begin_execution/end_execution for one command-program execution.

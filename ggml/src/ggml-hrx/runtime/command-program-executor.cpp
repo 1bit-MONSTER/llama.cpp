@@ -506,9 +506,11 @@ static Dispatch build_dispatch(const ResolvedCommand & command) {
 }
 
 struct GraphValueAccess {
-    bool main_write = false;        // merged side: this write is the graph main output
     bool read  = false;
     bool write = false;
+    // AMD: written by a main command, not only by an initializer. Initializers may synthesize device metadata from
+    // caller inputs, but only main graph writes are observable on the host.
+    bool main_write = false;
     bool        native_read         = false;
     bool        transformed_read    = false;
     bool        layout_conflict     = false;
@@ -558,6 +560,38 @@ static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(
                         access.read  = true;
                         access.write = true;
                         break;
+                }
+                if (binding.access == ResourceAccess::Write) {
+                    continue;
+                }
+                if (binding.layout == kNativeWeightLayout) {
+                    access.native_read = true;
+                    if (access.transformed_read) {
+                        access.layout_conflict = true;
+                    }
+                    continue;
+                }
+                if (binding.offset != 0 || binding.source_length == 0 || binding.length == 0 ||
+                    binding.source_type == GGML_TYPE_COUNT || binding.input_size <= 0 || binding.output_size <= 0) {
+                    access.layout_conflict = true;
+                    continue;
+                }
+                if (!access.transformed_read) {
+                    access.transformed_read    = true;
+                    access.layout              = binding.layout;
+                    access.source_type         = binding.source_type;
+                    access.input_size          = binding.input_size;
+                    access.output_size         = binding.output_size;
+                    access.source_length       = binding.source_length;
+                    access.materialized_length = binding.length;
+                } else if (access.layout != binding.layout || access.source_type != binding.source_type ||
+                           access.input_size != binding.input_size || access.output_size != binding.output_size ||
+                           access.source_length != binding.source_length ||
+                           access.materialized_length != binding.length) {
+                    access.layout_conflict = true;
+                }
+                if (access.native_read) {
+                    access.layout_conflict = true;
                 }
             }
         }
@@ -705,7 +739,6 @@ static CommandProgramWeightDemands collect_weight_demands(
     return result;
 }
 
-
 static CommandProgramBindings materialize_host_bindings(const CommandProgramExecutionContext & context,
                                                         const CommandProgram &                 commands,
                                                         const CommandProgramBindings &         bindings,
@@ -721,7 +754,6 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
     // measured 38 <-> 44 MiB on Qwen3-4B-IQ4_XS. Reported, not refused: a budget below the set means these weights run
     // on the CPU, which placement now decides with the same number.
     const size_t program_bytes = observe_host_weight_working_set(bindings, access_by_value);
-    const CommandProgramWeightDemands demands = collect_weight_demands(commands, bindings, access_by_value);
     const size_t working_set   = host_weight_working_set_bytes();
     if (const char * trace = std::getenv("GGML_HRX_HOST_WEIGHT_TRACE")) {
         if (std::atoi(trace) != 0) {
@@ -754,7 +786,6 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             materialized.push_back(binding);
             continue;
         }
-        const bool managed_weight = binding.weight && access.read && !access.write && binding.source_host_data != nullptr;
         const bool materialize_weight = binding.weight && access.read && !access.write &&
                                         (binding.requires_materialization() || access.transformed_read);
         // The layout a command reads a value in is chosen by the dispatch builder from the tensor's type, before any
@@ -779,34 +810,11 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             materialized.push_back(binding);
             continue;
         }
-        if (managed_weight) {
-            for (const CommandProgramWeightDemand & demand : demands.weights) {
-                if (demand.request.value != binding.value) {
-                    continue;
-                }
-                CommandProgramBinding device_binding = binding;
-                device_binding.layout = demand.request.layout;
-                device_binding.layout_source_type = demand.request.source_type;
-                device_binding.input_size = demand.request.input_size;
-                device_binding.output_size = demand.request.output_size;
-                device_binding.source_length = demand.request.source_length;
-                if (demand.requires_materialization) {
-                    HostWeightAcquireResult resident = context.host_weights->acquire(
-                        context.device, context.stream, *context.host_transfers, demand.source);
-                    if (!resident.valid()) {
-                        status.log("materialize host weight value %d layout %s failed", binding.value.value,
-                                   demand.request.layout.c_str());
-                        status.append(resident.status);
-                        continue;
-                    }
-                    device_binding.buffer = resident.lease.buffer();
-                    device_binding.host_data = nullptr;
-                    device_binding.offset = 0;
-                    device_binding.length = resident.lease.length();
-                    device_binding.capacity = resident.lease.length();
-                    prepared.resident_host_weights.push_back({ binding.value, demand.source, std::move(resident.lease) });
-                }
-                materialized.push_back(std::move(device_binding));
+        if (materialize_weight) {
+            if (access.layout_conflict) {
+                status.log("weight value %d has conflicting resident layout requests", binding.value.value);
+                materialized.push_back(binding);
+                continue;
             }
             HostWeightSource source;
             source.host_data  = binding.host_data;
@@ -879,6 +887,15 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             device_binding.offset                = resident.lease.offset();
             device_binding.length                = resident.lease.length();
             device_binding.capacity              = resident.lease.length();
+            // The merged bind step finds a transformed binding by (value, layout, transformation)
+            // (CommandProgramBindings::find), so the resident binding has to say which layout it holds.
+            if (access.transformed_read) {
+                device_binding.layout             = access.layout;
+                device_binding.layout_source_type = access.source_type;
+                device_binding.input_size         = access.input_size;
+                device_binding.output_size        = access.output_size;
+                device_binding.source_length      = access.source_length;
+            }
             materialized.push_back(device_binding);
             prepared.resident_host_weights.push_back({ binding.value, source, resident.lease });
             continue;
@@ -901,7 +918,9 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         staging.value                        = binding.value.value;
         staging.host_data                    = static_cast<uint8_t *>(binding.host_data) + binding.offset;
         staging.upload                       = access.read;
-        staging.download                     = access.write && !binding.graph_input;
+        // ours: never write a graph input back to the caller's host tensor (ggml reuses that memory). AMD: only main
+        // graph writes are observable; initializers may synthesize device metadata from caller inputs.
+        staging.download                     = access.main_write && !binding.graph_input;
         if (staging.upload && context.host_buffers != nullptr) {
             staging.source_host_buffer = context.host_buffers->find(staging.host_data, staging.length);
         }
@@ -1282,7 +1301,7 @@ static Status flush_stream_commands(const CommandProgramExecutionContext & conte
 }
 
 static Status wait_stream_commands(const CommandProgramExecutionContext & context, const char * label,
-                                   const void * work = nullptr) {
+                                   const void * work) {
     Status status;
     if (ErrorResult error = take_status(stream_wait_sleeping(context.stream, wait_history_for(work)))) {
         status.log("%s failed: %s", label, error->c_str());
@@ -1444,7 +1463,7 @@ static void materialize_command_list_executables(const CommandProgramExecutionCo
     for (size_t i = 0; i < prepared_commands.size(); ++i) {
         PreparedCommand & command = prepared_commands[i];
         command.kernel.executable = context.kernel_executables->materialize(
-            { context.device, context.target }, executable_refs[i], command.kernel.constants);
+            { context.device, context.target, context.compile_trace }, executable_refs[i], command.kernel.constants);
         if (command.kernel.executable == nullptr) {
             status.log("failed to prepare %s", format_prepared_command_context(command).c_str());
         }
@@ -2395,7 +2414,7 @@ bool execute_prepared_command_program(const CommandProgramExecutionContext & con
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(flush_status));
         return false;
     }
-    Status wait_status = wait_stream_commands(context, "wait for direct HRX command program");
+    Status wait_status = wait_stream_commands(context, "wait for direct HRX command program", &commands);
     if (!wait_status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(wait_status));
         return false;

@@ -2,6 +2,7 @@
 
 #include "runtime/host-gap-profile.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -126,13 +127,18 @@ std::shared_ptr<PreparedCommandProgramCacheEntry> PreparedCommandProgramCache::g
     uint64_t graph_uid,
     uint64_t command_shape_hash,
     const CommandProgramBindings & bindings) {
-    const Key key = cache_key(graph_uid, context, command_shape_hash, bindings);
+    Key key;
+    {
+        const HostGapScope scope("cache.key");
+        key = cache_key(graph_uid, context, command_shape_hash, bindings);
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     auto found = programs_.find(key);
     if (found != programs_.end()) {
         return found->second;
     }
-    auto entry = std::make_shared<PreparedCommandProgramCacheEntry>();
+    auto entry       = std::make_shared<PreparedCommandProgramCacheEntry>();
+    entry->graph_uid = graph_uid;
     programs_.emplace(key, entry);
     return entry;
 }
@@ -148,13 +154,24 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     const bool serial_execution = debug_serial_command_execution_enabled();
     const bool execute_directly = replay_disabled || serial_execution;
     if (!entry->ready) {
-        auto prepared = prepare_command_program(context, commands, bindings);
+        PreparedCommandProgram prepared = [&] {
+            const HostGapScope scope("prep.prepare");
+            return prepare_command_program(context, commands, bindings);
+        }();
         if (!prepared.valid()) {
             result.status.append(prepared.status);
             return result;
         }
         entry->prepared = std::move(prepared);
         entry->ready = true;
+        {
+            // The graph-program byte budget has to see these bytes or it can never bite (engine #841). The entry
+            // lock is held here and mutex_ is taken under it; get_or_create takes mutex_ alone and never an entry
+            // lock, so the order is always entry -> mutex_ and cannot invert.
+            const size_t                bytes = entry->prepared.retained_bytes();
+            std::lock_guard<std::mutex> lock(mutex_);
+            retained_by_graph_[entry->graph_uid] += bytes;
+        }
         record_build();
     } else {
         record_hit();
@@ -172,8 +189,11 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         if (rebuild_enabled) {
             entry->recorded = {};
         }
-        const auto replay = bind_and_launch_recorded_command_graph(
-            context, commands, bindings, entry->prepared, entry->recorded);
+        RecordedCommandGraphExecutionResult replay;
+        {
+            const HostGapScope scope("cache.replay");
+            replay = bind_and_launch_recorded_command_graph(context, commands, bindings, entry->prepared, entry->recorded);
+        }
         apply_graph_replay_result(result, replay);
         result.success = replay.success;
         const bool fallback = !replay.success && graph_replay_should_fallback(replay.event);

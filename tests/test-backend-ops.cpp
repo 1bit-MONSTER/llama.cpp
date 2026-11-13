@@ -1208,7 +1208,9 @@ static bool op_filter_entry_matches(std::string_view entry, std::string_view op_
 // TODO: [TAG_MUL_MAT_ID_SKIP] see https://github.com/ggml-org/llama.cpp/pull/26631
 static bool backend_lacks_skipped_ids(ggml_backend_t backend, ggml_cgraph * gf) {
     const char * name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)));
-    if (strcmp(name, "CUDA") != 0 && strcmp(name, "ROCm") != 0 && strcmp(name, "MUSA") != 0) {
+    // HRX: MUL_MAT_ID/ADD_ID with -1 = skipped (upstream 701fd25) is not implemented on this line either; no graph
+    // builder here emits -1 ids, so it is a declared gap like CUDA's, not a wrong answer a model can reach.
+    if (strcmp(name, "CUDA") != 0 && strcmp(name, "ROCm") != 0 && strcmp(name, "MUSA") != 0 && strcmp(name, "HRX") != 0) {
         return false;
     }
     for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
@@ -5727,7 +5729,8 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, bool skip = 
         }
         if (activation_scale != 1.0f && strcmp(t->name, "b") == 0) {
             // engine #2127 / #2167: the default fill is uniform in [-1, 1], which no half-precision narrowing of the
-            // activation can get wrong, so a case can ask for a wider activation. Only the activation `b` is scaled.
+            // activation can get wrong, so a case can ask for a wider activation. Only the activation `b` is scaled:
+            // scaling an f32 weight as well would put the weights outside half precision, which no model does.
             const size_t ne = (size_t) ggml_nelements(t);
             std::vector<float> data(ne);
             std::uniform_real_distribution<float> gen(-activation_scale, activation_scale);

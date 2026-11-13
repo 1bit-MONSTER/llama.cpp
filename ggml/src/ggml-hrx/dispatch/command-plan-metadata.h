@@ -131,6 +131,8 @@ class CommandPlanMetadata {
 
     bool append_alternate_value(CommandPlanAlternateValue alternate, Status & status);
 
+    void append_activation_publication_diagnostic(CommandPlanActivationPublicationDiagnostic diagnostic);
+
     bool append_moe_routing_bundle(CommandPlanMoeRoutingBundle bundle, Status & status);
 
     const CommandPlanGeneratedResource * find_generated_resource(ValueId               source_value,
@@ -149,10 +151,6 @@ class CommandPlanMetadata {
 
     const std::vector<CommandPlanActivationPublicationDiagnostic> & activation_publication_diagnostics() const {
         return activation_publication_diagnostics_;
-    }
-
-    void append_activation_publication_diagnostic(CommandPlanActivationPublicationDiagnostic diagnostic) {
-        activation_publication_diagnostics_.push_back(std::move(diagnostic));
     }
 
     const std::vector<CommandPlanAlternateValue> & alternate_values() const { return alternate_values_; }

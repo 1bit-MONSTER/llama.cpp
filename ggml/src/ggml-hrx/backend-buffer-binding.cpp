@@ -151,9 +151,15 @@ bool ggml_backend_hrx_weight_layout_eligible(const ggml_tensor * tensor) {
     if (tensor == nullptr) {
         return true;
     }
-    const ggml_tensor * root = tensor->view_src != nullptr ? tensor->view_src : tensor;
+    const ggml_tensor * root   = tensor->view_src != nullptr ? tensor->view_src : tensor;
     ggml_backend_buffer_t buffer = root->buffer;
-    const bool is_weight = buffer != nullptr &&
-                           ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
-    return !is_weight || ggml_backend_hrx_weight_has_repackable_source(tensor);
+    if (buffer == nullptr) {
+        return true;  // not allocated yet: the plan is re-checked when the slot is bound (graph-program-cache)
+    }
+    // 2138 merge. AMD's line repacks only from a retained host copy, so it asks for one. This line's residency path
+    // repacks any buffer flagged GGML_BACKEND_BUFFER_USAGE_WEIGHTS, from host data or from the device buffer
+    // (aadd60251), and refuses a packed read of anything else (engine #969: unflagged bytes are not packed). So a
+    // packed layout is eligible exactly for a weights buffer; declining here lets a native route take the node
+    // instead of the executor refusing the whole graph.
+    return ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 }

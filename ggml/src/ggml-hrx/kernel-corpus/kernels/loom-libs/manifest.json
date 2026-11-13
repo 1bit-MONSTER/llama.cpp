@@ -675,13 +675,25 @@
       "path": "ops/set_rows.loom"
     },
     {
-      "path": "ops/rmsnorm_binary_f32.loom"
-    },
-    {
       "path": "ops/rmsnorm_binary_q8_1_x4.loom"
     },
     {
+      "path": "motifs/rmsnorm_f32.loom"
+    },
+    {
+      "path": "ops/rmsnorm_binary_f32.loom"
+    },
+    {
+      "path": "motifs/dequant_prism.loom"
+    },
+    {
+      "path": "motifs/dequant_1bit.loom"
+    },
+    {
       "path": "ops/llm_attention_q_matmul_rope_f32_f32_wmma.loom"
+    },
+    {
+      "path": "motifs/rope_f32.loom"
     },
     {
       "path": "ops/llm_attention_k_matmul_rope_set_rows_f32_f32_wmma.loom"
@@ -702,10 +714,19 @@
       "path": "ops/mul_mat_id_f32_f32_wmma.loom"
     },
     {
+      "path": "motifs/mul_mat_id_f32_f32_wmma_core.loom"
+    },
+    {
       "path": "ops/mul_mat_id_postops_f32_f32_wmma.loom"
     },
     {
+      "path": "motifs/mul_mat_id_f32_f32_postops.loom"
+    },
+    {
       "path": "ops/mul_mat_id_postops_next_rmsnorm_f32_f32_wmma.loom"
+    },
+    {
+      "path": "ops/mul_mat_add_next_rmsnorm_f32_f32_wmma.loom"
     },
     {
       "path": "ops/mul_mat_bias_f32_f32_wmma.loom"
@@ -715,9 +736,6 @@
     },
     {
       "path": "ops/mul_mat_bias_add_f32_f32_wmma.loom"
-    },
-    {
-      "path": "ops/mul_mat_add_next_rmsnorm_f32_f32_wmma.loom"
     },
     {
       "path": "ops/mul_mat_bias_add_next_rmsnorm_f32_f32_wmma.loom"
@@ -759,28 +777,70 @@
       "path": "ops/attention_sink_f32.loom"
     },
     {
-      "path": "motifs/binary_f32_apply.loom"
+      "path": "ops/binary_bc_f32.loom"
     },
     {
-      "path": "motifs/dequant_1bit.loom"
+      "path": "ops/binary_f32.loom"
     },
     {
-      "path": "motifs/dequant_prism.loom"
+      "path": "ops/copy_f32.loom"
     },
     {
-      "path": "motifs/mul_mat_id_f32_f32_postops.loom"
+      "path": "ops/flash_attention_decode_split_f32_f16_wmma.loom"
     },
     {
-      "path": "motifs/mul_mat_id_f32_f32_wmma_core.loom"
+      "path": "ops/flash_attention_f32_f16_wmma.loom"
     },
     {
-      "path": "motifs/rmsnorm_f32.loom"
+      "path": "ops/get_rows_f32.loom"
     },
     {
-      "path": "motifs/rope_f32.loom"
+      "path": "ops/mul_mat_id_f16_f16_wmma.loom"
     },
     {
-      "path": "motifs/unary_f32_apply.loom"
+      "path": "motifs/mul_mat_id_f16_f16_wmma_core.loom"
+    },
+    {
+      "path": "ops/mul_mat_id_swiglu_f16_f16_wmma.loom"
+    },
+    {
+      "path": "motifs/mul_mat_id_swiglu_f16_f16_wmma_body.loom"
+    },
+    {
+      "path": "motifs/mul_mat_id_swiglu_f16_f16_accumulate.loom"
+    },
+    {
+      "path": "motifs/mul_mat_id_q4k_f16_wmma_projection.loom"
+    },
+    {
+      "path": "motifs/mul_mat_id_q5k_f16_wmma_projection.loom"
+    },
+    {
+      "path": "motifs/mul_mat_id_q6k_f16_wmma_projection.loom"
+    },
+    {
+      "path": "ops/rmsnorm_f32.loom"
+    },
+    {
+      "path": "ops/rope_f32.loom"
+    },
+    {
+      "path": "ops/rope_set_rows_f32.loom"
+    },
+    {
+      "path": "ops/scale_bias_f32.loom"
+    },
+    {
+      "path": "ops/scale_f32.loom"
+    },
+    {
+      "path": "ops/gated_delta_net_f32_wmma.loom"
+    },
+    {
+      "path": "ops/ssm_conv_generic_f32.loom"
+    },
+    {
+      "path": "ops/ssm_conv_f32.loom"
     }
   ],
   "exports": [
@@ -833,7 +893,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -848,7 +910,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -900,7 +964,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -915,7 +981,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -965,7 +1033,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -980,7 +1050,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -1030,7 +1102,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -1045,34 +1119,18 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
       "name": "ggml_copy_transpose_f16",
       "family": "loom_libs",
       "symbol": "ggml_copy_transpose_f16",
-      "source": "ops/copy/transpose_f16.loom",
-      "workload_parameters": [
-        {
-          "name": "row_count",
-          "type": "index"
-        },
-        {
-          "name": "column_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "row_count",
-          "type": "index"
-        },
-        {
-          "name": "column_count",
-          "type": "index"
-        }
-      ],
+      "source": "ops/copy_f32.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
       "bindings": [
         "input",
         "output"
@@ -1085,21 +1143,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/copy/transpose_f16.loom"
+          "ops/copy_f32.loom"
         ],
-        "library_sources": [
-          "motifs/copy/transpose_tile.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/copy/transpose_tile.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_copy_f16_k16_major",
       "family": "loom_libs",
       "symbol": "ggml_copy_f16_k16_major",
-      "source": "ops/copy/copy_f16_k16_major.loom",
+      "source": "ops/copy_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1124,23 +1178,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/copy/copy_f16_k16_major.loom"
+          "ops/copy_f32.loom"
         ],
-        "library_sources": [
-          "motifs/copy/layout_k16_major.loom",
-          "motifs/copy/convert_f32_f16.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/copy/layout_k16_major.loom",
-        "motifs/copy/convert_f32_f16.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_copy_f32_f16",
       "family": "loom_libs",
       "symbol": "ggml_copy_f32_f16",
-      "source": "ops/copy/copy_f32_f16.loom",
+      "source": "ops/copy_f32.loom",
       "workload_parameters": [
         {
           "name": "element_count",
@@ -1165,21 +1213,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/copy/copy_f32_f16.loom"
+          "ops/copy_f32.loom"
         ],
-        "library_sources": [
-          "motifs/copy/convert_f32_f16.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/copy/convert_f32_f16.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_copy_f32",
       "family": "loom_libs",
       "symbol": "ggml_copy_f32",
-      "source": "ops/copy/copy_f32.loom",
+      "source": "ops/copy_f32.loom",
       "workload_parameters": [
         {
           "name": "element_count",
@@ -1204,21 +1248,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/copy/copy_f32.loom"
+          "ops/copy_f32.loom"
         ],
-        "library_sources": [
-          "motifs/copy/vector_load_store.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/copy/vector_load_store.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_copy_strided_source_f32",
       "family": "loom_libs",
       "symbol": "ggml_copy_strided_source_f32",
-      "source": "ops/copy/strided_source_f32.loom",
+      "source": "ops/copy_f32.loom",
       "workload_parameters": [
         {
           "name": "element_count",
@@ -1251,49 +1291,19 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/copy/strided_source_f32.loom"
+          "ops/copy_f32.loom"
         ],
-        "library_sources": [
-          "motifs/copy/strided_source.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/copy/strided_source.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_concat_dim0_f32",
       "family": "loom_libs",
       "symbol": "ggml_concat_dim0_f32",
-      "source": "ops/copy/concat_dim0_f32.loom",
-      "workload_parameters": [
-        {
-          "name": "row_count",
-          "type": "index"
-        },
-        {
-          "name": "lhs_span",
-          "type": "index"
-        },
-        {
-          "name": "rhs_span",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "row_count",
-          "type": "index"
-        },
-        {
-          "name": "lhs_span",
-          "type": "index"
-        },
-        {
-          "name": "rhs_span",
-          "type": "index"
-        }
-      ],
+      "source": "ops/copy_f32.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
       "bindings": [
         "lhs",
         "rhs",
@@ -1308,21 +1318,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/copy/concat_dim0_f32.loom"
+          "ops/copy_f32.loom"
         ],
-        "library_sources": [
-          "motifs/copy/concat_dim0.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/copy/concat_dim0.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_concat_dim0_strided_source_f32",
       "family": "loom_libs",
       "symbol": "ggml_concat_dim0_strided_source_f32",
-      "source": "ops/copy/concat_dim0_strided_source_f32.loom",
+      "source": "ops/copy_f32.loom",
       "workload_parameters": [
         {
           "name": "lhs_span",
@@ -1357,21 +1363,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/copy/concat_dim0_strided_source_f32.loom"
+          "ops/copy_f32.loom"
         ],
-        "library_sources": [
-          "motifs/copy/concat_dim0.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/copy/concat_dim0.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_scale_bias_f32",
       "family": "loom_libs",
       "symbol": "ggml_scale_bias_f32",
-      "source": "ops/elementwise/scale_bias_f32.loom",
+      "source": "ops/scale_bias_f32.loom",
       "workload_parameters": [
         {
           "name": "element_count",
@@ -1396,15 +1398,11 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/elementwise/scale_bias_f32.loom"
+          "ops/scale_bias_f32.loom"
         ],
-        "library_sources": [
-          "motifs/elementwise/scale_apply.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/elementwise/scale_apply.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_unary_f32",
@@ -1449,7 +1447,7 @@
       "name": "ggml_scale_f32",
       "family": "loom_libs",
       "symbol": "ggml_scale_f32",
-      "source": "ops/elementwise/scale_f32.loom",
+      "source": "ops/scale_f32.loom",
       "workload_parameters": [
         {
           "name": "element_count",
@@ -1474,15 +1472,11 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/elementwise/scale_f32.loom"
+          "ops/scale_f32.loom"
         ],
-        "library_sources": [
-          "motifs/elementwise/scale_apply.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/elementwise/scale_apply.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_scale_add_f32",
@@ -1531,7 +1525,7 @@
       "name": "ggml_binary_f32",
       "family": "loom_libs",
       "symbol": "ggml_binary_f32",
-      "source": "ops/elementwise/binary_f32.loom",
+      "source": "ops/binary_f32.loom",
       "workload_parameters": [
         {
           "name": "element_count",
@@ -1558,7 +1552,7 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/elementwise/binary_f32.loom"
+          "ops/binary_f32.loom"
         ],
         "library_sources": [
           "motifs/elementwise/binary_apply.loom"
@@ -1617,7 +1611,7 @@
       "name": "ggml_binary_swiglu_symmetric_i4_k32",
       "family": "loom_libs",
       "symbol": "ggml_binary_swiglu_symmetric_i4_k32",
-      "source": "ops/elementwise/binary_swiglu_symmetric_i4_k32.loom",
+      "source": "ops/binary_f32.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -1640,21 +1634,21 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/elementwise/binary_swiglu_symmetric_i4_k32.loom"
+          "ops/binary_f32.loom"
         ],
         "library_sources": [
-          "motifs/elementwise/symmetric_i4_binary.loom"
+          "motifs/elementwise/binary_apply.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/elementwise/symmetric_i4_binary.loom"
+        "motifs/elementwise/binary_apply.loom"
       ]
     },
     {
       "name": "ggml_binary_bc_f32",
       "family": "loom_libs",
       "symbol": "ggml_binary_bc_f32",
-      "source": "ops/elementwise/binary_bc_f32.loom",
+      "source": "ops/binary_bc_f32.loom",
       "workload_parameters": [
         {
           "name": "element_count",
@@ -1729,16 +1723,14 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/elementwise/binary_bc_f32.loom"
+          "ops/binary_bc_f32.loom"
         ],
         "library_sources": [
-          "motifs/elementwise/binary_apply.loom",
-          "motifs/elementwise/broadcast_index.loom"
+          "motifs/elementwise/binary_apply.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/elementwise/binary_apply.loom",
-        "motifs/elementwise/broadcast_index.loom"
+        "motifs/elementwise/binary_apply.loom"
       ]
     },
     {
@@ -1814,7 +1806,7 @@
       "name": "ggml_rmsnorm_f32",
       "family": "loom_libs",
       "symbol": "ggml_rmsnorm_f32",
-      "source": "ops/normalization/rmsnorm_f32.loom",
+      "source": "ops/rmsnorm_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1839,21 +1831,21 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/normalization/rmsnorm_f32.loom"
+          "ops/rmsnorm_f32.loom"
         ],
         "library_sources": [
-          "motifs/normalization/rmsnorm.loom"
+          "motifs/rmsnorm_f32.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/normalization/rmsnorm.loom"
+        "motifs/rmsnorm_f32.loom"
       ]
     },
     {
       "name": "ggml_rmsnorm_mul_rope_f32",
       "family": "loom_libs",
       "symbol": "ggml_rmsnorm_mul_rope_f32",
-      "source": "ops/normalization/rmsnorm_mul_rope_f32.loom",
+      "source": "ops/rmsnorm_f32.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -1872,23 +1864,21 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/normalization/rmsnorm_mul_rope_f32.loom"
+          "ops/rmsnorm_f32.loom"
         ],
         "library_sources": [
-          "motifs/normalization/rmsnorm.loom",
-          "motifs/rope/rope_f32.loom"
+          "motifs/rmsnorm_f32.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/rope/rope_f32.loom"
+        "motifs/rmsnorm_f32.loom"
       ]
     },
     {
       "name": "ggml_rmsnorm_binary_f32",
       "family": "loom_libs",
       "symbol": "ggml_rmsnorm_binary_f32",
-      "source": "ops/normalization/rmsnorm_binary_f32.loom",
+      "source": "ops/rmsnorm_binary_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -1915,18 +1905,20 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/normalization/rmsnorm_binary_f32.loom"
+          "ops/rmsnorm_binary_f32.loom"
         ],
         "library_sources": [
-          "motifs/normalization/rmsnorm.loom",
-          "motifs/normalization/rmsnorm_binary.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/rmsnorm_f32.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
@@ -2068,7 +2060,7 @@
       "name": "ggml_rmsnorm_binary_f32_k16",
       "family": "loom_libs",
       "symbol": "ggml_rmsnorm_binary_f32_k16",
-      "source": "ops/normalization/rmsnorm_binary_f32_k16.loom",
+      "source": "ops/rmsnorm_binary_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2097,20 +2089,20 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/normalization/rmsnorm_binary_f32_k16.loom"
+          "ops/rmsnorm_binary_f32.loom"
         ],
         "library_sources": [
-          "motifs/normalization/rmsnorm.loom",
-          "motifs/normalization/rmsnorm_binary.loom",
-          "motifs/normalization/publish_f16.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/rmsnorm_f32.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_binary.loom",
-        "motifs/normalization/publish_f16.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
@@ -2217,7 +2209,7 @@
       "name": "ggml_rmsnorm_binary_symmetric_i4_k32",
       "family": "loom_libs",
       "symbol": "ggml_rmsnorm_binary_symmetric_i4_k32",
-      "source": "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom",
+      "source": "ops/rmsnorm_binary_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2250,23 +2242,27 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/normalization/rmsnorm_binary_symmetric_i4_k32.loom"
+          "ops/rmsnorm_binary_f32.loom"
         ],
         "library_sources": [
-          "motifs/normalization/rmsnorm.loom",
-          "motifs/normalization/rmsnorm_symmetric_i4.loom"
+          "motifs/rmsnorm_f32.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "ggml_add_rmsnorm_binary_symmetric_i4_k32",
       "family": "loom_libs",
       "symbol": "ggml_add_rmsnorm_binary_symmetric_i4_k32",
-      "source": "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom",
+      "source": "ops/rmsnorm_binary_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2303,23 +2299,27 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/normalization/add_rmsnorm_binary_symmetric_i4_k32.loom"
+          "ops/rmsnorm_binary_f32.loom"
         ],
         "library_sources": [
-          "motifs/normalization/rmsnorm.loom",
-          "motifs/normalization/rmsnorm_symmetric_i4.loom"
+          "motifs/rmsnorm_f32.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
       "name": "ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
       "family": "loom_libs",
       "symbol": "ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32",
-      "source": "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom",
+      "source": "ops/rmsnorm_binary_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -2354,16 +2354,20 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/normalization/rmsnorm_gate_silu_mul_symmetric_i4_k32.loom"
+          "ops/rmsnorm_binary_f32.loom"
         ],
         "library_sources": [
-          "motifs/normalization/rmsnorm.loom",
-          "motifs/normalization/rmsnorm_symmetric_i4.loom"
+          "motifs/rmsnorm_f32.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/normalization/rmsnorm.loom",
-        "motifs/normalization/rmsnorm_symmetric_i4.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
@@ -2470,7 +2474,9 @@
           "motifs/bf16_f16.loom",
           "motifs/f32_f16.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom"
         ]
       },
       "compile_dependencies": [
@@ -2485,7 +2491,9 @@
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom"
       ]
     },
     {
@@ -2539,7 +2547,9 @@
           "motifs/bf16_f16.loom",
           "motifs/f32_f16.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom"
         ]
       },
       "compile_dependencies": [
@@ -2554,7 +2564,9 @@
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom"
       ]
     },
     {
@@ -2602,7 +2614,9 @@
           "motifs/bf16_f16.loom",
           "motifs/f32_f16.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom"
         ]
       },
       "compile_dependencies": [
@@ -2617,7 +2631,9 @@
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom"
       ]
     },
     {
@@ -2665,7 +2681,9 @@
           "motifs/bf16_f16.loom",
           "motifs/f32_f16.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom"
         ]
       },
       "compile_dependencies": [
@@ -2680,7 +2698,9 @@
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom"
       ]
     },
     {
@@ -2861,7 +2881,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -2876,7 +2898,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -2930,7 +2954,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -2945,7 +2971,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -2998,7 +3026,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3012,7 +3042,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -3067,7 +3099,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3081,7 +3115,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -3129,7 +3165,10 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/rope_f32.loom"
         ]
       },
       "compile_dependencies": [
@@ -3142,7 +3181,10 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/rope_f32.loom"
       ]
     },
     {
@@ -3197,7 +3239,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3213,7 +3257,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -3270,7 +3316,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3286,7 +3334,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -3336,7 +3386,10 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/rope_f32.loom"
         ]
       },
       "compile_dependencies": [
@@ -3351,7 +3404,10 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/rope_f32.loom"
       ]
     },
     {
@@ -3405,7 +3461,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3420,7 +3478,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -3476,7 +3536,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3491,7 +3553,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -3540,7 +3604,10 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/rope_f32.loom"
         ]
       },
       "compile_dependencies": [
@@ -3554,14 +3621,17 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/rope_f32.loom"
       ]
     },
     {
       "name": "ggml_mul_mat_id_f16_f16_wmma",
       "family": "loom_libs",
       "symbol": "ggml_mul_mat_id_f16_f16_wmma",
-      "source": "ops/matmul_id/mul_mat_id_f16_f16_wmma.loom",
+      "source": "ops/mul_mat_id_f16_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3590,27 +3660,21 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/matmul_id/mul_mat_id_f16_f16_wmma.loom"
+          "ops/mul_mat_id_f16_f16_wmma.loom"
         ],
         "library_sources": [
-          "motifs/matmul_id/f16_down_schedule.loom",
-          "motifs/matmul_id/f16_publish.loom",
-          "motifs/matmul_id/f16_projection_q4k.loom",
-          "motifs/matmul_id/f16_projection_q6k.loom"
+          "motifs/mul_mat_id_f16_f16_wmma_core.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/matmul_id/f16_down_schedule.loom",
-        "motifs/matmul_id/f16_publish.loom",
-        "motifs/matmul_id/f16_projection_q4k.loom",
-        "motifs/matmul_id/f16_projection_q6k.loom"
+        "motifs/mul_mat_id_f16_f16_wmma_core.loom"
       ]
     },
     {
       "name": "ggml_mul_mat_id_swiglu_f16_f16_wmma",
       "family": "loom_libs",
       "symbol": "ggml_mul_mat_id_swiglu_f16_f16_wmma",
-      "source": "ops/matmul_id/mul_mat_id_swiglu_f16_f16_wmma.loom",
+      "source": "ops/mul_mat_id_swiglu_f16_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -3643,16 +3707,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/matmul_id/mul_mat_id_swiglu_f16_f16_wmma.loom"
+          "ops/mul_mat_id_swiglu_f16_f16_wmma.loom"
         ],
         "library_sources": [
-          "motifs/matmul_id/f16_pair_schedule.loom",
-          "motifs/matmul_id/f16_pair_accumulate.loom",
-          "motifs/matmul_id/f16_pair_binary_publish.loom",
-          "motifs/matmul_id/f16_projection_q4k.loom",
-          "motifs/matmul_id/f16_projection_q5k.loom",
-          "motifs/matmul_id/f16_projection_q6k.loom",
+          "motifs/mul_mat_id_swiglu_f16_f16_wmma_body.loom",
+          "motifs/mul_mat_id_swiglu_f16_f16_accumulate.loom",
+          "motifs/mul_mat_id_q4k_f16_wmma_projection.loom",
+          "motifs/mul_mat_id_q5k_f16_wmma_projection.loom",
+          "motifs/mul_mat_id_q6k_f16_wmma_projection.loom",
           "motifs/dequant.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -3663,13 +3728,14 @@
         ]
       },
       "compile_dependencies": [
-        "motifs/matmul_id/f16_pair_schedule.loom",
-        "motifs/matmul_id/f16_pair_accumulate.loom",
-        "motifs/matmul_id/f16_pair_binary_publish.loom",
-        "motifs/matmul_id/f16_projection_q4k.loom",
-        "motifs/matmul_id/f16_projection_q5k.loom",
-        "motifs/matmul_id/f16_projection_q6k.loom",
+        "motifs/mul_mat_id_swiglu_f16_f16_wmma_body.loom",
+        "motifs/mul_mat_id_swiglu_f16_f16_accumulate.loom",
+        "motifs/mul_mat_id_q4k_f16_wmma_projection.loom",
+        "motifs/mul_mat_id_q5k_f16_wmma_projection.loom",
+        "motifs/mul_mat_id_q6k_f16_wmma_projection.loom",
         "motifs/dequant.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -3725,7 +3791,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3737,7 +3805,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -3790,7 +3860,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3802,7 +3874,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -3851,7 +3925,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3863,7 +3939,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -3916,7 +3994,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3928,7 +4008,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -3982,7 +4064,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -3995,7 +4079,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -4049,7 +4135,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -4062,7 +4150,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -4122,7 +4212,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -4135,7 +4227,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -4195,7 +4289,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -4208,7 +4304,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -4262,7 +4360,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -4275,7 +4375,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -4329,7 +4431,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -4342,7 +4446,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -4851,7 +4957,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -4863,7 +4971,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -4923,7 +5033,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -4934,7 +5046,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -4997,7 +5111,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -5009,7 +5125,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -5060,7 +5178,9 @@
           "motifs/f32_f16.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/elementwise/binary_apply.loom",
-          "motifs/quantize_q8_1_x4.loom"
+          "motifs/quantize_q8_1_x4.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -5076,7 +5196,9 @@
         "motifs/f32_f16.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/elementwise/binary_apply.loom",
-        "motifs/quantize_q8_1_x4.loom"
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -5129,7 +5251,9 @@
           "motifs/f32_f16.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/elementwise/binary_apply.loom",
-          "motifs/quantize_q8_1_x4.loom"
+          "motifs/quantize_q8_1_x4.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -5145,7 +5269,9 @@
         "motifs/f32_f16.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/elementwise/binary_apply.loom",
-        "motifs/quantize_q8_1_x4.loom"
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -5196,7 +5322,9 @@
           "motifs/f32_f16.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/elementwise/binary_apply.loom",
-          "motifs/quantize_q8_1_x4.loom"
+          "motifs/quantize_q8_1_x4.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -5212,7 +5340,9 @@
         "motifs/f32_f16.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/elementwise/binary_apply.loom",
-        "motifs/quantize_q8_1_x4.loom"
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -5265,7 +5395,9 @@
           "motifs/f32_f16.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/elementwise/binary_apply.loom",
-          "motifs/quantize_q8_1_x4.loom"
+          "motifs/quantize_q8_1_x4.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -5281,7 +5413,9 @@
         "motifs/f32_f16.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/elementwise/binary_apply.loom",
-        "motifs/quantize_q8_1_x4.loom"
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -5332,7 +5466,9 @@
           "motifs/f32_f16.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
           "motifs/elementwise/binary_apply.loom",
-          "motifs/quantize_q8_1_x4.loom"
+          "motifs/quantize_q8_1_x4.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -5348,7 +5484,9 @@
         "motifs/f32_f16.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
         "motifs/elementwise/binary_apply.loom",
-        "motifs/quantize_q8_1_x4.loom"
+        "motifs/quantize_q8_1_x4.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -5396,7 +5534,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -5409,7 +5549,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -6235,14 +6377,30 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
       ]
     },
     {
@@ -6282,14 +6440,30 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
       ]
     },
     {
@@ -6358,14 +6532,30 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
       ]
     },
     {
@@ -6399,14 +6589,30 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
       ]
     },
     {
@@ -6446,14 +6652,30 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
       ]
     },
     {
@@ -6476,8 +6698,8 @@
       "bindings": [
         "partial_values",
         "partial_ids",
-        "selected_outputs",
-        "selected_values"
+        "candidate_output",
+        "value_output"
       ],
       "binding_access": [
         "read",
@@ -6495,14 +6717,30 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
       ]
     },
     {
@@ -6538,14 +6776,30 @@
           "motifs/q6_k_f16.loom",
           "motifs/dequant.loom",
           "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/q6_k_f16.loom",
         "motifs/dequant.loom",
         "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
       ]
     },
     {
@@ -6607,7 +6861,7 @@
       "name": "ggml_flash_attention_f32_f16_wmma",
       "family": "loom_libs",
       "symbol": "ggml_flash_attention_f32_f16_wmma",
-      "source": "ops/flash_attention/prefill_f32_f16_wmma.loom",
+      "source": "ops/flash_attention_f32_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "query_token_count",
@@ -6648,21 +6902,11 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/flash_attention/prefill_f32_f16_wmma.loom"
+          "ops/flash_attention_f32_f16_wmma.loom"
         ],
-        "library_sources": [
-          "motifs/flash_attention/qk_block_wmma.loom",
-          "motifs/flash_attention/online_softmax.loom",
-          "motifs/flash_attention/pv_block_wmma.loom",
-          "motifs/flash_attention/publish_f32.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/flash_attention/qk_block_wmma.loom",
-        "motifs/flash_attention/online_softmax.loom",
-        "motifs/flash_attention/pv_block_wmma.loom",
-        "motifs/flash_attention/publish_f32.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_flash_attention_f32_f16_wmma_publish_f16",
@@ -6731,7 +6975,7 @@
       "name": "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8",
       "family": "loom_libs",
       "symbol": "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8",
-      "source": "ops/flash_attention/decode_split_f32_f16_wmma_next_q8.loom",
+      "source": "ops/flash_attention_decode_split_f32_f16_wmma.loom",
       "workload_parameters": [
         {
           "name": "key_value_token_count",
@@ -6772,23 +7016,13 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/flash_attention/decode_split_f32_f16_wmma_next_q8.loom"
+          "ops/flash_attention_decode_split_f32_f16_wmma.loom"
         ],
         "library_sources": [
-          "motifs/flash_attention/decode_partials.loom",
-          "motifs/flash_attention/decode_reduce.loom",
-          "motifs/flash_attention/publish_f32.loom",
-          "motifs/flash_attention/publish_q8.loom",
-          "motifs/flash_attention/completion_counter_reduce.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/flash_attention/decode_partials.loom",
-        "motifs/flash_attention/decode_reduce.loom",
-        "motifs/flash_attention/publish_f32.loom",
-        "motifs/flash_attention/publish_q8.loom",
-        "motifs/flash_attention/completion_counter_reduce.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
     },
@@ -7000,7 +7234,7 @@
       "name": "ggml_get_rows_f32",
       "family": "loom_libs",
       "symbol": "ggml_get_rows_f32",
-      "source": "ops/rows/get_rows_f32.loom",
+      "source": "ops/get_rows_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -7043,11 +7277,12 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/rows/get_rows_f32.loom"
+          "ops/get_rows_f32.loom"
         ],
         "library_sources": [
-          "motifs/rows/get_rows_decode.loom",
           "motifs/dequant.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/publish_f32.loom",
           "motifs/quantize_q8_1_x4.loom",
           "motifs/q4_k_f16.loom",
@@ -7060,8 +7295,9 @@
         ]
       },
       "compile_dependencies": [
-        "motifs/rows/get_rows_decode.loom",
         "motifs/dequant.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
         "motifs/q4_k_f16.loom",
@@ -7135,7 +7371,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -7149,7 +7387,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -7275,7 +7515,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -7289,14 +7531,16 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
       "name": "ggml_get_rows_f32_next",
       "family": "loom_libs",
       "symbol": "ggml_get_rows_f32_next",
-      "source": "ops/rows/get_rows_next_f32.loom",
+      "source": "ops/get_rows_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -7341,11 +7585,12 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/rows/get_rows_next_f32.loom"
+          "ops/get_rows_f32.loom"
         ],
         "library_sources": [
-          "motifs/rows/get_rows_decode.loom",
           "motifs/dequant.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
           "motifs/publish_f32.loom",
           "motifs/quantize_q8_1_x4.loom",
           "motifs/q4_k_f16.loom",
@@ -7358,8 +7603,9 @@
         ]
       },
       "compile_dependencies": [
-        "motifs/rows/get_rows_decode.loom",
         "motifs/dequant.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
         "motifs/q4_k_f16.loom",
@@ -7375,24 +7621,16 @@
       "name": "ggml_rope_f32",
       "family": "loom_libs",
       "symbol": "ggml_rope_f32",
-      "source": "ops/rope/rope_f32.loom",
+      "source": "ops/rope_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
-          "type": "index"
-        },
-        {
-          "name": "input_span",
           "type": "index"
         }
       ],
       "launch_parameters": [
         {
           "name": "token_count",
-          "type": "index"
-        },
-        {
-          "name": "input_span",
           "type": "index"
         }
       ],
@@ -7414,14 +7652,14 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/rope/rope_f32.loom"
+          "ops/rope_f32.loom"
         ],
         "library_sources": [
-          "motifs/rope/rope_f32.loom"
+          "motifs/rope_f32.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/rope/rope_f32.loom"
+        "motifs/rope_f32.loom"
       ]
     },
     {
@@ -7565,7 +7803,7 @@
       "name": "ggml_set_rows",
       "family": "loom_libs",
       "symbol": "ggml_set_rows",
-      "source": "ops/rows/set_rows.loom",
+      "source": "ops/set_rows.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -7608,21 +7846,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/rows/set_rows.loom"
+          "ops/set_rows.loom"
         ],
-        "library_sources": [
-          "motifs/rows/cache_publish.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/rows/cache_publish.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "ggml_rope_set_rows_f32",
       "family": "loom_libs",
       "symbol": "ggml_rope_set_rows_f32",
-      "source": "ops/rope/rope_set_rows_f32.loom",
+      "source": "ops/rope_set_rows_f32.loom",
       "workload_parameters": [
         {
           "name": "token_count",
@@ -7663,43 +7897,23 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/rope/rope_set_rows_f32.loom"
+          "ops/rope_set_rows_f32.loom"
         ],
         "library_sources": [
-          "motifs/rope/rope_f32.loom",
-          "motifs/rows/cache_publish.loom"
+          "motifs/rope_f32.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/rope/rope_f32.loom",
-        "motifs/rows/cache_publish.loom"
+        "motifs/rope_f32.loom"
       ]
     },
     {
       "name": "llm_ssm_conv_f32",
       "family": "loom_libs",
       "symbol": "llm_ssm_conv_f32",
-      "source": "ops/ssm_conv/generic_f32.loom",
-      "workload_parameters": [
-        {
-          "name": "n_t",
-          "type": "index"
-        },
-        {
-          "name": "n_s",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "n_t",
-          "type": "index"
-        },
-        {
-          "name": "n_s",
-          "type": "index"
-        }
-      ],
+      "source": "ops/ssm_conv_generic_f32.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
       "bindings": [
         "window",
         "filter",
@@ -7714,16 +7928,14 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/ssm_conv/generic_f32.loom"
+          "ops/ssm_conv_generic_f32.loom"
         ],
         "library_sources": [
-          "motifs/ssm_conv/generic_apply.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/elementwise/binary_apply.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/ssm_conv/generic_apply.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/elementwise/binary_apply.loom"
       ]
@@ -7763,27 +7975,9 @@
       "name": "llm_ssm_conv_binary_f32",
       "family": "loom_libs",
       "symbol": "llm_ssm_conv_binary_f32",
-      "source": "ops/ssm_conv/generic_binary_f32.loom",
-      "workload_parameters": [
-        {
-          "name": "n_t",
-          "type": "index"
-        },
-        {
-          "name": "n_s",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "n_t",
-          "type": "index"
-        },
-        {
-          "name": "n_s",
-          "type": "index"
-        }
-      ],
+      "source": "ops/ssm_conv_generic_f32.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
       "bindings": [
         "window",
         "filter",
@@ -7800,16 +7994,14 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/ssm_conv/generic_binary_f32.loom"
+          "ops/ssm_conv_generic_f32.loom"
         ],
         "library_sources": [
-          "motifs/ssm_conv/generic_apply.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/elementwise/binary_apply.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/ssm_conv/generic_apply.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/elementwise/binary_apply.loom"
       ]
@@ -7818,7 +8010,7 @@
       "name": "llm_ssm_conv_snapshot_window_tail_f32",
       "family": "loom_libs",
       "symbol": "llm_ssm_conv_snapshot_window_tail_f32",
-      "source": "ops/ssm_conv/snapshot_window_tail_f32.loom",
+      "source": "ops/ssm_conv_f32.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -7837,21 +8029,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/ssm_conv/snapshot_window_tail_f32.loom"
+          "ops/ssm_conv_f32.loom"
         ],
-        "library_sources": [
-          "motifs/ssm_conv/snapshot_window_tail.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/ssm_conv/snapshot_window_tail.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "llm_ssm_conv_dconv4_silu_prefill_finish_f32",
       "family": "loom_libs",
       "symbol": "llm_ssm_conv_dconv4_silu_prefill_finish_f32",
-      "source": "ops/ssm_conv/prefill_finish_f32.loom",
+      "source": "ops/ssm_conv_generic_f32.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -7872,23 +8060,23 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/ssm_conv/prefill_finish_f32.loom"
+          "ops/ssm_conv_generic_f32.loom"
         ],
         "library_sources": [
-          "motifs/ssm_conv/prefill_finish.loom",
-          "motifs/ssm_conv/dconv4_silu.loom"
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/elementwise/binary_apply.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/ssm_conv/prefill_finish.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/elementwise/binary_apply.loom"
       ]
     },
     {
       "name": "llm_ssm_conv_dconv4_silu_prefill_512_wg1024",
       "family": "loom_libs",
       "symbol": "llm_ssm_conv_dconv4_silu_prefill_512_wg1024",
-      "source": "ops/ssm_conv/prefill_dconv4_silu_512_wg1024.loom",
+      "source": "ops/ssm_conv_f32.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -7907,21 +8095,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/ssm_conv/prefill_dconv4_silu_512_wg1024.loom"
+          "ops/ssm_conv_f32.loom"
         ],
-        "library_sources": [
-          "motifs/ssm_conv/prefill_window.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/ssm_conv/prefill_window.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "llm_ssm_conv_dconv4_silu_decode_f32",
       "family": "loom_libs",
       "symbol": "llm_ssm_conv_dconv4_silu_decode_f32",
-      "source": "ops/ssm_conv/decode_dconv4_silu_f32.loom",
+      "source": "ops/ssm_conv_f32.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -7942,27 +8126,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/ssm_conv/decode_dconv4_silu_f32.loom"
+          "ops/ssm_conv_f32.loom"
         ],
-        "library_sources": [
-          "motifs/ssm_conv/state_materialize.loom",
-          "motifs/ssm_conv/rollback_store.loom",
-          "motifs/ssm_conv/decode_update.loom",
-          "motifs/ssm_conv/dconv4_silu.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "llm_ssm_conv_dconv4_silu_rollback_f32",
       "family": "loom_libs",
       "symbol": "llm_ssm_conv_dconv4_silu_rollback_f32",
-      "source": "ops/ssm_conv/rollback_dconv4_silu_f32.loom",
+      "source": "ops/ssm_conv_f32.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -7991,27 +8165,17 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/ssm_conv/rollback_dconv4_silu_f32.loom"
+          "ops/ssm_conv_f32.loom"
         ],
-        "library_sources": [
-          "motifs/ssm_conv/state_materialize.loom",
-          "motifs/ssm_conv/rollback_store.loom",
-          "motifs/ssm_conv/decode_update.loom",
-          "motifs/ssm_conv/dconv4_silu.loom"
-        ]
+        "library_sources": []
       },
-      "compile_dependencies": [
-        "motifs/ssm_conv/state_materialize.loom",
-        "motifs/ssm_conv/rollback_store.loom",
-        "motifs/ssm_conv/decode_update.loom",
-        "motifs/ssm_conv/dconv4_silu.loom"
-      ]
+      "compile_dependencies": []
     },
     {
       "name": "llm_gated_delta_net_f32_wmma_head128",
       "family": "loom_libs",
       "symbol": "llm_gated_delta_net_f32_wmma_head128",
-      "source": "ops/gated_delta_net/head128_scan_f32_wmma.loom",
+      "source": "ops/gated_delta_net_f32_wmma.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -8036,34 +8200,16 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/gated_delta_net/head128_scan_f32_wmma.loom"
+          "ops/gated_delta_net_f32_wmma.loom"
         ],
         "library_sources": [
-          "motifs/gated_delta_net/scan_state_head128.loom",
-          "motifs/gated_delta_net/projection_epilogue.loom",
-          "motifs/gated_delta_net/rmsnorm_gate.loom",
-          "motifs/gated_delta_net/inplace_state_head128.loom",
-          "motifs/gated_delta_net/snapshot_load.loom",
-          "motifs/gated_delta_net/snapshot_publish.loom",
-          "motifs/gated_delta_net/selected_snapshot_load.loom",
-          "motifs/gated_delta_net/publish_f32.loom",
-          "motifs/gated_delta_net/publish_q8.loom",
-          "motifs/normalization/rmsnorm.loom",
+          "motifs/rmsnorm_f32.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/gated_delta_net/scan_state_head128.loom",
-        "motifs/gated_delta_net/projection_epilogue.loom",
-        "motifs/gated_delta_net/rmsnorm_gate.loom",
-        "motifs/gated_delta_net/inplace_state_head128.loom",
-        "motifs/gated_delta_net/snapshot_load.loom",
-        "motifs/gated_delta_net/snapshot_publish.loom",
-        "motifs/gated_delta_net/selected_snapshot_load.loom",
-        "motifs/gated_delta_net/publish_f32.loom",
-        "motifs/gated_delta_net/publish_q8.loom",
-        "motifs/normalization/rmsnorm.loom",
+        "motifs/rmsnorm_f32.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
@@ -8072,7 +8218,7 @@
       "name": "llm_gated_delta_net_f32_wmma_head128_rmsnorm_gate",
       "family": "loom_libs",
       "symbol": "llm_gated_delta_net_f32_wmma_head128_rmsnorm_gate",
-      "source": "ops/gated_delta_net/head128_scan_rmsnorm_gate_f32_wmma.loom",
+      "source": "ops/gated_delta_net_f32_wmma.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -8105,34 +8251,16 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/gated_delta_net/head128_scan_rmsnorm_gate_f32_wmma.loom"
+          "ops/gated_delta_net_f32_wmma.loom"
         ],
         "library_sources": [
-          "motifs/gated_delta_net/scan_state_head128.loom",
-          "motifs/gated_delta_net/projection_epilogue.loom",
-          "motifs/gated_delta_net/rmsnorm_gate.loom",
-          "motifs/gated_delta_net/inplace_state_head128.loom",
-          "motifs/gated_delta_net/snapshot_load.loom",
-          "motifs/gated_delta_net/snapshot_publish.loom",
-          "motifs/gated_delta_net/selected_snapshot_load.loom",
-          "motifs/gated_delta_net/publish_f32.loom",
-          "motifs/gated_delta_net/publish_q8.loom",
-          "motifs/normalization/rmsnorm.loom",
+          "motifs/rmsnorm_f32.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/gated_delta_net/scan_state_head128.loom",
-        "motifs/gated_delta_net/projection_epilogue.loom",
-        "motifs/gated_delta_net/rmsnorm_gate.loom",
-        "motifs/gated_delta_net/inplace_state_head128.loom",
-        "motifs/gated_delta_net/snapshot_load.loom",
-        "motifs/gated_delta_net/snapshot_publish.loom",
-        "motifs/gated_delta_net/selected_snapshot_load.loom",
-        "motifs/gated_delta_net/publish_f32.loom",
-        "motifs/gated_delta_net/publish_q8.loom",
-        "motifs/normalization/rmsnorm.loom",
+        "motifs/rmsnorm_f32.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
@@ -8141,7 +8269,7 @@
       "name": "llm_gated_delta_net_f32_wmma_head128_projection_epilogue",
       "family": "loom_libs",
       "symbol": "llm_gated_delta_net_f32_wmma_head128_projection_epilogue",
-      "source": "ops/gated_delta_net/head128_scan_projection_epilogue_f32_wmma.loom",
+      "source": "ops/gated_delta_net_f32_wmma.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -8170,34 +8298,16 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/gated_delta_net/head128_scan_projection_epilogue_f32_wmma.loom"
+          "ops/gated_delta_net_f32_wmma.loom"
         ],
         "library_sources": [
-          "motifs/gated_delta_net/scan_state_head128.loom",
-          "motifs/gated_delta_net/projection_epilogue.loom",
-          "motifs/gated_delta_net/rmsnorm_gate.loom",
-          "motifs/gated_delta_net/inplace_state_head128.loom",
-          "motifs/gated_delta_net/snapshot_load.loom",
-          "motifs/gated_delta_net/snapshot_publish.loom",
-          "motifs/gated_delta_net/selected_snapshot_load.loom",
-          "motifs/gated_delta_net/publish_f32.loom",
-          "motifs/gated_delta_net/publish_q8.loom",
-          "motifs/normalization/rmsnorm.loom",
+          "motifs/rmsnorm_f32.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/gated_delta_net/scan_state_head128.loom",
-        "motifs/gated_delta_net/projection_epilogue.loom",
-        "motifs/gated_delta_net/rmsnorm_gate.loom",
-        "motifs/gated_delta_net/inplace_state_head128.loom",
-        "motifs/gated_delta_net/snapshot_load.loom",
-        "motifs/gated_delta_net/snapshot_publish.loom",
-        "motifs/gated_delta_net/selected_snapshot_load.loom",
-        "motifs/gated_delta_net/publish_f32.loom",
-        "motifs/gated_delta_net/publish_q8.loom",
-        "motifs/normalization/rmsnorm.loom",
+        "motifs/rmsnorm_f32.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
@@ -8206,7 +8316,7 @@
       "name": "llm_gated_delta_net_f32_wmma_head128_inplace",
       "family": "loom_libs",
       "symbol": "llm_gated_delta_net_f32_wmma_head128_inplace",
-      "source": "ops/gated_delta_net/head128_inplace_f32_wmma.loom",
+      "source": "ops/gated_delta_net_f32_wmma.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -8231,34 +8341,16 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/gated_delta_net/head128_inplace_f32_wmma.loom"
+          "ops/gated_delta_net_f32_wmma.loom"
         ],
         "library_sources": [
-          "motifs/gated_delta_net/scan_state_head128.loom",
-          "motifs/gated_delta_net/projection_epilogue.loom",
-          "motifs/gated_delta_net/rmsnorm_gate.loom",
-          "motifs/gated_delta_net/inplace_state_head128.loom",
-          "motifs/gated_delta_net/snapshot_load.loom",
-          "motifs/gated_delta_net/snapshot_publish.loom",
-          "motifs/gated_delta_net/selected_snapshot_load.loom",
-          "motifs/gated_delta_net/publish_f32.loom",
-          "motifs/gated_delta_net/publish_q8.loom",
-          "motifs/normalization/rmsnorm.loom",
+          "motifs/rmsnorm_f32.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/gated_delta_net/scan_state_head128.loom",
-        "motifs/gated_delta_net/projection_epilogue.loom",
-        "motifs/gated_delta_net/rmsnorm_gate.loom",
-        "motifs/gated_delta_net/inplace_state_head128.loom",
-        "motifs/gated_delta_net/snapshot_load.loom",
-        "motifs/gated_delta_net/snapshot_publish.loom",
-        "motifs/gated_delta_net/selected_snapshot_load.loom",
-        "motifs/gated_delta_net/publish_f32.loom",
-        "motifs/gated_delta_net/publish_q8.loom",
-        "motifs/normalization/rmsnorm.loom",
+        "motifs/rmsnorm_f32.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
@@ -8267,7 +8359,7 @@
       "name": "llm_gated_delta_net_f32_wmma_head128_inplace_projection_epilogue",
       "family": "loom_libs",
       "symbol": "llm_gated_delta_net_f32_wmma_head128_inplace_projection_epilogue",
-      "source": "ops/gated_delta_net/head128_inplace_projection_epilogue_f32_wmma.loom",
+      "source": "ops/gated_delta_net_f32_wmma.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -8296,34 +8388,16 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/gated_delta_net/head128_inplace_projection_epilogue_f32_wmma.loom"
+          "ops/gated_delta_net_f32_wmma.loom"
         ],
         "library_sources": [
-          "motifs/gated_delta_net/scan_state_head128.loom",
-          "motifs/gated_delta_net/projection_epilogue.loom",
-          "motifs/gated_delta_net/rmsnorm_gate.loom",
-          "motifs/gated_delta_net/inplace_state_head128.loom",
-          "motifs/gated_delta_net/snapshot_load.loom",
-          "motifs/gated_delta_net/snapshot_publish.loom",
-          "motifs/gated_delta_net/selected_snapshot_load.loom",
-          "motifs/gated_delta_net/publish_f32.loom",
-          "motifs/gated_delta_net/publish_q8.loom",
-          "motifs/normalization/rmsnorm.loom",
+          "motifs/rmsnorm_f32.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/gated_delta_net/scan_state_head128.loom",
-        "motifs/gated_delta_net/projection_epilogue.loom",
-        "motifs/gated_delta_net/rmsnorm_gate.loom",
-        "motifs/gated_delta_net/inplace_state_head128.loom",
-        "motifs/gated_delta_net/snapshot_load.loom",
-        "motifs/gated_delta_net/snapshot_publish.loom",
-        "motifs/gated_delta_net/selected_snapshot_load.loom",
-        "motifs/gated_delta_net/publish_f32.loom",
-        "motifs/gated_delta_net/publish_q8.loom",
-        "motifs/normalization/rmsnorm.loom",
+        "motifs/rmsnorm_f32.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
@@ -8332,7 +8406,7 @@
       "name": "llm_gated_delta_net_f32_wmma_head128_snapshot",
       "family": "loom_libs",
       "symbol": "llm_gated_delta_net_f32_wmma_head128_snapshot",
-      "source": "ops/gated_delta_net/head128_snapshot_f32_wmma.loom",
+      "source": "ops/gated_delta_net_f32_wmma.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -8359,34 +8433,16 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/gated_delta_net/head128_snapshot_f32_wmma.loom"
+          "ops/gated_delta_net_f32_wmma.loom"
         ],
         "library_sources": [
-          "motifs/gated_delta_net/scan_state_head128.loom",
-          "motifs/gated_delta_net/projection_epilogue.loom",
-          "motifs/gated_delta_net/rmsnorm_gate.loom",
-          "motifs/gated_delta_net/inplace_state_head128.loom",
-          "motifs/gated_delta_net/snapshot_load.loom",
-          "motifs/gated_delta_net/snapshot_publish.loom",
-          "motifs/gated_delta_net/selected_snapshot_load.loom",
-          "motifs/gated_delta_net/publish_f32.loom",
-          "motifs/gated_delta_net/publish_q8.loom",
-          "motifs/normalization/rmsnorm.loom",
+          "motifs/rmsnorm_f32.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/gated_delta_net/scan_state_head128.loom",
-        "motifs/gated_delta_net/projection_epilogue.loom",
-        "motifs/gated_delta_net/rmsnorm_gate.loom",
-        "motifs/gated_delta_net/inplace_state_head128.loom",
-        "motifs/gated_delta_net/snapshot_load.loom",
-        "motifs/gated_delta_net/snapshot_publish.loom",
-        "motifs/gated_delta_net/selected_snapshot_load.loom",
-        "motifs/gated_delta_net/publish_f32.loom",
-        "motifs/gated_delta_net/publish_q8.loom",
-        "motifs/normalization/rmsnorm.loom",
+        "motifs/rmsnorm_f32.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
@@ -8395,7 +8451,7 @@
       "name": "llm_gated_delta_net_f32_wmma_head128_snapshot_projection_epilogue",
       "family": "loom_libs",
       "symbol": "llm_gated_delta_net_f32_wmma_head128_snapshot_projection_epilogue",
-      "source": "ops/gated_delta_net/head128_snapshot_projection_epilogue_f32_wmma.loom",
+      "source": "ops/gated_delta_net_f32_wmma.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -8426,34 +8482,16 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/gated_delta_net/head128_snapshot_projection_epilogue_f32_wmma.loom"
+          "ops/gated_delta_net_f32_wmma.loom"
         ],
         "library_sources": [
-          "motifs/gated_delta_net/scan_state_head128.loom",
-          "motifs/gated_delta_net/projection_epilogue.loom",
-          "motifs/gated_delta_net/rmsnorm_gate.loom",
-          "motifs/gated_delta_net/inplace_state_head128.loom",
-          "motifs/gated_delta_net/snapshot_load.loom",
-          "motifs/gated_delta_net/snapshot_publish.loom",
-          "motifs/gated_delta_net/selected_snapshot_load.loom",
-          "motifs/gated_delta_net/publish_f32.loom",
-          "motifs/gated_delta_net/publish_q8.loom",
-          "motifs/normalization/rmsnorm.loom",
+          "motifs/rmsnorm_f32.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/gated_delta_net/scan_state_head128.loom",
-        "motifs/gated_delta_net/projection_epilogue.loom",
-        "motifs/gated_delta_net/rmsnorm_gate.loom",
-        "motifs/gated_delta_net/inplace_state_head128.loom",
-        "motifs/gated_delta_net/snapshot_load.loom",
-        "motifs/gated_delta_net/snapshot_publish.loom",
-        "motifs/gated_delta_net/selected_snapshot_load.loom",
-        "motifs/gated_delta_net/publish_f32.loom",
-        "motifs/gated_delta_net/publish_q8.loom",
-        "motifs/normalization/rmsnorm.loom",
+        "motifs/rmsnorm_f32.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
@@ -8462,7 +8500,7 @@
       "name": "llm_gated_delta_net_f32_wmma_head128_selected_snapshot_projection_epilogue",
       "family": "loom_libs",
       "symbol": "llm_gated_delta_net_f32_wmma_head128_selected_snapshot_projection_epilogue",
-      "source": "ops/gated_delta_net/head128_selected_snapshot_projection_epilogue_f32_wmma.loom",
+      "source": "ops/gated_delta_net_f32_wmma.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -8495,34 +8533,16 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/gated_delta_net/head128_selected_snapshot_projection_epilogue_f32_wmma.loom"
+          "ops/gated_delta_net_f32_wmma.loom"
         ],
         "library_sources": [
-          "motifs/gated_delta_net/scan_state_head128.loom",
-          "motifs/gated_delta_net/projection_epilogue.loom",
-          "motifs/gated_delta_net/rmsnorm_gate.loom",
-          "motifs/gated_delta_net/inplace_state_head128.loom",
-          "motifs/gated_delta_net/snapshot_load.loom",
-          "motifs/gated_delta_net/snapshot_publish.loom",
-          "motifs/gated_delta_net/selected_snapshot_load.loom",
-          "motifs/gated_delta_net/publish_f32.loom",
-          "motifs/gated_delta_net/publish_q8.loom",
-          "motifs/normalization/rmsnorm.loom",
+          "motifs/rmsnorm_f32.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/gated_delta_net/scan_state_head128.loom",
-        "motifs/gated_delta_net/projection_epilogue.loom",
-        "motifs/gated_delta_net/rmsnorm_gate.loom",
-        "motifs/gated_delta_net/inplace_state_head128.loom",
-        "motifs/gated_delta_net/snapshot_load.loom",
-        "motifs/gated_delta_net/snapshot_publish.loom",
-        "motifs/gated_delta_net/selected_snapshot_load.loom",
-        "motifs/gated_delta_net/publish_f32.loom",
-        "motifs/gated_delta_net/publish_q8.loom",
-        "motifs/normalization/rmsnorm.loom",
+        "motifs/rmsnorm_f32.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
@@ -8531,7 +8551,7 @@
       "name": "llm_gated_delta_net_f32_wmma_head128_selected_snapshot_projection_rms_gate_q8",
       "family": "loom_libs",
       "symbol": "llm_gated_delta_net_f32_wmma_head128_selected_snapshot_projection_rms_gate_q8",
-      "source": "ops/gated_delta_net/head128_selected_snapshot_projection_rms_gate_publish_q8.loom",
+      "source": "ops/gated_delta_net_f32_wmma.loom",
       "workload_parameters": [],
       "launch_parameters": [],
       "bindings": [
@@ -8570,34 +8590,16 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/gated_delta_net/head128_selected_snapshot_projection_rms_gate_publish_q8.loom"
+          "ops/gated_delta_net_f32_wmma.loom"
         ],
         "library_sources": [
-          "motifs/gated_delta_net/scan_state_head128.loom",
-          "motifs/gated_delta_net/projection_epilogue.loom",
-          "motifs/gated_delta_net/rmsnorm_gate.loom",
-          "motifs/gated_delta_net/inplace_state_head128.loom",
-          "motifs/gated_delta_net/snapshot_load.loom",
-          "motifs/gated_delta_net/snapshot_publish.loom",
-          "motifs/gated_delta_net/selected_snapshot_load.loom",
-          "motifs/gated_delta_net/publish_f32.loom",
-          "motifs/gated_delta_net/publish_q8.loom",
-          "motifs/normalization/rmsnorm.loom",
+          "motifs/rmsnorm_f32.loom",
           "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/gated_delta_net/scan_state_head128.loom",
-        "motifs/gated_delta_net/projection_epilogue.loom",
-        "motifs/gated_delta_net/rmsnorm_gate.loom",
-        "motifs/gated_delta_net/inplace_state_head128.loom",
-        "motifs/gated_delta_net/snapshot_load.loom",
-        "motifs/gated_delta_net/snapshot_publish.loom",
-        "motifs/gated_delta_net/selected_snapshot_load.loom",
-        "motifs/gated_delta_net/publish_f32.loom",
-        "motifs/gated_delta_net/publish_q8.loom",
-        "motifs/normalization/rmsnorm.loom",
+        "motifs/rmsnorm_f32.loom",
         "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
@@ -8606,19 +8608,9 @@
       "name": "llm_gated_delta_net_projection_epilogue_f32",
       "family": "loom_libs",
       "symbol": "llm_gated_delta_net_projection_epilogue_f32",
-      "source": "ops/gated_delta_net/projection_epilogue_f32.loom",
-      "workload_parameters": [
-        {
-          "name": "element_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "element_count",
-          "type": "index"
-        }
-      ],
+      "source": "ops/gated_delta_net_f32_wmma.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
       "bindings": [
         "alpha_raw",
         "beta_raw",
@@ -8639,16 +8631,18 @@
       "compile_recipe": {
         "mode": "direct",
         "primary_sources": [
-          "ops/gated_delta_net/projection_epilogue_f32.loom"
+          "ops/gated_delta_net_f32_wmma.loom"
         ],
         "library_sources": [
-          "motifs/gated_delta_net/projection_epilogue.loom",
-          "motifs/gated_delta_net/publish_f32.loom"
+          "motifs/rmsnorm_f32.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/gated_delta_net/projection_epilogue.loom",
-        "motifs/gated_delta_net/publish_f32.loom"
+        "motifs/rmsnorm_f32.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/quantize_q8_1_x4.loom"
       ]
     },
     {
@@ -8696,7 +8690,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -8711,7 +8707,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -8763,7 +8761,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -8778,7 +8778,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -8827,7 +8829,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -8843,7 +8847,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -8892,7 +8898,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -8908,7 +8916,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -8957,7 +8967,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -8973,7 +8985,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9024,7 +9038,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9040,7 +9056,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9093,7 +9111,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9109,7 +9129,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9162,7 +9184,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9178,7 +9202,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9231,7 +9257,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9247,7 +9275,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9298,7 +9328,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9314,7 +9346,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9365,7 +9399,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9381,7 +9417,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9436,7 +9474,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9452,7 +9492,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9507,7 +9549,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9523,7 +9567,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9575,7 +9621,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9590,7 +9638,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9640,7 +9690,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9655,7 +9707,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9707,7 +9761,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9722,7 +9778,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9774,7 +9832,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9789,7 +9849,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9839,7 +9901,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9854,7 +9918,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -9904,7 +9970,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/dequant_prism.loom"
         ]
       },
       "compile_dependencies": [
@@ -9919,7 +9987,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/dequant_prism.loom"
       ]
     },
     {
@@ -10024,7 +10094,9 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom"
         ]
       },
       "compile_dependencies": [
@@ -10041,7 +10113,9 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom"
       ]
     },
     {
@@ -10127,13 +10201,13 @@
         "library_sources": [
           "motifs/rmsnorm_f32.loom",
           "motifs/quantize_q8_1_x4.loom",
-          "motifs/binary_f32_apply.loom"
+          "motifs/elementwise/binary_apply.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/rmsnorm_f32.loom",
         "motifs/quantize_q8_1_x4.loom",
-        "motifs/binary_f32_apply.loom"
+        "motifs/elementwise/binary_apply.loom"
       ]
     },
     {
@@ -10175,15 +10249,15 @@
         ],
         "library_sources": [
           "motifs/rmsnorm_f32.loom",
-          "motifs/binary_f32_apply.loom",
-          "motifs/unary_f32_apply.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/rmsnorm_f32.loom",
-        "motifs/binary_f32_apply.loom",
-        "motifs/unary_f32_apply.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
     },
@@ -10226,16 +10300,87 @@
         ],
         "library_sources": [
           "motifs/rmsnorm_f32.loom",
-          "motifs/binary_f32_apply.loom",
-          "motifs/unary_f32_apply.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/elementwise/unary_apply.loom",
           "motifs/quantize_q8_1_x4.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/rmsnorm_f32.loom",
-        "motifs/binary_f32_apply.loom",
-        "motifs/unary_f32_apply.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/elementwise/unary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_f32_f32_narrow_split_k4",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_f32_f32_narrow_split_k4",
+      "source": "ops/mul_mat_f32_f32_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "partial",
+        "output",
+        "completion_counters"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write",
+        "write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/mul_mat_f32_f32_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/mul_mat_f32_f32_wmma_core.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/mul_mat_quantized_f16_prefill.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/mul_mat_f32_f32_wmma_core.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/mul_mat_quantized_f16_prefill.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom"
       ]
     },
     {
@@ -10284,7 +10429,7 @@
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
           "motifs/dequant_1bit.loom",
-          "motifs/unary_f32_apply.loom",
+          "motifs/elementwise/unary_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -10301,7 +10446,7 @@
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
         "motifs/dequant_1bit.loom",
-        "motifs/unary_f32_apply.loom",
+        "motifs/elementwise/unary_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -10359,7 +10504,7 @@
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
           "motifs/dequant_1bit.loom",
-          "motifs/unary_f32_apply.loom",
+          "motifs/elementwise/unary_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
@@ -10376,7 +10521,7 @@
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
         "motifs/dequant_1bit.loom",
-        "motifs/unary_f32_apply.loom",
+        "motifs/elementwise/unary_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
@@ -10427,14 +10572,15 @@
           "motifs/dequant.loom",
           "motifs/dequant_prism.loom",
           "motifs/dequant_1bit.loom",
-          "motifs/unary_f32_apply.loom",
+          "motifs/elementwise/unary_apply.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
           "motifs/q8_0_f16.loom",
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/rope_f32.loom"
         ]
       },
       "compile_dependencies": [
@@ -10443,14 +10589,15 @@
         "motifs/dequant.loom",
         "motifs/dequant_prism.loom",
         "motifs/dequant_1bit.loom",
-        "motifs/unary_f32_apply.loom",
+        "motifs/elementwise/unary_apply.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
         "motifs/q8_0_f16.loom",
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/rope_f32.loom"
       ]
     },
     {
@@ -10719,6 +10866,83 @@
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_swiglu_f32_f32_wmma",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_swiglu_f32_f32_wmma",
+      "source": "ops/mul_mat_id_swiglu_f32_f32_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "expert_table",
+        "partition_table",
+        "gate_weight",
+        "up_weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/mul_mat_id_swiglu_f32_f32_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/f16_pair_schedule.loom",
+          "motifs/matmul_id/f16_pair_accumulate.loom",
+          "motifs/matmul_id/f16_pair_binary_publish.loom",
+          "motifs/matmul_id/f16_projection_q4k.loom",
+          "motifs/matmul_id/f16_projection_q5k.loom",
+          "motifs/matmul_id/f16_projection_q6k.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/f16_pair_schedule.loom",
+        "motifs/matmul_id/f16_pair_accumulate.loom",
+        "motifs/matmul_id/f16_pair_binary_publish.loom",
+        "motifs/matmul_id/f16_projection_q4k.loom",
+        "motifs/matmul_id/f16_projection_q5k.loom",
+        "motifs/matmul_id/f16_projection_q6k.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom"
       ]
     },
     {
@@ -11208,6 +11432,270 @@
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_q6_k_f16_wmma_prefill_from_packed",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_q6_k_f16_wmma_prefill_from_packed",
+      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/q6_k_f16.loom",
+          "motifs/dequant.loom",
+          "motifs/mul_mat_quantized_f16_prefill.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/q6_k_f16.loom",
+        "motifs/dequant.loom",
+        "motifs/mul_mat_quantized_f16_prefill.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_q6_k_packed_token1_f16_wmma",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_q6_k_packed_token1_f16_wmma",
+      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/q6_k_f16.loom",
+          "motifs/dequant.loom",
+          "motifs/mul_mat_quantized_f16_prefill.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/q6_k_f16.loom",
+        "motifs/dequant.loom",
+        "motifs/mul_mat_quantized_f16_prefill.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_q6_k_i8_prepacked_f16_wmma",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_q6_k_i8_prepacked_f16_wmma",
+      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/q6_k_f16.loom",
+          "motifs/dequant.loom",
+          "motifs/mul_mat_quantized_f16_prefill.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/q6_k_f16.loom",
+        "motifs/dequant.loom",
+        "motifs/mul_mat_quantized_f16_prefill.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_q6_k_packed_selected_refine_token1",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_q6_k_packed_selected_refine_token1",
+      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "candidate_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "candidate_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "candidates",
+        "exact_output",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/q6_k_f16.loom",
+          "motifs/dequant.loom",
+          "motifs/mul_mat_quantized_f16_prefill.loom",
+          "motifs/elementwise/binary_apply.loom",
+          "motifs/dequant_prism.loom",
+          "motifs/dequant_1bit.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/f32_f16.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/q6_k_f16.loom",
+        "motifs/dequant.loom",
+        "motifs/mul_mat_quantized_f16_prefill.loom",
+        "motifs/elementwise/binary_apply.loom",
+        "motifs/dequant_prism.loom",
+        "motifs/dequant_1bit.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/f32_f16.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom"
       ]
     },
     {
@@ -13536,346 +14024,6 @@
         "library_sources": []
       },
       "compile_dependencies": []
-    },
-    {
-      "name": "ggml_mul_mat_f32_f32_narrow_split_k4",
-      "family": "loom_libs",
-      "symbol": "ggml_mul_mat_f32_f32_narrow_split_k4",
-      "source": "ops/mul_mat_f32_f32_wmma.loom",
-      "workload_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "bindings": [
-        "input",
-        "weight",
-        "partial",
-        "output",
-        "completion_counters"
-      ],
-      "binding_access": [
-        "read",
-        "read",
-        "read_write",
-        "write",
-        "read_write"
-      ],
-      "target_selector": "",
-      "compile_recipe": {
-        "mode": "direct",
-        "primary_sources": [
-          "ops/mul_mat_f32_f32_wmma.loom"
-        ],
-        "library_sources": [
-          "motifs/mul_mat_f32_f32_wmma_core.loom",
-          "motifs/dequant.loom",
-          "motifs/elementwise/unary_apply.loom",
-          "motifs/q4_k_f16.loom",
-          "motifs/q6_k_f16.loom",
-          "motifs/q8_0_f16.loom",
-          "motifs/q8_1_f16.loom",
-          "motifs/f16_f16.loom",
-          "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom",
-          "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "motifs/mul_mat_f32_f32_wmma_core.loom",
-        "motifs/dequant.loom",
-        "motifs/elementwise/unary_apply.loom",
-        "motifs/q4_k_f16.loom",
-        "motifs/q6_k_f16.loom",
-        "motifs/q8_0_f16.loom",
-        "motifs/q8_1_f16.loom",
-        "motifs/f16_f16.loom",
-        "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom",
-        "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
-      ]
-    },
-    {
-      "name": "ggml_mul_mat_id_swiglu_f32_f32_wmma",
-      "family": "loom_libs",
-      "symbol": "ggml_mul_mat_id_swiglu_f32_f32_wmma",
-      "source": "ops/mul_mat_id_swiglu_f32_f32_wmma.loom",
-      "workload_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "bindings": [
-        "input",
-        "expert_table",
-        "partition_table",
-        "gate_weight",
-        "up_weight",
-        "output"
-      ],
-      "binding_access": [
-        "read",
-        "read",
-        "read",
-        "read",
-        "read",
-        "read_write"
-      ],
-      "target_selector": "",
-      "compile_recipe": {
-        "mode": "direct",
-        "primary_sources": [
-          "ops/mul_mat_id_swiglu_f32_f32_wmma.loom"
-        ],
-        "library_sources": [
-          "motifs/matmul_id/f16_pair_schedule.loom",
-          "motifs/matmul_id/f16_pair_accumulate.loom",
-          "motifs/matmul_id/f16_pair_binary_publish.loom",
-          "motifs/matmul_id/f16_projection_q4k.loom",
-          "motifs/matmul_id/f16_projection_q5k.loom",
-          "motifs/matmul_id/f16_projection_q6k.loom",
-          "motifs/dequant.loom",
-          "motifs/q4_k_f16.loom",
-          "motifs/q6_k_f16.loom",
-          "motifs/q8_0_f16.loom",
-          "motifs/q8_1_f16.loom",
-          "motifs/f16_f16.loom",
-          "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "motifs/matmul_id/f16_pair_schedule.loom",
-        "motifs/matmul_id/f16_pair_accumulate.loom",
-        "motifs/matmul_id/f16_pair_binary_publish.loom",
-        "motifs/matmul_id/f16_projection_q4k.loom",
-        "motifs/matmul_id/f16_projection_q5k.loom",
-        "motifs/matmul_id/f16_projection_q6k.loom",
-        "motifs/dequant.loom",
-        "motifs/q4_k_f16.loom",
-        "motifs/q6_k_f16.loom",
-        "motifs/q8_0_f16.loom",
-        "motifs/q8_1_f16.loom",
-        "motifs/f16_f16.loom",
-        "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
-      ]
-    },
-    {
-      "name": "ggml_mul_mat_q6_k_f16_wmma_prefill_from_packed",
-      "family": "loom_libs",
-      "symbol": "ggml_mul_mat_q6_k_f16_wmma_prefill_from_packed",
-      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
-      "workload_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "bindings": [
-        "input",
-        "weight",
-        "output"
-      ],
-      "binding_access": [
-        "read",
-        "read",
-        "write"
-      ],
-      "target_selector": "",
-      "compile_recipe": {
-        "mode": "direct",
-        "primary_sources": [
-          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
-        ],
-        "library_sources": [
-          "motifs/q6_k_f16.loom",
-          "motifs/dequant.loom",
-          "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "motifs/q6_k_f16.loom",
-        "motifs/dequant.loom",
-        "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
-      ]
-    },
-    {
-      "name": "ggml_mul_mat_q6_k_packed_token1_f16_wmma",
-      "family": "loom_libs",
-      "symbol": "ggml_mul_mat_q6_k_packed_token1_f16_wmma",
-      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
-      "workload_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "bindings": [
-        "input",
-        "weight",
-        "output"
-      ],
-      "binding_access": [
-        "read",
-        "read",
-        "write"
-      ],
-      "target_selector": "",
-      "compile_recipe": {
-        "mode": "direct",
-        "primary_sources": [
-          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
-        ],
-        "library_sources": [
-          "motifs/q6_k_f16.loom",
-          "motifs/dequant.loom",
-          "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "motifs/q6_k_f16.loom",
-        "motifs/dequant.loom",
-        "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
-      ]
-    },
-    {
-      "name": "ggml_mul_mat_q6_k_i8_prepacked_f16_wmma",
-      "family": "loom_libs",
-      "symbol": "ggml_mul_mat_q6_k_i8_prepacked_f16_wmma",
-      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
-      "workload_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        }
-      ],
-      "bindings": [
-        "input",
-        "weight",
-        "output"
-      ],
-      "binding_access": [
-        "read",
-        "read",
-        "write"
-      ],
-      "target_selector": "",
-      "compile_recipe": {
-        "mode": "direct",
-        "primary_sources": [
-          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
-        ],
-        "library_sources": [
-          "motifs/q6_k_f16.loom",
-          "motifs/dequant.loom",
-          "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "motifs/q6_k_f16.loom",
-        "motifs/dequant.loom",
-        "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
-      ]
-    },
-    {
-      "name": "ggml_mul_mat_q6_k_packed_selected_refine_token1",
-      "family": "loom_libs",
-      "symbol": "ggml_mul_mat_q6_k_packed_selected_refine_token1",
-      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
-      "workload_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        },
-        {
-          "name": "candidate_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "token_count",
-          "type": "index"
-        },
-        {
-          "name": "candidate_count",
-          "type": "index"
-        }
-      ],
-      "bindings": [
-        "input",
-        "weight",
-        "candidates",
-        "exact_output",
-        "output"
-      ],
-      "binding_access": [
-        "read",
-        "read",
-        "read",
-        "write",
-        "read_write"
-      ],
-      "target_selector": "",
-      "compile_recipe": {
-        "mode": "direct",
-        "primary_sources": [
-          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
-        ],
-        "library_sources": [
-          "motifs/q6_k_f16.loom",
-          "motifs/dequant.loom",
-          "motifs/mul_mat_quantized_f16_prefill.loom",
-          "motifs/elementwise/binary_apply.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "motifs/q6_k_f16.loom",
-        "motifs/dequant.loom",
-        "motifs/mul_mat_quantized_f16_prefill.loom",
-        "motifs/elementwise/binary_apply.loom"
-      ]
     }
   ],
   "link_modules": [

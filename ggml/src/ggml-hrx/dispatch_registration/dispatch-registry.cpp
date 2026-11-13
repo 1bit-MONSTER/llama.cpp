@@ -302,6 +302,10 @@ bool DispatchRegistry::match(const DispatchMatchContext & context,
             // engine #1316: see the helper - the next registration for this root op gets the node instead.
             matched = false;
         }
+        // AMD: a match whose weights cannot take the layout it asks for declines, so a narrower registration gets the node
+        if (matched && !dispatch_has_eligible_weight_layouts(context, candidate)) {
+            matched = false;
+        }
         const size_t  covered_output = matched ? first_covered_requested_output(context, candidate) : kNoNode;
         if (matched && covered_output != kNoNode) {
             dispatch_log_requested_output(registration, context.graph, covered_output);

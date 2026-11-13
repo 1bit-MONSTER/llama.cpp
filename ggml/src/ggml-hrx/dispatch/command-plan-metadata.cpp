@@ -35,6 +35,11 @@ static bool moe_routing_bundle_matches(const CommandPlanMoeRoutingBundle & lhs,
 
 }  // namespace
 
+void CommandPlanMetadata::append_activation_publication_diagnostic(
+    CommandPlanActivationPublicationDiagnostic diagnostic) {
+    activation_publication_diagnostics_.push_back(std::move(diagnostic));
+}
+
 void CommandPlanMetadata::clear() {
     generated_resources_.clear();
     alternate_values_.clear();
