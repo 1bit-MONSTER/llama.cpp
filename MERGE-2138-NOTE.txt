@@ -610,3 +610,14 @@ Ran all-theirs and read the fallout:
      lines) -- a duplicate-per-container check catches it, reading the hunk does not.
 So the shape is: theirs' wrapper API + ours' two features (budget trace, selector walk) re-expressed on it + one duplicate line removed.
 Reverted rather than half-ported. pi-attn owns this file.
+
+## THIRD non-marker defect: dispatch-get-rows.cpp registers two matchers that do not exist (found by building, not by triage)
+The merged file registers `common.get_rows_scale.f32` and `common.get_rows_rmsnorm_binary.q8_1_x4_f16`, both pointing at
+match_get_rows_scale_f32_dispatch / match_get_rows_rmsnorm_binary_dispatch -- and neither name exists anywhere in the tree, so the TU
+fails with 'was not declared in this scope' plus three brace-enclosed-conversion errors from the registry initialisers.
+Provenance: `git show 7a1f2b1:<file> | grep -c` -> 0, `git show 9bf5871:<file> | grep -c` -> 2. So the registrations came from AMD's side
+and the definitions did not: the merge took our file body and AMD's registry block. AMD's file also carries two helpers ours lacks
+(`token_capacity_class`, `to_config_value`) plus a match builder (`match_get_rows_scale_f32`) that the two dispatch fns call.
+Both kernels ARE in the generated catalog, so the corpus side is fine -- this is purely the missing code block.
+Fix shape: bring AMD's block (helpers + match builder + both *_dispatch functions, lines ~446-560 at 9bf5871) into the merged file,
+keeping our registry entries. Mechanical, but it is dispatch code and it belongs with the same hand-off as the 34 hunks.
