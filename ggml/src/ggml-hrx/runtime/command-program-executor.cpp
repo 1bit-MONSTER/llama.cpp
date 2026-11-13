@@ -61,10 +61,6 @@ void GraphReplayStreamState::add_host_writeback(void *       host_destination,
     pending_host_writebacks_.push_back({ host_destination, mapped_source, size, buffer });
 }
 
-bool GraphReplayStreamState::has_pending_host_writebacks() const {
-    return !pending_host_writebacks_.empty();
-}
-
 PreparedProgramConstantBuffer::~PreparedProgramConstantBuffer() {
     if (buffer != nullptr) {
         hrx_buffer_release(buffer);
@@ -510,9 +506,18 @@ static Dispatch build_dispatch(const ResolvedCommand & command) {
 }
 
 struct GraphValueAccess {
-    bool read       = false;
-    bool write      = false;
-    bool main_write = false;
+    bool main_write = false;        // merged side: this write is the graph main output
+    bool read  = false;
+    bool write = false;
+    bool        native_read         = false;
+    bool        transformed_read    = false;
+    bool        layout_conflict     = false;
+    std::string layout              = kNativeWeightLayout;
+    ggml_type   source_type         = GGML_TYPE_COUNT;
+    int64_t     input_size          = 0;
+    int64_t     output_size         = 0;
+    size_t      source_length       = 0;
+    size_t      materialized_length = 0;
 };
 
 static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(const CommandProgram & commands) {
@@ -545,7 +550,6 @@ static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(
     return access_by_value;
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 // Materialized bytes this binding is about to ask HostWeightCache::acquire() for, or 0 when it never gets there.
 // Mirrors the request site in materialize_host_bindings() below (including the #914 skip and the #192 refusal), so the
 // number the budget is judged on cannot drift from the number that is charged.
@@ -578,7 +582,8 @@ static size_t observe_host_weight_working_set(const CommandProgramBindings &    
         total += bytes;
     }
     return total;
-=======
+}
+
 static bool same_weight_request(const CommandBinding & lhs, const CommandBinding & rhs) {
     const bool same_value = lhs.value == rhs.value;
     const bool same_layout = lhs.layout == rhs.layout;
@@ -681,8 +686,8 @@ static CommandProgramWeightDemands collect_weight_demands(
     collect(commands.initialization_commands);
     collect(commands.commands);
     return result;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
+
 
 static CommandProgramBindings materialize_host_bindings(const CommandProgramExecutionContext & context,
                                                         const CommandProgram &                 commands,
@@ -692,7 +697,6 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
     Status                             status;
     materialized.reserve(bindings.bindings().size());
     const std::unordered_map<int32_t, GraphValueAccess> access_by_value = collect_graph_value_access(commands);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     // engine #669/#900: judge the budget against the set of host weights the model needs, not against one weight at a
     // time. The per-weight basis is not knowable before the carrier is chosen (acquire() charges the materialized
     // length: 132 B per row-block for the shared4 carrier against 136 B in the file for IQ4_XS, or 144 B for row64),
@@ -700,6 +704,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
     // measured 38 <-> 44 MiB on Qwen3-4B-IQ4_XS. Reported, not refused: a budget below the set means these weights run
     // on the CPU, which placement now decides with the same number.
     const size_t program_bytes = observe_host_weight_working_set(bindings, access_by_value);
+    const CommandProgramWeightDemands demands = collect_weight_demands(commands, bindings, access_by_value);
     const size_t working_set   = host_weight_working_set_bytes();
     if (const char * trace = std::getenv("GGML_HRX_HOST_WEIGHT_TRACE")) {
         if (std::atoi(trace) != 0) {
@@ -722,21 +727,17 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
                            residency_limit / (1024 * 1024));
         }
     }
-=======
-    const CommandProgramWeightDemands demands = collect_weight_demands(commands, bindings, access_by_value);
-    status.append(demands.status);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     for (const CommandProgramBinding & binding : bindings.bindings()) {
         const auto             found_access = access_by_value.find(binding.value.value);
         const GraphValueAccess access =
             found_access != access_by_value.end() ? found_access->second : GraphValueAccess{};
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         // A value that no command in this program references needs no device copy: staging it allocates a buffer that
         // is neither uploaded nor downloaded, one per shape (engine #914).
         if (found_access == access_by_value.end()) {
             materialized.push_back(binding);
             continue;
         }
+        const bool managed_weight = binding.weight && access.read && !access.write && binding.source_host_data != nullptr;
         const bool materialize_weight = binding.weight && access.read && !access.write &&
                                         (binding.requires_materialization() || access.transformed_read);
         // The layout a command reads a value in is chosen by the dispatch builder from the tensor's type, before any
@@ -758,16 +759,6 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             return CommandProgramBindings::from_bindings({}, status);
         }
         if (binding.length == 0 || (!binding.requires_materialization() && !materialize_weight)) {
-=======
-        const bool managed_weight = binding.weight && access.read && !access.write &&
-                                    binding.source_host_data != nullptr;
-        const bool empty_binding = binding.length == 0;
-        const bool directly_bindable = !binding.requires_materialization() && !managed_weight;
-        // Elided operations can leave external weights with no command users.
-        const bool unused_binding = !access.read && !access.write;
-        const bool use_existing_binding = empty_binding || directly_bindable || unused_binding;
-        if (use_existing_binding) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             materialized.push_back(binding);
             continue;
         }
@@ -796,7 +787,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
                     device_binding.offset = 0;
                     device_binding.length = resident.lease.length();
                     device_binding.capacity = resident.lease.length();
-                    prepared.resident_host_weights.push_back(std::move(resident.lease));
+                    prepared.resident_host_weights.push_back({ binding.value, demand.source, std::move(resident.lease) });
                 }
                 materialized.push_back(std::move(device_binding));
             }
@@ -877,12 +868,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         staging.value                        = binding.value.value;
         staging.host_data                    = static_cast<uint8_t *>(binding.host_data) + binding.offset;
         staging.upload                       = access.read;
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         staging.download                     = access.write && !binding.graph_input;
-=======
-        // Initializers may synthesize device metadata from caller inputs, but only main graph writes are observable.
-        staging.download                     = access.main_write;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         if (staging.upload && context.host_buffers != nullptr) {
             staging.source_host_buffer = context.host_buffers->find(staging.host_data, staging.length);
         }
@@ -1263,7 +1249,7 @@ static Status flush_stream_commands(const CommandProgramExecutionContext & conte
 }
 
 static Status wait_stream_commands(const CommandProgramExecutionContext & context, const char * label,
-                                   const void * work) {
+                                   const void * work = nullptr) {
     Status status;
     if (ErrorResult error = take_status(stream_wait_sleeping(context.stream, wait_history_for(work)))) {
         status.log("%s failed: %s", label, error->c_str());
@@ -1425,12 +1411,7 @@ static void materialize_command_list_executables(const CommandProgramExecutionCo
     for (size_t i = 0; i < prepared_commands.size(); ++i) {
         PreparedCommand & command = prepared_commands[i];
         command.kernel.executable = context.kernel_executables->materialize(
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
             { context.device, context.target }, executable_refs[i], command.kernel.constants);
-=======
-            { context.device, context.target, context.compile_trace }, executable_refs[i], command.kernel.specialization,
-            command.kernel.constants, command.kernel.launch);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         if (command.kernel.executable == nullptr) {
             status.log("failed to prepare %s", format_prepared_command_context(command).c_str());
         }
