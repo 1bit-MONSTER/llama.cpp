@@ -102,6 +102,7 @@ struct llama_hadamard {
 
     // bound to the model's tensors (setup)
     std::unordered_map<const ggml_tensor *, llama_hadamard_transform> rot;
+    std::unordered_map<const ggml_tensor *, llama_hadamard_transform> inverses;  // ours: the lookup-side tables
     std::unordered_map<const ggml_tensor *, llama_hadamard_transform> inv;
 
     bool empty() const { return rot.empty() && inv.empty(); }

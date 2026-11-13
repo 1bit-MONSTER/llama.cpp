@@ -151,6 +151,10 @@ class CommandPlanMetadata {
         return activation_publication_diagnostics_;
     }
 
+    void append_activation_publication_diagnostic(CommandPlanActivationPublicationDiagnostic diagnostic) {
+        activation_publication_diagnostics_.push_back(std::move(diagnostic));
+    }
+
     const std::vector<CommandPlanAlternateValue> & alternate_values() const { return alternate_values_; }
 
     const std::vector<CommandPlanMoeRoutingBundle> & moe_routing_bundles() const { return moe_routing_bundles_; }

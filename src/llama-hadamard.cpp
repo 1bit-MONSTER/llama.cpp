@@ -357,17 +357,17 @@ void llama_hadamard::setup(const llama_model & model) {
     }
     std::map<std::pair<uint32_t, ggml_backend_buffer_type_t>, ggml_tensor *> rots, signs;
     // the inverse (lookup side) must not inherit a host buffer from a CPU-mapped table, or every
-    // token's transform crosses devices: it takes the forward rotations' buffer type
+    // token's transform crosses devices: it takes the forward rot' buffer type
     ggml_backend_buffer_type_t preferred = nullptr;
 
-    const std::pair<const std::unordered_map<std::string, uint32_t> *, decltype(rotations) *> groups[] = {
-        { &weight_blocks, &rotations }, { &inverse_blocks, &inverses },
+    const std::pair<const std::unordered_map<std::string, uint32_t> *, decltype(rot) *> groups[] = {
+        { &weight_blocks, &rot }, { &inverse_blocks, &inverses },
     };
     for (const auto & [blocks, target] : groups) {
         for (const auto & [name, block] : *blocks) {
             const ggml_tensor * w = model.get_tensor(name.c_str());
             if (tied_output && name == "token_embd.weight") {
-                w = target == &rotations ? model.output : model.tok_embd;
+                w = target == &rot ? model.output : model.tok_embd;
                 if (!w || strcmp(w->name, "token_embd.weight") != 0) {
                     throw std::runtime_error("prism.hadamard.tied_output is not bound to the token embedding");
                 }
@@ -392,7 +392,7 @@ void llama_hadamard::setup(const llama_model & model) {
                     buft = ggml_backend_dev_buffer_type(dev);
                 }
             }
-            if (target == &rotations) {
+            if (target == &rot) {
                 preferred = buft;
             } else if (preferred) {
                 buft = preferred;
@@ -443,12 +443,12 @@ void llama_hadamard::setup(const llama_model & model) {
         }
     }
     LLAMA_LOG_INFO("%s: %zu Hadamard-folded weight(s) (%zu inverse-lookup), %zu rotation(s), %zu sign vector(s)\n",
-                   __func__, rotations.size() + inverses.size(), inverses.size(), rots.size(), signs.size());
+                   __func__, rot.size() + inverses.size(), inverses.size(), rots.size(), signs.size());
 }
 
 ggml_tensor * llama_hadamard::forward(ggml_context * ctx, const ggml_tensor * w, ggml_tensor * x, llama_hadamard_memo & memo) const {
-    const auto it = rotations.find(w);
-    if (it == rotations.end()) {
+    const auto it = rot.find(w);
+    if (it == rot.end()) {
         return x;
     }
     const auto & t = it->second;
@@ -512,8 +512,8 @@ void llama_hadamard::verify_graph(ggml_cgraph * gf) const {
             }
             continue;
         }
-        const auto it = rotations.find(node->src[0]);
-        if (it == rotations.end()) {
+        const auto it = rot.find(node->src[0]);
+        if (it == rot.end()) {
             if (inverses.count(node->src[0])) {
                 throw std::runtime_error(format("Hadamard-latent table '%s' is used as a head without a forward transform", node->src[0]->name));
             }

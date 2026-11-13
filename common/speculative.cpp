@@ -1080,15 +1080,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
         mask_token_id = llama_vocab_mask(llama_model_get_vocab(model_dft));
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        // DFlash2: the drafter emits a selector lattice (top-k candidates and pairwise
-        // transition scores per block position) through the nextn output instead of logits
-        selector_top_k = llama_model_dflash_selector_top_k(model_dft);
-        is_dflash2     = selector_top_k > 0;
-
-        LOG_INF("%s: adding speculative implementation '%s'%s\n", __func__, common_speculative_type_to_str(type).c_str(),
-                is_dflash2 ? " (DFlash2 selector)" : "");
-=======
         if (is_dspark && this->params.p_min > 0.0f) {
             char buf[16] = {};
             const bool has_conf =
@@ -1100,7 +1091,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
 
         LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(type).c_str());
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%.2f\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min);
         LOG_INF("%s: - block_size=%d, mask_token_id=%d, n_extract=%u, sample_from_anchor=%s\n", __func__,
                 block_size, mask_token_id, target_layer_ids_n, sample_from_anchor ? "true" : "false");
@@ -1125,8 +1115,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         // embd batches on an M-RoPE draft need 4 position rows per token
         is_mrope = llama_model_rope_type(model_dft) == LLAMA_ROPE_TYPE_MROPE;
         if (is_mrope) {
-            free(batch_inject.pos);
-            batch_inject.pos = (llama_pos *) malloc(sizeof(llama_pos) * 4 * llama_n_batch(ctx_dft));
+            // our line malloc'd 4 position rows per token; the common_batch wrapper carries that as n_pos
+            batch_inject.n_pos = GGML_MROPE_SECTIONS;
         }
 
         smpls.resize(n_seq);
@@ -1160,13 +1150,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
 
         // DFlash2 reads its selector lattice from h_nextn and never consumes raw logits.
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ !is_dflash2);
-        llama_set_causal_attn(ctx_dft, false); // DFlash needs non-causal attention
-=======
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ !is_dflash2 && !is_lilicorr);
         llama_set_causal_attn(ctx_dft, causal_attn); // DFlash needs non-causal attention unless the model says otherwise
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     ~common_speculative_impl_draft_dflash() override {
@@ -1271,63 +1256,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     }
                 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                // fuse extracted features through DFlash encoder
-                // M-RoPE drafts read 4 position rows per token from embd batches, so pass them explicitly
-                std::vector<llama_pos> enc_pos;
-                if (is_mrope) {
-                    enc_pos.resize((size_t) 4 * n_chunk);
-                    for (int32_t i = 0; i < n_chunk; ++i) {
-                        const llama_pos p = batch_in.pos[i_batch_beg[seq_id] + offset + i];
-                        enc_pos[0 * n_chunk + i] = p;
-                        enc_pos[1 * n_chunk + i] = p;
-                        enc_pos[2 * n_chunk + i] = p;
-                        enc_pos[3 * n_chunk + i] = 0;
-                    }
-                }
-
-                llama_batch enc_batch = {
-                    /*.n_tokens =*/ n_chunk,
-                    /*.token    =*/ nullptr,
-                    /*.embd     =*/ features_buf.data(),
-                    /*.pos      =*/ is_mrope ? enc_pos.data() : nullptr,
-                    /*.n_seq_id =*/ nullptr,
-                    /*.seq_id   =*/ nullptr,
-                    /*.logits   =*/ nullptr,
-                };
-
-                int32_t rc = llama_encode(ctx_dft, enc_batch);
-                if (rc != 0) {
-                    LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
-                            __func__, rc, (int) n_chunk, (int) offset);
-                    return false;
-                }
-
-                const float * inp_g = llama_get_embeddings_nextn(ctx_dft);
-                GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
-
-                // inject the DFlash decoder K/V cache at the tokens' target positions
-                batch_inject.n_tokens = n_chunk;
-                std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
-
-                for (int32_t i = 0; i < n_chunk; ++i) {
-                    const llama_pos p = batch_in.pos[i_batch_beg[seq_id] + offset + i];
-                    batch_inject.pos[i] = p;
-                    if (is_mrope) {
-                        batch_inject.pos[1 * n_chunk + i] = p;
-                        batch_inject.pos[2 * n_chunk + i] = p;
-                        batch_inject.pos[3 * n_chunk + i] = 0;
-                    }
-                    batch_inject.n_seq_id[i]  = 1;
-                    batch_inject.seq_id[i][0] = seq_id;
-                    batch_inject.logits[i]    = false;
-=======
                 batch_inject.clear();
                 for (int32_t i = 0; i < n_chunk; ++i) {
                     const llama_pos p = batch_in.tokens[i_batch_beg[seq_id] + offset + i].pos[0];
                     const llama_pos pos_arr[4] = { p, p, p, 0 };
                     batch_inject.add_embd({ features_buf.data() + (size_t) i * n_embd_enc, 1, (size_t) n_embd_enc }, pos_arr, seq_id, false);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
                 }
                 const int32_t rc = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch_inject.get());
                 if (rc != 0) {
@@ -1384,9 +1317,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             i_block_beg[seq_id] = batch.size();
             n_block    [seq_id] = n_block_tokens;
             for (int32_t i = 0; i < n_block_tokens; ++i) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                common_batch_add(batch, i == 0 ? dp.id_last : mask_token_id, n + i, { seq_id }, !is_dflash2);
-=======
                 const int32_t idx = batch.add(i == 0 ? dp.id_last : mask_token_id, n + i, seq_id, !is_dflash2 && !is_lilicorr);
                 if (is_lilicorr) {
                     // For LiliCorr drafting batch, set state embeddings for use in the associated transformer head.
@@ -1394,7 +1324,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     const size_t slot = (size_t) seq_id * lilicorr_rows + (size_t) pos % lilicorr_rows;
                     batch.set_embd_state(idx, { lilicorr_embd.data() + slot * (size_t) n_embd_dec, 1, (size_t) n_embd_dec });
                 }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             }
         }
 
@@ -1422,47 +1351,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             auto & result = *dp.result;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-            if (is_dflash2) {
-                const float * lattice = llama_get_embeddings_nextn(ctx_dft);
-                GGML_ASSERT(lattice && "DFlash2 selector produced no lattice");
-
-                // greedy walk: each position picks the candidate that scores best after the previous pick
-                int32_t predecessor = 0;
-                for (int32_t i = 1; i < n_block_tokens; ++i) {
-                    const float * row    = lattice + (size_t) (beg + i) * n_embd_dec;
-                    const float * scores = row + selector_top_k + (size_t) predecessor * selector_top_k;
-
-                    predecessor = (int32_t) std::distance(scores, std::max_element(scores, scores + selector_top_k));
-                    if (params.p_min > 0.0f) {
-                        // softmax(scores) at the argmax, i.e. 1 / sum(exp(s_k - s_max))
-                        float sum = 0.0f;
-                        for (int32_t k = 0; k < selector_top_k; ++k) {
-                            sum += std::exp(scores[k] - scores[predecessor]);
-                        }
-                        if (1.0f / sum < params.p_min) {
-                            break;
-                        }
-                    }
-                    result.push_back((llama_token) row[predecessor]);
-                }
-
-                if (result.size() < (size_t) params.n_min) {
-                    result.clear();
-                }
-                continue;
-            }
-
-            if (is_dspark) {
-                // DSpark predicts the next token from position 0 and optionally truncates
-                // at the first position below the confidence threshold.
-                const float * conf = params.p_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
-=======
             if (is_dflash2 || is_lilicorr) {
                 // Both DFlash and LiliCorr greedily walk the candidate lattice.
                 const float * lattice = llama_get_embeddings_nextn(ctx_dft);
                 GGML_ASSERT(lattice && "DFlash2 selector produced no lattice");
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
                 // DFlash2 can instead sample each step and hand q to the verifier for rejection sampling
                 const bool sample = is_dflash2 && params.probabilistic && dp.result_q;
@@ -1605,13 +1497,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    onebit::MtpBudgetTrace budget; // --spec-draft-cum-p-min state and the ONEBIT_MTP_TRACE log
+    onebit::MtpBudgetTrace budget; // --spec-draft-cum-p-min state and the ONEBIT_MTP_TRACE log (ours)
 
-    llama_batch batch;
-=======
     common_batch batch;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
     std::vector<common_sampler_ptr> smpls;
 
@@ -1816,21 +1704,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 const llama_seq_id seq_id = t.seq_id;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-                // pending_h is the h-row that precedes the first token of this
-                // batch, so it only pairs with that token when the batch really
-                // continues from it. A fresh sequence starts at pos 0 while
-                // pending_h still holds the previous request's last row; seeding
-                // the MTP head with it there made the draft's first prediction
-                // depend on the previous request (engine #290). This is the same
-                // continuity guard eagle3 applies with pending_pos_last.
-                const llama_pos pos_beg = batch_in.pos[i_batch_beg[seq_id]];
-                if (pending_pos[seq_id] >= 0 && pending_pos[seq_id] + 1 == pos_beg) {
-                    set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
-                } else {
-                    std::memset(batch.embd + (size_t) i_batch_beg[seq_id] * n_embd, 0, row_bytes);
-                }
-=======
                 // vision tokens carry an embedding instead of an id
                 const int32_t idx = t.id != LLAMA_TOKEN_NULL
                     ? batch.add(t.id, t.pos[0], seq_id, false)
@@ -1841,7 +1714,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     : h_tgt + (size_t) (k - 1) * n_embd;
 
                 batch.set_embd_state(idx, { h_row, 1, (size_t) n_embd });
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
             }
 
             auto * mem_dft = llama_get_memory(ctx_dft);
@@ -1884,7 +1756,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
             verify_h_rows[seq_id] = n_rows;
             verify_h[seq_id].resize((size_t) n_rows * n_embd);
-            verify_pos_first[seq_id] = batch_in.pos[i_batch_beg[seq_id]];
+            verify_pos_first[seq_id] = batch_in.tokens[i_batch_beg[seq_id]].pos[0];
 
             for (int32_t i = 0; i < n_rows; ++i) {
                 const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, i_batch_beg[seq_id] + i);
@@ -1893,7 +1765,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             std::memcpy(pending_h[seq_id].data(),
                     verify_h[seq_id].data() + (size_t) (n_rows - 1) * n_embd, row_bytes);
-            pending_pos[seq_id] = batch_in.pos[i_batch_end[seq_id]];
+            pending_pos[seq_id] = batch_in.tokens[i_batch_end[seq_id]].pos[0];
         }
 
         return true;
@@ -1902,13 +1774,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        budget.begin(n_seq);
-
-        common_batch_clear(batch);
-=======
         batch.clear();
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
         // keep track of which sequences are still drafting
         int n_drafting = 0;

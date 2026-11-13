@@ -232,6 +232,9 @@ ggml_add_backend_library(ggml-hrx
     dispatch/transient-allocator.h
     dispatch/transient-reuse-guard.cpp
     dispatch/transient-reuse-guard.h
+    dispatch_registration/common/dispatch-activation-publication.cpp
+    dispatch_registration/common/iq-codebook-resource.cpp
+    dispatch_registration/immutable-program-resource.cpp
     dispatch_registration/common/dispatch-binary.cpp
     dispatch_registration/common/dispatch-binary.h
     dispatch_registration/common/dispatch-common.cpp

@@ -28,7 +28,7 @@ void llama_model_blackmamba::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
     ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
     ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr[0]);
 
     switch (hparams.n_embd) {
         case 1152: type = LLM_TYPE_1_5B; break;
@@ -44,7 +44,7 @@ void llama_model_blackmamba::load_arch_tensors(llama_model_loader &) {
     const int64_t d_inner  = hparams.ssm_d_inner;
     const int64_t d_state  = hparams.ssm_d_state;
     const int64_t dt_rank  = hparams.ssm_dt_rank;
-    const int64_t n_ff_exp = hparams.n_ff_exp;
+    const int64_t n_ff_exp = hparams.n_ff_exp();
 
     tok_embd      = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
     output_norm   = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);

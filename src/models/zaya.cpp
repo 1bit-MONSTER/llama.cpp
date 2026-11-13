@@ -42,7 +42,7 @@ void llama_model_zaya::load_arch_hparams(llama_model_loader & ml) {
     }
     ml.get_key(LLM_KV_SSM_CONV_KERNEL, hparams.ssm_d_conv);
     GGML_ASSERT(hparams.ssm_d_conv == 2 && "the CCA graph is written for 2-tap convs");
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
+    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr[0], false);
     hparams.n_rot_full = hparams.n_embd_head_k() / 2;
     hparams.n_rot_swa  = hparams.n_embd_head_k() / 2;
     // two recurrent rows per sequence, written whole (as the gated-delta-net models do):
@@ -85,7 +85,7 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t n_embd_head = hparams.n_embd_head_k();
-    const int64_t n_ff_exp    = hparams.n_ff_exp;
+    const int64_t n_ff_exp    = hparams.n_ff_exp();   // the merged hparams exposes it as an accessor
     const int64_t d_conv      = hparams.ssm_d_conv;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -523,7 +523,7 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
             if (expert_biases != nullptr) {
                 probs = ggml_add(ctx0, gate_probs, expert_biases);
             }
-            ggml_tensor * sel = ggml_argsort_top_k(ctx0, probs, hparams.n_expert_used);            // [k, T]
+            ggml_tensor * sel = ggml_argsort_top_k(ctx0, probs, hparams.n_expert_used());            // [k, T]
             ggml_tensor * w   = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, gate_probs, 1, n_expert, n_tokens), sel);  // [1, k, T]
             ggml_tensor * x   = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
             ggml_tensor * up  = ggml_mul_mat_id(ctx0, layer.ffn_gate_up_exps, x, sel);            // [2 n_ff, k, T]
@@ -548,7 +548,7 @@ llama_model_zaya::graph<iswa>::graph(const llama_model & model, const llm_graph_
                 /* down_exps_b */     nullptr,
                 /* exp_probs_b */     expert_biases,
                 /* n_expert */        n_expert,
-                /* n_expert_used */   hparams.n_expert_used,
+                /* n_expert_used */   hparams.n_expert_used(),
                 /* type_op */         LLM_FFN_SILU,
                 /* norm_w */          false,
                 /* w_scale */         1.0f,

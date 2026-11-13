@@ -1450,7 +1450,6 @@ struct llama_model_deepseek4 : public llama_model_base {
         explicit graph(const llm_graph_params & params) : llm_graph_context(params) {}
 
         // mean over the hc (hyper-connection) dim: the collapsed hidden state, t_layer_inp
-        ggml_tensor * build_hc_mean(ggml_tensor * x) const;
 
         // collapse the hc streams with per-stream weights
         ggml_tensor * build_hc_pre(
@@ -3157,6 +3156,7 @@ struct llama_model_glm5_next : public llama_model_base {
     class llm_graph_input_kpool;
 
     struct graph : public llm_build_delta_net_base {
+        ggml_tensor * build_hc_mean(ggml_tensor * cur) const;  // ours: hidden-context mean
         graph(const llama_model & model, const llm_graph_params & params);
 
         // build the helpers without the trunk, so graph_mtp can reuse them
