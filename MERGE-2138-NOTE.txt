@@ -784,3 +784,33 @@ that AMD's file does not have, and the merged file's helpers have moved on in si
 question the row has been circling all day -- whose runtime, with the other side's features re-expressed on it -- finally with a size attached:
 one subsystem in this file, the device-source path in host-memory (already done), and has_prepared_program's ownership model in graph-program-cache.
 Reverted. 25 hunks / 5 files, tree clean.
+
+## command-program-executor: the block is genuinely NEITHER side -- do not resolve it by picking
+After the fixes that worked elsewhere (drop the duplicate out-of-line has_pending_host_writebacks, since the header defines it inline; replace
+GraphValueAccess with ours' full struct; add AMD's main_write to make it a union), the remaining errors are:
+    managed_weight not declared    demands not declared    push_back(HostWeightBinding) no matching overload
+and they are not ordering problems. Measured:
+  * `managed_weight` and `demands` appear ONLY at their use site (658+) in the merged file -- neither side declares them there;
+  * ours has NEITHER name anywhere in its file (grep: zero);
+  * AMD's `collect_weight_demands` definition was inside a hunk that resolved to ours, so it is GONE from the merged file while line 1780 still calls it.
+So the block at 628-660 is our access-field logic (transformed_read, layout_conflict, source_length -- all ours) wrapped around AMD's weight-demand
+locals, and the helper that would produce those locals was deleted by my own hunk choice. This is the first file in the merge where "take a side" is
+demonstrably wrong for the block itself: the block is a composition that needs BOTH sides' pieces re-united, and one of them (AMD's
+collect_weight_demands, 592-~660 in AMD's file) has to be carried over wholesale.
+Reverted. State: 13 hunks / 2 files (command-program-executor 5, speculative 8).
+
+## command-program-executor: the shape is now fully known, and it needs a hand rebuild
+Measured facts (all verified, none speculative):
+  * our hunks' block (the one reading transformed_read / layout_conflict / source_length) sits INSIDE AMD's materialize_host_bindings(), and it
+    uses two of AMD's locals -- `demands` and `managed_weight` -- which AMD declares LATER in the same function (AMD lines 853 and 859);
+  * AMD's `collect_weight_demands(...)` (AMD lines 751-~850) is a file-scope static that produces `demands`, and it is GONE from the merged file:
+    my hunk resolution kept ours, and ours has neither the helper nor the names (grep: zero occurrences in our file);
+  * `managed_weight` does not need AMD's local at all -- its expression is `binding.weight && access.read && !access.write && binding.source_host_data`,
+    and all four of those are in scope where our block sits, so it can be declared locally there;
+  * `demands` does need the helper, so AMD's `collect_weight_demands` must come over wholesale and be declared at FILE scope before the function.
+What went wrong five times: scripted insertion of that helper kept landing inside a function signature ("storage class specified for parameter
+..."), because this file's function bodies contain nested braces that make "\n}\n" an unreliable anchor. The fix is not a better regex — it is to
+edit this file by hand, at file scope, with the helper pasted between two function definitions by line number.
+
+So: 5 hunks, 2 known edits (helper at file scope + managed_weight local), one file-scope paste. That is the recipe; it does not need another
+investigation, and it should not be attempted again with a script.
