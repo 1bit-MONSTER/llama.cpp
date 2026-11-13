@@ -10,6 +10,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace ggml::hrx {
 namespace {
@@ -63,9 +64,28 @@ static bool has_qualified_q8_consumer(const Graph & graph, const Value & value) 
         kQwen30BMoeDispatchProfile.expert_count,
         kQwen30BMoeDispatchProfile.route_count,
     };
-    for (const GraphNode * consumer : graph.index().consumers(value.id)) {
-        if (consumer != nullptr && common_q8_consumer_is_qualified_routed_projection(graph, *consumer, value, profile)) {
-            return true;
+    // engine#2374: the routed gate/up pair may read the value through a full-range layout alias (a RESHAPE of the
+    // same bytes). That alias has two consumers, gate and up, so the single-consumer walk above stops at it; walk
+    // every full-range alias here and ask each of its consumers. The gate/up matcher already resolves the alternate
+    // through alias_source, so publishing on the root value is what it reads.
+    std::vector<const Value *> activations = { &value };
+    for (size_t next = 0; next < activations.size() && next < graph.values().size(); ++next) {
+        const Value & activation = *activations[next];
+        for (const GraphNode * consumer : graph.index().consumers(activation.id)) {
+            if (consumer == nullptr) {
+                continue;
+            }
+            if (common_q8_consumer_is_qualified_routed_projection(graph, *consumer, activation, profile)) {
+                return true;
+            }
+            if (is_layout_alias_node(graph, *consumer) && consumer->inputs.size() == 1 &&
+                consumer->inputs[0] == activation.id) {
+                const Value * aliased = graph.values().find(consumer->output);
+                if (aliased != nullptr && aliased->type == GGML_TYPE_F32 && aliased->contiguous &&
+                    same_full_value_range(*aliased, activation)) {
+                    activations.push_back(aliased);
+                }
+            }
         }
     }
     return false;
