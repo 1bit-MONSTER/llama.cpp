@@ -900,3 +900,20 @@ RISK to state plainly for the owner: the bridge serialises and re-parses the sch
 the round trip lossy in principle. It is a merge-level bridge to get both sides' code compiling, not a design anyone would choose; if the chat layer is going to
 live on common_json, porting the converter is the better end state and this is a stopgap.
 Reverted so the tree stays as the merge produced it. Everything else builds; this is the last item and a fresh session should start from this note.
+
+## chat.cpp port: measured to 16 errors, then reverted -- here is the exact ladder for whoever finishes it
+The port is real and mostly mechanical; I got chat.cpp from 74 to 16 errors and stopped before committing because the last items cross into peg-parser and
+I do not want to land a half-ported arena at the end of a long session. The ladder, in the order that worked (each step measured):
+  1. `foreach_function(inputs.tools, [&](const json & tool)` -> `[&](size_t, const json & tool)`: 17 sites, -46 errors on its own. The merged
+     foreach_function passes an INDEX as its first argument; ours did not. This is the single biggest item and it is one regex.
+  2. `data.prompt += X` -> `data.prompt.append(X)`: 11 sites (the member's type changed from std::string to common_chat_prompt).
+  3. `prompt.rfind(..)` + `prompt.replace(pos,len,..)` -> `prompt.str().rfind(..)` + `prompt.replace_last(..)`: 1 site.
+  4. the grammar-builder bridge, in chat.cpp's OWN TU (not in the builder): a static helper that parses common_json -> ordered_json, calls
+     builder.resolve_refs, and returns. Confining it here keeps json-schema-to-grammar.cpp at 0 errors (putting it in the builder's lambda broke that file:
+     8 errors).
+  5. `#include <nlohmann/json.hpp>` in chat.cpp -- ordered_json is only forward-declared otherwise, and the bridge needs the complete type.
+Still open when I stopped: common_peg_arena::save() x10 -- ours has save/load as 2-line delegators to a private dump_impl (76 lines) and a loader the merged
+arena does not have, so this is a real port of arena serialisation, not a declaration; plus prompt->std::string conversions x2, common_json::get_to x1, and
+the ministral/gpt-oss initialiser signatures x2.
+So: steps 1-5 are ready to apply as written (74 -> 16), and the arena serialisation is the one piece that needs its own attention.
+Everything else in the row builds; tree reverted to the last consistent state.
