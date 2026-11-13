@@ -597,3 +597,16 @@ A blanket regex that appends `constants` produced 'constants was not declared' a
 rewrite always looks like. It is a fifteen-minute edit with eyes on each site and it is the LAST test TU.
 
 Reverted the test; the library-side API decision stands.
+
+## common/speculative.cpp (8 hunks): a batch-wrapper port plus two of our features, NOT text assembly (measured this turn)
+Ran all-theirs and read the fallout:
+  1. it keeps is_dflash2 (9 uses) and is_lilicorr (10) and selector_top_k (4), so AMD's line did NOT drop the selector concept;
+  2. it DROPS MtpBudgetTrace entirely (0 uses) -- that class exists in common/onebit-mtp-budget.h, i.e. it is ours and live elsewhere,
+     so the merge has to re-add the budget trace around the draft walk;
+  3. it refactors llama_batch + common_batch_add into a `common_batch` wrapper whose entries are `tokens[i].pos[]` with `n_pos = 1`
+     (GGML_MROPE_SECTIONS for MROPE) -- so the M-RoPE block that mallocs `batch_inject.pos` (4 rows per token) has to be re-expressed
+     in the wrapper's terms; with a raw .pos access it does not compile at all;
+  4. the merge also left a duplicated `is_mrope = llama_model_rope_type(...)` assignment and its comment (both sides added the same two
+     lines) -- a duplicate-per-container check catches it, reading the hunk does not.
+So the shape is: theirs' wrapper API + ours' two features (budget trace, selector walk) re-expressed on it + one duplicate line removed.
+Reverted rather than half-ported. pi-attn owns this file.
