@@ -1144,7 +1144,7 @@ static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchCon
     // A HIP kernel add-on may take the kernel (hip/hip-dispatches.h).
     hip_routed_down_dispatch({ match.weight->type, match.input_is_q8, match.token_count, kRoutedFfnExpertHiddenSize,
                                kRoutedFfnRouteCount, match.route_stride, kRoutedFfnExpertCount, kRoutedFfnInputSize,
-                               1e-6f },
+                               kRoutedFfnProfile.rms_norm_epsilon },
                              dispatch);
 
     dispatch_match.value_aliases.push_back({ match.reduce.residual_input->id, match.output->id });
