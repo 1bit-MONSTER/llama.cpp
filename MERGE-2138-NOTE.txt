@@ -641,3 +641,18 @@ the one concrete feature that must survive being on whichever side loses.
   3. dispatch-get-rows.cpp truncated AMD file, registrations without definitions -> fixed by taking AMD's (628 lines)
   4. dispatch-mul-mat-id.cpp truncated AMD file, three PRE-#118 ref names         -> fixed by taking AMD's (533 lines)
   5. dispatch-mul-mat.cpp / dispatch-gated-mul-mat.cpp truncation                 -> NOT free: needs the header set too (above)
+
+## dispatch-mul-mat-id.cpp: the exact recipe, measured to 3 remaining errors before I reverted
+Our file is 317 lines, AMD's 533, and the gap is a REFACTOR, not a feature we lack. What the file needs, in the order I proved it:
+  1. AMD's EIGHT refs (tiled/skinny x plain/scaled/postops/postops_next_rmsnorm), ours had five with three in the PRE-#118 names
+     (kMulMatIdF32F32WmmaKernel, kMulMatIdPostOpsF32F32WmmaKernel, kMulMatIdPostOpsNextRmsNormF32F32WmmaKernel). Inserting AMD's block
+     duplicates the scaled pair, so ours' two scaled refs must go at the same time -- per-container duplicate check, again.
+  2. AMD's THREE selectors, and note the third has a TWO-ARG overload: common_mul_mat_id_postops_f32_kernel(match) at one call site and
+     common_mul_mat_id_postops_f32_kernel(root, match.has_rmsnorm) at another. My first pass took only the 1-arg form and left two call
+     sites unresolved.
+  3. All three must sit ABOVE the first use (line ~194 in ours), i.e. right after is_bias_shape -- not above the first *matcher*, because
+     a postops matcher that uses them comes earlier than match_mul_mat_id_dispatch.
+  4. The remaining error after that was 'invalid initialization' at the 1-arg call site: our match type at that point is NOT
+     CommonMulMatIdMatch (AMD's selector takes that), so the selector needs an adapter or the call site needs the routed match.
+Reverted: the file is back to its committed state (521 lines, marker-free, refs still wrong). Doing this by line-surgery in one pass is what
+went wrong twice; the next attempt should copy AMD's block wholesale and then delete ours' duplicates, rather than insert piecewise.
