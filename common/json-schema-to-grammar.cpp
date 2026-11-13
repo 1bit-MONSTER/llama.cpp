@@ -1187,3 +1187,19 @@ std::string build_grammar(const std::function<void(const common_grammar_builder 
     converter.check_errors();
     return converter.format_grammar();
 }
+
+// AMD's rule-name sanitiser (their peg-parser calls it; the merge kept their caller and our file)
+std::string gbnf_format_rule_name(const std::string & name) {
+    std::string out;
+    bool in_invalid = false;
+    for (char c : name) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+            out += c;
+            in_invalid = false;
+        } else if (!in_invalid) {
+            out += '-';
+            in_invalid = true;
+        }
+    }
+    return out;
+}

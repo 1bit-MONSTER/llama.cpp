@@ -39,5 +39,6 @@ struct common_grammar_options {
 };
 
 std::string gbnf_format_literal(const std::string & literal);
+std::string gbnf_format_rule_name(const std::string & name);   // AMD's sanitiser, used by peg-parser
 
 std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options = {});
