@@ -45,6 +45,7 @@ struct PreparedCommandProgramCacheExecutionResult {
 class PreparedCommandProgramCache {
   public:
     // Full physical bindings select the entry; a validated graph instance can retain it for warm execution.
+    using Entry = PreparedCommandProgramCacheEntry;  // our name for the namespace-level struct
     std::shared_ptr<PreparedCommandProgramCacheEntry> get_or_create(
         const CommandProgramExecutionContext & context,
         uint64_t graph_uid,

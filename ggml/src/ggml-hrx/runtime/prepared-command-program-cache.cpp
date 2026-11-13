@@ -1,11 +1,7 @@
 #include "prepared-command-program-cache.h"
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
 #include "runtime/host-gap-profile.h"
 
-=======
-#include <algorithm>
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -105,14 +101,10 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     if (graph_uid == 0 || !commands.valid() || !bindings.valid()) {
         result.graph_replay_event             = HrxGraphReplayEvent::Ineligible;
         result.graph_replay_ineligible_reason = "uncached_graph";
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
         PreparedCommandProgram prepared = [&] {
             const HostGapScope scope("prep.prepare");
             return prepare_command_program(context, commands, bindings);
         }();
-=======
-        auto prepared = prepare_command_program(context, commands, bindings);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         if (!prepared.valid()) {
             result.status.append(prepared.status);
             return result;
@@ -125,30 +117,9 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         return result;
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    Key                    key;
-    {
-        const HostGapScope scope("cache.key");
-        key = cache_key(graph_uid, context, command_shape_hash, bindings);
-    }
-    std::shared_ptr<Entry> entry;
-    bool                   created_entry = false;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto                        found = programs_.find(key);
-        if (found == programs_.end()) {
-            entry = std::make_shared<Entry>();
-            programs_.emplace(key, entry);
-            created_entry = true;
-        } else {
-            entry = found->second;
-        }
-    }
-=======
     return execute_with_result(context, commands, bindings,
                                get_or_create(context, graph_uid, command_shape_hash, bindings));
 }
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 
 std::shared_ptr<PreparedCommandProgramCacheEntry> PreparedCommandProgramCache::get_or_create(
     const CommandProgramExecutionContext & context,
@@ -201,16 +172,8 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         if (rebuild_enabled) {
             entry->recorded = {};
         }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-        RecordedCommandGraphExecutionResult replay;
-        {
-            const HostGapScope scope("cache.replay");
-            replay = bind_and_launch_recorded_command_graph(context, commands, bindings, entry->program, entry->recorded);
-        }
-=======
         const auto replay = bind_and_launch_recorded_command_graph(
             context, commands, bindings, entry->prepared, entry->recorded);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         apply_graph_replay_result(result, replay);
         result.success = replay.success;
         const bool fallback = !replay.success && graph_replay_should_fallback(replay.event);
@@ -220,64 +183,8 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
             result.status.append(replay.status);
         }
     }
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-
-    PreparedCommandProgram prepared = [&] {
-        const HostGapScope scope("prep.prepare");
-        return prepare_command_program(context, commands, bindings);
-    }();
-    if (!prepared.valid()) {
-        if (created_entry) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            const auto                  found = programs_.find(key);
-            if (found != programs_.end() && found->second == entry && !entry->has_program) {
-                programs_.erase(found);
-            }
-        }
-        result.status.append(prepared.status);
-        return result;
-    }
-    entry->program     = std::move(prepared);
-    entry->has_program = true;
-    {
-        // The graph-program byte budget has to see these bytes or it can never bite (engine #841). mutex_ is taken
-        // here without ever being held across an entry lock acquisition, so the two locks cannot invert.
-        const size_t                bytes = entry->program.retained_bytes();
-        std::lock_guard<std::mutex> lock(mutex_);
-        retained_by_graph_[graph_uid] += bytes;
-    }
-    record_build();
-
-    if (debug_serial_command_execution_enabled()) {
-        result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
-        result.graph_replay_ineligible_reason = "debug_serial_execution";
-        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->program);
-        if (!result.success) {
-            result.status.log("execute prepared HRX command program failed");
-        }
-        return result;
-    }
-
-    const RecordedCommandGraphExecutionResult replay =
-        bind_and_launch_recorded_command_graph(context, commands, bindings, entry->program, entry->recorded);
-    apply_graph_replay_result(result, replay);
-    if (replay.success) {
-        result.success = true;
-        return result;
-    }
-    if (!graph_replay_should_fallback(replay.event)) {
-        result.status.append(replay.status);
-        if (result.status.success()) {
-            result.status.log("execute prepared HRX graph replay failed");
-        }
-        return result;
-    }
-    result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->program);
-    if (!result.success) {
-=======
     const bool missing_error = !result.success && result.status.success();
     if (missing_error) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         result.status.log("execute prepared HRX command program failed");
     }
     return result;
