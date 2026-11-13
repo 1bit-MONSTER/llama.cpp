@@ -830,3 +830,20 @@ our block, all with a named fix:
 So: two pastes, one hoist, one call-site argument, and one type decision (item 3). That is the whole remaining work on this file -- and the reason it
 defeated five scripted attempts is that four of those attempts were re-deriving these four items instead of using them.
 Reverted; file clean; 13 hunks / 2 files remain in the row.
+
+## ORCH: #2138 needs a decision on the chat/schema layer (the last build blocker is a fork, not a fix)
+Everything else builds: 0 markers, libggml-hrx, libllama, the models, hrx-backend-test, test-hrx-external-window-view.
+common/chat.cpp (74 errors) is blocked on which grammar layer the merged tree carries:
+  * OURS:  common_grammar_builder { add_rule(string,string), add_schema(string, nlohmann::ordered_json),
+           resolve_refs(nlohmann::ordered_json&) } + common_schema_info::{resolve_refs, resolves_to_string},
+           implemented in our json-schema-to-grammar.cpp (7 uses of resolve_refs, 1 of resolves_to_string);
+  * MERGED: common_grammar_builder { add_rule, add_schema(string, common_chat_schema) } -- a different schema type --
+           and no resolve_refs / resolves_to_string anywhere in the .cpp.
+So chat.cpp (ours, using the ordered_json builder) cannot compile against the merged header, and the 74 errors are four symptoms of one cause:
+  resolve_refs 17, the std::function reference initialisations 17, common_chat_prompt += 11, common_peg_arena::save 10.
+Two ways out, and they are not merge mechanics:
+  (a) keep OUR json-schema layer: restore our json-schema-to-grammar.{h,cpp} members beside AMD's common_chat_schema path -- both can live, but the
+      builder then has two add_schema overloads and every caller must be unambiguous;
+  (b) port our chat.cpp onto AMD's common_chat_schema builder -- no duplicate APIs, but it rewrites our chat features against a type we did not write.
+My read: (a) is smaller and keeps both feature sets, but it puts two schema abstractions in one header, and that is the chat owner's call rather than a
+merge decision. Everything else in the row is done and committed; this is the only item that needs a name on it.
