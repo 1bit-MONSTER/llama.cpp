@@ -70,6 +70,14 @@ static bool same_shape(const Value & lhs, const Value & rhs) {
     return true;
 }
 
+// Bytes of the route ids a routed kernel reads: token t's first kRoutedFfnRouteCount ids start at t * route_stride.
+// llama.cpp passes a [route_count, tokens] view of its [expert_count, tokens] argsort, so the view itself ends after
+// the last token's routes; binding the full token_count * route_stride would overrun a view whose source is not the
+// whole argsort (a one-token view is route_count ids, not route_stride).
+static size_t routed_route_id_bytes(int64_t token_count, int64_t route_stride) {
+    return static_cast<size_t>((token_count - 1) * route_stride + kRoutedFfnRouteCount) * sizeof(int32_t);
+}
+
 static bool is_profile_rms_norm_epsilon(float eps) {
     const float expected = kRoutedFfnProfile.rms_norm_epsilon;
     return eps >= expected * 0.9f && eps <= expected * 1.1f;
@@ -995,7 +1003,7 @@ static bool match_decode_routed_ffn_gate_up_swiglu_q4k_q8_dispatch(const Dispatc
                                                to_config_value(kRoutedFfnExpertHiddenSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity", to_config_value(match.token_count));
 
-    const size_t route_id_length = static_cast<size_t>(match.token_count * match.route_stride) * sizeof(int32_t);
+    const size_t route_id_length = routed_route_id_bytes(match.token_count, match.route_stride);
     dispatch.bindings.push_back({ match.input_alternate->alternate_value, 0, match.input_alternate->byte_count });
     dispatch.bindings.push_back({ match.route_ids->id, 0, route_id_length });
     dispatch.bindings.push_back({ match.gate_weight->id, 0, match.gate_weight->byte_count });
@@ -1127,7 +1135,7 @@ static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchCon
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size", to_config_value(kRoutedFfnInputSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.rms_epsilon", "0.000001");
 
-    const size_t route_id_length = static_cast<size_t>(match.token_count * match.route_stride) * sizeof(int32_t);
+    const size_t route_id_length = routed_route_id_bytes(match.token_count, match.route_stride);
     if (match.input_is_q8) {
         dispatch.bindings.push_back({ match.input_alternate->alternate_value, 0, match.input_alternate->byte_count });
     } else {
