@@ -539,6 +539,7 @@ static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
     dispatch.kernel = make_kernel_specialization(kRopeF32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     add_rope_compile_parameters(dispatch, match);
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;   // ours: capacity class + dynamic shape
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_span", to_config_value(match.input_span));
     dispatch.bindings.push_back({ match.positions->id, 0, match.positions->byte_count });
     dispatch.bindings.push_back({ match.input->storage_root, match.input->storage_offset, match.input_span_bytes });
@@ -776,6 +777,9 @@ static bool match_rope_f32_dispatch(const DispatchMatchContext & context, Dispat
     if (!match.matched()) {
         return false;
     }
+
+    // AMD's contract for standalone RoPE: one compiled program per capacity CLASS, shape dynamic. Without this the
+    // capacity classing above has no effect on compilation, because the specialization pins the exact token count.
 
     dispatch_match.covered_nodes.push_back(context.root_index);
     // above the kernel range: token chunks, each binding its positions, its strided input rows and its packed
