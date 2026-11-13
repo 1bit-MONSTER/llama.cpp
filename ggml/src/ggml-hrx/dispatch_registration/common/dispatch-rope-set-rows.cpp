@@ -25,6 +25,10 @@ namespace ggml::hrx {
 namespace {
 
 static constexpr KernelCatalogRef kRopeF32Kernel        = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_f32");
+static constexpr KernelCatalogRef kRopeConcatF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_concat_f32");
+static constexpr KernelCatalogRef kRopeScaleF32Kernel  = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_scale_f32");
+static constexpr KernelCatalogRef kRopeTokenScaleF32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_token_scale_f32");
 static constexpr KernelCatalogRef kSetRowsKernel        = GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows");
 static constexpr KernelCatalogRef kSetRowsScatterKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows_scatter");
 static constexpr KernelCatalogRef kRopeSetRowsF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_set_rows_f32");
@@ -133,9 +137,6 @@ static bool is_supported_rope_input_layout(const Value & value, size_t & span_el
 // The condition itself lives in ggml/src/ggml-hrx/rope-claim-params.h, so the claim in
 // fused-context-claim.h cannot drift away from what this matcher accepts (engine #1467).
 static bool is_supported_rope_params(const RopeParams & params, int64_t head_size) {
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    return rope_params_supported_by_rope_set_rows(params, head_size);
-=======
     const bool nonnegative_offset = params.n_offs >= 0;
     const bool aligned_offset = params.n_offs % 4 == 0;
     const bool fits_head = params.n_offs + params.n_dims <= head_size;
@@ -144,7 +145,6 @@ static bool is_supported_rope_params(const RopeParams & params, int64_t head_siz
     return supported_offset && params.n_dims >= 4 && params.n_dims <= head_size && params.n_dims % 4 == 0 && supported_mode &&
            std::isfinite(params.freq_base) && params.freq_base > 0.0f && std::isfinite(params.freq_scale) &&
            params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 
 static bool build_rope_theta_table(const GraphNode &      rope,
@@ -269,6 +269,18 @@ struct RopeMatch {
 
     bool matched() const { return node != nullptr && input != nullptr && positions != nullptr && output != nullptr; }
 };
+
+struct RopeConcatMatch {
+    RopeMatch         rope;
+    const GraphNode * concat           = nullptr;
+    const Value *     prefix           = nullptr;
+    const Value *     output           = nullptr;
+    size_t            concat_idx       = 0;
+    size_t            input_span_bytes = 0;
+
+    bool matched() const { return rope.matched() && concat != nullptr && prefix != nullptr && output != nullptr; }
+};
+
 
 struct SetRowsMatch {
     const GraphNode * node            = nullptr;
@@ -458,23 +470,6 @@ static SetRowsMatch match_set_rows_2d(const Graph & graph,
     return match;
 }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-static void add_rope_compile_parameters(Dispatch & dispatch, const RopeMatch & match) {
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.head_size", to_config_value(match.head_size));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.n_dims", to_config_value(match.n_dims));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.head_count", to_config_value(match.head_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.token_capacity", to_config_value(match.token_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_stride1", to_config_value(match.input_stride1));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_stride2", to_config_value(match.input_stride2));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.mscale", rope_mscale_config_value(match.rope_mscale));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.mode", to_config_value(match.mode));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.section_dims", to_config_value(match.section_dims));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.section_t3", to_config_value(match.section_t3));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.section_h3", to_config_value(match.section_h3));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.section_w3", to_config_value(match.section_w3));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.section_stride", to_config_value(match.token_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.token_base", to_config_value(int64_t(0)));
-=======
 static void add_rope_compile_parameters(Dispatch & dispatch,
                                         const RopeMatch & match,
                                         const char *      prefix,
@@ -498,7 +493,6 @@ static void add_rope_compile_parameters(Dispatch & dispatch,
     dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".mscale",
                                                rope_mscale_config_value(match.rope_mscale));
     dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".mode", to_config_value(match.mode));
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 
 static void add_set_rows_compile_parameters(Dispatch & dispatch, const SetRowsMatch & match) {
@@ -549,7 +543,7 @@ static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kRopeF32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
-    add_rope_compile_parameters(dispatch, match);
+    add_rope_compile_parameters(dispatch, match, "ggml.rope_f32");
     dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_span", to_config_value(match.input_span));
     dispatch.bindings.push_back({ match.positions->id, 0, match.positions->byte_count });
     dispatch.bindings.push_back({ match.input->storage_root, match.input->storage_offset, match.input_span_bytes });
@@ -745,15 +739,10 @@ static bool find_rope_set_rows_consumer(const Graph & graph, const GraphNode & r
 static RopeSetRowsMatch match_rope_set_rows_f32(const Graph & graph, const GraphNode * node) {
     RopeSetRowsMatch match;
     match.rope = match_rope_f32(graph, node);
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
-    if (!match.rope.matched() || match.rope.token_count > kRopeKernelMaxTokens ||
-        !find_rope_set_rows_consumer(graph, *node, match)) {
-=======
     if (match.rope.n_offs != 0) {
         return {};
     }
     if (!match.rope.matched() || !find_rope_set_rows_consumer(graph, *node, match)) {
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
         return {};
     }
 

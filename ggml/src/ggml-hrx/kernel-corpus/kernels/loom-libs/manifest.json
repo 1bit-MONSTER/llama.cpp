@@ -670,6 +670,9 @@
     },
     {
       "path": "ops/mul_mat_id_swiglu_f32_f32_wmma.loom"
+    },
+    {
+      "path": "ops/set_rows.loom"
     }
   ],
   "exports": [
@@ -9932,6 +9935,51 @@
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom"
       ]
+    },
+    {
+      "name": "ggml_set_rows_scatter",
+      "family": "loom_libs",
+      "symbol": "ggml_set_rows_scatter",
+      "source": "ops/set_rows.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "rows",
+        "indices",
+        "cache"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/set_rows.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
     }
   ],
   "link_modules": [
