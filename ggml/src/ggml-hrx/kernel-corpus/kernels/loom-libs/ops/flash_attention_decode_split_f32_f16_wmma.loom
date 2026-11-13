@@ -1115,7 +1115,9 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.multipass> devi
       %output_row_base = index.mul %output_row, %quads_per_row : index
       %quad_in_row = index.sub %quad, %output_row_base : index
       %output_channel0 = index.mul %quad_in_row, %c4 : index
-      %output_channel = index.assume %output_channel0 [range(%output_channel0, 0, 512)] : index
+      // quad_in_row < quads_per_row = value_head_size / 4, so the quad ends inside the row; stated against
+      // value_head_size so the full-vector bounds proof sees it (hrx-system pin-7 SUBRANGE/010).
+      %output_channel, %output_value_head_size = index.assume %output_channel0, %value_head_size [range(%output_channel0, 0, 512), multiple_of(%output_channel0, 4), lt(%output_channel0, %value_head_size)] : index, index
       %query_head = index.add %query_head_base, %output_row : index
       %row_sum = view.load %sum_stage_view[%output_row] : view<[%query_heads_per_key_value_head]xf32> -> f32
       %row_sum_vector = vector.splat %row_sum : vector<4xf32>
