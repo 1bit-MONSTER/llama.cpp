@@ -32,6 +32,16 @@ struct CommandPlanCompletionCounterRequest {
     uint32_t    count = 0;
 };
 
+// One dispatch match as the scheduler took it: the graph nodes it covers and the range of plan dispatches it emitted.
+// Recorded only for GGML_HRX_DISPATCH_SHAPE_LOG (dispatch-shape-log.h), which needs a command -> ggml node mapping.
+struct CommandPlanMatchRecord {
+    std::vector<size_t> covered_nodes;
+    size_t              first_initialization_dispatch = 0;
+    size_t              initialization_dispatch_count = 0;
+    size_t              first_dispatch                = 0;
+    size_t              dispatch_count                = 0;
+};
+
 struct CommandPlan {
     // Initializers prepare device metadata; their writes alone do not mutate caller-owned host inputs.
     // Caller-visible outputs and in-place updates belong in dispatches.
@@ -41,6 +51,7 @@ struct CommandPlan {
     std::vector<CommandPlanConstantInitialization>   constant_initializations;
     std::vector<CommandPlanCompletionCounterRequest> completion_counter_requests;
     CommandPlanMetadata                              metadata;
+    std::vector<CommandPlanMatchRecord>              match_records;  // empty unless the shape log is on
     Status                                           status;
 
     bool valid() const { return status.success(); }

@@ -1,6 +1,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include "dispatch-scheduler.h"
+#include "dispatch-shape-log.h"
 
 #include "ggml.h"
 #include "graph/graph-traversal.h"
@@ -50,6 +51,7 @@ static void clear_plan_results(CommandPlan & plan) {
     plan.constant_initializations.clear();
     plan.completion_counter_requests.clear();
     plan.metadata.clear();
+    plan.match_records.clear();
 }
 
 static void append_value_summary(std::ostringstream & stream, const Graph & graph, ValueId value_id) {
@@ -327,6 +329,11 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
             }
             clear_plan_results(plan_);
             return false;
+        }
+        if (dispatch_shape_log_enabled()) {
+            plan_.match_records.push_back({ match.covered_nodes, plan_.initialization_dispatches.size(),
+                                            match.initialization_dispatches.size(), plan_.dispatches.size(),
+                                            match.dispatches.size() });
         }
         for (Dispatch & dispatch : match.initialization_dispatches) {
             plan_.initialization_dispatches.push_back(std::move(dispatch));

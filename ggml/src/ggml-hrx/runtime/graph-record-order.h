@@ -28,7 +28,7 @@
 // moving kernels only a few places; full dependency-level order gave the same counts but Qwen3.6-35B
 // decode read 0.8% lower. Programs where reordering saves no barrier, and prompt programs (transient
 // arena extent over 16 MiB), keep program order.
-// GGML_HRX_GRAPH_ORDER=program records in program order. GGML_HRX_LOG_GRAPH_ORDER=1 logs the barrier
+// GGML_HRX_GRAPH_ORDER=program records in program order, and so does GGML_HRX_DISPATCH_SHAPE_LOG (its lines list commands in program order). GGML_HRX_LOG_GRAPH_ORDER=1 logs the barrier
 // count of both orders for every recorded graph.
 
 #pragma once
