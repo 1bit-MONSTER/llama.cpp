@@ -209,9 +209,11 @@ ggml_add_backend_library(ggml-hrx
     backend-buffer-binding.cpp
     hrx-1bit-safety.cpp
     host-weight-placement.cpp
+    model-buffer-from-mmap.cpp
     backend-buffer-binding.h
     backend-context.h
     host-weight-placement.h
+    model-buffer-from-mmap.h
     dispatch/command-plan-metadata.cpp
     dispatch/command-plan-metadata.h
     dispatch/command-plan.h

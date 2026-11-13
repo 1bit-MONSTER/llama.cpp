@@ -5718,9 +5718,22 @@ static void init_mul_mat_id_ids(ggml_context * ctx, int n_mats, bool skip = fals
     }
 }
 
-static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, bool skip = false) {
+static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, bool skip = false, float activation_scale = 1.0f) {
+    std::random_device rd;
+    std::default_random_engine rng(rd());
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-        if (t->type != GGML_TYPE_I32) {
+        if (t->type == GGML_TYPE_I32) {
+            continue;
+        }
+        if (activation_scale != 1.0f && strcmp(t->name, "b") == 0) {
+            // engine #2127 / #2167: the default fill is uniform in [-1, 1], which no half-precision narrowing of the
+            // activation can get wrong, so a case can ask for a wider activation. Only the activation `b` is scaled.
+            const size_t ne = (size_t) ggml_nelements(t);
+            std::vector<float> data(ne);
+            std::uniform_real_distribution<float> gen(-activation_scale, activation_scale);
+            for (size_t i = 0; i < ne; i++) { data[i] = gen(rng); }
+            ggml_backend_tensor_set(t, data.data(), 0, ne * sizeof(float));
+        } else {
             init_tensor_uniform(t);
         }
     }
@@ -5740,9 +5753,10 @@ struct test_mul_mat_id : public test_case {
     const int64_t m_v; // rows of as in memory, the experts of as are strided for m_v > m, no view for m_v == 0
     const bool ids_offset;
     const bool skip; // set some ids to a negative value
+    const float activation_scale; // engine #2167: scales the activation `b`; 1.0f for every earlier case
 
     std::string vars() override {
-        return VARS_TO_STR11(type_a, type_b, n_mats, n_used, b, m, n, k, m_v, ids_offset, skip);
+        return VARS_TO_STR12(type_a, type_b, n_mats, n_used, b, m, n, k, m_v, ids_offset, skip, activation_scale);
     }
 
     double max_nmse_err() override {
@@ -5767,9 +5781,9 @@ struct test_mul_mat_id : public test_case {
     test_mul_mat_id(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
             int64_t m = 32, int64_t n = 32, int64_t k = 32,
-            int64_t m_v = 0, bool ids_offset = false, bool skip = false)
+            int64_t m_v = 0, bool ids_offset = false, bool skip = false, float activation_scale = 1.0f)
         : type_a(type_a), type_b(type_b), n_mats(n_mats), n_used(n_used), b(b),
-            m(m), n(n), k(k), m_v(m_v), ids_offset(ids_offset), skip(skip) {
+            m(m), n(n), k(k), m_v(m_v), ids_offset(ids_offset), skip(skip), activation_scale(activation_scale) {
             GGML_ASSERT(n_used <= n_mats);
             GGML_ASSERT(m_v == 0 || m_v > m);
         }
@@ -5799,7 +5813,7 @@ struct test_mul_mat_id : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        init_mul_mat_id_tensors(ctx, n_mats, skip);
+        init_mul_mat_id_tensors(ctx, n_mats, skip, activation_scale);
     }
 
     void reinit_perf_iter(ggml_context * ctx) override {
@@ -8267,6 +8281,38 @@ struct test_mul_mat_vec_fusion : public test_case {
 
     double max_nmse_err() override {
         return 5e-3;
+    }
+};
+
+// Dense gate/up + SwiGLU (MUL_MAT_VEC_FUSION) whose activations exceed the f16 range (engine #2293): the same fill as
+// test_mul_mat_large_activation on the shared input, so a fused gate/up kernel that narrows the activations (or a
+// per-block sum of them) to f16 is checked against the CPU. The input is the one F32 tensor of shape [k, m].
+struct test_mul_mat_vec_fusion_large_activation : public test_mul_mat_vec_fusion {
+    const float magnitude;
+
+    std::string vars() override {
+        return test_mul_mat_vec_fusion::vars() + ",magnitude=" + var_to_str(magnitude);
+    }
+
+    test_mul_mat_vec_fusion_large_activation(ggml_type type, int64_t m, int64_t n, int64_t k, float magnitude)
+        : test_mul_mat_vec_fusion(type, GGML_GLU_OP_SWIGLU, m, n, k, false, 1, 1, false, false, true, false, {1, 1}),
+          magnitude(magnitude) {}
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type != GGML_TYPE_F32 || t->op != GGML_OP_NONE || t->ne[0] != k || t->ne[1] != m) {
+                continue;
+            }
+            std::vector<float> data(ggml_nelements(t));
+            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+            for (int64_t token = 0; token < t->ne[1]; token += 4) {
+                for (int64_t i = 0; i < t->ne[0]; i += 64) {
+                    data[token * t->ne[0] + i] = ((i / 64 + token / 4) % 2 == 0) ? magnitude : -magnitude;
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+        }
     }
 };
 
@@ -11873,6 +11919,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // element-wise expert below or off that contract must stay refused rather than reach a kernel that rejects it.
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8, 1472));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 8, 2, false, 384, 8,   92));
+    // engine #2167: a plain MUL_MAT_ID with activations above the half-precision range (65504). The routed kernels
+    // narrow the activation at 2^-6 (llama.cpp #285, in the engine pin since 7a1f2b81c), so these pass; before that
+    // commit the bf16 row at 1e5 returned NaN against a finite CPU result. 1e4 is the ordinary side of the limit.
+    // The shape is one the sweep already runs with the default fill, so only the magnitude differs; n = 1 is the
+    // one-token decode kernel.
+    for (float scale : { 1e4f, 1e5f }) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 4, 2, false, 512, 32, 256, 0, false, false, scale));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32,  GGML_TYPE_F32, 4, 2, false, 512, 32, 256, 0, false, false, scale));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4, 2, false, 512, 32, 256, 0, false, false, scale));
+    }
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16, GGML_TYPE_F32, 4, 2, false, 512, 1, 256, 0, false, false, 1e5f));
     // Row-padded activation against a dense weight: the model's dt_proj at the prefill token count, and the same contraction
     // at a small token count so a regression at either end is visible.
     test_cases.emplace_back(new test_mul_mat_row_padded_activation(GGML_TYPE_BF16, GGML_TYPE_F32, 2944, 512,  92, 264));
@@ -11901,6 +11958,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, n,  512, 9.1e4f));
         }
     }
+    // engine #2293: the 9..16-token K-quant paths, which read the activations' per-block sums (q8_1_x4 s = d * sum(q),
+    // stored in f16): the token loop at 12 tokens, and gate/up + SwiGLU at 12 and 16 tokens (the WMMA body).
+    for (ggml_type type_a : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K }) {
+        test_cases.emplace_back(new test_mul_mat_large_activation(type_a, 2048, 12, 4096, 9.1e4f));
+        for (int64_t tokens : { 12, 16 }) {
+            test_cases.emplace_back(new test_mul_mat_vec_fusion_large_activation(type_a, tokens, 2048, 4096, 9.1e4f));
+        }
+    }
     test_cases.emplace_back(new test_mul_mat_large_activation(GGML_TYPE_Q6_K, 2048, 22, 4096, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_large_activation(GGML_TYPE_Q6_K, 2048, 22,  512, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_large_activation(GGML_TYPE_Q6_K, 2048,  8,  512, 9.1e4f));
@@ -11914,6 +11979,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // q4_K at 512 tokens (packed prefill), q6_K at 512 (prefill), 8 (i8 prepacked; the skinny form at k = 512, m = 4096)
     // and 1 token (final projection); q5_K at 512 reads the native layout and is the control.
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2048, 512, 4096));
+    // engine #2137: q4_K at batch sizes off the 256 grid, where the generic kernel runs. It reads the stored layout by
+    // default and the packed row layout with GGML_HRX_Q4K_PACKED_TAIL=1; both must agree with the CPU.
+    for (int64_t n : { 6, 22, 164, 300 }) {
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2048, n, 4096));
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2048, n,  512));
+    }
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 9728, 164, 2560));
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q4_K, 2560, 164, 9728));
+    // and q6_K, off the 128 grid its prefill kernel takes: stored by default, packed with GGML_HRX_Q6K_PACKED_ROWS=1
+    for (int64_t n : { 22, 100, 164, 300 }) {
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, n, 4096));
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, n,  512));
+    }
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2560, 164, 2560));
+    // q6_K on its prefill kernel's 128 grid but off the 256 one (128, 384 tokens), and an output that is not a multiple
+    // of 128 at 256 tokens: the tile shapes of that kernel other than the wide one
+    for (int64_t n : { 128, 384 }) {
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, n, 4096));
+        test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 1024, n, 2560));
+    }
+    test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2112, 256, 2560));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048, 512, 4096));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 2048,   8, 4096));
     test_cases.emplace_back(new test_mul_mat_resident_weight(GGML_TYPE_Q6_K, 4096,   8,  512));
@@ -13025,6 +13111,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // The same routed shapes with the file's real 512 experts (engine #572 tile fit): 10 routes over 512 experts give
+    // ~1.6 / 10 / 40 routed rows per expert at 80 / 512 / 2048 tokens, so these reach the small-row tiles that the
+    // 16-expert cases above (50-320 rows per expert) never select. Gate/up: IQ4_XS (UD-IQ4_XS) and IQ2_S
+    // (UD-IQ3_XXS); down: IQ4_NL (both files) and Q5_0 (UD-IQ4_XS), 640 -> 2560 with one input row per route.
+    for (ggml_type t : {GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_S}) {
+        for (int64_t tokens : {80, 512, 2048}) {
+            test_cases.emplace_back(new test_mul_mat_vec_fusion(t, GGML_GLU_OP_SWIGLU, tokens, 640, 2560,
+                true, 512, 10, true, false, true, false));
+        }
+    }
+    for (ggml_type t : {GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_0}) {
+        for (int64_t tokens : {80, 512, 2048}) {
+            test_cases.emplace_back(new test_mul_mat_id(t, GGML_TYPE_F32, 512, 10, false, 2560, tokens, 640));
+        }
+    }
+
     // one-token Q4_K/Q5_K gate/up + SwiGLU at the HRX HIP kernel sizes (output % 128 == 0)
     for (ggml_type t : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) { for (int64_t n : {128, 384}) { for (int64_t k : {256, 1024, 2560}) { test_cases.emplace_back(new test_mul_mat_vec_fusion(t, GGML_GLU_OP_SWIGLU, 1, n, k, false, 1, 1, false, false, true, false, {1, 1})); } } }
     for (bool b : {false, true}) {
@@ -13482,6 +13584,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 32, 4, false, 2880, bs, 2880));
                 test_cases.emplace_back(new test_mul_mat_id_fusion(type_a, type_b, 32, 4, false, 2880, bs, 2880, 1));
             }
+        }
+    }
+
+    // Qwen3.8-Flash-Next routed down (engine #572): 512 experts, 10 routes, 640 -> 2560, the files' two down formats
+    for (int bs : {80, 512, 2048}) {
+        for (ggml_type type_a : {GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_0}) {
+            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 512, 10, false, 2560, bs, 640));
         }
     }
 

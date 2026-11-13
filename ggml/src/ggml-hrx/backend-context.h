@@ -61,6 +61,8 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_buffer_type_context           buft_context       = {};
     ggml_backend_buffer_type                       host_buft          = {};
     ggml_backend_hrx_buffer_type_context           host_buft_context  = {};
+    ggml_backend_buffer_type                       mapped_buft        = {};
+    ggml_backend_hrx_buffer_type_context           mapped_buft_context = {};
     ggml::hrx::HostBufferRegistry                  host_buffers;
     std::atomic<uint64_t>                          synchronous_upload_fallbacks{ 0 };
     std::atomic<uint64_t>                          synchronous_download_fallbacks{ 0 };

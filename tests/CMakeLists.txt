@@ -511,6 +511,13 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-external-window-view PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-external-window-view COMMAND test-hrx-external-window-view)
 
+    # the fused GATED_DELTA_NET pattern when the scheduler has already elided one of its layout aliases (the state
+    # RESHAPE visited before the L2_NORM root, engine #1925): host only
+    add_executable(test-hrx-gdn-passed-alias test-hrx-gdn-passed-alias.cpp)
+    target_link_libraries(test-hrx-gdn-passed-alias PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-gdn-passed-alias PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-gdn-passed-alias COMMAND test-hrx-gdn-passed-alias)
+
 
     add_executable(test-hrx-hadamard test-hrx-hadamard.cpp)
     target_link_libraries(test-hrx-hadamard PRIVATE ggml)
@@ -582,4 +589,13 @@ if (TARGET ggml-hrx)
         LABELS hrx
         TIMEOUT 900
         FAIL_REGULAR_EXPRESSION "test skipped: no device available")
+
+    # engine #2146: TOP_K on HRX gives the same indices in the same order every run
+    add_executable(test-hrx-top-k-repeat test-hrx-top-k-repeat.cpp)
+    target_link_libraries(test-hrx-top-k-repeat PRIVATE ggml)
+    target_include_directories(test-hrx-top-k-repeat PRIVATE ../ggml/include)
+    add_test(NAME test-hrx-top-k-repeat COMMAND test-hrx-top-k-repeat)
+    # the same cases with the kernel switched off: TOP_K must fall back to the CPU, not fail the graph (engine #2146)
+    add_test(NAME test-hrx-top-k-declined COMMAND test-hrx-top-k-repeat)
+    set_tests_properties(test-hrx-top-k-declined PROPERTIES ENVIRONMENT "GGML_HRX_DISABLE_DISPATCH=top_k")
 endif()

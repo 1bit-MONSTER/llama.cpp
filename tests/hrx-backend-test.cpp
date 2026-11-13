@@ -18,8 +18,10 @@
 #include "graph/graph-matcher.h"
 #include "graph/graph-traversal.h"
 #include "graph/graph.h"
+#include "hip/hip-capabilities.h"
 #include "hrx-interop-utils.h"
 #include "kernel-corpus/kernel-corpus.h"
+#include "model-buffer-from-mmap.h"
 #include "runtime/command-program-executor.h"
 #include "runtime/graph-executor.h"
 #include "runtime/graph-program-cache.h"
@@ -3490,6 +3492,314 @@ static bool matmul_graph_is_supported(ggml_context * ctx, ggml_tensor * output) 
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
     REQUIRE(imported.valid());
     return ggml::hrx::DispatchScheduler::can_schedule_graph(imported.graph, test_dispatch_target());
+}
+
+// engine #2137: which layout a prefill batch off the kernel's grid reads a Q4_K / Q6_K weight in follows the weight's
+// own buffer. A weight in the loader's file mapping (llama.cpp #304) costs a device copy per layout, so it is read in
+// the packed rows decode reads (weight format 44 / 46) and holds one copy. A weight that was uploaded already has its
+// stored layout on the device, so it stays stored (4 / 6) and the packed copy is not added.
+// GGML_HRX_Q4K_PACKED_TAIL / GGML_HRX_Q6K_PACKED_ROWS force one or the other; the row is about the default, so it does
+// nothing when either is set.
+// engine #2137: a stored-copy entry belongs to one mapping. A model mapped over the same addresses later (a reload in
+// the same process) starts with none, so a weight there is not taken to have a copy it never had.
+static void run_stored_copy_entries_forgotten_on_remap() {
+    ggml_backend_hrx_device_context device_context = {};
+    device_context.name                            = "HRX0";
+    ggml::hrx::model_buffer_from_mmap_init_type(&device_context);
+    std::vector<uint8_t> storage(64 * 1024 + 64);
+    uint8_t *            bytes = storage.data() + (64 - reinterpret_cast<uintptr_t>(storage.data()) % 64) % 64;
+    const size_t         size  = 64 * 1024;
+
+    ggml_backend_buffer_t first = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, size);
+    REQUIRE(first != nullptr);
+    ggml::hrx::note_stored_device_copy(bytes + 4096);
+    ggml::hrx::note_stored_device_copy(bytes + size + 0);  // outside the mapping: must survive the remap
+    REQUIRE(ggml::hrx::has_stored_device_copy(bytes + 4096));
+    ggml_backend_buffer_free(first);
+
+    ggml_backend_buffer_t second = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, size);
+    REQUIRE(second != nullptr);
+    REQUIRE(!ggml::hrx::has_stored_device_copy(bytes + 4096));
+    REQUIRE(ggml::hrx::has_stored_device_copy(bytes + size));
+    ggml::hrx::forget_stored_device_copies(bytes + size, 1);
+    REQUIRE(!ggml::hrx::has_stored_device_copy(bytes + size));
+    ggml_backend_buffer_free(second);
+}
+
+// engine #2137: the 256-aligned Q4_K prefill. For a file-mapped weight with no stored device copy it is the f16 kernel
+// over the packed rows; for one that already has a stored copy it is the 8-bit-block kernel over the stored layout
+// (weight format 4), so prefill shares decode's copy.
+static void schedule_q4k_aligned_prefill_layout(bool stored_copy_exists) {
+    if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr) {
+        std::printf("       skipped: a packed-layout switch is set in the environment\n");
+        return;
+    }
+    constexpr int64_t input_size  = 512;
+    constexpr int64_t output_size = 256;
+    constexpr int64_t token_count = 512;
+    ggml_backend_hrx_device_context device_context = {};
+    device_context.name                            = "HRX0";
+    ggml::hrx::model_buffer_from_mmap_init_type(&device_context);
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, input_size, output_size);
+    ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+    const size_t          byte_count = GGML_PAD(ggml_nbytes(weight), 64) + 64;
+    std::vector<uint8_t>  storage(byte_count + 64);
+    uint8_t *             bytes  = storage.data() + (64 - reinterpret_cast<uintptr_t>(storage.data()) % 64) % 64;
+    ggml_backend_buffer_t buffer = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, byte_count);
+    REQUIRE(buffer != nullptr);
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_tallocr allocator = ggml_tallocr_new(buffer);
+    REQUIRE(ggml_tallocr_alloc(&allocator, weight) == GGML_STATUS_SUCCESS);
+    if (stored_copy_exists) {
+        ggml::hrx::note_stored_device_copy(ggml::hrx::stored_copy_key(weight));
+    }
+    ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+    ggml_cgraph * graph  = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    size_t found = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
+        for (const auto & binding : dispatch.bindings) {
+            if (binding.value != imported.graph.nodes().front().inputs[0]) {
+                continue;
+            }
+            ++found;
+            if (stored_copy_exists) {
+                REQUIRE(name == "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256");
+                require_compile_parameter(dispatch, "ggml.mul_mat_q8_1_x4.weight_format", "4");
+                REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
+            } else {
+                REQUIRE(name == "loom_libs:ggml_mul_mat_q4_k_f16_wmma_prefill_wave32");
+                REQUIRE(binding.layout != ggml::hrx::kNativeWeightLayout);
+            }
+        }
+    }
+    REQUIRE(found == 1);
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+}
+
+static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool file_mapped, int64_t token_count = 100,
+                                                  bool stored_copy_exists = false) {
+    if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr || std::getenv("GGML_HRX_Q6K_PACKED_ROWS") != nullptr) {
+        std::printf("       skipped: a packed-layout switch is set in the environment\n");
+        return;
+    }
+    constexpr int64_t input_size  = 512;
+    constexpr int64_t output_size = 256;
+    // token_count: 100 is off the 256 (Q4_K) and 128 (Q6_K) grids of the aligned prefill kernels; 12 is the batch size
+    // the Q6_K i8 kernel takes, which reads a layout of its own
+
+    ggml_backend_hrx_device_context device_context = {};
+    device_context.name                            = "HRX0";
+    ggml::hrx::model_buffer_from_mmap_init_type(&device_context);
+
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, weight_type, input_size, output_size);
+    ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+    REQUIRE(weight != nullptr);
+    REQUIRE(input != nullptr);
+
+    // the weight's bytes, as the loader would hand them over: host memory, either wrapped as the file mapping or as a
+    // plain weights buffer (which is what an upload looks like to the matcher: weights, but not the mapped type)
+    // (ggml_backend_cpu_buffer_from_ptr requires the tensor alignment, which a vector's storage does not promise)
+    const size_t          byte_count = GGML_PAD(ggml_nbytes(weight), 64) + 64;
+    std::vector<uint8_t>  storage(byte_count + 64);
+    uint8_t *             bytes  = storage.data() + (64 - reinterpret_cast<uintptr_t>(storage.data()) % 64) % 64;
+    ggml_backend_buffer_t buffer = file_mapped ? ggml::hrx::model_buffer_from_mmap(&device_context, bytes, byte_count) :
+                                                 ggml_backend_cpu_buffer_from_ptr(bytes, byte_count);
+    REQUIRE(buffer != nullptr);
+    REQUIRE(ggml::hrx::buffer_is_file_mapped(buffer) == file_mapped);
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_tallocr allocator = ggml_tallocr_new(buffer);
+    REQUIRE(ggml_tallocr_alloc(&allocator, weight) == GGML_STATUS_SUCCESS);
+    if (stored_copy_exists) {
+        // engine #2137: a decode kernel already made a stored-layout device copy of this weight
+        ggml::hrx::note_stored_device_copy(ggml::hrx::stored_copy_key(weight));
+        REQUIRE(ggml::hrx::has_stored_device_copy(ggml::hrx::stored_copy_key(weight)));
+    }
+
+    ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+    REQUIRE(output != nullptr);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+
+    const int         stored   = weight_type == GGML_TYPE_Q4_K ? 4 : 6;
+    const std::string expected = std::to_string(file_mapped && !stored_copy_exists ? stored + 40 : stored);
+    size_t            found    = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        const auto format = dispatch.kernel.compile_parameters.find("ggml.mul_mat.weight_format");
+        if (format == dispatch.kernel.compile_parameters.end()) {
+            continue;
+        }
+        ++found;
+        if (format->second != expected) {
+            std::printf("       %s weight, %s buffer: weight_format=%s, expected %s (kernel %s)\n",
+                        ggml_type_name(weight_type), file_mapped ? "file-mapped" : "uploaded", format->second.c_str(),
+                        expected.c_str(), kernel_name_for_id(dispatch.kernel.kernel_id).c_str());
+        }
+        REQUIRE(format->second == expected);
+    }
+    if (weight_type == GGML_TYPE_Q6_K && !file_mapped && !stored_copy_exists && token_count >= 6 && token_count <= 16) {
+        // an uploaded Q6_K weight keeps the i8 kernel at this batch size; it carries no weight_format
+        REQUIRE(found == 0);
+        REQUIRE(scheduler.plan().dispatches.size() == 1);
+        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches.front().kernel.kernel_id) ==
+                "loom_libs:ggml_mul_mat_q6_k_i8_prepacked_f16_wmma");
+    } else {
+        // the case must reach a kernel that takes the format, or it asserts nothing
+        REQUIRE(found == 1);
+    }
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+}
+
+// engine #2137: a weight a GET_ROWS also reads (a tied token embedding) is read stored by every kernel, because the
+// gather needs the stored layout and a program holds one layout per value (engine #1316). A 2-to-8-token batch on it
+// stays on the kquant few-token kernel, which reads that same stored copy; handing it to the packed prefill kernel
+// would only pick the stored tiled path, which is slower.
+static void schedule_tied_weight_few_tokens_keeps_kquant(ggml_type weight_type, int64_t token_count) {
+    if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr || std::getenv("GGML_HRX_Q6K_PACKED_ROWS") != nullptr) {
+        std::printf("       skipped: a packed-layout switch is set in the environment\n");
+        return;
+    }
+    constexpr int64_t input_size  = 512;
+    constexpr int64_t output_size = 256;
+
+    ggml_backend_hrx_device_context device_context = {};
+    device_context.name                            = "HRX0";
+    ggml::hrx::model_buffer_from_mmap_init_type(&device_context);
+
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, weight_type, input_size, output_size);
+    ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+    ggml_tensor * ids    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
+    REQUIRE(weight != nullptr);
+    REQUIRE(input != nullptr);
+    REQUIRE(ids != nullptr);
+
+    const size_t          byte_count = GGML_PAD(ggml_nbytes(weight), 64) + 64;
+    std::vector<uint8_t>  storage(byte_count + 64);
+    uint8_t *             bytes  = storage.data() + (64 - reinterpret_cast<uintptr_t>(storage.data()) % 64) % 64;
+    ggml_backend_buffer_t buffer = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, byte_count);
+    REQUIRE(buffer != nullptr);
+    REQUIRE(ggml::hrx::buffer_is_file_mapped(buffer));
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_tallocr allocator = ggml_tallocr_new(buffer);
+    REQUIRE(ggml_tallocr_alloc(&allocator, weight) == GGML_STATUS_SUCCESS);
+
+    ggml_tensor * gathered = ggml_get_rows(ctx, weight, ids);
+    ggml_tensor * output   = ggml_mul_mat(ctx, weight, input);
+    REQUIRE(gathered != nullptr);
+    REQUIRE(output != nullptr);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, gathered);
+    ggml_build_forward_expand(graph, output);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+
+    size_t kquant = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
+        if (name == "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32") {
+            ++kquant;
+        } else {
+            std::printf("       %s, %lld tokens: dispatch %s\n", ggml_type_name(weight_type),
+                        static_cast<long long>(token_count), name.c_str());
+        }
+    }
+    REQUIRE(kquant == 1);
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+}
+
+// engine #1962: the draft head's logits step (common.mul_mat.q6_k_token1_shortlist) selects activation groups, and the
+// scan reads as many group ids as it is told were selected. The selection kernel writes one id per 32-wide group that
+// exists, so the request must never exceed input_size / 32: at 96 for every width, an input below 3072 left the tail
+// of the id buffer unwritten and the scan used it as group indices.
+static void schedule_q6k_token1_shortlist_group_count(int64_t hidden_size, int64_t vocab_size, int64_t expected_groups) {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * table      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 8);
+    ggml_tensor * ids        = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    ggml_tensor * external   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+    ggml_tensor * scale_a    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+    ggml_tensor * scale_b    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+    ggml_tensor * projection = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2 * hidden_size, hidden_size);
+    ggml_tensor * head       = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, hidden_size, vocab_size);
+    ggml_tensor * branch_a   = ggml_mul(ctx, ggml_rms_norm(ctx, ggml_get_rows(ctx, table, ids), 0.000001f), scale_a);
+    ggml_tensor * branch_b   = ggml_mul(ctx, ggml_rms_norm(ctx, external, 0.000001f), scale_b);
+    ggml_tensor * projected  = ggml_mul_mat(ctx, projection, ggml_concat(ctx, branch_a, branch_b, 0));
+    ggml_tensor * logits     = ggml_mul_mat(ctx, head, projected);
+    REQUIRE(logits != nullptr);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, logits);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+
+    size_t select_count = 0;
+    size_t scan_count   = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
+        if (name == "loom_libs:ggml_select_symmetric_i4_k32_groups") {
+            ++select_count;
+            require_compile_parameter(dispatch, "ggml.mul_mat_q6_k_shortlist.selected_group_count",
+                                      std::to_string(expected_groups));
+            REQUIRE(dispatch.bindings.size() == 2);
+            REQUIRE(dispatch.bindings[1].length == static_cast<size_t>(expected_groups) * sizeof(int32_t));
+        } else if (name == "loom_libs:ggml_mul_mat_q6_k_symmetric_i2_scan_token1") {
+            ++scan_count;
+            require_compile_parameter(dispatch, "ggml.mul_mat_q6_k_shortlist.selected_group_count",
+                                      std::to_string(expected_groups));
+        }
+    }
+    // the case must reach the shortlist, or it asserts nothing
+    REQUIRE(select_count == 1);
+    REQUIRE(scan_count == 1);
+
+    ggml_free(ctx);
 }
 
 static void schedule_qwen_terminal_q6k_q8_command(int64_t token_count) {
@@ -8246,10 +8556,16 @@ static void append_qwen_routed_down_for_graph(ggml::hrx::Graph &              gr
     REQUIRE(output_value != nullptr);
     const ggml::hrx::CommandPlanMoeRoutingBundle * routing_bundle =
         plan.metadata.find_moe_routing_bundle(route_ids_value->id);
+    // engine #2186: both f16 planes of the fused routed feed-forward are stored at 2^-6, and the plan says so: a reader
+    // that does not ask for that scale must not find them.
     const ggml::hrx::CommandPlanAlternateValue * gate_up_alternate = plan.metadata.find_alternate_value(
-        glu_value->id, GGML_TYPE_F16, qwen_routed_gate_up_f16_output_size(tensors.output->ne[2]));
+        glu_value->id, GGML_TYPE_F16, qwen_routed_gate_up_f16_output_size(tensors.output->ne[2]), 6);
     const ggml::hrx::CommandPlanAlternateValue * routed_down_alternate = plan.metadata.find_alternate_value(
-        output_value->id, GGML_TYPE_F16, qwen_routed_down_f16_output_size(tensors.output->ne[2]));
+        output_value->id, GGML_TYPE_F16, qwen_routed_down_f16_output_size(tensors.output->ne[2]), 6);
+    REQUIRE(plan.metadata.find_alternate_value(glu_value->id, GGML_TYPE_F16,
+                                               qwen_routed_gate_up_f16_output_size(tensors.output->ne[2])) == nullptr);
+    REQUIRE(plan.metadata.find_alternate_value(output_value->id, GGML_TYPE_F16,
+                                               qwen_routed_down_f16_output_size(tensors.output->ne[2])) == nullptr);
     REQUIRE(routing_bundle != nullptr);
     REQUIRE(gate_up_alternate != nullptr);
     REQUIRE(routed_down_alternate != nullptr);
@@ -9376,6 +9692,8 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         // the f32 GLU output the down projection reads.
         REQUIRE(plan.metadata.find_alternate_value(imported.graph.values().find_tensor(tensors.glu)->id, GGML_TYPE_F16,
                                                    qwen_routed_gate_up_f16_output_size(4)) == nullptr);
+        REQUIRE(plan.metadata.find_alternate_value(imported.graph.values().find_tensor(tensors.glu)->id, GGML_TYPE_F16,
+                                                   qwen_routed_gate_up_f16_output_size(4), 6) == nullptr);
         const size_t             down_index = producer_index_for_tensor(imported.graph, tensors.output);
         ggml::hrx::DispatchMatch down_match;
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, down_index, down_match));
@@ -9650,6 +9968,25 @@ static void run_alias_value_import_checks() {
     REQUIRE(aliased_binding->buffer == dummy_hrx_buffer(0x8000));
     REQUIRE(aliased_binding->offset == 64);
     REQUIRE(aliased_binding->length == 8 * sizeof(float));
+
+    // engine #2159: an alternate stored at a scale is found only by a reader that asks for that scale, also through an
+    // alias. Value 1 aliases value 0; value 0 has an f16 copy stored at 2^-6.
+    {
+        ggml::hrx::Graph alias_graph;
+        alias_graph.values() = value_map;
+        ggml::hrx::CommandPlan alias_plan;
+        ggml::hrx::Status      alias_status;
+        REQUIRE(alias_plan.metadata.append_alternate_value(
+            { ggml::hrx::ValueId(0), ggml::hrx::ValueId(7), GGML_TYPE_F16, 16, "test.scaled_f16", 6 }, alias_status));
+        const auto * scaled =
+            ggml::hrx::find_alternate_value(alias_graph, alias_plan, ggml::hrx::ValueId(1), GGML_TYPE_F16, 16, 6);
+        REQUIRE(scaled != nullptr);
+        REQUIRE(scaled->scale_log2 == 6);
+        REQUIRE(ggml::hrx::find_alternate_value(alias_graph, alias_plan, ggml::hrx::ValueId(1), GGML_TYPE_F16, 16) ==
+                nullptr);
+        REQUIRE(ggml::hrx::find_alternate_value(alias_graph, alias_plan, ggml::hrx::ValueId(0), GGML_TYPE_F16, 16) ==
+                nullptr);
+    }
 
     ggml_free(ctx);
 }
@@ -9977,6 +10314,104 @@ static void run_zero_output_scheduler_elision_checks() {
     }
 
     ggml_free(ctx);
+}
+
+// engine #679: a node only a fused HIP dispatch executes is placed on HRX only through a matcher's own claim
+// predicate (hip/hip-capabilities.h). The QSA indexer's f16 gather at Flash-Next's 18.8k shape is the case: standalone
+// it has no dispatch, so supports_op says no and the scheduler puts it on the CPU, and hip.qsa_pool_blocks (the add-on
+// fusion rooted at it) never sees it in a model graph. A predicate claims exactly what it names and nothing else.
+static bool hip_tensor_claim_test_predicate(const ggml_tensor * op) {
+    return op != nullptr && op->op == GGML_OP_GET_ROWS &&
+           (std::strcmp(op->name, "hip_tensor_claim_test.claimed") == 0 ||
+            std::strcmp(op->name, "hip_tensor_claim_test.sched_claimed") == 0);
+}
+
+static void run_hip_tensor_claim_checks() {
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = 512 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 128, 18944);
+    ggml_tensor * cells = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 18944);
+    ggml_tensor * named = ggml_get_rows(ctx, cache, cells);
+    ggml_tensor * other = ggml_get_rows(ctx, cache, cells);
+    REQUIRE(named != nullptr && other != nullptr);
+    ggml_set_name(named, "hip_tensor_claim_test.claimed");
+    ggml_set_name(other, "hip_tensor_claim_test.not_claimed");
+
+    // before any predicate: the standalone answer, which is no for this gather
+    REQUIRE(!ggml::hrx::hip_tensor_claimed(named));
+    REQUIRE(!ggml_backend_supports_op(backend, named));
+    REQUIRE(!ggml_backend_supports_op(backend, other));
+
+    ggml::hrx::hip_declare_tensor_claim(hip_tensor_claim_test_predicate);
+    ggml::hrx::hip_declare_tensor_claim(hip_tensor_claim_test_predicate);  // registries run per architecture: once
+    REQUIRE(ggml::hrx::hip_tensor_claimed(named));
+    REQUIRE(ggml_backend_supports_op(backend, named));
+    // the claim is the predicate's, not the op's: the same gather under another name keeps the standalone answer
+    REQUIRE(!ggml::hrx::hip_tensor_claimed(other));
+    REQUIRE(!ggml_backend_supports_op(backend, other));
+
+    ggml_free(ctx);
+
+    // The constraint the hook documents, armed: a claim no dispatch takes fails the graph loudly (engine #389), it does
+    // not fall back. Through the scheduler, HRX0 + CPU, cache and cells in HRX memory: the unclaimed gather is placed
+    // on the CPU and computes; the same gather claimed (this predicate has no fusion behind it) is placed on HRX,
+    // where nothing executes it, and the compute returns an error.
+    ggml_backend_t cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    REQUIRE(cpu != nullptr);
+    for (const bool claimed : { false, true }) {
+        ggml_init_params gp = {};
+        gp.mem_size         = 512 * 1024;
+        gp.no_alloc         = true;
+        ggml_context * gctx = ggml_init(gp);
+        REQUIRE(gctx != nullptr);
+        ggml_tensor * gcache = ggml_new_tensor_2d(gctx, GGML_TYPE_F16, 128, 18944);
+        ggml_tensor * gcells = ggml_new_tensor_1d(gctx, GGML_TYPE_I32, 18944);
+        ggml_backend_buffer_t inputs = ggml_backend_alloc_ctx_tensors(gctx, backend);
+        REQUIRE(inputs != nullptr);
+        std::vector<ggml_fp16_t> hv((size_t) ggml_nelements(gcache), ggml_fp32_to_fp16(1.0f));
+        std::vector<int32_t>     iv((size_t) ggml_nelements(gcells));
+        for (size_t i = 0; i < iv.size(); ++i) {
+            iv[i] = (int32_t) i;
+        }
+        ggml_backend_tensor_set(gcache, hv.data(), 0, ggml_nbytes(gcache));
+        ggml_backend_tensor_set(gcells, iv.data(), 0, ggml_nbytes(gcells));
+
+        ggml_init_params cp = {};
+        cp.mem_size         = 512 * 1024;
+        cp.no_alloc         = true;
+        ggml_context * cctx = ggml_init(cp);
+        REQUIRE(cctx != nullptr);
+        ggml_tensor * gathered = ggml_get_rows(cctx, gcache, gcells);
+        ggml_set_name(gathered, claimed ? "hip_tensor_claim_test.sched_claimed" : "hip_tensor_claim_test.sched_free");
+        ggml_set_output(gathered);
+        ggml_cgraph * graph = ggml_new_graph(cctx);
+        ggml_build_forward_expand(graph, gathered);
+
+        ggml_backend_t       backends[2] = { backend, cpu };
+        ggml_backend_sched_t sched = ggml_backend_sched_new(backends, nullptr, 2, GGML_DEFAULT_GRAPH_SIZE, false, true);
+        REQUIRE(sched != nullptr);
+        REQUIRE(ggml_backend_sched_alloc_graph(sched, graph));
+        REQUIRE(ggml_backend_sched_get_tensor_backend(sched, gathered) == (claimed ? backend : cpu));
+        const ggml_status status = ggml_backend_sched_graph_compute(sched, graph);
+        if (claimed) {
+            REQUIRE(status != GGML_STATUS_SUCCESS);
+        } else {
+            REQUIRE(status == GGML_STATUS_SUCCESS);
+        }
+        ggml_backend_sched_free(sched);
+        ggml_free(cctx);
+        ggml_backend_buffer_free(inputs);
+        ggml_free(gctx);
+    }
+    ggml_backend_free(cpu);
+    ggml_backend_free(backend);
 }
 
 static void run_zero_output_device_support_checks() {
@@ -15317,6 +15752,47 @@ int main(int argc, char ** argv) {
         { "gdn_selected_rms_q8_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(); } },
         { "llama_attention_matmul_dispatch", [] { run_llama_attention_matmul_dispatch_checks(); } },
         { "quantized_value_projection_dispatch", [] { run_quantized_value_projection_dispatch_checks(); } },
+        // widths 256 and 2560 (Qwen3.8-Flash-Next) have fewer than 96 groups; 4096 has more
+        { "packed_layout_follows_weight.q4_k.file_mapped",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, true); } },
+        { "packed_layout_follows_weight.q4_k.uploaded",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, false); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true); } },
+        { "packed_layout_follows_weight.q6_k.uploaded",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, false); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped.tokens12",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 12); } },
+        { "packed_layout_follows_weight.q6_k.uploaded.tokens12",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, false, 12); } },
+        // engine #2137: 6 to 8 tokens is also the kquant few-token kernels' range, which read the stored layout; for a
+        // file-mapped weight prefill reads packed, the packed prefill kernel takes the batch
+        { "packed_layout_follows_weight.q4_k.file_mapped.tokens6",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, true, 6); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped.tokens8",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 8); } },
+        // ...but not for a weight a GET_ROWS also reads (a tied embedding): prefill cannot pack it either. (Q6_K: the
+        // i8 kernel takes a tied weight at 6 to 16 tokens before this matcher, dispatch-mul-mat.cpp)
+        { "tied_weight_few_tokens_keeps_kquant.q4_k.tokens6",
+          [] { schedule_tied_weight_few_tokens_keeps_kquant(GGML_TYPE_Q4_K, 6); } },
+        { "tied_weight_few_tokens_keeps_kquant.q4_k.tokens8",
+          [] { schedule_tied_weight_few_tokens_keeps_kquant(GGML_TYPE_Q4_K, 8); } },
+        // engine #2137: a file-mapped weight that already has a stored device copy (a decode kernel read it stored) is
+        // read stored by prefill too, so it is not copied a second time; and not in the i8 layout at 6 to 16 tokens
+        { "stored_copy_entries_forgotten_on_remap", [] { run_stored_copy_entries_forgotten_on_remap(); } },
+        { "q4k_aligned_prefill_layout.packed", [] { schedule_q4k_aligned_prefill_layout(false); } },
+        { "q4k_aligned_prefill_layout.stored_copy", [] { schedule_q4k_aligned_prefill_layout(true); } },
+        { "packed_layout_follows_weight.q4_k.file_mapped.stored_copy",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, true, 100, true); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 100, true); } },
+        { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy.tokens12",
+          [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 12, true); } },
+        { "q6k_token1_shortlist_group_count.256", [] { schedule_q6k_token1_shortlist_group_count(256, 65536, 8); } },
+        { "q6k_token1_shortlist_group_count.2560",
+          [] { schedule_q6k_token1_shortlist_group_count(2560, 248320, 80); } },
+        { "q6k_token1_shortlist_group_count.4096",
+          [] { schedule_q6k_token1_shortlist_group_count(4096, 65536, 96); } },
         { "schedule_qwen_terminal_q6k_q8_command.tokens1", [] { schedule_qwen_terminal_q6k_q8_command(1); } },
         { "schedule_qwen_terminal_q6k_q8_command.tokens18", [] { schedule_qwen_terminal_q6k_q8_command(18); } },
         { "schedule_get_rows_q8_1_alternate_command.q4_k", [] { schedule_get_rows_q8_1_alternate_command(GGML_TYPE_Q4_K); } },
@@ -15369,6 +15845,7 @@ int main(int argc, char ** argv) {
 
     const std::vector<Case> device_cases = {
         { "zero_output_device_support", [] { run_zero_output_device_support_checks(); } },
+        { "hip_tensor_claim", [] { run_hip_tensor_claim_checks(); } },
         { "scale_f32_device_support", [] { run_scale_f32_device_support_checks(); } },
         { "qwen_expert_table_partition_prefill_512_execution", [] { run_qwen_expert_table_partition_prefill_512_execution(); } },
         { "add_f32", [] { run_add_f32(); } },

@@ -44,6 +44,10 @@ static constexpr int64_t                       kRoutedFfnRouteCount             
 static constexpr size_t                        kRoutedFfnPlanTransientAlignment  = 256;
 static constexpr const char *                  kRoutedFfnF16GateUpOutputName     = "qwen.moe.gate_up_swiglu_f16";
 static constexpr const char *                  kRoutedFfnF16RoutedDownOutputName = "qwen.moe.routed_down_f16";
+// engine #2186: both f16 planes of the fused routed feed-forward hold their values at 2^-6. The gate/up kernel
+// publishes the SwiGLU product that way, the routed down projection is linear and carries the factor, and the weighted
+// reduce multiplies it back in f32. Recorded on the plan's alternate values so a reader has to ask for it.
+static constexpr int                           kRoutedFfnF16PlaneScaleLog2       = 6;
 static constexpr const char *                  kRoutedFfnQ8GateUpOutputName      = "qwen.decode.moe.gate_up_swiglu_q8";
 static constexpr const char *                  kRoutedFfnQ8HiddenOutputName      = "qwen.decode.moe.hidden_q8";
 static constexpr const char *                  kRoutedFfnQ8NextRmsNormOutputName = "qwen.prefill.moe.next_rmsnorm_q8";
@@ -387,7 +391,8 @@ static RoutedDownMatch match_routed_ffn_down_grouped(const DispatchMatchContext 
     }
 
     const CommandPlanAlternateValue * input_alternate =
-        find_alternate_value(context.plan, input->id, GGML_TYPE_F16, f16_gate_up_output_size(token_count));
+        find_alternate_value(context.plan, input->id, GGML_TYPE_F16, f16_gate_up_output_size(token_count),
+                             kRoutedFfnF16PlaneScaleLog2);
     if (input_alternate == nullptr) {
         return {};
     }
@@ -873,7 +878,8 @@ static WeightedReduceMatch match_routed_ffn_down_weighted_reduce(const DispatchM
     }
     const int64_t                     token_count = match.token_count;
     const CommandPlanAlternateValue * routed_alternate =
-        find_alternate_value(context.plan, routed_output->id, GGML_TYPE_F16, f16_routed_down_output_size(token_count));
+        find_alternate_value(context.plan, routed_output->id, GGML_TYPE_F16, f16_routed_down_output_size(token_count),
+                             kRoutedFfnF16PlaneScaleLog2);
     if (routed_alternate == nullptr) {
         return {};
     }
@@ -917,7 +923,8 @@ static bool match_routed_ffn_gate_up_swiglu_f16_wmma_dispatch(const DispatchMatc
         { f16_output, kRoutedFfnF16GateUpOutputName, f16_output_bytes, kRoutedFfnPlanTransientAlignment });
     Status metadata_status;
     if (!dispatch_match.metadata.append_alternate_value(
-            { match.glu_output->id, f16_output, GGML_TYPE_F16, f16_output_bytes, kRoutedFfnF16GateUpOutputName },
+            { match.glu_output->id, f16_output, GGML_TYPE_F16, f16_output_bytes, kRoutedFfnF16GateUpOutputName,
+              kRoutedFfnF16PlaneScaleLog2 },
             metadata_status)) {
         return false;
     }
@@ -1189,7 +1196,8 @@ static bool build_routed_ffn_down_grouped_dispatch(const DispatchMatchContext & 
         { f16_output, kRoutedFfnF16RoutedDownOutputName, f16_output_bytes, kRoutedFfnPlanTransientAlignment });
     Status metadata_status;
     if (!dispatch_match.metadata.append_alternate_value(
-            { match.output->id, f16_output, GGML_TYPE_F16, f16_output_bytes, kRoutedFfnF16RoutedDownOutputName },
+            { match.output->id, f16_output, GGML_TYPE_F16, f16_output_bytes, kRoutedFfnF16RoutedDownOutputName,
+              kRoutedFfnF16PlaneScaleLog2 },
             metadata_status)) {
         return false;
     }

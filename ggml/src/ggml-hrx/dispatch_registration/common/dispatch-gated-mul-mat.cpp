@@ -2,6 +2,7 @@
 #include "dispatch-i4-prefill-opt-in.h"
 
 #include "dispatch-mul-mat-common.h"
+#include "dispatch-q4k-packed-tail.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -732,6 +733,26 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
     if (use_wmma && match.token_count < 2) {
         return false;
     }
+    // engine #2137 (dispatch-q4k-packed-tail.h): the WMMA body reading both weights in the packed row layout
+    // each weight on its own: Q4_K or Q6_K in its packed layout, anything else stored
+    const auto tail_format = [&](const Value & weight, CommonMulMatWeightFormat format) {
+        if (!use_wmma) {
+            return format;
+        }
+        if (format == CommonMulMatWeightFormat::Q4K &&
+            q4k_packed_tail_weight_ok(weight, match.input_size, match.output_size) && q4k_packed_tail_enabled(weight)) {
+            return CommonMulMatWeightFormat::Q4KRow64;
+        }
+        if (format == CommonMulMatWeightFormat::Q6K &&
+            q6k_packed_rows_weight_ok(weight, match.input_size, match.output_size) && q6k_packed_rows_enabled(weight)) {
+            return CommonMulMatWeightFormat::Q6KRow64;
+        }
+        return format;
+    };
+    const CommonMulMatWeightFormat gate_bound =
+        pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 : tail_format(*match.gate_weight, match.gate_format);
+    const CommonMulMatWeightFormat up_bound =
+        pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 : tail_format(*match.up_weight, match.up_format);
     dispatch.kernel = make_kernel_specialization(publish_q8 ? kMulMatSwiGLUQ4Q8OutputKernel :
         use_q8 ? kMulMatSwiGLUQ4Q8LowTokenDotKernel :
         (use_direct_dot ? kMulMatSwiGLUF32F32LowTokenDotKernel : kMulMatSwiGLUF32F32WmmaKernel));
@@ -744,24 +765,25 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
                                                common_to_config_value(match.output_size));
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_swiglu.gate_weight_format",
-        common_to_config_value(common_mul_mat_format_config_value(pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
-                                                                           match.gate_format)));
+        common_to_config_value(common_mul_mat_format_config_value(gate_bound)));
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_swiglu.up_weight_format",
-        common_to_config_value(common_mul_mat_format_config_value(pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
-                                                                           match.up_format)));
+        common_to_config_value(common_mul_mat_format_config_value(up_bound)));
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.op",
                                                common_to_config_value(static_cast<int64_t>(binary_kind_config_value(match.op))));
     dispatch.bindings.push_back(activation);
-    if (pack_q4) {
-        for (const Value * weight : { match.gate_weight, match.up_weight }) {
-            dispatch.bindings.push_back({ weight->id, 0, weight->byte_count, kQ4KPackedK256Row64Layout, weight->type,
-                                          match.input_size, match.output_size, weight->byte_count });
+    const auto bind_weight = [&](const Value & weight, CommonMulMatWeightFormat bound) {
+        const char * layout = bound == CommonMulMatWeightFormat::Q4KRow64 ? kQ4KPackedK256Row64Layout :
+                              bound == CommonMulMatWeightFormat::Q6KRow64 ? kQ6KPackedK256Row64ScaleRowLayout : nullptr;
+        if (layout != nullptr) {
+            dispatch.bindings.push_back({ weight.id, 0, weight.byte_count, layout, weight.type, match.input_size,
+                                          match.output_size, weight.byte_count });
+        } else {
+            dispatch.bindings.push_back({ weight.id, 0, weight.byte_count });
         }
-    } else {
-        dispatch.bindings.push_back({ match.gate_weight->id, 0, match.gate_weight->byte_count });
-        dispatch.bindings.push_back({ match.up_weight->id, 0, match.up_weight->byte_count });
-    }
+    };
+    bind_weight(*match.gate_weight, gate_bound);
+    bind_weight(*match.up_weight, up_bound);
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
     if (publish_q8) {

@@ -254,6 +254,15 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
     }
     Status                    pending_diagnostics;
     const GraphTraversalOrder traversal = GraphTraversalOrder::build(graph);
+    if (traversal.stalled_count() != 0) {
+        // Said only if the graph is then refused (pending_diagnostics is printed with the refusal): the nodes below
+        // were matched in index order, so "not scheduled yet" or an uncovered pattern root further down can be a
+        // consequence of this line rather than a fault of the matcher it names (engine #1925).
+        const size_t first = traversal.first_stalled_node();
+        pending_diagnostics.log("dependency walk stalled: %zu of %zu nodes were not reached and are matched in index "
+                                "order, from node %zu (%s)",
+                                traversal.stalled_count(), nodes.size(), first, ggml_op_name(nodes[first].op));
+    }
     for (const GraphNode * node : traversal.nodes()) {
         size_t i = 0;
         if (node == nullptr || !graph.index().node_index(node, i)) {

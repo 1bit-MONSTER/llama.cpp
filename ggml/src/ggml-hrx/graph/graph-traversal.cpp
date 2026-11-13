@@ -100,6 +100,16 @@ GraphTraversalOrder GraphTraversalOrder::build(const Graph & graph) {
     std::vector<int> pending_inputs(nodes.size(), 0);
     for (size_t i = 0; i < nodes.size(); ++i) {
         for (ValueId input : nodes[i].inputs) {
+            // An in-place op lists its own destination as an input: the CPY of a ggml_cast, or of the empty logits
+            // copy, has its dst as its own output value. That input is produced by this very node, so it must not
+            // make the node wait for itself: counted, the node never became ready, the walk stopped there, and
+            // everything downstream of it was appended in index order instead of dependency order. In index order
+            // the root of a fused pattern can come before a projection the pattern reads (the L2_NORM of the
+            // gated delta net before its gate MUL_MAT), which fails the graph (engine #1925). The scheduler's
+            // node_inputs_are_available() makes the same exception.
+            if (input == nodes[i].output) {
+                continue;
+            }
             if (graph.index().producer(input) != nullptr) {
                 ++pending_inputs[i];
             }
@@ -154,6 +164,10 @@ GraphTraversalOrder GraphTraversalOrder::build(const Graph & graph) {
 
     for (size_t i = 0; i < nodes.size(); ++i) {
         if (!selected[i]) {
+            if (result.stalled_count_ == 0) {
+                result.first_stalled_node_ = i;
+            }
+            ++result.stalled_count_;
             result.nodes_.push_back(&nodes[i]);
         }
     }

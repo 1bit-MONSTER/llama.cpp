@@ -9,6 +9,7 @@
 #include "backend-buffer-binding.h"
 #include "backend-context.h"
 #include "fused-context-claim.h"
+#include "model-buffer-from-mmap.h"
 #include "host-weight-placement.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
@@ -1034,8 +1035,8 @@ static void device_props(ggml_backend_dev_t device, ggml_backend_dev_props * pro
     device_memory(device, &props->memory_free, &props->memory_total);
     props->type      = GGML_BACKEND_DEVICE_TYPE_GPU;
     props->device_id = nullptr;
-    props->caps      = { true, true, true, false };
-    props->caps.mmap_support = true;
+    props->caps      = { true, true, ggml::hrx::model_buffer_from_mmap_enabled(), false };
+    props->caps.mmap_support = ggml::hrx::model_buffer_from_mmap_enabled();  // engine #856 switch, as buffer_from_host_ptr
 }
 
 static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parameters) {
@@ -1070,46 +1071,6 @@ static ggml_backend_buffer_type_t device_buffer_type(ggml_backend_dev_t device) 
 
 static ggml_backend_buffer_type_t device_host_buffer_type(ggml_backend_dev_t device) {
     return &device_context(device)->host_buft;
-}
-
-static ggml_backend_buffer_t device_buffer_from_host_ptr(ggml_backend_dev_t device,
-                                                          void *             ptr,
-                                                          size_t             size,
-                                                          size_t             max_tensor_size) {
-    GGML_UNUSED(max_tensor_size);
-    const bool has_pointer = ptr != nullptr;
-    const bool has_size = size != 0;
-    const bool valid_region = has_pointer && has_size;
-    if (!valid_region) {
-        return nullptr;
-    }
-    const uint64_t generation = g_allocation_generation.fetch_add(1);
-    auto * context = new (std::nothrow) ggml_backend_hrx_buffer_context{
-        device_context(device), nullptr, static_cast<uint8_t *>(ptr), generation, generation, false, true,
-        0, 0, nullptr,
-    };
-    if (context == nullptr) {
-        return nullptr;
-    }
-    ggml::hrx::HostBufferRef known_host = device_context(device)->host_buffers.find(ptr, size);
-    const bool known_host_region = known_host.valid();
-    const bool coherent_host_region = known_host.direct_bindable();
-    const bool known_direct_host = known_host_region && coherent_host_region;
-    if (known_host_region) {
-        context->identity = known_host.identity();
-        context->generation = known_host.generation();
-        context->retained_base = static_cast<uint8_t *>(known_host.base());
-        context->physical_offset = known_host.offset();
-        context->physical_capacity = known_host.capacity();
-    }
-    if (known_direct_host) {
-        hrx_buffer_retain(known_host.buffer());
-        context->buffer = known_host.buffer();
-        context->direct_host_binding = true;
-    }
-    // The importer retains the mapped region, which may be read-only. HRX owns only this descriptor; mutation
-    // callbacks require caller-writable storage and native weight storage is materialized on demand.
-    return ggml_backend_buffer_init(&device_context(device)->buft, buffer_i, context, size);
 }
 
 static bool eager_capability_declared(enum ggml_op op) {
@@ -1689,15 +1650,27 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (op->op == GGML_OP_VIEW && op->view_src != nullptr && op->type == GGML_TYPE_Q8_0) {
         return true;
     }
+    // a node only a fused HIP dispatch executes, claimed by that matcher's own predicate (hip/hip-capabilities.h)
+#if GGML_HRX_HIP_TENSOR_CLAIM
+    if (ggml::hrx::hip_tensor_claimed(op)) {
+        return true;
+    }
+#endif
     return eager_capability_declared(op->op) &&
            (ggml::hrx::fused_context_claim(
                 op, [device](const ggml_tensor * tensor) { return device_supports_op(device, tensor); }) ||
             ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture));
 }
 
+static ggml_backend_buffer_t device_buffer_from_host_ptr(ggml_backend_dev_t device, void * ptr, size_t size,
+                                                         size_t max_tensor_size) {
+    GGML_UNUSED(max_tensor_size);
+    return ggml::hrx::model_buffer_from_mmap(device_context(device), ptr, size);
+}
+
 static bool device_supports_buffer_type(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
     auto * context = device_context(device);
-    if (buft == &context->buft || buft == &context->host_buft) {
+    if (buft == &context->buft || buft == &context->host_buft || buft == &context->mapped_buft) {
         return true;
     }
     // Claiming another backend's host buffer makes the scheduler place host-resident weights and every
@@ -1863,10 +1836,12 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         device_ctx->buft              = { buffer_type_i, nullptr, &device_ctx->buft_context };
         device_ctx->host_buft_context = { device_ctx.get(), device_ctx->name + "_HOST", true };
         device_ctx->host_buft         = { buffer_type_i, nullptr, &device_ctx->host_buft_context };
+        ggml::hrx::model_buffer_from_mmap_init_type(device_ctx.get());
         context->device_contexts.emplace_back(std::move(device_ctx));
         context->devices.push_back({ device_i, nullptr, context->device_contexts.back().get() });
         context->device_contexts.back()->buft.device      = &context->devices.back();
         context->device_contexts.back()->host_buft.device = &context->devices.back();
+        context->device_contexts.back()->mapped_buft.device = &context->devices.back();
     }
     return context;
 }

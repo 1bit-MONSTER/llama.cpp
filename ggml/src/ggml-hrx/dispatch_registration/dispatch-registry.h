@@ -180,4 +180,11 @@ class DispatchRegistryBuilder {
 
 const DispatchRegistry * find_dispatch_registry(const DispatchTarget & target);
 
+// GGML_HRX_DISABLE_DISPATCH, the one rule for it: true when a comma-separated pattern is a substring of `name`, or is
+// "fused" and kind is Fused. The registry skips such a registration, and a supports_op claim for a node that only that
+// registration executes must decline with it, or the scheduler keeps the node on HRX with no dispatch and the graph
+// fails ("unsupported HRX node", engine #2146: =top_k left TOP_K claimed because the claim looked for the full name
+// "hip.top_k_f32" inside the variable instead of the pattern inside the name).
+bool dispatch_name_disabled(const char * name, DispatchMatchKind kind = DispatchMatchKind::SingleOp);
+
 }  // namespace ggml::hrx
