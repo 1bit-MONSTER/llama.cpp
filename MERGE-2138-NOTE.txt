@@ -746,3 +746,14 @@ dispatch-gated-mul-mat-id, dispatch-mul-mat-id, dispatch-registry, dispatch-rope
 Runtime: speculative (8), prepared-command-program-cache (5), graph-executor (5), command-program-executor (5), graph-program-cache (2) -- the
 semantic half, still marked.
 Manifests: all four reconciled (loom-libs 224 exports, qwen_moe 71), which is what unblocked the dispatch layer.
+
+## graph-program-cache.cpp: the difference is a DESIGN, and it is small enough to describe exactly
+Our class holds `PreparedCommandProgram prepared_;` plus `bool has_prepared_`, and answers has_prepared_program() under prepared_mutex_.
+AMD's class holds `std::shared_ptr<PreparedCommandProgramCacheEntry> prepared_entry_;` and exposes prepared_entry(); there is no has_prepared_ at all.
+So the file cannot be resolved by picking a side or by renaming: our side WRITES a prepared program into the graph program; AMD's side POINTS AT a
+cache entry. The difference shows up exactly where it matters -- what is shared, who owns the lifetime, and what has_prepared_program() means.
+Reasons it is not mine to decide: it changes ownership semantics for the prepared path (shared_ptr vs value), and graph-executor's use_graph_prepared
+branch depends on the answer.
+Snapshot for the hand-off (5 files, 25 hunks, all runtime):
+  speculative.cpp 8   prepared-command-program-cache 5   graph-executor 5   command-program-executor 5   graph-program-cache 2
+Everything else in the tree compiles: the whole dispatch layer, all four manifests, ggml-cpu, corpus, qwen4exp.
