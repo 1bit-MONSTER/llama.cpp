@@ -56,6 +56,7 @@ class HostTransferManager {
 
 struct HostWeightSource {
     const void * host_data  = nullptr;
+    hrx_buffer_t device_buffer = nullptr; // ours: device-resident weight sources (host-memory.cpp)
     uint64_t     identity   = 0;
     uint64_t     generation = 0;
     size_t       capacity   = 0;
@@ -269,6 +270,7 @@ class HostWeightCache {
     // synchronizes the stream before freeing anything, because a dispatch from an earlier command program may
     // still be reading the buffer.
     void        evict_for(hrx_stream_t stream, size_t needed);
+    size_t fail_cold_after_ = SIZE_MAX;
 };
 
 // RAII over HostWeightCache::begin_execution/end_execution for one command-program execution.
@@ -290,7 +292,6 @@ class HostWeightExecutionScope {
 
   private:
     HostWeightCache * cache_ = nullptr;
-    size_t fail_cold_after_ = SIZE_MAX;
 };
 
 struct HostStagingBuffer {

@@ -1913,7 +1913,6 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         return result;
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     const SourceKey key{ source.identity,   source.generation,   source.capacity, source.offset,
                          source.length,     materialized_length, source.layout,   source.source_type,
                          source.input_size, source.output_size };
@@ -1941,6 +1940,7 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         evict_for(stream, materialized_length);
     }
 
+    const bool           has_device_source = source.device_buffer != nullptr;
     HostWeightSource     materialization_source = source;
     std::vector<uint8_t> canonical;
     if (has_device_source) {
@@ -1958,28 +1958,6 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         materialization_source.device_buffer = nullptr;
         materialization_source.capacity      = canonical.size();
         materialization_source.offset        = 0;
-=======
-    // Native residency copies this byte range verbatim. Only transformed layouts interpret its type and shape.
-    const bool native_layout = source.layout == kNativeWeightLayout;
-    const SourceKey key{ source.identity, source.generation, source.capacity, source.offset,
-                         source.length, materialized_length, source.layout,
-                         native_layout ? GGML_TYPE_COUNT : source.source_type,
-                         native_layout ? 0 : source.input_size, native_layout ? 0 : source.output_size };
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto found = entries_.find(key);
-    if (found != entries_.end()) {
-        ++stats_.hits;
-        result.lease = HostWeightLease(found->second);
-        return result;
-    }
-    if (fail_cold_after_ == 0) {
-        fail_cold_after_ = SIZE_MAX;
-        result.status.log("injected host weight acquisition failure");
-        return result;
-    }
-    if (fail_cold_after_ != SIZE_MAX) {
-        --fail_cold_after_;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     }
 
     const void *         upload_data = nullptr;
@@ -2069,7 +2047,6 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         return result;
     }
 
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto                  inserted = entries_.emplace(key, entry);
@@ -2104,15 +2081,6 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         }
     }
     result.lease = HostWeightLease(entry);
-=======
-    entries_.emplace(key, entry);
-    ++stats_.allocation_count;
-    stats_.resident_bytes += materialized_length;
-    report_new_representation(key, *entry);
-    ++stats_.misses;
-    stats_.materialized_bytes += materialized_length;
-    result.lease = HostWeightLease(std::move(entry));
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
     return result;
 }
 
@@ -2160,7 +2128,6 @@ void HostWeightCache::fail_cold_acquire_after_for_test(size_t successful_acquire
 void HostWeightCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.clear();
-<<<<<<< 7a1f2b81ce17aaa84a40b766d1b06e5fd4601196
     last_use_.clear();
     resident_bytes_ = 0;
     available_at_first_weight_ = 0;
@@ -2178,10 +2145,6 @@ void HostWeightCache::clear() {
     arena_free_bytes_ = 0;
     arena_free_.clear();
     arena_deferred_.clear();
-=======
-    stats_.allocation_count = 0;
-    stats_.resident_bytes = 0;
->>>>>>> 9bf5871310a8d7de74f4cb0c57009835fbf91c27
 }
 
 HostStagingBuffer::~HostStagingBuffer() {
