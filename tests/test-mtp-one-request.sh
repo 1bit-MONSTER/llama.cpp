@@ -6,7 +6,9 @@
 # Pass: HTTP 200 from /completion with non-empty content, the server still alive afterwards, and the server log
 # reporting a draft acceptance line (so the MTP drafter really ran). Distinct exit codes per failure:
 #   1 server never became healthy   2 the server died (e.g. the #2433 SIGSEGV)   3 the request timed out or HTTP != 200
-#   4 empty content                 5 no draft acceptance line (the drafter did not run)
+#   4 empty content                 5 no draft acceptance line, or 0 drafts accepted (the drafter did not work)
+# Worst case of this script: health 200 x (curl -m 2 + sleep 3) = 1000 s + the request (-m 600) = ~1600 s; the ctest
+# TIMEOUT must stay above that or these exit codes never get to run.
 set -u
 BIN_DIR=${1:?usage: test-mtp-one-request.sh <bin dir>}
 M=${ONEBIT_MTP_TEST_MODEL:-}
@@ -52,6 +54,8 @@ sleep 1
 alive=yes; kill -0 "$SRV" 2>/dev/null || alive=no
 content=$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("content",""))' 2>/dev/null || true)
 acc=$(grep -m1 "draft acceptance" "$LOG" || true)
+# "draft acceptance = 0.64286 (    9 accepted /    14 generated)": the accepted count is what says the drafter worked
+acc_n=$(printf '%s' "$acc" | sed -nE 's/.*\( *([0-9]+) accepted.*/\1/p')
 echo "test-mtp-one-request: http=$http alive=$alive content=$(printf '%q' "${content:0:60}")"
 echo "  ${acc:-no draft acceptance line}"
 if [ "$alive" != yes ]; then
@@ -60,4 +64,5 @@ fi
 if [ "$http" != 200 ]; then echo "test-mtp-one-request: request failed or timed out (http=$http), FAIL (log $LOG)"; exit 3; fi
 if [ -z "$content" ]; then echo "test-mtp-one-request: empty content, FAIL (log $LOG)"; exit 4; fi
 if [ -z "$acc" ]; then echo "test-mtp-one-request: no draft acceptance line, the MTP drafter did not run, FAIL (log $LOG)"; exit 5; fi
+if [ -z "$acc_n" ] || [ "$acc_n" -lt 1 ]; then echo "test-mtp-one-request: 0 drafts accepted (${acc_n:-unparsed}), the MTP drafter did not work, FAIL (log $LOG)"; exit 5; fi
 echo "test-mtp-one-request: OK"; rm -f "$LOG"; exit 0
