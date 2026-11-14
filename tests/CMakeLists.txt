@@ -186,6 +186,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-reasoning-budget.cpp  LABEL behavior)
+    llama_build_and_test(test-onebit-mtp-budget.cpp LABEL behavior) # engine #2433
     llama_build_and_test(test-grammar-parser.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-grammar-integration.cpp  LABEL behavior)
     llama_build_and_test(test-llama-grammar.cpp  LABEL behavior  LINK llama)

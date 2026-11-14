@@ -1529,6 +1529,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     // request's last row (engine #290).
     std::vector<llama_pos> pending_pos;
 
+    // all-zero h-row for the first token of a batch that does not continue from pending_h
+    std::vector<float> zero_h;
+
     std::vector<int32_t> i_batch_beg;
     std::vector<int32_t> i_batch_end;
 
@@ -1611,6 +1614,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
         pending_pos.assign(n_seq, -1);
+        zero_h.assign(n_embd, 0.0f);
 
         i_last.assign(n_seq, -1);
         i_batch_beg.assign(n_seq, -1);
@@ -1709,9 +1713,17 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     ? batch.add(t.id, t.pos[0], seq_id, false)
                     : batch.add_embd(t.embd, t.pos.data(), seq_id, false);
 
-                const float * h_row = k == i_batch_beg[seq_id]
-                    ? pending_h[seq_id].data()
-                    : h_tgt + (size_t) (k - 1) * n_embd;
+                // pending_h is the h-row that precedes the first token of this batch, so it only
+                // pairs with that token when the batch really continues from it. A fresh sequence
+                // starts at pos 0 while pending_h still holds the previous request's last row;
+                // seeding the MTP head with it there made the draft's first prediction depend on
+                // the previous request (engine #290). Same continuity guard eagle3 applies with
+                // pending_pos_last. (The #327 merge dropped it; engine #2433.)
+                const float * h_row = h_tgt + (size_t) (k - 1) * n_embd;
+                if (k == i_batch_beg[seq_id]) {
+                    const bool continues = pending_pos[seq_id] >= 0 && pending_pos[seq_id] + 1 == t.pos[0];
+                    h_row = continues ? pending_h[seq_id].data() : zero_h.data();
+                }
 
                 batch.set_embd_state(idx, { h_row, 1, (size_t) n_embd });
             }
@@ -1773,6 +1785,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
+
+        // sizes the budget/trace state to n_seq; keep()/drafted()/end() index it per sequence
+        // (the #327 merge dropped this call and every MTP draft wrote past an empty vector, engine #2433)
+        budget.begin(n_seq);
 
         batch.clear();
 
