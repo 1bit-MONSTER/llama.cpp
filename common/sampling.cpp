@@ -126,6 +126,12 @@ struct common_sampler {
     // for rejection sampling; independent of the draft, or the target distribution is not preserved
     std::mt19937 rng;
 
+    // engine C4-STREAMS: the chain is provably an argmax over the logits (temperature 0 and every other stage keeps the top
+    // token); fast_greedy_mask marks the ids a -inf logit bias removes. common_sampler_sample then skips the 248k-entry
+    // candidate array and the chain (~0.7 ms per slot and step on Qwen3.8-27B).
+    bool              fast_greedy = false;
+    std::vector<char> fast_greedy_mask;
+
     void reset() {
         prev.clear();
 
@@ -444,6 +450,54 @@ struct common_sampler * common_sampler_init(
         /* .rng     = */ std::mt19937(llama_sampler_get_seed(chain) ^ 0x9e3779b9u),
     };
 
+    {
+        bool ok = params.mirostat == 0 && params.n_probs == 0 && !grmr && !rbudget && !params.backend_sampling &&
+                  !params.samplers.empty() && params.samplers.back() == COMMON_SAMPLER_TYPE_TEMPERATURE &&
+                  params.temp == 0.0f && params.dynatemp_range == 0.0f;
+        for (const auto type : params.samplers) {
+            switch (type) {
+                case COMMON_SAMPLER_TYPE_TOP_K:
+                case COMMON_SAMPLER_TYPE_TOP_P:
+                case COMMON_SAMPLER_TYPE_MIN_P:
+                case COMMON_SAMPLER_TYPE_TOP_N_SIGMA:
+                case COMMON_SAMPLER_TYPE_TEMPERATURE:
+                    break;  // never remove the top token
+                case COMMON_SAMPLER_TYPE_PENALTIES:
+                    ok &= params.penalty_last_n == 0 ||
+                          (params.penalty_repeat == 1.0f && params.penalty_freq == 0.0f && params.penalty_present == 0.0f);
+                    break;
+                case COMMON_SAMPLER_TYPE_DRY:
+                    ok &= params.dry_multiplier == 0.0f;
+                    break;
+                case COMMON_SAMPLER_TYPE_XTC:
+                    ok &= params.xtc_probability <= 0.0f;
+                    break;
+                case COMMON_SAMPLER_TYPE_TYPICAL_P:
+                    ok &= params.typ_p >= 1.0f;
+                    break;
+                default:
+                    ok = false;  // infill, adaptive-p, anything new
+            }
+        }
+        if (ok) {
+            const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+            result->fast_greedy_mask.assign(n_vocab, 0);
+            for (const auto & b : params.logit_bias) {
+                if (b.bias == -INFINITY) {
+                    if (b.token >= 0 && b.token < n_vocab) result->fast_greedy_mask[b.token] = 1;
+                } else if (b.bias != 0.0f) {
+                    ok = false;  // a finite bias can move the argmax
+                }
+            }
+            int32_t n_suppress = 0;
+            const llama_token * suppress = llama_vocab_get_suppress_tokens(vocab, &n_suppress);
+            for (int32_t i = 0; i < n_suppress; ++i) {
+                if (suppress[i] >= 0 && suppress[i] < n_vocab) result->fast_greedy_mask[suppress[i]] = 1;
+            }
+        }
+        result->fast_greedy = ok && getenv("LLAMA_NO_FAST_GREEDY") == nullptr;
+    }
+
     return result;
 }
 
@@ -611,6 +665,34 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     const auto tm = gsmpl->tm();
 
     llama_token id = LLAMA_TOKEN_NULL;
+
+    if (gsmpl->fast_greedy && llama_get_sampled_token_ith(ctx, idx) == LLAMA_TOKEN_NULL) {
+        const float * logits = llama_get_logits_ith(ctx, idx);
+        const int32_t n_vocab = (int32_t) gsmpl->fast_greedy_mask.size();
+        if (logits != nullptr && n_vocab > 0) {
+            const char * mask   = gsmpl->fast_greedy_mask.data();
+            int32_t      best   = -1;
+            float        best_v = -INFINITY;
+            bool         nan    = false;
+            for (int32_t i = 0; i < n_vocab; ++i) {
+                const float v = logits[i];
+                if (std::isnan(v)) {
+                    nan = true;  // the full path below reports it (engine#123/#315)
+                    break;
+                }
+                if (v > best_v && !mask[i]) {
+                    best_v = v;
+                    best   = i;
+                }
+            }
+            if (!nan && best >= 0) {
+                gsmpl->cur.resize(1);
+                gsmpl->cur[0]  = { best, best_v, 1.0f };
+                gsmpl->cur_p   = { gsmpl->cur.data(), 1, 0, true };
+                return best;
+            }
+        }
+    }
 
     auto & grmr  = gsmpl->grmr;
     auto & rbudget = gsmpl->rbudget;
