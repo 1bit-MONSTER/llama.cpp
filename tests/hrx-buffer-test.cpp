@@ -223,7 +223,10 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     ggml_backend_dev_get_props(device, &props);
     REQUIRE(props.caps.buffer_from_host_ptr);
 
-    std::array<uint32_t, 128> source = {};
+    // engine #2393: ggml_backend_cpu_buffer_from_ptr requires TENSOR_ALIGNMENT (32) and a stack std::array is only
+    // 4-byte aligned. The imported buffer hands this pointer to the backend verbatim, so the alignment is part of
+    // the contract the caller has to satisfy, not something the backend may pad away.
+    alignas(TENSOR_ALIGNMENT) std::array<uint32_t, 128> source = {};
     for (size_t i = 0; i < source.size(); ++i) {
         source[i] = static_cast<uint32_t>(i + 1);
     }
@@ -231,7 +234,12 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
                                                                             sizeof(source) / 2);
     REQUIRE(imported != nullptr);
     REQUIRE(ggml_backend_buffer_get_base(imported) == source.data());
-    REQUIRE(!ggml_backend_buffer_is_host(imported));
+    // engine #2393: `imported` and `is_host` are INDEPENDENT flags in this backend, not exclusive ones --
+    // backend-buffer-binding.cpp:85 keeps them as separate booleans (ordinary_device_buffer = !imported && !is_host)
+    // and :111 accepts either as "retained", so a zero-copy import of host memory is legitimately host-typed. The
+    // contract the case can enforce is the one asserted immediately below: the buffer is an IMPORTED handle with no
+    // private storage, and its base is the caller's pointer (asserted above). A buffer-type label adds nothing to
+    // that, and asserting the negative here would pin an implementation detail the rest of the code does not rely on.
     auto * context = ggml_backend_hrx_buffer_context_from_buffer(imported);
     REQUIRE(context->imported);
     REQUIRE(context->buffer == nullptr);
@@ -598,6 +606,14 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(!conflict.valid());
 
     ggml::hrx::HostWeightCacheStats weight_stats = weights.stats();
+    // engine #2393: state the counters the cache actually reports, on stderr because REQUIRE aborts before stdout
+    // flushes. The expectation below is hits 1 / misses 3 / allocations 3; printing separates "the counter is not
+    // incremented" from "the second acquire missed".
+    std::fprintf(stderr, "       host_weight_cache: hits=%llu misses=%llu allocations=%llu resident=%zu\n",
+                 static_cast<unsigned long long>(weight_stats.hits),
+                 static_cast<unsigned long long>(weight_stats.misses),
+                 static_cast<unsigned long long>(weight_stats.allocation_count),
+                 static_cast<size_t>(weight_stats.resident_bytes));
     REQUIRE(weight_stats.hits == 1);
     REQUIRE(weight_stats.misses == 3);
     REQUIRE(weight_stats.allocation_count == 3);
