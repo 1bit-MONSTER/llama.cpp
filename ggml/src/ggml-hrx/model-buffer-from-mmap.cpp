@@ -17,6 +17,7 @@
 
 #include "backend-context.h"
 #include "ggml-backend-impl.h"
+#include "ggml-impl.h"   // TENSOR_ALIGNMENT, GGML_LOG_ERROR (engine #2393 guard)
 #include "runtime/host-memory.h"
 
 #include <iterator>
@@ -147,6 +148,13 @@ ggml_backend_buffer_t model_buffer_from_mmap(ggml_backend_hrx_device_context * d
     // packs once, and it keeps the retagged CPU from-pointer buffer: making it an imported handle (borrowed buffer, no
     // pool charge) broke real model loading -- verified by a control run on an unmodified tree that generated tokens
     // while this tree crashed in cli_server::wait_ready(). The import path is device_buffer_from_host_ptr's own branch.
+    // engine #2393: an unaligned pointer must be REPORTED, not fatal. Without this guard the mapped_host_ptr case
+    // aborts inside ggml_backend_cpu_buffer_from_ptr's TENSOR_ALIGNMENT assert (signal 6).
+    if (ptr == nullptr || size == 0 || reinterpret_cast<uintptr_t>(ptr) % TENSOR_ALIGNMENT != 0) {
+        GGML_LOG_ERROR("%s: refusing host pointer %p (size %zu): it must be non-null and %d-byte aligned\n", __func__,
+                       ptr, size, TENSOR_ALIGNMENT);
+        return nullptr;
+    }
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
     if (buffer != nullptr) {
         buffer->buft = &device->mapped_buft;
