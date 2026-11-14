@@ -491,6 +491,8 @@ if (TARGET ggml-hrx)
     # our line's hrx-backend-test takes case names as its only arguments (no test_runner::Suite flags)
     add_test(NAME hrx-backend-test COMMAND hrx-backend-test)
     if (GGML_HRX_HIP_ADDON_DIR)
+        # engine#2392: hrx-backend-test labels the cases the add-on's own matchers take (hip_addon_known_fail)
+        target_compile_definitions(hrx-backend-test PRIVATE GGML_HRX_HIP_ADDON)
         # engine#2392: with a HIP add-on built in, its matchers claim nodes whose Loom-path plan many host cases
         # assert, so an add-on build otherwise never checks the Loom path at all. This runs the same suite with every
         # add-on registration (all named hip.*) switched off; measured 87/0 host, 14/14 device at 5006d9308.
