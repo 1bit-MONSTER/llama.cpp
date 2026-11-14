@@ -234,12 +234,14 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
                                                                             sizeof(source) / 2);
     REQUIRE(imported != nullptr);
     REQUIRE(ggml_backend_buffer_get_base(imported) == source.data());
-    // engine #2393: `imported` and `is_host` are INDEPENDENT flags in this backend, not exclusive ones --
-    // backend-buffer-binding.cpp:85 keeps them as separate booleans (ordinary_device_buffer = !imported && !is_host)
-    // and :111 accepts either as "retained", so a zero-copy import of host memory is legitimately host-typed. The
-    // contract the case can enforce is the one asserted immediately below: the buffer is an IMPORTED handle with no
-    // private storage, and its base is the caller's pointer (asserted above). A buffer-type label adds nothing to
-    // that, and asserting the negative here would pin an implementation detail the rest of the code does not rely on.
+    // engine #2393: an import is NOT host-typed, and that is the property that broke. #370 relaxed this assertion
+    // on the reading that `imported` and `is_host` are independent flags (backend-buffer-binding.cpp:85 keeps them
+    // separate, :111 accepts either as "retained"). #371 settled it the other way: the bug was that a from-pointer
+    // buffer reached here as a CPU buffer with its `buft` retagged, so `is_host` was true for something that was not
+    // a host allocation at all. An import now has its own buft (backend-context.h: `imported_buft`, "a direct
+    // binding whose buffer must not claim to be a host allocation"), so this negative is the invariant to hold:
+    // if an import ever becomes host-typed again, it went back through the retagging path that cost an afternoon.
+    REQUIRE(!ggml_backend_buffer_is_host(imported));
     auto * context = ggml_backend_hrx_buffer_context_from_buffer(imported);
     REQUIRE(context->imported);
     REQUIRE(context->buffer == nullptr);
