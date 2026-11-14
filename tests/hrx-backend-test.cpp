@@ -5550,11 +5550,11 @@ static void run_packed_f16_producer_consumer_checks() {
             plan.metadata.find_generated_resource(value->id, ggml::hrx::GeneratedResourceRole::F16K16Major);
         // engine #1962: the gated product's f16 form is published at 2^-6
         const auto * alternate = plan.metadata.find_alternate_value(value->id, GGML_TYPE_F16, value->byte_count / 2, 6);
+        // engine #449: which form a row publishes is per row, so each is checked on its own: the k16-major pack
+        // (`packed`, or `packed_copy` when a copy dispatch makes it from the plain alternate) and the plain f16
+        // alternate at 2^-6 (`alternate`). A row whose output came from the wrong producer fails one of the two.
         REQUIRE((generated != nullptr) == (test.packed || test.packed_copy));
-        // engine #449: a row that used to get a plain f16 alternate now gets the packed k16-major form
-        // (or the other way round). What the row asserts is that the producer's f16 output is published.
-        REQUIRE((alternate != nullptr || generated != nullptr) ==
-                (test.alternate || test.packed || test.packed_copy));
+        REQUIRE((alternate != nullptr) == test.alternate);
         const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
             return kernel_name_for_id(dispatch.kernel.kernel_id) ==
                    "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32";
