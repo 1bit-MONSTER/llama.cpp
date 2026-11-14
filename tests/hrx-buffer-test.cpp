@@ -7,6 +7,7 @@
 #include "ggml-impl.h"
 #include "ggml.h"
 #include "hrx-interop-utils.h"
+#include "model-buffer-from-mmap.h"
 #include "runtime/host-memory.h"
 #include "testing_suite.h"
 
@@ -222,10 +223,7 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     ggml_backend_dev_get_props(device, &props);
     REQUIRE(props.caps.buffer_from_host_ptr);
 
-    // engine #2393: ggml_backend_cpu_buffer_from_ptr requires TENSOR_ALIGNMENT (32) and a stack std::array is only
-    // 4-byte aligned. The imported buffer hands this pointer to the backend verbatim, so the alignment is part of
-    // the contract the caller has to satisfy, not something the backend may pad away.
-    alignas(TENSOR_ALIGNMENT) std::array<uint32_t, 128> source = {};
+    std::array<uint32_t, 128> source = {};
     for (size_t i = 0; i < source.size(); ++i) {
         source[i] = static_cast<uint32_t>(i + 1);
     }
@@ -233,12 +231,7 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
                                                                             sizeof(source) / 2);
     REQUIRE(imported != nullptr);
     REQUIRE(ggml_backend_buffer_get_base(imported) == source.data());
-    // engine #2393: `imported` and `is_host` are INDEPENDENT flags in this backend, not exclusive ones --
-    // backend-buffer-binding.cpp:85 keeps them as separate booleans (ordinary_device_buffer = !imported && !is_host)
-    // and :111 accepts either as "retained", so a zero-copy import of host memory is legitimately host-typed. The
-    // contract the case can enforce is the one asserted immediately below: the buffer is an IMPORTED handle with no
-    // private storage, and its base is the caller's pointer (asserted above). A buffer-type label adds nothing to
-    // that, and asserting the negative here would pin an implementation detail the rest of the code does not rely on.
+    REQUIRE(!ggml_backend_buffer_is_host(imported));
     auto * context = ggml_backend_hrx_buffer_context_from_buffer(imported);
     REQUIRE(context->imported);
     REQUIRE(context->buffer == nullptr);
@@ -420,6 +413,48 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
 #endif
 }
 
+// engine #856 / #2393: model_buffer_from_mmap, the CPU from-pointer buffer retagged as the mapped type
+static void run_mapped_host_ptr_checks(ggml_backend_t backend) {
+    ggml_backend_dev_t device = ggml_backend_get_device(backend);
+    alignas(TENSOR_ALIGNMENT) std::array<uint32_t, 128> source = {};
+    for (size_t i = 0; i < source.size(); ++i) {
+        source[i] = static_cast<uint32_t>(i + 1);
+    }
+    REQUIRE(ggml::hrx::model_buffer_from_mmap(backend_context(backend)->device, source.data() + 1,
+                                              sizeof(source) - sizeof(uint32_t)) == nullptr);
+    REQUIRE(ggml::hrx::model_buffer_from_mmap(backend_context(backend)->device, nullptr, sizeof(source)) == nullptr);
+
+    ggml_backend_buffer_t mapped =
+        ggml::hrx::model_buffer_from_mmap(backend_context(backend)->device, source.data(), sizeof(source));
+    REQUIRE(mapped != nullptr);
+    REQUIRE(ggml_backend_buffer_get_base(mapped) == source.data());
+    REQUIRE(ggml_backend_buffer_is_host(mapped));
+    REQUIRE(ggml::hrx::buffer_is_file_mapped(mapped));
+    REQUIRE(ggml_backend_dev_supports_buft(device, ggml_backend_buffer_get_type(mapped)));
+
+    ggml_init_params params = {};
+    params.mem_size         = 4096;
+    params.no_alloc         = true;
+    ggml_context * ggml     = ggml_init(params);
+    REQUIRE(ggml != nullptr);
+    ggml_tensor * tensor = ggml_new_tensor_1d(ggml, GGML_TYPE_I32, 32);
+    REQUIRE(ggml_backend_tensor_alloc(mapped, tensor, source.data() + 32) == GGML_STATUS_SUCCESS);
+
+    const uint32_t replacement = 999;
+    ggml_backend_tensor_set_async(backend, tensor, &replacement, sizeof(uint32_t), sizeof(replacement));
+    ggml_backend_synchronize(backend);
+    REQUIRE(source[33] == replacement);
+    std::array<uint32_t, 32> readback = {};
+    ggml_backend_tensor_get_async(backend, tensor, readback.data(), 0, sizeof(readback));
+    ggml_backend_synchronize(backend);
+    REQUIRE(readback[0] == source[32]);
+    REQUIRE(readback[1] == replacement);
+
+    ggml_backend_buffer_free(mapped);
+    REQUIRE(source[33] == replacement);
+    ggml_free(ggml);
+}
+
 static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
     ggml::hrx::HostTransferManager transfers;
     ggml::hrx::HostStagingBuffer   staging;
@@ -563,14 +598,6 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(!conflict.valid());
 
     ggml::hrx::HostWeightCacheStats weight_stats = weights.stats();
-    // engine #2393: state the counters the cache actually reports, on stderr because REQUIRE aborts before stdout
-    // flushes. The expectation below is hits 1 / misses 3 / allocations 3; printing separates "the counter is not
-    // incremented" from "the second acquire missed".
-    std::fprintf(stderr, "       host_weight_cache: hits=%llu misses=%llu allocations=%llu resident=%zu\n",
-                 static_cast<unsigned long long>(weight_stats.hits),
-                 static_cast<unsigned long long>(weight_stats.misses),
-                 static_cast<unsigned long long>(weight_stats.allocation_count),
-                 static_cast<size_t>(weight_stats.resident_bytes));
     REQUIRE(weight_stats.hits == 1);
     REQUIRE(weight_stats.misses == 3);
     REQUIRE(weight_stats.allocation_count == 3);
@@ -743,6 +770,11 @@ static void register_hrx_buffer_cases(test_runner::Suite & suite) {
     suite.device_case("imported_buffer", [] {
         run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
             run_imported_buffer_checks(backend);
+        });
+    });
+    suite.device_case("mapped_host_ptr", [] {
+        run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
+            run_mapped_host_ptr_checks(backend);
         });
     });
     suite.device_case("host_transfer", [] {

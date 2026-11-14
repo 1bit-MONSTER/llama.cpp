@@ -21,12 +21,23 @@
 
 struct ggml_backend_hrx_device_context;
 
+// engine #2393: build an HRX buffer whose storage is the caller's pointer (no allocation, no pool charge).
+// Used by model_buffer_from_mmap instead of retagging a CPU buffer, which made the HRX buffer-context accessor
+// read a CPU context. Global scope on purpose: the definition sits outside the anonymous ggml::hrx namespace.
+ggml_backend_buffer_t hrx_imported_buffer_from_ptr(ggml_backend_hrx_device_context * device, void * ptr, size_t size);
+// engine #2393: the same window shape for a mapped weight -- mapped_buft, no parent allocation to inherit.
+ggml_backend_buffer_t hrx_mapped_buffer_from_ptr(ggml_backend_hrx_device_context * device, void * ptr, size_t size);
+
 namespace ggml::hrx {
 
 // engine #856: the model weights stay in the loader's mmap and are not uploaded to a device buffer. The host-weight cache
 // packs each weight from these pages, so GTT holds one copy of the model instead of two. GGML_HRX_MODEL_BUFFER_COPY=1
 // restores the old upload, and so does a residency limit (GGML_HRX_HOST_WEIGHT_LIMIT_MB).
 bool model_buffer_from_mmap_enabled();
+
+// engine #2393: build an HRX buffer whose storage is the caller's pointer (no allocation, no pool charge).
+// Used by model_buffer_from_mmap instead of retagging a CPU buffer, which made the HRX buffer-context accessor
+// read a CPU context.
 
 // True for a buffer of the mapped type, i.e. weights that are host pages of the model file and not a device upload. A
 // weight in such a buffer costs a device copy for every layout the kernels read it in (engine #2137).

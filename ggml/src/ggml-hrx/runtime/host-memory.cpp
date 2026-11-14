@@ -2184,14 +2184,11 @@ void HostWeightCache::clear() {
     resident_bytes_ = 0;
     available_at_first_weight_ = 0;
     oversize_warned_           = false;
-    // engine #2393: hits/misses/evictions are CUMULATIVE -- a caller measuring cache effectiveness across a
-    // clear() must not see them reset. Only the residency counters describe what is currently materialised, and
-    // those are what clearing invalidates.
-    const HostWeightCacheStats counters = stats_;
-    stats_               = {};
-    stats_.hits          = counters.hits;
-    stats_.misses        = counters.misses;
-    stats_.evictions     = counters.evictions;
+    // engine#2393: the live gauges follow the entries just dropped; hits, misses, evictions, materialized bytes and
+    // duplicate warnings are counts over the cache's life, which is what AMD's clear() keeps (9bf5871) and what
+    // tests/hrx-buffer-test.cpp asserts. The #327 merge had kept this branch's older `stats_ = {}`.
+    stats_.allocation_count = 0;
+    stats_.resident_bytes   = 0;
     if (arena_ != nullptr) {
         hrx_buffer_release(arena_);
         arena_ = nullptr;
