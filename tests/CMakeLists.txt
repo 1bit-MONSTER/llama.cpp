@@ -637,7 +637,12 @@ if (TARGET ggml-hrx)
     add_test(NAME hrx-ops-test COMMAND hrx-ops-test
         --hrx-test-jobs 4 --hrx-test-output all --hrx-test-filter ".*")
 
-    set_tests_properties(hrx-buffer-test hrx-backend-test hrx-loom-jit-test hrx-ops-test PROPERTIES
+    # engine#2393: test-hrx-ops and test-hrx-buffer were missing from this list, and both print the same
+    # "test skipped: no device available" line. Measured on a machine with the runtime unset: test-hrx-ops exited
+    # **0** while skipping 267 of its 269 cases -- a green row for a suite that never touched a device. Their four
+    # siblings fail in that state, which is the right answer for a row whose subject is the hardware.
+    set_tests_properties(hrx-buffer-test hrx-backend-test hrx-loom-jit-test hrx-ops-test
+                         test-hrx-ops test-hrx-buffer PROPERTIES
         LABELS hrx
         TIMEOUT 900
         FAIL_REGULAR_EXPRESSION "test skipped: no device available")
