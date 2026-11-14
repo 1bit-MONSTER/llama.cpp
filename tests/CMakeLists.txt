@@ -490,6 +490,17 @@ if (TARGET ggml-hrx)
     target_include_directories(hrx-backend-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     # our line's hrx-backend-test takes case names as its only arguments (no test_runner::Suite flags)
     add_test(NAME hrx-backend-test COMMAND hrx-backend-test)
+    if (GGML_HRX_HIP_ADDON_DIR)
+        # engine#2392: with a HIP add-on built in, its matchers claim nodes whose Loom-path plan many host cases
+        # assert, so an add-on build otherwise never checks the Loom path at all. This runs the same suite with every
+        # add-on registration (all named hip.*) switched off; measured 87/0 host, 14/14 device at 5006d9308.
+        add_test(NAME hrx-backend-test-loom COMMAND hrx-backend-test)
+        set_tests_properties(hrx-backend-test-loom PROPERTIES
+            ENVIRONMENT "GGML_HRX_DISABLE_DISPATCH=hip."
+            LABELS hrx
+            TIMEOUT 900
+            FAIL_REGULAR_EXPRESSION "test skipped: no device available")
+    endif()
 
     # our line's Loom JIT suite (the base's ctest row); AMD's hrx-loom-jit-test is a different file
     add_executable(test-hrx-loom-jit test-hrx-loom-jit.cpp)
