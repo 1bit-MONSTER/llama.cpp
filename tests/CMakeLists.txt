@@ -153,6 +153,20 @@ llama_test(test-tokenizer-0 NAME test-tokenizer-0-qwen35          LABEL behavior
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-refact          LABEL behavior  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-refact.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-starcoder       LABEL behavior  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-starcoder.gguf)
 
+# engine#2433 regression arm: one llama-server request with MTP drafting, CPU only; needs ONEBIT_MTP_TEST_MODEL
+# (a GGUF with its own MTP head), else it reports SKIP (77)
+if (NOT WIN32 AND LLAMA_BUILD_SERVER)
+    llama_test_cmd(
+        ${CMAKE_CURRENT_SOURCE_DIR}/test-mtp-one-request.sh
+        NAME test-mtp-one-request
+        LABEL behavior
+        ARGS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+    )
+    # CI leaves ONEBIT_MTP_TEST_MODEL unset, so the row is SKIP there. TIMEOUT must exceed the script's own worst
+    # case (health 200 x 5 s + the 600 s request = ~1600 s), or a slow load is cut off before its exit code prints
+    set_tests_properties(test-mtp-one-request PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1800)
+endif()
+
 if (NOT WIN32)
     llama_test_cmd(
         ${CMAKE_CURRENT_SOURCE_DIR}/test-tokenizers-repo.sh
