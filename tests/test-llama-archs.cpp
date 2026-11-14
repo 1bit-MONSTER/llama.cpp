@@ -23,12 +23,67 @@
 #include <utility>
 #include <vector>
 
+#ifndef _WIN32
+#include <csignal>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char ** environ;
+#endif
+
+// engine#2444: every architecture runs in its own child process, so an abort marks that row and the table
+// still completes. One abort in one process took every later architecture down with it, and hid the
+// failures behind it. --child is how the parent starts a child; --inline keeps the single process (gdb).
+static bool g_child  = false;
+static bool g_inline = false;
+static std::vector<std::string> g_child_args; // seed, stdev, verbosity, backend and output dir, as the parent got them
+
 static bool arch_matches(const std::string & filter, llm_arch arch) {
     if (filter.empty()) {
         return true;
     }
     return std::regex_search(llama_arch_name(arch), std::regex(filter));
 }
+
+#ifndef _WIN32
+// run each matching architecture in a child; returns how many failed, and counts the ones that died on a signal
+static size_t run_isolated(const std::string & arch_filter, size_t * n_run, size_t * n_crashed) {
+    size_t n_failed = 0;
+    for (const llm_arch & arch : llama_arch_all()) {
+        if (arch == LLM_ARCH_UNKNOWN || !arch_matches(arch_filter, arch)) {
+            continue;
+        }
+        std::vector<std::string> args = { "/proc/self/exe", "--child", "-a", llama_arch_name(arch) };
+        args.insert(args.end(), g_child_args.begin(), g_child_args.end());
+        std::vector<char *> argv;
+        for (std::string & a : args) {
+            argv.push_back(a.data());
+        }
+        argv.push_back(nullptr);
+
+        common_log_flush(common_log_main());
+        fflush(stdout);
+        fflush(stderr);
+        pid_t pid = 0;
+        if (posix_spawn(&pid, argv[0], nullptr, nullptr, argv.data(), environ) != 0) {
+            throw std::runtime_error(std::string("cannot start a child for ") + llama_arch_name(arch));
+        }
+        int status = 0;
+        while (waitpid(pid, &status, 0) < 0) {
+        }
+        (*n_run)++;
+        if (WIFSIGNALED(status)) {
+            // the child printed the row it was on, without its result: finish that row
+            LOG(" CRASH (%s): %s\n", strsignal(WTERMSIG(status)), llama_arch_name(arch));
+            (*n_crashed)++;
+            n_failed++;
+        } else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            n_failed++;
+        }
+    }
+    return n_failed;
+}
+#endif
 
 // normalized mean squared error = mse(a, b) / mse(a, 0)
 static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
@@ -156,6 +211,7 @@ static void usage(char ** argv) {
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
+    LOG("  --inline                 Run every architecture in this process (default: one child process each)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
     LOG("  %s\n", argv[0]);
@@ -1039,6 +1095,16 @@ static bool arch_supported(const llm_arch arch) {
 }
 
 static int save_models(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const std::string & dir) {
+#ifndef _WIN32
+    if (!g_child && !g_inline) {
+        size_t n_run = 0, n_crashed = 0;
+        const size_t n_bad = run_isolated(arch_filter, &n_run, &n_crashed);
+        if (n_bad != 0) {
+            LOG_ERR("%s: %zu of %zu architecture(s) failed (%zu crashed)\n", __func__, n_bad, n_run, n_crashed);
+        }
+        return n_bad == 0 ? 0 : 1;
+    }
+#endif
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -1211,16 +1277,31 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
     size_t n_tests = 0;
     size_t n_failed = 0;
     common_log_flush(common_log_main());
-    LOG(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip", "Mixed batch");
-    LOG("|");
-    for (size_t i = 0; i < max_arch_name_length; i++) {
-        LOG("-");
+    if (!g_child) {
+        LOG(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip", "Mixed batch");
+        LOG("|");
+        for (size_t i = 0; i < max_arch_name_length; i++) {
+            LOG("-");
+        }
+        LOG("|");
+        for (size_t i = 0; i < max_device_label_length; i++) {
+            LOG("-");
+        }
+        LOG("|------|---------------|---------|---------------|\n");
     }
-    LOG("|");
-    for (size_t i = 0; i < max_device_label_length; i++) {
-        LOG("-");
+#ifndef _WIN32
+    if (!g_child && !g_inline) {
+        size_t n_run = 0, n_crashed = 0;
+        const size_t n_bad = run_isolated(arch_filter, &n_run, &n_crashed);
+        if (n_bad == 0) {
+            LOG("Summary: all %zu architecture(s) passed, each in its own process\n", n_run);
+        } else {
+            LOG("Summary: %zu architecture(s) run, %zu failed (%zu crashed)\n", n_run, n_bad, n_crashed);
+        }
+        llama_log_set(ud.log_old.callback, ud.log_old.user_data);
+        return n_bad == 0 ? 0 : 1;
     }
-    LOG("|------|---------------|---------|---------------|\n");
+#endif
     for (const llm_arch & arch : llama_arch_all()) {
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
@@ -1376,7 +1457,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         }
     }
 
-    if (n_tests == 0) {
+    if (g_child) {
+        // the parent prints the summary over every architecture
+    } else if (n_tests == 0) {
         LOG("Summary: no tests executed\n");
     } else if (n_failed == 0) {
         LOG("Summary: all %zu test(s) passed\n", n_tests);
@@ -1427,6 +1510,10 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--child") == 0) {
+            g_child = true;
+        } else if (strcmp(argv[i], "--inline") == 0) {
+            g_inline = true;
         } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
             if (i + 1 < argc) {
                 seed = std::stoull(argv[++i]);
@@ -1478,15 +1565,31 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: stdev must be > 0\n", __func__);
         return 1;
     }
-    LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
+    if (!g_child) {
+        LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
+    }
+    {
+        char stdev_str[32];
+        snprintf(stdev_str, sizeof(stdev_str), "%.9g", stdev);
+        g_child_args = { "-s", std::to_string(seed), "-d", stdev_str, "-v", std::to_string(verbosity) };
+        if (target_backend != nullptr) {
+            g_child_args.insert(g_child_args.end(), { "-b", target_backend });
+        }
+        if (!out.empty()) {
+            g_child_args.insert(g_child_args.end(), { "-o", out });
+        }
+    }
 
     init_normal_pool(seed, stdev);
 
     try {
-        if (!out.empty()) {
-            return save_models(arch_filter, seed, stdev, verbosity, out);
-        }
-        return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
+        const int rc = !out.empty() ? save_models(arch_filter, seed, stdev, verbosity, out)
+                                    : test_backends(arch_filter, seed, stdev, verbosity, target_backend);
+        // the log is written by a worker thread: drain it before exiting, or a child's last rows are lost and
+        // the next child's output lands on the unterminated row
+        common_log_flush(common_log_main());
+        fflush(stdout);
+        return rc;
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());
         return -1;
