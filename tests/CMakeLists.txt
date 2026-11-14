@@ -162,7 +162,8 @@ if (NOT WIN32 AND LLAMA_BUILD_SERVER)
         LABEL behavior
         ARGS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
     )
-    set_tests_properties(test-mtp-one-request PROPERTIES SKIP_RETURN_CODE 77)
+    # CI leaves ONEBIT_MTP_TEST_MODEL unset, so the row is SKIP there; the timeout bounds a slow CPU load + request
+    set_tests_properties(test-mtp-one-request PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900)
 endif()
 
 if (NOT WIN32)
