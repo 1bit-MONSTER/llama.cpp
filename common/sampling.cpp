@@ -195,6 +195,61 @@ std::string common_params_sampling::print() const {
     return std::string(result);
 }
 
+bool common_sampler_fast_greedy_eligible(const common_params_sampling & params, bool has_grammar, bool has_reasoning_budget) {
+    bool ok = params.mirostat == 0 && params.n_probs == 0 && !has_grammar && !has_reasoning_budget && !params.backend_sampling &&
+              !params.samplers.empty() && params.samplers.back() == COMMON_SAMPLER_TYPE_TEMPERATURE &&
+              params.temp == 0.0f && params.dynatemp_range == 0.0f;
+    for (const auto type : params.samplers) {
+        switch (type) {
+            case COMMON_SAMPLER_TYPE_TOP_K:
+            case COMMON_SAMPLER_TYPE_TOP_P:
+            case COMMON_SAMPLER_TYPE_TOP_N_SIGMA:
+            case COMMON_SAMPLER_TYPE_TEMPERATURE:
+                break;  // never remove the top token
+            case COMMON_SAMPLER_TYPE_MIN_P:
+                ok &= params.min_p <= 1.0f;  // keeps p >= min_p * p_max, which includes the top token only for min_p <= 1
+                break;
+            case COMMON_SAMPLER_TYPE_PENALTIES:
+                ok &= params.penalty_last_n == 0 ||
+                      (params.penalty_repeat == 1.0f && params.penalty_freq == 0.0f && params.penalty_present == 0.0f);
+                break;
+            case COMMON_SAMPLER_TYPE_DRY:
+                ok &= params.dry_multiplier == 0.0f;
+                break;
+            case COMMON_SAMPLER_TYPE_XTC:
+                ok &= params.xtc_probability <= 0.0f;
+                break;
+            case COMMON_SAMPLER_TYPE_TYPICAL_P:
+                ok &= params.typ_p >= 1.0f;
+                break;
+            default:
+                ok = false;  // infill, adaptive-p, anything new
+        }
+    }
+    for (const auto & b : params.logit_bias) {
+        if (b.bias != -INFINITY && b.bias != 0.0f) {
+            ok = false;  // a finite bias can move the argmax
+        }
+    }
+    return ok;
+}
+
+int32_t common_sampler_fast_greedy_argmax(const float * logits, int32_t n_vocab, const char * mask) {
+    int32_t best   = -1;
+    float   best_v = -INFINITY;
+    for (int32_t i = 0; i < n_vocab; ++i) {
+        const float v = logits[i];
+        if (std::isnan(v)) {
+            return -1;  // the full path reports it (engine#123/#315)
+        }
+        if (v > best_v && (mask == nullptr || !mask[i])) {
+            best_v = v;
+            best   = i;
+        }
+    }
+    return best;
+}
+
 struct common_sampler * common_sampler_init(
         const struct llama_model * model,
         struct common_params_sampling & params) {
@@ -451,42 +506,13 @@ struct common_sampler * common_sampler_init(
     };
 
     {
-        bool ok = params.mirostat == 0 && params.n_probs == 0 && !grmr && !rbudget && !params.backend_sampling &&
-                  !params.samplers.empty() && params.samplers.back() == COMMON_SAMPLER_TYPE_TEMPERATURE &&
-                  params.temp == 0.0f && params.dynatemp_range == 0.0f;
-        for (const auto type : params.samplers) {
-            switch (type) {
-                case COMMON_SAMPLER_TYPE_TOP_K:
-                case COMMON_SAMPLER_TYPE_TOP_P:
-                case COMMON_SAMPLER_TYPE_MIN_P:
-                case COMMON_SAMPLER_TYPE_TOP_N_SIGMA:
-                case COMMON_SAMPLER_TYPE_TEMPERATURE:
-                    break;  // never remove the top token
-                case COMMON_SAMPLER_TYPE_PENALTIES:
-                    ok &= params.penalty_last_n == 0 ||
-                          (params.penalty_repeat == 1.0f && params.penalty_freq == 0.0f && params.penalty_present == 0.0f);
-                    break;
-                case COMMON_SAMPLER_TYPE_DRY:
-                    ok &= params.dry_multiplier == 0.0f;
-                    break;
-                case COMMON_SAMPLER_TYPE_XTC:
-                    ok &= params.xtc_probability <= 0.0f;
-                    break;
-                case COMMON_SAMPLER_TYPE_TYPICAL_P:
-                    ok &= params.typ_p >= 1.0f;
-                    break;
-                default:
-                    ok = false;  // infill, adaptive-p, anything new
-            }
-        }
+        bool ok = common_sampler_fast_greedy_eligible(params, grmr != nullptr, rbudget != nullptr);
         if (ok) {
             const int32_t n_vocab = llama_vocab_n_tokens(vocab);
             result->fast_greedy_mask.assign(n_vocab, 0);
             for (const auto & b : params.logit_bias) {
-                if (b.bias == -INFINITY) {
-                    if (b.token >= 0 && b.token < n_vocab) result->fast_greedy_mask[b.token] = 1;
-                } else if (b.bias != 0.0f) {
-                    ok = false;  // a finite bias can move the argmax
+                if (b.bias == -INFINITY && b.token >= 0 && b.token < n_vocab) {
+                    result->fast_greedy_mask[b.token] = 1;
                 }
             }
             int32_t n_suppress = 0;
@@ -670,24 +696,10 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
         const float * logits = llama_get_logits_ith(ctx, idx);
         const int32_t n_vocab = (int32_t) gsmpl->fast_greedy_mask.size();
         if (logits != nullptr && n_vocab > 0) {
-            const char * mask   = gsmpl->fast_greedy_mask.data();
-            int32_t      best   = -1;
-            float        best_v = -INFINITY;
-            bool         nan    = false;
-            for (int32_t i = 0; i < n_vocab; ++i) {
-                const float v = logits[i];
-                if (std::isnan(v)) {
-                    nan = true;  // the full path below reports it (engine#123/#315)
-                    break;
-                }
-                if (v > best_v && !mask[i]) {
-                    best_v = v;
-                    best   = i;
-                }
-            }
-            if (!nan && best >= 0) {
+            const int32_t best = common_sampler_fast_greedy_argmax(logits, n_vocab, gsmpl->fast_greedy_mask.data());
+            if (best >= 0) {
                 gsmpl->cur.resize(1);
-                gsmpl->cur[0]  = { best, best_v, 1.0f };
+                gsmpl->cur[0]  = { best, logits[best], 1.0f };
                 gsmpl->cur_p   = { gsmpl->cur.data(), 1, 0, true };
                 return best;
             }

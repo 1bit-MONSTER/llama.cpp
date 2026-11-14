@@ -67,6 +67,12 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl);
 //
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first = false);
 
+// greedy fast path (common_sampler_sample): true when every stage of the chain built from params provably keeps the top
+// token, so sampling is an argmax over the logits minus the -inf-biased / suppressed ids
+bool    common_sampler_fast_greedy_eligible(const common_params_sampling & params, bool has_grammar, bool has_reasoning_budget);
+// argmax over logits skipping mask[i] != 0 (mask may be null); -1 when a logit is NaN or every id is masked / -inf
+int32_t common_sampler_fast_greedy_argmax(const float * logits, int32_t n_vocab, const char * mask);
+
 // generalized version of common_sampler_sample
 //
 // will cross-reference the sampled tokens with a batch of draft tokens and accept those that match
