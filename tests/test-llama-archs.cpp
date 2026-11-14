@@ -327,6 +327,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             n_ff_per_layer.push_back(il <= 1 ? 0 : n_ff);
         }
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
+    } else if (arch == LLM_ARCH_BLACKMAMBA) {
+        // layers alternate a Mamba mixer (n_ff == 0) and a Switch MoE; with no 0 the graph has no mixer and
+        // never consumes the recurrent-state input, which then has no buffer at set_input
+        std::vector<uint32_t> n_ff_per_layer;
+        n_ff_per_layer.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            n_ff_per_layer.push_back(il % 2 == 0 ? 0 : n_ff);
+        }
+        ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
     } else {
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff);
     }
@@ -939,6 +948,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MAPLE:
         case LLM_ARCH_MUSE_SPARK:
         case LLM_ARCH_KOLIBRI1:
+        case LLM_ARCH_BLACKMAMBA: // every layer is a Mamba mixer + routed MoE: blackmamba.cpp reads expert_feed_forward_length unconditionally
             return true;
         default:
             return false;
@@ -997,6 +1007,12 @@ static bool arch_supported(const llm_arch arch) {
     }
     if (arch == LLM_ARCH_PLM) {
         return false; // TODO tensor shapes
+    }
+    if (arch == LLM_ARCH_ZAMBA2 || arch == LLM_ARCH_ZAYA) {
+        // FIXME engine#2444: the generic fixture does not write these hybrids' hparams (zaya: 2-tap CCA conv and its
+        // state widths; zamba2: the shared attention block's width), so one aborts at load and the other in build_qkv
+        // and either took every later architecture down with it
+        return false;
     }
     if (arch == LLM_ARCH_CLEF || arch == LLM_ARCH_VLLM_DECISION2) {
         return false; // TODO decision head tensors

@@ -28,7 +28,7 @@ void llama_model_blackmamba::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
     ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
     ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr[0]);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
 
     switch (hparams.n_embd) {
         case 1152: type = LLM_TYPE_1_5B; break;
