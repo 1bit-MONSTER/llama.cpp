@@ -582,6 +582,13 @@ static bool match_mul_mat_swiglu_q4_q8_prefill_dispatch(const DispatchMatchConte
         !distinct_storage(context.graph, *match.gate_output, *match.up_output)) {
         return false;
     }
+    // engine #2137 / #2392: this kernel reads the gate and up weights only in the packed rows. A weight that already
+    // has a stored device copy (a decode kernel read it stored: with the HIP add-on, every dense decode does) is left
+    // to a matcher that reads it stored, as the plain aligned prefill does (dispatch-mul-mat.cpp), instead of being
+    // held twice. Measured on Qwen3-4B Q4_K_M with the add-on: 70 gate/up weights were resident in both layouts.
+    if (q4k_aligned_prefill_reads_stored(*match.gate_weight) || q4k_aligned_prefill_reads_stored(*match.up_weight)) {
+        return false;
+    }
 
     // Keep in sync with ggml_swiglu_use_packed_f16 in the shared operation.
     const bool packed_input = match.token_count % 512 == 0 &&

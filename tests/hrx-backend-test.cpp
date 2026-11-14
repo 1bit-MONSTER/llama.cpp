@@ -3723,6 +3723,80 @@ static void schedule_q4k_aligned_prefill_layout(bool stored_copy_exists) {
     ggml_free(ctx);
 }
 
+// engine #2392 / #2137: the fused gate/up SwiGLU prefill reads both Q4_K weights only in the packed rows. When the
+// weights already have stored device copies (a decode read them stored: with the HIP add-on, every dense decode does),
+// it leaves them to a matcher that reads them stored, as the plain aligned prefill does, so neither is held twice.
+// Measured with the add-on on Qwen3-4B Q4_K_M: 72 gate/up weights in both layouts (+946 MiB) without this rule.
+static void schedule_swiglu_q4k_prefill_layout(bool stored_copy_exists) {
+    if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr) {
+        std::printf("       skipped: a packed-layout switch is set in the environment\n");
+        return;
+    }
+    constexpr int64_t input_size  = 512;
+    constexpr int64_t hidden      = 256;
+    constexpr int64_t token_count = 512;
+    ggml_backend_hrx_device_context device_context = {};
+    device_context.name                            = "HRX0";
+    ggml::hrx::model_buffer_from_mmap_init_type(&device_context);
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * gate_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, input_size, hidden);
+    ggml_tensor * up_weight   = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, input_size, hidden);
+    ggml_tensor * input       = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+    const size_t  one         = GGML_PAD(ggml_nbytes(gate_weight), 256);
+    const size_t  byte_count  = 2 * one + 256;
+    std::vector<uint8_t>  storage(byte_count + 64);
+    uint8_t *             bytes  = storage.data() + (64 - reinterpret_cast<uintptr_t>(storage.data()) % 64) % 64;
+    ggml_backend_buffer_t buffer = ggml::hrx::model_buffer_from_mmap(&device_context, bytes, byte_count);
+    REQUIRE(buffer != nullptr);
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_tallocr allocator = ggml_tallocr_new(buffer);
+    REQUIRE(ggml_tallocr_alloc(&allocator, gate_weight) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_tallocr_alloc(&allocator, up_weight) == GGML_STATUS_SUCCESS);
+    if (stored_copy_exists) {
+        ggml::hrx::note_stored_device_copy(ggml::hrx::stored_copy_key(gate_weight));
+        ggml::hrx::note_stored_device_copy(ggml::hrx::stored_copy_key(up_weight));
+    }
+    ggml_tensor * gate   = ggml_mul_mat(ctx, gate_weight, input);
+    ggml_tensor * up     = ggml_mul_mat(ctx, up_weight, input);
+    ggml_tensor * output = ggml_swiglu_split(ctx, gate, up);
+    ggml_cgraph * graph  = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    const ggml::hrx::Value * gate_value = imported.graph.values().find_tensor(gate_weight);
+    const ggml::hrx::Value * up_value   = imported.graph.values().find_tensor(up_weight);
+    REQUIRE(gate_value != nullptr && up_value != nullptr);
+    size_t fused = 0, weight_reads = 0, packed_reads = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32") {
+            ++fused;
+        }
+        for (const auto & binding : dispatch.bindings) {
+            if (binding.value == gate_value->id || binding.value == up_value->id) {
+                ++weight_reads;
+                packed_reads += binding.layout != ggml::hrx::kNativeWeightLayout;
+            }
+        }
+    }
+    if (stored_copy_exists) {
+        REQUIRE(fused == 0);
+        REQUIRE(weight_reads >= 2);  // both weights are still read, by something
+        REQUIRE(packed_reads == 0);  // and only in the layout their stored copies have
+    } else {
+        // the case reaches the fused kernel, or the stored arm asserts nothing
+        REQUIRE(fused == 1);
+        REQUIRE(packed_reads == 2);
+    }
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+}
+
 static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool file_mapped, int64_t token_count = 100,
                                                   bool stored_copy_exists = false) {
     if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr || std::getenv("GGML_HRX_Q6K_PACKED_ROWS") != nullptr) {
@@ -15918,6 +15992,8 @@ int main(int argc, char ** argv) {
         { "stored_copy_entries_forgotten_on_remap", [] { run_stored_copy_entries_forgotten_on_remap(); } },
         { "q4k_aligned_prefill_layout.packed", [] { schedule_q4k_aligned_prefill_layout(false); } },
         { "q4k_aligned_prefill_layout.stored_copy", [] { schedule_q4k_aligned_prefill_layout(true); } },
+        { "swiglu_q4k_prefill_layout.packed", [] { schedule_swiglu_q4k_prefill_layout(false); } },
+        { "swiglu_q4k_prefill_layout.stored_copy", [] { schedule_swiglu_q4k_prefill_layout(true); } },
         { "packed_layout_follows_weight.q4_k.file_mapped.stored_copy",
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, true, 100, true); } },
         { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy",
