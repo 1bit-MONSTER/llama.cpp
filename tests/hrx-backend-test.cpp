@@ -15527,48 +15527,54 @@ static bool hip_addon_dispatch_active() {
 #endif
 }
 
-static const char * hip_addon_known_fail(const char * name) {
+struct HipAddonLabel {
+    const char * name;
+    const char * reason;
+    const char * expect;
+};
+
+static const HipAddonLabel * hip_addon_known_fail(const char * name) {
     // the add-on's own kernels plan the node: its ids are hashed by design, and its plan shape is its own
     static const char * kPlan = "#2392 add-on plans this node";
     // the add-on's dense kernels take no weight_format and read the weight stored; the trade is the owner's
     static const char * kLayout = "#2392 add-on reads the weight stored";
-    static const struct {
-        const char * name;
-        const char * reason;
-    } kLabels[] = {
-        { "qwen_flash_attention_dispatch", kPlan },
-        { "qwen_attention_postprocess_dispatch", kPlan },
-        { "qwen_matmul_dispatch", kPlan },
-        { "gdn_native_projection_pair_dispatch", kPlan },
-        { "common_mul_mat_id_swiglu_dispatch", kPlan },
-        { "common_mul_mat_id_postops_dispatch", kPlan },
-        { "qwen_routed_gate_up_dispatch", kPlan },
+    // `expect`: a fragment of the requirement the case fails on along that path. A labelled case that fails on any
+    // other requirement is a new defect, not the documented one, and the runner reports it as UNEXPECTED-FAIL.
+    // A row is removed when its mechanism's fix lands: the case then passes on the add-on path (UNEXPECTED-PASS).
+    static const HipAddonLabel kLabels[] = {
+        { "qwen_flash_attention_dispatch", kPlan, "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8" },
+        { "qwen_attention_postprocess_dispatch", kPlan, "scheduler.plan().dispatches.size() == 4" },
+        { "qwen_matmul_dispatch", kPlan, "projection != scheduler.plan().dispatches.rend()" },
+        { "gdn_native_projection_pair_dispatch", kPlan, "(fused != plan.dispatches.end()) == test.fused" },
+        { "common_mul_mat_id_swiglu_dispatch", kPlan, "match.dispatches.size() == 3" },
+        { "common_mul_mat_id_postops_dispatch", kPlan, "match.dispatches.size() == 3" },
+        { "qwen_routed_gate_up_dispatch", kPlan, "ggml_mul_mat_id_decode_f32_wave64" },
         // hip.dense_prefill.mm takes the producer, so no Loom publisher writes the alternate
-        { "tiled_matmul_alternate_publish", kPlan },
+        { "tiled_matmul_alternate_publish", kPlan, "alternate != nullptr" },
         // the add-on's few-token kernel takes the tied weight instead of the Loom kquant kernel
-        { "tied_weight_few_tokens_keeps_kquant.q4_k.tokens6", kPlan },
-        { "tied_weight_few_tokens_keeps_kquant.q4_k.tokens8", kPlan },
+        { "tied_weight_few_tokens_keeps_kquant.q4_k.tokens6", kPlan, "kquant == 1" },
+        { "tied_weight_few_tokens_keeps_kquant.q4_k.tokens8", kPlan, "kquant == 1" },
         // C1: the norm publishes a q8 alternate no dispatch reads, and the add-on consumer takes no f16 one
-        { "rmsnorm_binary_f16_output", "#2392 C1 add-on consumer reads neither alternate" },
+        { "rmsnorm_binary_f16_output", "#2392 C1 add-on consumer reads neither alternate", "publication->alternate_value" },
         // hip.moe_tokens.* publishes the routed gate/up plane as Q8_1, not as f16 at 2^-6
-        { "qwen_weighted_reduce_next_rmsnorm_q8_publication", "#2392 add-on gate/up plane is Q8_1" },
-        { "packed_layout_follows_weight.q4_k.file_mapped", kLayout },
-        { "packed_layout_follows_weight.q4_k.uploaded", kLayout },
-        { "packed_layout_follows_weight.q4_k.file_mapped.tokens6", kLayout },
-        { "packed_layout_follows_weight.q4_k.file_mapped.stored_copy", kLayout },
-        { "packed_layout_follows_weight.q6_k.file_mapped", kLayout },
-        { "packed_layout_follows_weight.q6_k.uploaded", kLayout },
-        { "packed_layout_follows_weight.q6_k.file_mapped.tokens8", kLayout },
-        { "packed_layout_follows_weight.q6_k.file_mapped.tokens12", kLayout },
-        { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy", kLayout },
-        { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy.tokens12", kLayout },
+        { "qwen_weighted_reduce_next_rmsnorm_q8_publication", "#2392 add-on gate/up plane is Q8_1", "gate_up_alternate != nullptr" },
+        { "packed_layout_follows_weight.q4_k.file_mapped", kLayout, "found == 1" },
+        { "packed_layout_follows_weight.q4_k.uploaded", kLayout, "found == 1" },
+        { "packed_layout_follows_weight.q4_k.file_mapped.tokens6", kLayout, "found == 1" },
+        { "packed_layout_follows_weight.q4_k.file_mapped.stored_copy", kLayout, "found == 1" },
+        { "packed_layout_follows_weight.q6_k.file_mapped", kLayout, "found == 1" },
+        { "packed_layout_follows_weight.q6_k.uploaded", kLayout, "found == 1" },
+        { "packed_layout_follows_weight.q6_k.file_mapped.tokens8", kLayout, "found == 1" },
+        { "packed_layout_follows_weight.q6_k.file_mapped.tokens12", kLayout, "found == 1" },
+        { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy", kLayout, "found == 1" },
+        { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy.tokens12", kLayout, "found == 1" },
     };
     if (!hip_addon_dispatch_active()) {
         return nullptr;
     }
     for (const auto & label : kLabels) {
         if (std::strcmp(label.name, name) == 0) {
-            return label.reason;
+            return &label;
         }
     }
     return nullptr;
@@ -15578,9 +15584,10 @@ static int run_cases(const char * label, const std::vector<Case> & cases) {
     std::printf("%s: %zu case(s)\n", label, cases.size());
     size_t passed = 0, failed = 0, known = 0, unexpected = 0;
     for (const Case & listed : cases) {
-        Case test = listed;
-        if (test.known_fail == nullptr) {
-            test.known_fail = hip_addon_known_fail(test.name);
+        Case                    test  = listed;
+        const HipAddonLabel *   addon = test.known_fail == nullptr ? hip_addon_known_fail(test.name) : nullptr;
+        if (addon != nullptr) {
+            test.known_fail = addon->reason;
         }
         bool        ok = true;
         std::string where;
@@ -15593,7 +15600,12 @@ static int run_cases(const char * label, const std::vector<Case> & cases) {
             ok    = false;
             where = std::string("exception: ") + error.what();
         }
-        if (test.known_fail != nullptr) {
+        if (addon != nullptr && !ok && where.find(addon->expect) == std::string::npos) {
+            // labelled for the add-on path, but it failed somewhere else: a new defect the label must not absorb
+            ++unexpected;
+            std::printf("[UNEXPECTED-FAIL %s] %s\n       expected to fail on: %s\n       failed on:           %s\n",
+                        test.known_fail, test.name, addon->expect, where.c_str());
+        } else if (test.known_fail != nullptr) {
             if (ok) {
                 ++unexpected;
                 std::printf("[UNEXPECTED-PASS %s] %s\n", test.known_fail, test.name);
