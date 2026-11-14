@@ -239,6 +239,10 @@ static std::map<std::string, std::string> flash_attention_config(const char * qu
         { "ggml.flash_attention.key_value_head_count", key_value_head_count },
         { "ggml.flash_attention.qk_head_size",         head_size            },
         { "ggml.flash_attention.value_head_size",      head_size            },
+        // engine#2138: this line's prefill kernel takes the V row stride as a config (#95, MLA shapes);
+        // dispatch-flash-attention.cpp emits it, and test-hrx-loom-jit.cpp passes the same value.
+        { "ggml.flash_attention.value_stride",
+          std::to_string(std::stoll(key_value_head_count) * std::stoll(head_size)) },
         { "ggml.flash_attention.attention_scale",      attention_scale      },
         { "ggml.flash_attention.apply_gate",           "0"                  },
         { "ggml.flash_attention.gate_stride_head",     "1"                  },
@@ -829,6 +833,12 @@ static void run_loom_jit_compile_checks() {
                                                     { "column_count", 1024 },
     },
                                                 {
+                                                    // engine#2138: this line's transpose is specialized on its shape
+                                                    // (6c4a83f26); the values dispatch-flash-attention.cpp emits for a
+                                                    // 8192-token V with the default spread pitch (8192 % 64 == 0 -> +32)
+                                                    { "ggml.copy_transpose_f16.row_count", "8192" },
+                                                    { "ggml.copy_transpose_f16.column_count", "1024" },
+                                                    { "ggml.copy_transpose_f16.output_pitch", "8224" },
     });
     require_compiled_kernel(transpose_ref);
     auto transposed_attention_config = flash_attention_config("24", "4", "256", "0.0625");
@@ -1369,6 +1379,10 @@ static void run_binary_fusion_compile_checks() {
                                            {
                                                { "llm.ssm_conv.generic.d_conv", "4" },
                                                { "llm.ssm_conv.generic.d_inner", "64" },
+                                               // engine#2138: this line's generic SSM_CONV specializes on the token and
+                                               // sequence counts too (dispatch-ssm-conv.cpp sets both)
+                                               { "llm.ssm_conv.generic.n_t", "8" },
+                                               { "llm.ssm_conv.generic.n_s", "1" },
                                                { "llm.ssm_conv.generic.unary_op", "23" },
                                                { "llm.ssm_conv.generic.binary_op", "3" },
                                                { "llm.ssm_conv.generic.binary_lhs", "0" },
