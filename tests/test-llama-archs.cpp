@@ -327,6 +327,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             n_ff_per_layer.push_back(il <= 1 ? 0 : n_ff);
         }
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
+    } else if (arch == LLM_ARCH_BLACKMAMBA) {
+        // layers alternate a Mamba mixer (n_ff == 0) and a Switch MoE; with no 0 the graph has no mixer and
+        // never consumes the recurrent-state input, which then has no buffer at set_input
+        std::vector<uint32_t> n_ff_per_layer;
+        n_ff_per_layer.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            n_ff_per_layer.push_back(il % 2 == 0 ? 0 : n_ff);
+        }
+        ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
     } else {
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff);
     }
@@ -360,7 +369,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     }
 
     ms.add_kv(LLM_KV_ATTENTION_MAX_ALIBI_BIAS, 8.0f);
-    if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) {
+    if (arch == LLM_ARCH_ZAMBA2) {
+        // the shared attention block runs on [hidden, embedding] concatenated: q/k/v are 2*n_embd wide
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   2*n_embd_head);
+        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, 2*n_embd_head);
+    } else if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) {
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   n_embd_head);
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, n_embd_head);
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,   n_embd_head/2);
@@ -667,7 +680,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
     ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP ? 256 : 2*n_embd);
-    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
+    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(arch == LLM_ARCH_ZAYA ? 2 : 4)); // zaya: the CCA graph is 2-tap only
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
     ms.add_kv(LLM_KV_SSM_GROUP_COUNT,           arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
@@ -939,6 +952,8 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MAPLE:
         case LLM_ARCH_MUSE_SPARK:
         case LLM_ARCH_KOLIBRI1:
+        case LLM_ARCH_ZAYA:       // every layer has CCA attention and the MoE
+        case LLM_ARCH_BLACKMAMBA: // every layer is a Mamba mixer + routed MoE: blackmamba.cpp reads expert_feed_forward_length unconditionally
             return true;
         default:
             return false;
