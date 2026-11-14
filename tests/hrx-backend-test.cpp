@@ -5444,51 +5444,23 @@ static void run_qwen_attention_postprocess_dispatch_checks() {
                                         producer_index_for_tensor(imported.graph, tensors.query_reshape), match));
         append_match_to_plan(plan, match, covered_nodes);
         REQUIRE(plan.valid());
+        // #327 kept both bodies here, AMD's "no initialization, one dispatch" block directly above our "two
+        // initialization dispatches" one, so the case could not pass. The code is AMD's: the context-capture and
+        // metadata initialization kernels are gone from both dispatch trees, and postprocess reads positions and the
+        // two cache-index vectors itself. What stays ours is the setup (engine #533): the three projection
+        // dispatches go in first, so postprocess is the last of four, not the only one (engine#2388).
         REQUIRE(plan.initialization_dispatches.empty());
-        REQUIRE(plan.dispatches.size() == 1);
-        const ggml::hrx::Dispatch & postprocess = plan.dispatches.front();
+        REQUIRE(plan.dispatches.size() == 4);
+        const ggml::hrx::Dispatch & postprocess = plan.dispatches.back();
         REQUIRE(postprocess.bindings[0].value == imported.graph.values().find_tensor(tensors.positions)->id);
         REQUIRE(postprocess.bindings[1].value == imported.graph.values().find_tensor(tensors.key_cache_indices)->id);
         REQUIRE(postprocess.bindings[2].value == imported.graph.values().find_tensor(tensors.value_cache_indices)->id);
-
-        REQUIRE(plan.initialization_dispatches.size() == 2);
-
-        const ggml::hrx::Dispatch & context_capture = plan.initialization_dispatches[0];
-        const ggml::hrx::Dispatch & metadata        = plan.initialization_dispatches[1];
-        REQUIRE(kernel_name_for_id(context_capture.kernel.kernel_id) == "qwen:qwen_attention_context_base_capture");
-        REQUIRE(kernel_name_for_id(metadata.kernel.kernel_id) == "qwen3_moe:qwen_attention_metadata");
-        REQUIRE(context_capture.bindings.size() == 2);
-        REQUIRE(metadata.bindings.size() == 5);
-        REQUIRE(context_capture.bindings[1].value == metadata.bindings[0].value);
-        REQUIRE(metadata.kernel.integer_parameters.at("token_count") == token_count);
-        REQUIRE(metadata.kernel.integer_parameters.at("context_capacity") == cache_row_count);
-
-        const ggml::hrx::Value * positions_value     = imported.graph.values().find_tensor(tensors.positions);
-        const ggml::hrx::Value * key_indices_value   = imported.graph.values().find_tensor(tensors.key_cache_indices);
-        const ggml::hrx::Value * value_indices_value = imported.graph.values().find_tensor(tensors.value_cache_indices);
-        const ggml::hrx::Value * mask_value          = imported.graph.values().find_tensor(tensors.mask);
-        REQUIRE(positions_value != nullptr);
-        REQUIRE(key_indices_value != nullptr);
-        REQUIRE(value_indices_value != nullptr);
-        REQUIRE(mask_value != nullptr);
-        REQUIRE(context_capture.bindings[0].value == positions_value->id);
-        REQUIRE(metadata.bindings[1].value == positions_value->id);
-        REQUIRE(metadata.bindings[2].value == key_indices_value->id);
-        REQUIRE(metadata.bindings[3].value == value_indices_value->id);
-        REQUIRE(metadata.bindings[4].value == mask_value->id);
-
 
         const ggml::hrx::CommandProgram commands =
             ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
         REQUIRE(commands.valid());
         REQUIRE(command_program_verifies(commands));
-        REQUIRE(commands.initialization_commands.size() == 2);
-        REQUIRE(commands.initialization_commands[0].bindings[0].name == "positions");
-        REQUIRE(commands.initialization_commands[0].bindings[1].name == "control");
-        REQUIRE(commands.initialization_commands[1].bindings[0].name == "control");
-        REQUIRE(commands.initialization_commands[1].bindings[4].name == "attention_mask");
-        REQUIRE(ggml::hrx::find_transient_allocation(commands.transients, context_capture.bindings[1].value) !=
-                nullptr);
+        REQUIRE(commands.initialization_commands.empty());
     }
 
     ggml_free(ctx);
@@ -8352,11 +8324,22 @@ static void schedule_qwen_router_top8_command(ggml_context * ctx,
                                   std::to_string(expected_route_count));
         require_compile_parameter(partition_table_dispatch, "ggml.workload.token_capacity",
                                   std::to_string(token_count));
-        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_expert_mask", "511");
-        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_partition_shift", "9");
-        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_row_count_shift", "15");
+        // our router keeps a compact descriptor layout up to 128 experts (96049a20b); AMD's line always uses the
+        // 512-expert one, and #327 brought its fixed 511/9/15/expert_count here. The numbers are written out rather
+        // than read from moe_router_descriptor_layout(), so a wrong layout cannot pass by agreeing with itself; the
+        // device tier's partition prefill cases prove these values on the GPU (engine#2381, engine#2388).
+        const bool   compact          = expected_expert_count <= 128;
+        const char * expert_mask      = compact ? "127" : "511";
+        const char * partition_shift  = compact ? "7" : "9";
+        const char * row_count_shift  = compact ? "13" : "15";
+        const char * partition_groups = compact ? "128" : "512";
+        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_expert_mask", expert_mask);
+        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_partition_shift",
+                                  partition_shift);
+        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_row_count_shift",
+                                  row_count_shift);
         require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.partition_workgroup_size",
-                                  std::to_string(expected_expert_count));
+                                  partition_groups);
     }
 
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
@@ -8839,6 +8822,11 @@ static ggml::hrx::GraphImportResult import_common_mul_mat_id_swiglu_graph(ggml_c
     return imported;
 }
 
+// defined below with the other composable-kernel names; the merged selector (mul_mat_id_swiglu_f32_kernel) picks the
+// skinny pair-input kernel at token_count <= 5 and the tiled one above, so a check naming the retired monolith fails
+// on a correct plan (engine#2388, the same shape #341 fixed for routed_moe_decode)
+static const char * common_mul_mat_id_swiglu_f32_kernel_name(int64_t token_count);
+
 static void require_common_mul_mat_id_swiglu_match(ggml_context *                      ctx,
                                                    const CommonMulMatIdSwiGLUTensors & tensors,
                                                    ggml_tensor *                       root_projection) {
@@ -8854,7 +8842,8 @@ static void require_common_mul_mat_id_swiglu_match(ggml_context *               
     REQUIRE(match.metadata.moe_routing_bundles().size() == 1);
 
     const ggml::hrx::Dispatch & dispatch = match.dispatches.back();
-    REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma");
+    REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
+            common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));
     REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == tensors.output->ne[2]);
     REQUIRE(dispatch.bindings.size() == 7);
     require_compile_parameter(dispatch, "ggml.mul_mat_id_swiglu.input_size",
@@ -9694,7 +9683,8 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
     }
 
     {
-        const QwenRoutedGateUpTensors tensors    = build_qwen_routed_gate_up_graph(ctx, 4);
+        constexpr int64_t             token_count = 4;
+        const QwenRoutedGateUpTensors tensors    = build_qwen_routed_gate_up_graph(ctx, token_count);
         ggml::hrx::GraphImportResult  imported   = import_qwen_routed_gate_up_graph(ctx, tensors);
         const size_t                  gate_index = producer_index_for_tensor(imported.graph, tensors.gate);
         std::vector<bool>             covered_nodes(imported.graph.nodes().size(), false);
@@ -9732,8 +9722,10 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[1].kernel.kernel_id) ==
                 "loom_libs:ggml_moe_build_expert_partition_table");
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[2].kernel.kernel_id) ==
-                "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma");
-        REQUIRE(gate_up_match.dispatches[2].bindings.size() == 6);
+                common_mul_mat_id_swiglu_f32_kernel_name(token_count));
+        // the seventh slot is the IQ3_XXS grid (a read-only placeholder for other formats), which #327 brought with
+        // the composable kernels; AMD's suite checks 7 here and the common-path case above already does (engine#2388)
+        REQUIRE(gate_up_match.dispatches[2].bindings.size() == 7);
         REQUIRE(gate_up_match.dispatches[2].bindings[1].value == gate_up_match.transients[0].value);
         REQUIRE(gate_up_match.dispatches[2].bindings[2].value == gate_up_match.transients[1].value);
         REQUIRE(gate_up_match.metadata.generated_resources().size() == 2);
@@ -9765,8 +9757,8 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, gate_index, gate_up_match));
         REQUIRE(gate_up_match.dispatches.size() == 1);
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[0].kernel.kernel_id) ==
-                "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma");
-        REQUIRE(gate_up_match.dispatches[0].bindings.size() == 6);
+                common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));   // as AMD's suite (engine#2388)
+        REQUIRE(gate_up_match.dispatches[0].bindings.size() == 7);
     }
 
     {
@@ -9780,8 +9772,8 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(match_dispatch_at_index(imported.graph, plan, covered_nodes, gate_index, gate_up_match));
         REQUIRE(gate_up_match.dispatches.size() == 1);
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[0].kernel.kernel_id) ==
-                "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma");
-        REQUIRE(gate_up_match.dispatches[0].bindings.size() == 6);
+                common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));   // as AMD's suite (engine#2388)
+        REQUIRE(gate_up_match.dispatches[0].bindings.size() == 7);
     }
 
     {
