@@ -4048,7 +4048,20 @@ ggml_tensor * llm_graph_context::build_rs(
     // needs its state and cache in distinct storage, so its matcher (dispatch-ssm-conv.cpp) declines an in-place state and
     // the separate concat / conv / copy kernels run (hrx-ops-test ssm_conv_decode.in_place_state).
     // measured on the gated-delta-net families only (Qwen3.5/3.6/3.8, Qwen3-Next), and only for one token per sequence:
-    // a continuation prefill (state kept, so the copy is also an identity) keeps the gather and its fused prefill kernels
+    // a continuation prefill (state kept, so the copy is also an identity) keeps the gather and its fused prefill kernels.
+    //
+    // Aliasing contract: the view returned here IS the memory rows the graph later writes back. That is safe because the
+    // view is consumed before the write-back by data dependency, not by node order. In llm_build_delta_net_base:
+    //   - conv: the view's only consumer is the ggml_concat in build_conv_state; the write-back is ggml_cpy(conv_state_last,
+    //     ...) whose source is a view of that concat's output, so the write cannot run before the read.
+    //   - ssm:  the view's only consumer is the delta net (fused: one op; autoregressive: one ggml_mul(s, g), all later
+    //     terms are derived); the write-back in build_recurrent_attn copies the delta net's new state, its output.
+    // The gather path relied on the same chain (get_rows -> concat / delta net -> cpy into the same rows); the view only
+    // moves the read from get_rows to the consumer. A new node that reads this view without being upstream of the
+    // write-back would see the updated state: it must take the gather instead (an eval callback on "conv_states" /
+    // "state_predelta" may observe the written state on backends that run the copy before calling it).
+    // Host-side cell changes (src0, seq_id, rs_idx) happen between ubatches; s_copy_identity is re-evaluated for each
+    // ubatch's context here and in can_reuse, so a reused graph never carries a stale identity.
     const bool delta_net_arch = arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN3NEXT;
     if (delta_net_arch && inp->s_copy_identity && !get_state_rows && ubatch.n_seq_tokens == 1) {
         ggml_tensor * states = ggml_reshape_2d(ctx0, s, state_size, s->ne[1]);
