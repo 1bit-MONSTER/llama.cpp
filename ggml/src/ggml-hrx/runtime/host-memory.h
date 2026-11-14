@@ -70,14 +70,20 @@ struct HostWeightSource {
 };
 
 // Residency counts cache-owned representations, not buffers retained after an explicit clear.
+// Two kinds of field (engine#2393). Lifetime counters (hits, misses, evictions, materialized_bytes, duplicate_warnings)
+// only grow, and HostWeightCache::clear() keeps them. Live gauges (allocation_count, resident_bytes) describe the
+// entries resident now, and clear() zeroes them with the entries. A new field must say which it is, and clear() must
+// follow.
 struct HostWeightCacheStats {
+    // lifetime counters
     uint64_t hits             = 0;
     uint64_t misses           = 0;
     uint64_t evictions        = 0;
     size_t   materialized_bytes = 0;
+    uint64_t duplicate_warnings = 0;
+    // live gauges
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
-    uint64_t duplicate_warnings = 0;
 };
 
 // The pairing every pooled allocation in this file needs (engine #1711/#1823): charge before the allocation, return
