@@ -345,10 +345,11 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(transfer_stats.uploads == 3);
     REQUIRE(transfer_stats.upload_bytes == 96);
 
+    // engine#2393 / #356: clear() zeroes the live gauges and keeps the lifetime counts
     weights.clear();
     weight_stats = weights.stats();
-    REQUIRE(weight_stats.hits == 0);
-    REQUIRE(weight_stats.misses == 0);
+    REQUIRE(weight_stats.hits == 1);
+    REQUIRE(weight_stats.misses == 3);
     REQUIRE(weight_stats.allocation_count == 0);
     REQUIRE(weight_stats.resident_bytes == 0);
 }
