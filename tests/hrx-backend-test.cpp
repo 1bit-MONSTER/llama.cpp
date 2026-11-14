@@ -3797,6 +3797,44 @@ static void schedule_swiglu_q4k_prefill_layout(bool stored_copy_exists) {
     ggml_free(ctx);
 }
 
+// DECODE-BW (11-14): a one-token decode whose gate and up weights are in DIFFERENT formats (Qwen3.8-27B Q4_K_M: Q4_K gate,
+// Q6_K up) does not take the fused direct-dot SwiGLU body; separate decode GEMVs + the GLU dispatch were 1.5 % faster
+// end to end. Two tokens (an MTP verify batch) keep the fused body, and so does a one-token pair in ONE format.
+static void schedule_mixed_format_swiglu_decode(ggml_type gate_type, ggml_type up_type, int64_t token_count,
+                                                bool expect_fused) {
+    // Qwen3.8-27B's FFN shape: at a small hidden size kquant.swiglu.decode_f32 takes the pair and this matcher never runs
+    constexpr int64_t input_size = 5120;
+    constexpr int64_t hidden     = 17408;
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * gate_weight = ggml_new_tensor_2d(ctx, gate_type, input_size, hidden);
+    ggml_tensor * up_weight   = ggml_new_tensor_2d(ctx, up_type, input_size, hidden);
+    // the FFN input as the model builds it: RMSNorm x weight, which publishes a q8_1 copy the kquant SwiGLU decode
+    // kernel declines (it reads f32), so the pair reaches the f32 SwiGLU matcher as on the real model
+    ggml_tensor * hidden_in   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, token_count);
+    ggml_tensor * norm_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, input_size);
+    ggml_tensor * input       = ggml_mul(ctx, ggml_rms_norm(ctx, hidden_in, 1e-6f), norm_weight);
+    ggml_tensor * gate        = ggml_mul_mat(ctx, gate_weight, input);
+    ggml_tensor * up          = ggml_mul_mat(ctx, up_weight, input);
+    ggml_tensor * output      = ggml_swiglu_split(ctx, gate, up);
+    ggml_cgraph * graph       = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    size_t fused = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        fused += kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot";
+    }
+    REQUIRE(fused == (expect_fused ? 1u : 0u));
+    REQUIRE(!scheduler.plan().dispatches.empty());  // the unfused case is still planned, not dropped
+    ggml_free(ctx);
+}
+
 static void schedule_packed_layout_follows_weight(ggml_type weight_type, bool file_mapped, int64_t token_count = 100,
                                                   bool stored_copy_exists = false) {
     if (std::getenv("GGML_HRX_Q4K_PACKED_TAIL") != nullptr || std::getenv("GGML_HRX_Q6K_PACKED_ROWS") != nullptr) {
@@ -15554,6 +15592,8 @@ static const HipAddonLabel * hip_addon_known_fail(const char * name) {
         // the add-on's few-token kernel takes the tied weight instead of the Loom kquant kernel
         { "tied_weight_few_tokens_keeps_kquant.q4_k.tokens6", kPlan, "kquant == 1" },
         { "tied_weight_few_tokens_keeps_kquant.q4_k.tokens8", kPlan, "kquant == 1" },
+        // the add-on's few-token kernel takes the 2-token mixed-format gate/up pair (the Loom fused body is the -loom row's)
+        { "mixed_format_swiglu_decode.q4k_q6k.t2", kPlan, "fused == (expect_fused ? 1u : 0u)" },
         // C1: the norm publishes a q8 alternate no dispatch reads, and the add-on consumer takes no f16 one
         { "rmsnorm_binary_f16_output", "#2392 C1 add-on consumer reads neither alternate", "publication->alternate_value" },
         // hip.moe_tokens.* publishes the routed gate/up plane as Q8_1, not as f16 at 2^-6
@@ -16070,6 +16110,9 @@ int main(int argc, char ** argv) {
         { "q4k_aligned_prefill_layout.stored_copy", [] { schedule_q4k_aligned_prefill_layout(true); } },
         { "swiglu_q4k_prefill_layout.packed", [] { schedule_swiglu_q4k_prefill_layout(false); } },
         { "swiglu_q4k_prefill_layout.stored_copy", [] { schedule_swiglu_q4k_prefill_layout(true); } },
+        { "mixed_format_swiglu_decode.q4k_q6k.t1", [] { schedule_mixed_format_swiglu_decode(GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, 1, false); } },
+        { "mixed_format_swiglu_decode.q4k_q6k.t2", [] { schedule_mixed_format_swiglu_decode(GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, 2, true); } },
+        { "mixed_format_swiglu_decode.q6k_q6k.t1", [] { schedule_mixed_format_swiglu_decode(GGML_TYPE_Q6_K, GGML_TYPE_Q6_K, 1, true); } },
         { "packed_layout_follows_weight.q4_k.file_mapped.stored_copy",
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q4_K, true, 100, true); } },
         { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy",
