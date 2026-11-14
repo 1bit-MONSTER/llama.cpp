@@ -428,6 +428,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_combine(
     const int64_t nt = residual->ne[2];
 
     // 2*sigmoid centres the scatter weights on 1, so a zero injection is a plain residual add
+    // inject arrives scaled by 1/hc (both branches above); the pre-#327 sigmoid(inject / hc) here scaled it twice (engine#2444)
     ggml_tensor * w = ggml_sigmoid(ctx0, inject);
     w = ggml_scale(ctx0, w, 2.0f);
 
@@ -1018,6 +1019,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
+    // no top-k scatter into kq_mask here: build_qsa_sel already returns the mask. The pre-#327 index scatter
+    // (kq_mask_top_k) that #327 kept fed this mask to ggml_set_rows as indices and could not build (engine#2444)
     // the selection replaces the kq_mask: split it into the streams of the K view
     const int64_t n_stream = k->ne[3];
     GGML_ASSERT(sel->ne[0] == k->ne[2] && sel->ne[1] % n_stream == 0);
