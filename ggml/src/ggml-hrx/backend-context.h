@@ -63,6 +63,11 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_buffer_type_context           host_buft_context  = {};
     ggml_backend_buffer_type                       mapped_buft        = {};
     ggml_backend_hrx_buffer_type_context           mapped_buft_context = {};
+    // engine #2393: imported host memory the device addresses directly. NOT mapped_buft: that one is host-typed on
+    // purpose (mapped weights ARE host memory, and the scheduler's placement depends on it), while an import is a
+    // direct binding whose buffer must not claim to be a host allocation.
+    ggml_backend_buffer_type                       imported_buft        = {};
+    ggml_backend_hrx_buffer_type_context           imported_buft_context = {};
     ggml::hrx::HostBufferRegistry                  host_buffers;
     std::atomic<uint64_t>                          synchronous_upload_fallbacks{ 0 };
     std::atomic<uint64_t>                          synchronous_download_fallbacks{ 0 };

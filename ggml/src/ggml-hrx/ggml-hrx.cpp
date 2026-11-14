@@ -214,10 +214,16 @@ static void buffer_free(ggml_backend_buffer_t buffer) {
     if (registered_host_buffer) {
         context->device->host_buffers.remove(context->buffer);
     }
-    if (context->buffer != nullptr) {
+    if (owned_buffer && context->buffer != nullptr) {
+        // engine #2393: an import borrows the parent allocation's handle; releasing it here would free memory the
+        // importer does not own.
         hrx_buffer_release(context->buffer);
     }
-    ggml::hrx::onebit::pool_release(buffer->size);
+    if (owned_buffer) {
+        // engine #2393: only a buffer that CHARGED the pool may credit it back. pool_release saturates, so an
+        // imported buffer would not underflow -- it would quietly subtract from budget it never reserved.
+        ggml::hrx::onebit::pool_release(buffer->size);
+    }
     delete context;
 }
 
@@ -515,6 +521,8 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
     return ggml_backend_buffer_init(buft, buffer_i, context, size);
 }
 
+
+
 static size_t buffer_alignment(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
     return GGML_HRX_ALIGNMENT;
@@ -781,13 +789,6 @@ static void backend_set_tensor_async(ggml_backend_t backend,
     auto *                            backend_context = static_cast<ggml_backend_hrx_context *>(backend->context);
     ggml_backend_hrx_buffer_context * context         = nullptr;
     size_t                            tensor_base     = 0;
-    ggml_backend_buffer_t buffer = tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
-    if (buffer != nullptr && buffer->iface.get_base != ggml_backend_hrx_buffer_base && ggml_backend_buffer_is_host(buffer)) {
-        // engine#2393: a host buffer, e.g. the from-pointer weight buffer of device_buffer_from_host_ptr
-        backend_synchronize(backend);
-        ggml_backend_tensor_set(tensor, data, offset, size);
-        return;
-    }
     if (!ggml_backend_hrx_tensor_binding(tensor, &context, &tensor_base) || offset > ggml_nbytes(tensor) ||
         size > ggml_nbytes(tensor) - offset) {
         GGML_LOG_ERROR("%s: invalid HRX tensor upload\n", __func__);
@@ -818,13 +819,6 @@ static void backend_get_tensor_async(ggml_backend_t      backend,
     auto *                            backend_context = static_cast<ggml_backend_hrx_context *>(backend->context);
     ggml_backend_hrx_buffer_context * context         = nullptr;
     size_t                            tensor_base     = 0;
-    ggml_backend_buffer_t buffer = tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
-    if (buffer != nullptr && buffer->iface.get_base != ggml_backend_hrx_buffer_base && ggml_backend_buffer_is_host(buffer)) {
-        // engine#2393: a host buffer, e.g. the from-pointer weight buffer of device_buffer_from_host_ptr
-        backend_synchronize(backend);
-        ggml_backend_tensor_get(tensor, data, offset, size);
-        return;
-    }
     if (!ggml_backend_hrx_tensor_binding(tensor, &context, &tensor_base) || offset > ggml_nbytes(tensor) ||
         size > ggml_nbytes(tensor) - offset) {
         GGML_LOG_ERROR("%s: invalid HRX tensor download\n", __func__);
@@ -1679,12 +1673,17 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
 static ggml_backend_buffer_t device_buffer_from_host_ptr(ggml_backend_dev_t device, void * ptr, size_t size,
                                                          size_t max_tensor_size) {
     GGML_UNUSED(max_tensor_size);
-    return ggml::hrx::model_buffer_from_mmap(device_context(device), ptr, size);
+    // engine #2393: an IMPORT is not a mapping. This is the branch the buffer suite exercises and the one that needs an
+    // imported handle; model_buffer_from_mmap stays as it was for mmap-backed weights.
+    return hrx_imported_buffer_from_ptr(device_context(device), ptr, size);
 }
 
 static bool device_supports_buffer_type(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
     auto * context = device_context(device);
-    if (buft == &context->buft || buft == &context->host_buft || buft == &context->mapped_buft) {
+    if (buft == &context->buft || buft == &context->host_buft || buft == &context->mapped_buft ||
+        // engine #2393: an imported handle is HRX's own buffer type -- without this the scheduler refuses
+        // every imported tensor, and device_buffer_from_host_ptr is how mmap-backed weights arrive.
+        buft == &context->imported_buft) {
         return true;
     }
     // Claiming another backend's host buffer makes the scheduler place host-resident weights and every
@@ -1913,6 +1912,46 @@ ggml_backend_buffer_type_t ggml_backend_hrx_buffer_type(size_t device) {
     return device < ggml_backend_reg_dev_count(registry) ?
                ggml_backend_dev_buffer_type(ggml_backend_reg_dev_get(registry, device)) :
                nullptr;
+}
+
+ggml_backend_buffer_t hrx_imported_buffer_from_ptr(ggml_backend_hrx_device_context * device, void * ptr, size_t size) {
+    // engine #2393: a zero-copy import is an HRX buffer whose storage is the caller's, not a retagged CPU buffer --
+    // retagging made ggml_backend_hrx_buffer_context_from_buffer() read a CPU context as an HRX one, so
+    // context->imported and context->buffer were unrelated memory. Nothing is allocated, so nothing is released:
+    // buffer_free skips the arena release for a null context->buffer and now skips the pool credit too.
+    // engine #2393: an imported subregion is a VIEW of an allocation that may already exist, so it inherits that
+    // allocation's direct-bindability and identity rather than reading the device's current mode -- the caller
+    // allocates a coherent buffer, restores the flag, and only then imports a subregion of it, and the subregion
+    // stays direct-bindable because that property belongs to the allocation. A bare host pointer with no parent
+    // registered is the caller's own memory: no identity to inherit, and the device flag is the only signal.
+    const ggml::hrx::HostBufferRef parent = device->host_buffers.find(ptr, size);
+    const uint64_t               fresh    = g_allocation_generation.fetch_add(1);
+    const uint64_t               identity   = parent.valid() ? parent.identity() : fresh;
+    const uint64_t               generation = parent.valid() ? parent.generation() : fresh;
+    const bool                   direct     = parent.valid() ? parent.direct_bindable() : device->use_direct_host_bindings;
+    // engine #2393: the import borrows the parent's handle -- it IS a window on that allocation, and the case
+    // asserts imported_context->buffer == the parent's. buffer_free must therefore not release it (see below).
+    // engine #2393: the import's physical offset is its byte offset INSIDE the parent allocation (the case asserts
+    // 256 for a subregion taken at base + 256), and its physical capacity is the parent's -- the window sees the
+    // whole allocation at that offset, which is what a direct binding needs.
+    const size_t physical_offset = parent.valid()
+        ? static_cast<size_t>(static_cast<uint8_t *>(ptr) - static_cast<uint8_t *>(parent.base()))
+        : 0;
+    const size_t physical_capacity = parent.valid() ? parent.capacity() : 0;
+    // engine #2393: retained_base marks the buffer as part of a SHARED host region, which is what makes the binding
+    // resolver add physical_offset to the tensor offset (backend-buffer-binding.cpp:92-93). buffer_alloc sets it to
+    // the allocation base for a host-visible buffer, so a window into that allocation inherits it.
+    uint8_t * retained_base = parent.valid() ? static_cast<uint8_t *>(parent.base()) : nullptr;
+    auto * context = new (std::nothrow) ggml_backend_hrx_buffer_context{
+        device, parent.valid() ? parent.buffer() : nullptr, static_cast<uint8_t *>(ptr), identity, generation, direct,
+        true, physical_offset, physical_capacity, retained_base,
+    };
+    if (context == nullptr) {
+        return nullptr;
+    }
+    // engine #2393: a dedicated non-host buffer type -- mapped_buft is host-visible on purpose (model weights), and
+    // an import is a direct binding, not a host allocation. The coherent-subregion case asserts both halves together.
+    return ggml_backend_buffer_init(&device->imported_buft, buffer_i, context, size);
 }
 
 GGML_BACKEND_DL_IMPL(ggml_backend_hrx_reg)
