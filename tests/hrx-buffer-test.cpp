@@ -7,6 +7,7 @@
 #include "ggml-impl.h"
 #include "ggml.h"
 #include "hrx-interop-utils.h"
+#include "model-buffer-from-mmap.h"
 #include "runtime/host-memory.h"
 #include "testing_suite.h"
 
@@ -412,6 +413,48 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
 #endif
 }
 
+// engine #856 / #2393: model_buffer_from_mmap, the CPU from-pointer buffer retagged as the mapped type
+static void run_mapped_host_ptr_checks(ggml_backend_t backend) {
+    ggml_backend_dev_t device = ggml_backend_get_device(backend);
+    alignas(TENSOR_ALIGNMENT) std::array<uint32_t, 128> source = {};
+    for (size_t i = 0; i < source.size(); ++i) {
+        source[i] = static_cast<uint32_t>(i + 1);
+    }
+    REQUIRE(ggml::hrx::model_buffer_from_mmap(backend_context(backend)->device, source.data() + 1,
+                                              sizeof(source) - sizeof(uint32_t)) == nullptr);
+    REQUIRE(ggml::hrx::model_buffer_from_mmap(backend_context(backend)->device, nullptr, sizeof(source)) == nullptr);
+
+    ggml_backend_buffer_t mapped =
+        ggml::hrx::model_buffer_from_mmap(backend_context(backend)->device, source.data(), sizeof(source));
+    REQUIRE(mapped != nullptr);
+    REQUIRE(ggml_backend_buffer_get_base(mapped) == source.data());
+    REQUIRE(ggml_backend_buffer_is_host(mapped));
+    REQUIRE(ggml::hrx::buffer_is_file_mapped(mapped));
+    REQUIRE(ggml_backend_dev_supports_buft(device, ggml_backend_buffer_get_type(mapped)));
+
+    ggml_init_params params = {};
+    params.mem_size         = 4096;
+    params.no_alloc         = true;
+    ggml_context * ggml     = ggml_init(params);
+    REQUIRE(ggml != nullptr);
+    ggml_tensor * tensor = ggml_new_tensor_1d(ggml, GGML_TYPE_I32, 32);
+    REQUIRE(ggml_backend_tensor_alloc(mapped, tensor, source.data() + 32) == GGML_STATUS_SUCCESS);
+
+    const uint32_t replacement = 999;
+    ggml_backend_tensor_set_async(backend, tensor, &replacement, sizeof(uint32_t), sizeof(replacement));
+    ggml_backend_synchronize(backend);
+    REQUIRE(source[33] == replacement);
+    std::array<uint32_t, 32> readback = {};
+    ggml_backend_tensor_get_async(backend, tensor, readback.data(), 0, sizeof(readback));
+    ggml_backend_synchronize(backend);
+    REQUIRE(readback[0] == source[32]);
+    REQUIRE(readback[1] == replacement);
+
+    ggml_backend_buffer_free(mapped);
+    REQUIRE(source[33] == replacement);
+    ggml_free(ggml);
+}
+
 static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
     ggml::hrx::HostTransferManager transfers;
     ggml::hrx::HostStagingBuffer   staging;
@@ -727,6 +770,11 @@ static void register_hrx_buffer_cases(test_runner::Suite & suite) {
     suite.device_case("imported_buffer", [] {
         run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
             run_imported_buffer_checks(backend);
+        });
+    });
+    suite.device_case("mapped_host_ptr", [] {
+        run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
+            run_mapped_host_ptr_checks(backend);
         });
     });
     suite.device_case("host_transfer", [] {
