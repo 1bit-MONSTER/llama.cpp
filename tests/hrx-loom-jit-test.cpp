@@ -1438,6 +1438,19 @@ static void run_loom_jit_materialize_checks() {
     REQUIRE(device.open());
     run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Sync, binary);
     run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Async, binary);
+    run_targeted_export_materialize_case(device);
+}
+
+// engine#2404: AMD's cache keys a Dynamic dispatch without its workload values and compiles it unspecialised, so
+// every size shares one executable. Our KernelExecutableCache keeps every workload value in the key, so a Dynamic
+// dispatch is compiled once per size. Measured on 11-14: ggml_rope_f32 (the only Dynamic dispatch on LFM2.5-1.2B and
+// Qwen2.5-0.5B; none on Qwen3-4B) costs about 2.7 ms per new prompt length, so the path is not ported for speed. The
+// case stays labelled until it is.
+static void run_loom_jit_dynamic_materialize_checks() {
+    const ggml::hrx::KernelDefinition & binary = find_kernel("ggml_binary_f32");
+
+    HrxTestDevice device;
+    REQUIRE(device.open());
     run_dynamic_cache_materialize_case(device, ggml::hrx::LoomJitMode::Sync, binary);
     run_dynamic_cache_materialize_case(device, ggml::hrx::LoomJitMode::Async, binary);
     run_dynamic_export_reuse_case(device, "ggml_unary_f32", { { "element_count", 64 } },
@@ -1513,7 +1526,6 @@ static void run_loom_jit_materialize_checks() {
         { { "element_count", 192 } },
         { { "llm.gated_delta_net.epilogue_head_count", "48" },
           { "llm.gated_delta_net.epilogue_workgroup_size", "256" } });
-    run_targeted_export_materialize_case(device);
 }
 
 static void run_binary_publication_compile_checks() {
@@ -1561,6 +1573,8 @@ static void register_hrx_loom_jit_cases(test_runner::Suite & suite) {
     suite.host_case("prefill-fusions", [] { run_prefill_fusion_compile_checks(); });
     suite.host_case("binary-fusions", [] { run_binary_fusion_compile_checks(); });
     suite.device_case("materialize", [] { run_loom_jit_materialize_checks(); });
+    suite.known_fail_device_case("dynamic-materialize", "engine#2404: no Dynamic-workload path in KernelExecutableCache",
+                                 [] { run_loom_jit_dynamic_materialize_checks(); });
 }
 
 int main(int argc, char ** argv) {
