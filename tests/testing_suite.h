@@ -28,6 +28,11 @@ struct Case {
     std::string           name;
     std::function<void()> run;
     bool                  requires_device = true;
+    // A case that is known to fail carries the issue it is waiting on. It does not fail the run, and a case
+    // whose label is set but which passes is an UNEXPECTED-PASS that does -- the same semantics the sibling
+    // suite has had since engine#449 (tests/hrx-backend-test.cpp), moved here so every suite that uses this
+    // runner can pin a known defect instead of leaving it out of the suite entirely.
+    const char * known_fail = nullptr;
 };
 
 enum class OutputMode {
@@ -80,6 +85,7 @@ struct Options {
 
 struct Result {
     std::string name;
+    const char * known_fail = nullptr;
     std::string output;
     int         exit_code   = -1;
     int         signal_code = 0;
@@ -255,7 +261,8 @@ inline int run_single_case_in_process(const Config &           config,
 
 inline Result run_single_case_child(const Config & config, const Options & options, const Case & test_case) {
     Result result;
-    result.name = test_case.name;
+    result.name       = test_case.name;
+    result.known_fail = test_case.known_fail;
 
     const auto start = std::chrono::steady_clock::now();
 
@@ -388,8 +395,13 @@ inline int run_cases_parallel(const Config &            config,
             const size_t done   = finished.fetch_add(1) + 1;
             {
                 std::lock_guard<std::mutex> lock(print_mutex);
-                std::printf("%s %4zu/%zu %-86s %8lld ms\n", result.passed ? "[PASS]" : "[FAIL]", done,
+                const char * verdict = result.passed ? (result.known_fail != nullptr ? "[UNEXPECTED-PASS]" : "[PASS]")
+                                                    : (result.known_fail != nullptr ? "[KNOWN-FAIL]" : "[FAIL]");
+                std::printf("%s %4zu/%zu %-86s %8lld ms\n", verdict, done,
                             selected_cases.size(), result.name.c_str(), static_cast<long long>(result.elapsed_ms));
+                if (result.known_fail != nullptr) {
+                    std::printf("       known to fail: %s\n", result.known_fail);
+                }
                 if (!result.passed) {
                     if (result.signal_code != 0) {
                         std::printf("       terminated by signal %d\n", result.signal_code);
@@ -419,27 +431,43 @@ inline int run_cases_parallel(const Config &            config,
         thread.join();
     }
 
-    size_t passed = 0;
+    size_t passed = 0, failed = 0, known = 0, unexpected = 0;
     for (const Result & result : results) {
-        if (result.passed) {
-            ++passed;
+        if (result.known_fail == nullptr) {
+            if (result.passed) {
+                ++passed;
+            } else {
+                ++failed;
+            }
+        } else if (result.passed) {
+            ++unexpected;
+        } else {
+            ++known;
         }
     }
-    const size_t  failed = results.size() - passed;
     const int64_t elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - suite_start).count();
 
-    std::printf("\n%s summary: %zu passed, %zu failed, %zu total, %lld ms\n", config.suite_name.c_str(), passed, failed,
+    std::printf("\n%s summary: %zu passed, %zu failed, %zu known-fail, %zu unexpected-pass, %zu total, %lld ms\n",
+                config.suite_name.c_str(), passed, failed, known, unexpected,
                 results.size(), static_cast<long long>(elapsed_ms));
-    if (failed != 0) {
+    if (failed != 0 || unexpected != 0) {
         std::printf("Failed cases:\n");
         for (const Result & result : results) {
-            if (!result.passed) {
+            if (!result.passed && result.known_fail == nullptr) {
                 std::printf("  %s\n", result.name.c_str());
             }
         }
     }
-    return failed == 0 ? 0 : 1;
+    if (unexpected != 0) {
+        std::printf("Unexpected passes - the defect these cases name is fixed, remove their known_fail label:\n");
+        for (const Result & result : results) {
+            if (result.passed && result.known_fail != nullptr) {
+                std::printf("  %s  (%s)\n", result.name.c_str(), result.known_fail);
+            }
+        }
+    }
+    return (failed + unexpected) == 0 ? 0 : 1;
 }
 
 inline bool select_cases(const std::vector<Case> & cases,
@@ -499,6 +527,13 @@ class Suite {
 
     template <typename F> void host_case(std::string name, F && run) {
         add_case(cases_, std::move(name), std::function<void()>(std::forward<F>(run)), false);
+    }
+
+    // A case that fails today and names the issue it is waiting on: it is reported, counted as known-fail,
+    // and the run stays green. When it starts passing it is an UNEXPECTED-PASS and does fail the run.
+    template <typename F> void known_fail_device_case(std::string name, const char * reason, F && run) {
+        add_case(cases_, std::move(name), std::function<void()>(std::forward<F>(run)), true);
+        cases_.back().known_fail = reason;
     }
 
     bool parse_options(int argc, char ** argv, Options & options) const {
