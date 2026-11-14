@@ -789,6 +789,13 @@ static void backend_set_tensor_async(ggml_backend_t backend,
     auto *                            backend_context = static_cast<ggml_backend_hrx_context *>(backend->context);
     ggml_backend_hrx_buffer_context * context         = nullptr;
     size_t                            tensor_base     = 0;
+    ggml_backend_buffer_t buffer = tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
+    if (buffer != nullptr && buffer->iface.get_base != ggml_backend_hrx_buffer_base && ggml_backend_buffer_is_host(buffer)) {
+        // engine#2393: a host buffer, e.g. the mapped weight buffer of model_buffer_from_mmap
+        backend_synchronize(backend);
+        ggml_backend_tensor_set(tensor, data, offset, size);
+        return;
+    }
     if (!ggml_backend_hrx_tensor_binding(tensor, &context, &tensor_base) || offset > ggml_nbytes(tensor) ||
         size > ggml_nbytes(tensor) - offset) {
         GGML_LOG_ERROR("%s: invalid HRX tensor upload\n", __func__);
@@ -819,6 +826,13 @@ static void backend_get_tensor_async(ggml_backend_t      backend,
     auto *                            backend_context = static_cast<ggml_backend_hrx_context *>(backend->context);
     ggml_backend_hrx_buffer_context * context         = nullptr;
     size_t                            tensor_base     = 0;
+    ggml_backend_buffer_t buffer = tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
+    if (buffer != nullptr && buffer->iface.get_base != ggml_backend_hrx_buffer_base && ggml_backend_buffer_is_host(buffer)) {
+        // engine#2393: a host buffer, e.g. the mapped weight buffer of model_buffer_from_mmap
+        backend_synchronize(backend);
+        ggml_backend_tensor_get(tensor, data, offset, size);
+        return;
+    }
     if (!ggml_backend_hrx_tensor_binding(tensor, &context, &tensor_base) || offset > ggml_nbytes(tensor) ||
         size > ggml_nbytes(tensor) - offset) {
         GGML_LOG_ERROR("%s: invalid HRX tensor download\n", __func__);
