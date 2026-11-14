@@ -622,6 +622,9 @@ if (TARGET ggml-hrx)
     if (GGML_HRX_HIP_ADDON_DIR)
         add_test(NAME test-hrx-routed-down-hip COMMAND test-hrx-routed-down-hip --arm hip)
         set_tests_properties(test-hrx-routed-down-hip PROPERTIES SKIP_RETURN_CODE 77)
+        # Q4_K gate on: returns 77 when the add-on has no Q4_K kernel
+        add_test(NAME test-hrx-routed-down-hip-q4k COMMAND test-hrx-routed-down-hip --arm hip-q4k)
+        set_tests_properties(test-hrx-routed-down-hip-q4k PROPERTIES SKIP_RETURN_CODE 77)
     endif()
 
     add_executable(test-hrx-attention-sink test-hrx-attention-sink.cpp)

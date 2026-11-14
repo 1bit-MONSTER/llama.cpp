@@ -26,7 +26,9 @@
 // The registration writes the residual in place and publishes n2 only as its q8 alternate, so the test reads the
 // residual through `out` and n2 through `proj`, a Q4_K projection that reads that alternate.
 //
-// Arms (argv): --arm loom sets GGML_HRX_HIP_MOE_DOWN=0, --arm hip sets it to 1, both before the registry is built
+// Arms (argv), each set before the registry is built (the add-on reads its gates once): --arm loom sets
+// GGML_HRX_HIP_MOE_DOWN=0 and GGML_HRX_HIP_MOE_DOWN_Q4K=0; --arm hip sets the Q6_K gate to 1; --arm hip-q4k sets the
+// Q4_K gate to 1 and the Q6_K gate to 0, and returns 77 when the add-on has no Q4_K kernel. Both gates are always set
 // (the add-on reads it once). Cases:
 //   t1_q6k_oracle  1 token, Q6_K down, h also a graph output: the residual is checked per element against an fp64
 //                  host product of HRX's own h, and proj against an fp64 host projection of HRX's own residual;
@@ -90,6 +92,7 @@ constexpr int64_t kNextOut   = 4096;  // the next layer's q projection in Qwen3-
 constexpr float   kEps       = 1e-6f;
 
 constexpr const char * kHipKernel  = "moe_down_q6k_f32_next_q8";
+constexpr const char * kHipKernelQ4K = "moe_down_q4k_q8_next_q8";
 constexpr const char * kLoomQ6K    = "qwen3_moe_routed_down_q6k_f32_wave64_next_q8";
 constexpr const char * kLoomQ4K    = "qwen3_moe_routed_down_q4k_q8_1_x4_next_q8";
 
@@ -262,17 +265,22 @@ ggml_cgraph * build_graph(ggml_context * gctx, const Case & c, Tensors & t) {
 // ---- path taken -----------------------------------------------------------------------------------------------------
 
 struct KernelCount {
-    int hip = 0, loom_q6k = 0, loom_q4k = 0;
+    int hip = 0, loom_q6k = 0, loom_q4k = 0, hip_q4k = 0;
 };
 
 // The add-on's kernel as kernel_definition_name() spells it: the readable name goes through the add-on's symbol hook
 // (hip/hip-code-objects.h) to the name it registered; empty when this build has no such HIP kernel.
 std::string g_hip_name;
+std::string g_hip_q4k_name;
+
+enum class Arm { loom, hip, hip_q4k };
 
 void count_name(const std::string & name, KernelCount & k) {
     // names are family:name (kernel_definition_name)
     if (!g_hip_name.empty() && name == g_hip_name) {
         ++k.hip;
+    } else if (!g_hip_q4k_name.empty() && name == g_hip_q4k_name) {
+        ++k.hip_q4k;
     } else if (name == std::string("qwen3_moe:") + kLoomQ6K) {
         ++k.loom_q6k;
     } else if (name == std::string("qwen3_moe:") + kLoomQ4K) {
@@ -281,22 +289,26 @@ void count_name(const std::string & name, KernelCount & k) {
 }
 
 // The expected counts for one case and arm; prints and returns false on a mismatch.
-bool check_counts(const char * where, const Case & c, bool hip_arm, const KernelCount & k) {
+bool check_counts(const char * where, const Case & c, Arm arm, const KernelCount & k) {
     bool ok = true;
     if (c.hook_case) {
-        ok = hip_arm ? (k.hip == 1 && k.loom_q6k == 0) : (k.hip == 0 && k.loom_q6k == 1);
+        ok = arm == Arm::hip ? (k.hip == 1 && k.loom_q6k == 0) : (k.hip == 0 && k.loom_q6k == 1);
+        ok = ok && k.hip_q4k == 0;
     } else {
         ok = k.hip == 0 && k.loom_q6k == 0;
         if (c.down_type == GGML_TYPE_Q4_K) {
-            ok = ok && k.loom_q4k == 1;  // the registration matched, so the hook was asked and declined
+            // the registration matched, so the hook was asked: only the Q4_K gate lets it take the op
+            ok = ok && (arm == Arm::hip_q4k ? (k.hip_q4k == 1 && k.loom_q4k == 0) : (k.hip_q4k == 0 && k.loom_q4k == 1));
+        } else {
+            ok = ok && k.hip_q4k == 0;
         }
     }
-    std::printf("  %s %-14s hip=%d loom_q6k=%d loom_q4k=%d %s\n", where, c.name, k.hip, k.loom_q6k, k.loom_q4k,
-                ok ? "OK" : "FAIL");
+    std::printf("  %s %-14s hip=%d loom_q6k=%d loom_q4k=%d hip_q4k=%d %s\n", where, c.name, k.hip, k.loom_q6k,
+                k.loom_q4k, k.hip_q4k, ok ? "OK" : "FAIL");
     return ok;
 }
 
-bool plan_case(const Case & c, bool hip_arm) {
+bool plan_case(const Case & c, Arm arm) {
     ggml_init_params p    = { 256 * ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
     ggml_context *   ctx  = ggml_init(p);
     Tensors          t{};
@@ -325,7 +337,7 @@ bool plan_case(const Case & c, bool hip_arm) {
         count_name(name, k);
     }
     ggml_free(ctx);
-    return check_counts("plan  ", c, hip_arm, k);
+    return check_counts("plan  ", c, arm, k);
 }
 
 KernelCount count_dumped_kernels(const std::filesystem::path & dir) {
@@ -583,14 +595,14 @@ bool check_against_cpu(const Data & d, const Result & got, const Result & cpu) {
 
 int main(int argc, char ** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep the lines printed before a failed REQUIRE
-    const char *          arm       = nullptr;
+    const char *          arm_name  = nullptr;
     bool                  plan_only = false;
     bool                  cpu_only  = false;
     std::filesystem::path dump_root = "test-hrx-routed-down-hip-dump";
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--arm" && i + 1 < argc) {
-            arm = argv[++i];
+            arm_name = argv[++i];
         } else if (a == "--plan-only") {
             plan_only = true;
         } else if (a == "--cpu-only") {
@@ -598,18 +610,24 @@ int main(int argc, char ** argv) {
         } else if (a == "--dump-dir" && i + 1 < argc) {
             dump_root = argv[++i];
         } else {
-            arm = nullptr;
+            arm_name = nullptr;
             break;
         }
     }
-    if (arm == nullptr || (std::strcmp(arm, "hip") != 0 && std::strcmp(arm, "loom") != 0)) {
-        std::fprintf(stderr, "usage: %s --arm hip|loom [--plan-only | --cpu-only] [--dump-dir DIR]\n", argv[0]);
+    if (arm_name == nullptr ||
+        (std::strcmp(arm_name, "hip") != 0 && std::strcmp(arm_name, "loom") != 0 && std::strcmp(arm_name, "hip-q4k") != 0)) {
+        std::fprintf(stderr, "usage: %s --arm hip|hip-q4k|loom [--plan-only | --cpu-only] [--dump-dir DIR]\n", argv[0]);
         return 2;
     }
-    const bool hip_arm = std::strcmp(arm, "hip") == 0;
-    // before anything builds the dispatch registry: the add-on reads it once
-    setenv("GGML_HRX_HIP_MOE_DOWN", hip_arm ? "1" : "0", 1);
-    std::printf("test-hrx-routed-down-hip: arm %s (GGML_HRX_HIP_MOE_DOWN=%s)\n", arm, hip_arm ? "1" : "0");
+    const Arm arm = std::strcmp(arm_name, "hip") == 0     ? Arm::hip :
+                    std::strcmp(arm_name, "hip-q4k") == 0 ? Arm::hip_q4k :
+                                                            Arm::loom;
+    // before anything builds the dispatch registry: the add-on reads its gates once; both are always set, so a value
+    // left in the shell cannot move an arm
+    setenv("GGML_HRX_HIP_MOE_DOWN", arm == Arm::hip ? "1" : "0", 1);
+    setenv("GGML_HRX_HIP_MOE_DOWN_Q4K", arm == Arm::hip_q4k ? "1" : "0", 1);
+    std::printf("test-hrx-routed-down-hip: arm %s (GGML_HRX_HIP_MOE_DOWN=%s GGML_HRX_HIP_MOE_DOWN_Q4K=%s)\n", arm_name,
+                arm == Arm::hip ? "1" : "0", arm == Arm::hip_q4k ? "1" : "0");
 
     REQUIRE(ggml::hrx::find_dispatch_registry({ "gfx1151" }) != nullptr);  // registers the HIP kernels
     if (const ggml::hrx::KernelDefinition * hip =
@@ -618,14 +636,24 @@ int main(int argc, char ** argv) {
         g_hip_name = ggml::hrx::kernel_definition_name(*hip);
     }
     std::printf("  HIP kernel %s: %s\n", kHipKernel, g_hip_name.empty() ? "not in this build" : g_hip_name.c_str());
-    if (hip_arm && g_hip_name.empty()) {
+    if (arm == Arm::hip && g_hip_name.empty()) {
         std::printf("test-hrx-routed-down-hip: --arm hip needs a build with the HIP add-on's %s, FAIL\n", kHipKernel);
         return 1;
+    }
+    if (const ggml::hrx::KernelDefinition * hip_q4k =
+            ggml::hrx::find_hip_kernel_definition(
+                ggml::hrx::hip_kernel_ref(ggml::hrx::hip_addon_kernel_symbol(kHipKernelQ4K)).id)) {
+        g_hip_q4k_name = ggml::hrx::kernel_definition_name(*hip_q4k);
+    }
+    std::printf("  HIP kernel %s: %s\n", kHipKernelQ4K, g_hip_q4k_name.empty() ? "not in this build" : g_hip_q4k_name.c_str());
+    if (arm == Arm::hip_q4k && g_hip_q4k_name.empty()) {
+        std::printf("test-hrx-routed-down-hip: --arm hip-q4k: this add-on has no %s, SKIP\n", kHipKernelQ4K);
+        return 77;
     }
 
     int failures = 0;
     for (const Case & c : kCases) {
-        failures += plan_case(c, hip_arm) ? 0 : 1;
+        failures += plan_case(c, arm) ? 0 : 1;
     }
     if (plan_only) {
         REQUIRE(failures == 0);
@@ -672,14 +700,14 @@ int main(int argc, char ** argv) {
     for (const Case & c : kCases) {
         std::printf("  device %s\n", c.name);
         const Data                  d   = make_data(c);
-        const std::filesystem::path dir = dump_root / (std::string(arm) + "-" + c.name);
+        const std::filesystem::path dir = dump_root / (std::string(arm_name) + "-" + c.name);
         std::filesystem::remove_all(dir);
         std::filesystem::create_directories(dir);
         setenv("GGML_HRX_DUMP_COMMAND_PROGRAM_DIR", dir.c_str(), 1);
         bool         stable = true;
         const Result got    = run(hrx, cpu, c, d, 3, &stable);
         unsetenv("GGML_HRX_DUMP_COMMAND_PROGRAM_DIR");
-        bool ok = check_counts("device", c, hip_arm, count_dumped_kernels(dir));
+        bool ok = check_counts("device", c, arm, count_dumped_kernels(dir));
         std::printf("    three runs bit-identical: %s\n", stable ? "yes" : "NO");
         ok = ok && stable;
         if (c.expose_h) {
@@ -694,6 +722,6 @@ int main(int argc, char ** argv) {
     ggml_backend_free(cpu);
     ggml_backend_free(hrx);
     REQUIRE(failures == 0);
-    std::printf("test-hrx-routed-down-hip: arm %s, all cases OK\n", arm);
+    std::printf("test-hrx-routed-down-hip: arm %s, all cases OK\n", arm_name);
     return 0;
 }
