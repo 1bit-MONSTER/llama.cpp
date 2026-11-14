@@ -24,6 +24,7 @@
 #include <vector>
 
 #ifndef _WIN32
+#include <cerrno>
 #include <csignal>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -69,10 +70,19 @@ static size_t run_isolated(const std::string & arch_filter, size_t * n_run, size
             throw std::runtime_error(std::string("cannot start a child for ") + llama_arch_name(arch));
         }
         int status = 0;
+        bool waited = true;
         while (waitpid(pid, &status, 0) < 0) {
+            if (errno != EINTR) {
+                // any other error (ECHILD, a bad pid) would spin here forever, and a status left at 0 reads as a pass
+                waited = false;
+                break;
+            }
         }
         (*n_run)++;
-        if (WIFSIGNALED(status)) {
+        if (!waited) {
+            LOG(" CANNOT TELL (waitpid: %s): %s\n", strerror(errno), llama_arch_name(arch));
+            n_failed++;
+        } else if (WIFSIGNALED(status)) {
             // the child printed the row it was on, without its result: finish that row
             LOG(" CRASH (%s): %s\n", strsignal(WTERMSIG(status)), llama_arch_name(arch));
             (*n_crashed)++;
