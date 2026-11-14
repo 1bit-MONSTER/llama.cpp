@@ -15602,6 +15602,14 @@ static const HipAddonLabel * hip_addon_known_fail(const char * name) {
         { "packed_layout_follows_weight.q4_k.uploaded", kLayout, "found == 1" },
         { "packed_layout_follows_weight.q4_k.file_mapped.tokens6", kLayout, "found == 1" },
         { "packed_layout_follows_weight.q4_k.file_mapped.stored_copy", kLayout, "found == 1" },
+        // gpu-kernels#84 added the 306 entry that claims a 256-aligned batch of a Q4_K weight Loom reads STORED, which is
+        // exactly this case's stored-copy arm: the kernel is now hip.dense_prefill.mm_q4k_stored instead of the Loom
+        // q5_k/iq4_xs form the arm asserts. Measured rather than assumed: the add-on build before #84 (gk-b0ed206) passes the
+        // case, and at the pin it fails at :3712 unless GGML_HRX_HIP_DENSE_PREFILL_Q4K_STORED=0 -- the opt-out gpu-kernels#85
+        // added -- in which case it passes again. The label is arm-scoped by hip_addon_dispatch_active(), which is why the
+        // loom-only row still asserts the Loom kernel and still passes.
+        { "q4k_aligned_prefill_layout.stored_copy", kPlan,
+          "ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256" },
         { "packed_layout_follows_weight.q6_k.file_mapped", kLayout, "found == 1" },
         { "packed_layout_follows_weight.q6_k.uploaded", kLayout, "found == 1" },
         { "packed_layout_follows_weight.q6_k.file_mapped.tokens8", kLayout, "found == 1" },
