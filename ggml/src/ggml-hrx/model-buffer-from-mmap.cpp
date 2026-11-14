@@ -153,9 +153,11 @@ ggml_backend_buffer_t model_buffer_from_mmap(ggml_backend_hrx_device_context * d
                        ptr, size, TENSOR_ALIGNMENT);
         return nullptr;
     }
-    ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
+    // engine #2393: a real HRX window, not a retagged CPU buffer -- retagging left the context a CPU context, so
+    // every ggml_backend_hrx_buffer_context reader (and backend_set_tensor_async's choice of write path) read
+    // unrelated memory.
+    ggml_backend_buffer_t buffer = ::hrx_mapped_buffer_from_ptr(device, ptr, size);
     if (buffer != nullptr) {
-        buffer->buft = &device->mapped_buft;
         // engine #2137: entries from a mapping that was here before describe other bytes
         forget_stored_device_copies(ptr, size);
     }

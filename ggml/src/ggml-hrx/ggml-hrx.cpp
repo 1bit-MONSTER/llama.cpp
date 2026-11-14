@@ -1928,6 +1928,27 @@ ggml_backend_buffer_type_t ggml_backend_hrx_buffer_type(size_t device) {
                nullptr;
 }
 
+ggml_backend_buffer_t hrx_mapped_buffer_from_ptr(ggml_backend_hrx_device_context * device, void * ptr, size_t size) {
+    // engine #2393: a mapped weight is host memory the loader owns, presented as a window -- the same shape as an
+    // import with two fields different: buft is mapped_buft (host-visible on purpose, the scheduler's placement for a
+    // mapped weight depends on it) and there is no parent allocation to inherit from. imported = true is the honest
+    // ownership flag: nothing here was allocated by the backend, so buffer_free must neither release a handle (there
+    // is none) nor credit the pool.
+    if (ptr == nullptr || size == 0 || reinterpret_cast<uintptr_t>(ptr) % TENSOR_ALIGNMENT != 0) {
+        GGML_LOG_ERROR("%s: refusing host pointer %p (size %zu): it must be non-null and %d-byte aligned\n", __func__,
+                       ptr, size, TENSOR_ALIGNMENT);
+        return nullptr;
+    }
+    const uint64_t generation = g_allocation_generation.fetch_add(1);
+    auto * context = new (std::nothrow) ggml_backend_hrx_buffer_context{
+        device, nullptr, static_cast<uint8_t *>(ptr), generation, generation, false, true, 0, 0, nullptr,
+    };
+    if (context == nullptr) {
+        return nullptr;
+    }
+    return ggml_backend_buffer_init(&device->mapped_buft, buffer_i, context, size);
+}
+
 ggml_backend_buffer_t hrx_imported_buffer_from_ptr(ggml_backend_hrx_device_context * device, void * ptr, size_t size) {
     // engine #2393: a zero-copy import is an HRX buffer whose storage is the caller's, not a retagged CPU buffer --
     // retagging made ggml_backend_hrx_buffer_context_from_buffer() read a CPU context as an HRX one, so

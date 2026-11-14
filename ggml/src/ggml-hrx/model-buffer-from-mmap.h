@@ -25,6 +25,8 @@ struct ggml_backend_hrx_device_context;
 // Used by model_buffer_from_mmap instead of retagging a CPU buffer, which made the HRX buffer-context accessor
 // read a CPU context. Global scope on purpose: the definition sits outside the anonymous ggml::hrx namespace.
 ggml_backend_buffer_t hrx_imported_buffer_from_ptr(ggml_backend_hrx_device_context * device, void * ptr, size_t size);
+// engine #2393: the same window shape for a mapped weight -- mapped_buft, no parent to inherit.
+ggml_backend_buffer_t hrx_mapped_buffer_from_ptr(ggml_backend_hrx_device_context * device, void * ptr, size_t size);
 
 namespace ggml::hrx {
 
