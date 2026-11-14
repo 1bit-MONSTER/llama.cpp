@@ -6630,8 +6630,18 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_qwen_decode_attention_output_next_q8_scheduling_case(false); });
     add(suite, "fa_decode_next_q8.true",
         [=] { run_qwen_decode_attention_output_next_q8_scheduling_case(true); });
-    add(suite, "fa_prefill_full_cache.512",
-        [=] { run_qwen_full_cache_prefill_flash_attention_scheduling_case(512); });
+    // engine#2374 item 3: measured on BOTH paths -- with the HIP add-on and with GGML_HRX_DISABLE_DISPATCH=hip.
+    // Both fail at the same assertion, `compact_mask != nullptr` (test-hrx-ops.cpp:2394), which runs BEFORE the
+    // case looks for any flash dispatch. So this is not an add-on claiming a Loom-path node: no
+    // append_alternate_value caller publishes a GGML_TYPE_F16 alternate anywhere in the tree, and the
+    // `qwen3_moe:qwen_attention_metadata` dispatch the case also waits for is not registered at all
+    // (`grep -rln qwen_attention_metadata ggml/src/ggml-hrx/` returns nothing). The compact-mask optimisation
+    // this case was written for does not exist on this line; the label names the DEFECT rather than the issue,
+    // so the day a compact F16 mask alternate is published this becomes an UNEXPECTED-PASS and gets removed.
+    suite.known_fail_device_case("fa_prefill_full_cache.512",
+                                 "engine#2374 item 3: no compact F16 mask alternate is published (and no "
+                                 "qwen_attention_metadata dispatch exists) on either the add-on or the Loom path",
+                                 [=] { run_qwen_full_cache_prefill_flash_attention_scheduling_case(512); });
 }
 
 int main(int argc, char ** argv) {
