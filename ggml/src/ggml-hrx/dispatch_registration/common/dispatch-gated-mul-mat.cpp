@@ -733,6 +733,13 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
 
     Dispatch dispatch;
     const bool use_direct_dot = match.token_count <= 5 && match.input_size % 256 == 0;
+    // One-token decode with gate and up in DIFFERENT formats (Qwen3.8-27B Q4_K_M: Q4_K gate + Q6_K up on 17 layers): the
+    // fused direct-dot body runs at ~181 GB/s, while two separate decode GEMVs + the GLU dispatch reach the weights' own
+    // kernels. Measured 11.79/11.80/11.80 -> 11.97/11.98/11.97 tok/s (tg64, three interleaved pairs, greedy text
+    // identical; DECODE-BW 11-14). Same-format pairs and 2..5-token batches (MTP verify) keep the fused body.
+    if (use_direct_dot && !use_q8 && match.token_count == 1 && match.gate_format != match.up_format) {
+        return false;
+    }
     const bool use_wmma       = !use_q8 && !use_direct_dot;
     if (use_wmma && match.token_count < 2) {
         return false;
