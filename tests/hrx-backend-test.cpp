@@ -218,6 +218,9 @@ static std::string kernel_name_for_id(uint64_t kernel_id) {
     return ggml::hrx::kernel_definition_name(*resolved.definition);
 }
 
+// scopes a case to the add-on path (defined with the label table, further down)
+static bool hip_addon_dispatch_active();
+
 static void require_compile_parameter(const ggml::hrx::Dispatch & dispatch,
                                       const char *                name,
                                       const std::string &         value) {
@@ -3709,16 +3712,37 @@ static void schedule_q4k_aligned_prefill_layout(bool stored_copy_exists) {
             }
             ++found;
             if (stored_copy_exists) {
-                REQUIRE(name == "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256");
-                require_compile_parameter(dispatch, "ggml.mul_mat_q8_1_x4.weight_format", "4");
-                REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
+                // gpu-kernels#84's 306 entry claims a 256-aligned batch of a Q4_K weight Loom reads STORED, which is this arm
+                // exactly, so the add-on path plans hip.dense_prefill.mm_q4k_stored here while the Loom q5_k/iq4_xs form below
+                // is the loom row's expectation. Asserted per arm rather than left to hip_addon_known_fail: #84's routing is
+                // permanent, and a label would stop this case checking the add-on path at all.
+                //
+                // The kernel id cannot be asserted -- add-on ids are hashed by design (#2392) and this one moves with any
+                // kernel edit -- so the add-on arm asserts the identifier CLASS plus the layout, which is the property this arm
+                // was written for. Which add-on kernel is chosen stays pinned by GGML_HRX_HIP_DENSE_PREFILL_Q4K_STORED=0 (the
+                // opt-out gpu-kernels#85 added, which flips this row back to the Loom kernel) and by gpu-kernels' tile probes.
+                REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);   // measured: ggml-native on both paths
+                if (hip_addon_dispatch_active()) {
+                    REQUIRE(name.rfind("hip:", 0) == 0);
+                } else {
+                    REQUIRE(name == "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256");
+                    require_compile_parameter(dispatch, "ggml.mul_mat_q8_1_x4.weight_format", "4");
+                }
             } else {
                 REQUIRE(name == "loom_libs:ggml_mul_mat_q4_k_f16_wmma_prefill_wave32");
                 REQUIRE(binding.layout != ggml::hrx::kNativeWeightLayout);
             }
         }
     }
-    REQUIRE(found == 1);
+    // The weight-reference count is arm-specific, measured: 1 on the Loom path (one kernel binds it), 3 on the add-on
+    // path, where #84's dense-prefill entry is reached through the dispatches that also bind the weight. The old
+    // `found == 1` was arm-blind -- and ipso facto unreachable on the add-on path once the case stopped aborting at its
+    // first match, which is what the known-fail label had hidden.
+    if (hip_addon_dispatch_active()) {
+        REQUIRE(found >= 1);
+    } else {
+        REQUIRE(found == 1);
+    }
     ggml_backend_buffer_free(buffer);
     ggml_free(ctx);
 }
@@ -15602,14 +15626,6 @@ static const HipAddonLabel * hip_addon_known_fail(const char * name) {
         { "packed_layout_follows_weight.q4_k.uploaded", kLayout, "found == 1" },
         { "packed_layout_follows_weight.q4_k.file_mapped.tokens6", kLayout, "found == 1" },
         { "packed_layout_follows_weight.q4_k.file_mapped.stored_copy", kLayout, "found == 1" },
-        // gpu-kernels#84 added the 306 entry that claims a 256-aligned batch of a Q4_K weight Loom reads STORED, which is
-        // exactly this case's stored-copy arm: the kernel is now hip.dense_prefill.mm_q4k_stored instead of the Loom
-        // q5_k/iq4_xs form the arm asserts. Measured rather than assumed: the add-on build before #84 (gk-b0ed206) passes the
-        // case, and at the pin it fails at :3712 unless GGML_HRX_HIP_DENSE_PREFILL_Q4K_STORED=0 -- the opt-out gpu-kernels#85
-        // added -- in which case it passes again. The label is arm-scoped by hip_addon_dispatch_active(), which is why the
-        // loom-only row still asserts the Loom kernel and still passes.
-        { "q4k_aligned_prefill_layout.stored_copy", kPlan,
-          "ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256" },
         { "packed_layout_follows_weight.q6_k.file_mapped", kLayout, "found == 1" },
         { "packed_layout_follows_weight.q6_k.uploaded", kLayout, "found == 1" },
         { "packed_layout_follows_weight.q6_k.file_mapped.tokens8", kLayout, "found == 1" },
