@@ -5452,6 +5452,8 @@ static void run_qwen_attention_postprocess_dispatch_checks() {
         REQUIRE(plan.initialization_dispatches.empty());
         REQUIRE(plan.dispatches.size() == 4);
         const ggml::hrx::Dispatch & postprocess = plan.dispatches.back();
+        REQUIRE(kernel_name_for_id(postprocess.kernel.kernel_id) ==
+                "qwen3_moe:qwen3_moe_attention_postprocess_f32_f16");   // back() is postprocess, not assumed
         REQUIRE(postprocess.bindings[0].value == imported.graph.values().find_tensor(tensors.positions)->id);
         REQUIRE(postprocess.bindings[1].value == imported.graph.values().find_tensor(tensors.key_cache_indices)->id);
         REQUIRE(postprocess.bindings[2].value == imported.graph.values().find_tensor(tensors.value_cache_indices)->id);
@@ -9726,6 +9728,8 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         // the seventh slot is the IQ3_XXS grid (a read-only placeholder for other formats), which #327 brought with
         // the composable kernels; AMD's suite checks 7 here and the common-path case above already does (engine#2388)
         REQUIRE(gate_up_match.dispatches[2].bindings.size() == 7);
+        // slot 6 is the IQ3_XXS grid; for these formats it is the input buffer as a read-only placeholder
+        REQUIRE(gate_up_match.dispatches[2].bindings[6].value == gate_up_match.dispatches[2].bindings[0].value);
         REQUIRE(gate_up_match.dispatches[2].bindings[1].value == gate_up_match.transients[0].value);
         REQUIRE(gate_up_match.dispatches[2].bindings[2].value == gate_up_match.transients[1].value);
         REQUIRE(gate_up_match.metadata.generated_resources().size() == 2);
@@ -9759,6 +9763,7 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[0].kernel.kernel_id) ==
                 common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));   // as AMD's suite (engine#2388)
         REQUIRE(gate_up_match.dispatches[0].bindings.size() == 7);
+        REQUIRE(gate_up_match.dispatches[0].bindings[6].value == gate_up_match.dispatches[0].bindings[0].value);
     }
 
     {
@@ -9774,6 +9779,7 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[0].kernel.kernel_id) ==
                 common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));   // as AMD's suite (engine#2388)
         REQUIRE(gate_up_match.dispatches[0].bindings.size() == 7);
+        REQUIRE(gate_up_match.dispatches[0].bindings[6].value == gate_up_match.dispatches[0].bindings[0].value);
     }
 
     {
