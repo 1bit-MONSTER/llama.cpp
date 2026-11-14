@@ -543,6 +543,14 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-ops PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-ops COMMAND test-hrx-ops)
+    # engine#2393 / #355: the same suite with every add-on registration disabled, so the LOOM path is exercised at
+    # all -- until now no row ran it, and the add-on's own kernels hid whatever the loom path does. Measured at
+    # 7e91e98a7 with GGML_HRX_DISABLE_DISPATCH=hip.: 270 passed, 0 failed, 1 known-fail (a labelled one),
+    # 0 unexpected-pass, 271 total, rc 0. The no-device guard below is not optional: without it this row passes on
+    # a machine whose runtime never initialised, which is the defect #375 fixed for its two siblings.
+    add_test(NAME test-hrx-ops-loom COMMAND test-hrx-ops)
+    set_tests_properties(test-hrx-ops-loom PROPERTIES
+        ENVIRONMENT "GGML_HRX_DISABLE_DISPATCH=hip.")
 
 
     add_executable(test-hrx-hadamard test-hrx-hadamard.cpp)
@@ -642,7 +650,7 @@ if (TARGET ggml-hrx)
     # **0** while skipping 267 of its 269 cases -- a green row for a suite that never touched a device. Their four
     # siblings fail in that state, which is the right answer for a row whose subject is the hardware.
     set_tests_properties(hrx-buffer-test hrx-backend-test hrx-loom-jit-test hrx-ops-test
-                         test-hrx-ops test-hrx-buffer PROPERTIES
+                         test-hrx-ops test-hrx-buffer test-hrx-ops-loom PROPERTIES
         LABELS hrx
         TIMEOUT 900
         FAIL_REGULAR_EXPRESSION "test skipped: no device available")
