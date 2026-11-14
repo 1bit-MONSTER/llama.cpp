@@ -80,4 +80,25 @@ void set_hip_set_rows_hook(HipSetRowsHook hook);
 bool hip_set_rows_dispatch(const HipSetRowsArgs & args, DispatchMatch & match);
 bool hip_set_rows_hook_installed();
 
+// Routed MoE one-token down projection hook (dispatch_registration/qwen/dispatch-routed-ffn.cpp,
+// llm.routed_ffn.decode_down_next_q8). The matcher has built the whole dispatch for its Loom kernel: bindings
+// input, route_ids, route_weights, weight, output (residual in, updated in place), norm_weight, completion
+// counter (0 on entry and exit), next_q8 (block_q8_1_x4 of the next RMS norm). A hook that returns true has
+// replaced dispatch.kernel with a kernel of that same binding contract; false keeps the Loom kernel.
+#define GGML_HRX_HIP_ROUTED_DOWN_HOOK 1  // an add-on may test for the hook below
+struct HipRoutedDownArgs {
+    int     weight_type;  // ggml_type of the expert weights
+    bool    input_is_q8;  // input binding is the q8_1_x4 alternate rather than f32
+    int64_t token_count;
+    int64_t input_size;
+    int64_t route_count;
+    int64_t route_id_stride;
+    int64_t expert_count;
+    int64_t output_size;
+    float   eps;
+};
+using HipRoutedDownHook = bool (*)(const HipRoutedDownArgs & args, Dispatch & dispatch);
+void set_hip_routed_down_hook(HipRoutedDownHook hook);
+bool hip_routed_down_dispatch(const HipRoutedDownArgs & args, Dispatch & dispatch);
+
 }  // namespace ggml::hrx

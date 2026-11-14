@@ -599,6 +599,18 @@ if (TARGET ggml-hrx)
     add_test(NAME test-hrx-fa-masked-v COMMAND test-hrx-fa-masked-v)
     set_tests_properties(test-hrx-fa-masked-v PROPERTIES SKIP_RETURN_CODE 77)
 
+    # the routed-down hook on llm.routed_ffn.decode_down_next_q8: plan and device kernel names, an fp64 oracle and the
+    # CPU backend, with the add-on's kernel off (loom) and on (hip, only when a HIP add-on is built in)
+    add_executable(test-hrx-routed-down-hip test-hrx-routed-down-hip.cpp)
+    target_link_libraries(test-hrx-routed-down-hip PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-routed-down-hip PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-routed-down-loom COMMAND test-hrx-routed-down-hip --arm loom)
+    set_tests_properties(test-hrx-routed-down-loom PROPERTIES SKIP_RETURN_CODE 77)
+    if (GGML_HRX_HIP_ADDON_DIR)
+        add_test(NAME test-hrx-routed-down-hip COMMAND test-hrx-routed-down-hip --arm hip)
+        set_tests_properties(test-hrx-routed-down-hip PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+
     add_executable(test-hrx-attention-sink test-hrx-attention-sink.cpp)
     target_link_libraries(test-hrx-attention-sink PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-attention-sink PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
