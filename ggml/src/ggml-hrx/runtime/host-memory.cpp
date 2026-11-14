@@ -2184,7 +2184,14 @@ void HostWeightCache::clear() {
     resident_bytes_ = 0;
     available_at_first_weight_ = 0;
     oversize_warned_           = false;
-    stats_          = {};
+    // engine #2393: hits/misses/evictions are CUMULATIVE -- a caller measuring cache effectiveness across a
+    // clear() must not see them reset. Only the residency counters describe what is currently materialised, and
+    // those are what clearing invalidates.
+    const HostWeightCacheStats counters = stats_;
+    stats_               = {};
+    stats_.hits          = counters.hits;
+    stats_.misses        = counters.misses;
+    stats_.evictions     = counters.evictions;
     if (arena_ != nullptr) {
         hrx_buffer_release(arena_);
         arena_ = nullptr;
