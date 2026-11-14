@@ -8641,6 +8641,98 @@ static void run_ssm_conv_prefill_recurrent_case(ggml_type type, bool gathered, b
     ggml_backend_free(backend);
 }
 
+// One-token conv-state update whose state is either gathered (get_rows, a copy) or read in place from the cache row the
+// update writes back (llm_graph_input_rs::s_copy_identity, engine C4-STREAMS). The fused decode kernel declares state
+// and cache noalias, so its matcher must decline the in-place form (state and cache share storage); both forms must give
+// the same output and cache.
+struct SsmConvDecodeGraph {
+    ggml_context * ctx    = nullptr;
+    ggml_tensor *  x      = nullptr;
+    ggml_tensor *  pool   = nullptr;
+    ggml_tensor *  ids    = nullptr;
+    ggml_tensor *  filter = nullptr;
+    ggml_tensor *  output = nullptr;
+    ggml_cgraph *  graph  = nullptr;
+};
+
+static SsmConvDecodeGraph make_ssm_conv_decode_graph(int64_t n, bool in_place) {
+    ggml_init_params params = {};
+    params.mem_size         = 8 * 1024 * 1024;
+    params.no_alloc         = true;
+    SsmConvDecodeGraph c;
+    c.ctx = ggml_init(params);
+    REQUIRE(c.ctx != nullptr);
+    c.x      = ggml_new_tensor_1d(c.ctx, GGML_TYPE_F32, n);
+    c.pool   = ggml_new_tensor_2d(c.ctx, GGML_TYPE_F32, 3 * n, 2);
+    c.ids    = ggml_new_tensor_1d(c.ctx, GGML_TYPE_I32, 1);
+    c.filter = ggml_new_tensor_2d(c.ctx, GGML_TYPE_F32, 4, n);
+    c.graph  = ggml_new_graph(c.ctx);
+    ggml_tensor * cache = ggml_view_2d(c.ctx, c.pool, 3 * n, 1, c.pool->nb[1], 0);
+    ggml_tensor * state = nullptr;
+    if (in_place) {
+        state = ggml_reshape_3d(c.ctx, ggml_view_2d(c.ctx, c.pool, 3 * n, 1, c.pool->nb[1], 0), 3, n, 1);
+    } else {
+        ggml_tensor * rows = ggml_get_rows(c.ctx, c.pool, c.ids);
+        ggml_build_forward_expand(c.graph, rows);
+        state = ggml_reshape_3d(c.ctx, rows, 3, n, 1);
+    }
+    ggml_tensor * x      = ggml_reshape_3d(c.ctx, c.x, n, 1, 1);
+    ggml_tensor * window = ggml_concat(c.ctx, state, ggml_transpose(c.ctx, x), 0);
+    ggml_tensor * tail   = ggml_view_3d(c.ctx, window, 3, n, 1, window->nb[1], window->nb[2], sizeof(float));
+    ggml_build_forward_expand(c.graph, ggml_cpy(c.ctx, tail, cache));
+    c.output = ggml_silu(c.ctx, ggml_ssm_conv(c.ctx, window, c.filter));
+    ggml_set_output(c.output);
+    ggml_build_forward_expand(c.graph, c.output);
+    const auto   sequence = scheduled_kernel_sequence(c.graph);
+    const bool   fused    = std::find(sequence.begin(), sequence.end(),
+                                      "loom_libs:llm_ssm_conv_dconv4_silu_decode_f32") != sequence.end();
+    if (fused == in_place || std::getenv("HRX_TEST_PRINT_SEQUENCE") != nullptr) {
+        for (const std::string & name : sequence) {
+            std::fprintf(stderr, "  scheduled %s\n", name.c_str());
+        }
+    }
+    REQUIRE(fused == !in_place);
+    return c;
+}
+
+static void run_ssm_conv_decode_in_place_state_schedule_checks() {
+    for (const bool in_place : { true, false }) {
+        auto c = make_ssm_conv_decode_graph(8192, in_place);
+        ggml_free(c.ctx);
+    }
+}
+
+static void run_ssm_conv_decode_in_place_state_case() {
+    const int64_t n       = 8192;
+    auto          backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    auto a  = make_ssm_conv_decode_graph(n, true);
+    auto b  = make_ssm_conv_decode_graph(n, false);
+    auto ab = ggml_backend_alloc_ctx_tensors(a.ctx, backend);
+    auto bb = ggml_backend_alloc_ctx_tensors(b.ctx, backend);
+    REQUIRE(ab != nullptr && bb != nullptr);
+    const auto    filters = make_pattern_f32(4 * n, 11, 0.0625f);
+    const auto    states  = make_pattern_f32(6 * n, 17, 0.03125f);
+    const int32_t id      = 0;
+    set_tensor_pair_bytes(backend, a.filter, backend, b.filter, filters.data(), filters.size() * sizeof(float));
+    set_tensor_pair_bytes(backend, a.pool, backend, b.pool, states.data(), states.size() * sizeof(float));
+    set_tensor_pair_bytes(backend, a.ids, backend, b.ids, &id, sizeof(id));
+    for (int round = 0; round < 6; ++round) {  // each round reads the state the previous one wrote
+        const auto x = make_pattern_f32(n, 7 + round, 0.0625f);
+        set_tensor_pair_bytes(backend, a.x, backend, b.x, x.data(), x.size() * sizeof(float));
+        REQUIRE(ggml_backend_graph_compute(backend, a.graph) == GGML_STATUS_SUCCESS);
+        REQUIRE(ggml_backend_graph_compute(backend, b.graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(backend);
+        require_close(get_f32_tensor(backend, a.pool), get_f32_tensor(backend, b.pool), 0.0f, 0.0f);
+        require_close(get_f32_tensor(backend, a.output), get_f32_tensor(backend, b.output), 1e-6f, 1e-5f);
+    }
+    ggml_backend_buffer_free(ab);
+    ggml_backend_buffer_free(bb);
+    ggml_free(a.ctx);
+    ggml_free(b.ctx);
+    ggml_backend_free(backend);
+}
+
 static void run_vector_output_capacity_experiment() {
     constexpr int64_t kSmallVectorInputSize = 256;
     constexpr int64_t kAboveOldOutputSize   = 262208;
@@ -8712,6 +8804,8 @@ static void register_basic_ops_cases(Suite & suite) {
         suite.device_case("ssm_conv_prefill_recurrent." + type_name(type) + ".gathered_clear_state",
                           [type] { run_ssm_conv_prefill_recurrent_case(type, true, true); });
     }
+    suite.host_case("ssm_conv_decode.in_place_state.schedule", [] { run_ssm_conv_decode_in_place_state_schedule_checks(); });
+    suite.device_case("ssm_conv_decode.in_place_state", [] { run_ssm_conv_decode_in_place_state_case(); });
     suite.device_case("view_mul_f32.cpu_reference", [] { run_view_mul_f32_cpu_reference_case(); });
     for (const int64_t token_count : { 2, 23 }) {
         suite.device_case("strided_cont.tokens" + std::to_string(token_count),

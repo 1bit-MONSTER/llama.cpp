@@ -1467,6 +1467,25 @@ ggml_tensor * llama_memory_recurrent_context::get_p_l(int32_t il) const {
     return mem->p_l[il];
 }
 
+bool llama_memory_recurrent_context::s_copy_is_identity() const {
+    if (get_rs_z() >= 0) {
+        return false;
+    }
+    for (uint32_t i = 0; i < get_n_rs(); ++i) {
+        const uint32_t cell_idx = i + mem->head;
+        if (mem->cells[cell_idx].src0 != (int32_t) cell_idx) {
+            return false;
+        }
+        if (mem->n_rs_seq != 0 && !mem->cells[cell_idx].seq_id.empty()) {
+            const llama_seq_id seq = *mem->cells[cell_idx].seq_id.begin();
+            if (seq >= 0 && (size_t) seq < mem->rs_idx.size() && mem->rs_idx[seq] != 0) {
+                return false;  // a rollback reads an older snapshot row
+            }
+        }
+    }
+    return true;
+}
+
 int32_t llama_memory_recurrent_context::s_copy(int i) const {
     const uint32_t cell_idx = i + mem->head;
     const int32_t  src0     = mem->cells[cell_idx].src0;
