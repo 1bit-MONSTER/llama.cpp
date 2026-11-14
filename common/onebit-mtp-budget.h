@@ -59,14 +59,14 @@ class MtpBudgetTrace {
     // The candidate just sampled: folds it into the running product and reports whether to draft it.
     // false means the running product has fallen to or below the threshold, so drafting stops here.
     bool keep(int32_t seq, float p1, float threshold) {
-        const size_t i = static_cast<size_t>(seq);
+        const size_t i = slot(seq);
         budget_cum_[i] *= p1;
         return mtp_keep_drafting(budget_cum_[i], threshold);
     }
 
     // The candidate was added to the draft: remember the depth and log "D" (depth, p1, running product).
     void drafted(int32_t seq, size_t n_drafted, float p1, int32_t token) {
-        const size_t i = static_cast<size_t>(seq);
+        const size_t i = slot(seq);
         drafted_[i] = n_drafted;
         trace_cum_[i] *= p1;
         if (FILE * f = file()) {
@@ -79,6 +79,9 @@ class MtpBudgetTrace {
 
     // Drafting ended for this step: logs "E" with the drafted count of every sequence.
     void end(uint32_t n_seq) {
+        if (n_seq > 0) {
+            slot(static_cast<int32_t>(n_seq - 1));
+        }
         if (FILE * f = file()) {
             for (uint32_t seq = 0; seq < n_seq; ++seq) {
                 std::fprintf(f, "E t=%.3f step=%llu seq=%u drafted=%zu\n", now_ms(), (unsigned long long) step_, seq,
@@ -97,7 +100,26 @@ class MtpBudgetTrace {
         }
     }
 
+    // Per-sequence state, for tests: the running product the rule has folded for seq so far.
+    float budget_cum(int32_t seq) const {
+        const size_t i = static_cast<size_t>(seq);
+        return i < budget_cum_.size() ? budget_cum_[i] : 1.0f;
+    }
+
   private:
+    // Index of seq's state, growing it (fresh: product 1, nothing drafted) when a caller reaches a sequence
+    // begin() did not size. A missing begin() once made every MTP draft write past an empty vector and
+    // SIGSEGV llama-server on its first request (engine #2433); with this it costs only the rule's reset.
+    size_t slot(int32_t seq) {
+        const size_t i = static_cast<size_t>(seq);
+        if (i >= budget_cum_.size()) {
+            budget_cum_.resize(i + 1, 1.0f);
+            trace_cum_.resize(i + 1, 1.0f);
+            drafted_.resize(i + 1, 0);
+        }
+        return i;
+    }
+
     static FILE * file() {
         static FILE * f = []() -> FILE * {
             const char * p = std::getenv("ONEBIT_MTP_TRACE");
