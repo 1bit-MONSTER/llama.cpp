@@ -531,6 +531,15 @@ static std::pair<ValueId, ValueId> add_rope_frequency_bindings(const DispatchMat
     return { theta, freq_factors };
 }
 
+// The bound rope_f32's index.assume proofs need, sized by the capacity CLASS rather than by this tensor's exact token
+// count: `input_span` is compile-time config (rope_f32.loom:18, read at :51), so a per-tensor value compiles one
+// program per token count and the capacity class stops affecting compilation. capacity >= token_count, so the bound
+// stays valid for every shape inside the class.
+static int64_t rope_input_span_for_capacity(int64_t capacity, const RopeMatch & match) {
+    const int64_t head_span = (match.head_count - 1) * match.input_stride1 + match.head_size;
+    return (capacity - 1) * match.input_stride2 + head_span;
+}
+
 static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
                                    const RopeMatch &            match,
                                    DispatchMatch &              dispatch_match) {
@@ -540,7 +549,13 @@ static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     add_rope_compile_parameters(dispatch, match);
     dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;   // ours: capacity class + dynamic shape
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_span", to_config_value(match.input_span));
+    // Derived from the capacity CLASS, not from the exact span: `input_span` is compile-time config (rope_f32.loom:18,
+    // read at :51 for the index.assume bounds), so pinning the exact span compiles one program per token count and the
+    // capacity class above stops affecting compilation -- exactly what the comment in match_rope_f32_dispatch warns
+    // about. capacity >= token_count, so the bound stays valid for every shape inside the class.
+    dispatch.kernel.compile_parameters.emplace(
+        "ggml.rope_f32.input_span",
+        to_config_value(rope_input_span_for_capacity(token_capacity_class(match.token_count), match)));
     dispatch.bindings.push_back({ match.positions->id, 0, match.positions->byte_count });
     dispatch.bindings.push_back({ match.input->storage_root, match.input->storage_offset, match.input_span_bytes });
     dispatch.bindings.push_back({ theta, 0, match.theta_bytes });
@@ -806,9 +821,12 @@ static bool match_rope_f32_dispatch(const DispatchMatchContext & context, Dispat
                 part.kernel.compile_parameters["ggml.rope_f32.token_base"] = to_config_value(first_token);
             }
             first_token += count;
-            part.kernel.compile_parameters["ggml.rope_f32.token_capacity"] = to_config_value(token_capacity_class(count));
+            const int64_t capacity = token_capacity_class(count);
+            part.kernel.compile_parameters["ggml.rope_f32.token_capacity"] = to_config_value(capacity);
+            // Same rule as above: the span follows the class, so a 3-token and a 4-token chunk share one compiled
+            // program instead of one each.
             part.kernel.compile_parameters["ggml.rope_f32.input_span"] =
-                to_config_value(static_cast<int64_t>((count - 1) * match.input_stride2) + static_cast<int64_t>(head_span));
+                to_config_value(static_cast<int64_t>((capacity - 1) * match.input_stride2) + static_cast<int64_t>(head_span));
         },
         dispatch_match);
 }

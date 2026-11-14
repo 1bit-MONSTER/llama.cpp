@@ -2359,8 +2359,16 @@ static void run_rope_set_rows_dispatch_checks() {
         // Standalone RoPE shares a capacity class while keeping the actual shape dynamic.
         require_compile_parameter(dispatch, "ggml.rope_f32.token_capacity", "4");
         REQUIRE(dispatch.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
-        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.rope_f32.input_span") == 0);
-        REQUIRE(dispatch.kernel.integer_parameters.at("input_span") == hidden_size * token_count);
+        // AMD's pin (#327) asserts the runtime-parameter design here: `input_span` as an integer parameter and never a
+        // compile parameter. Our line keeps it compile-time, because rope_f32.loom declares it config.decl (:18) and
+        // reads it with config.get (:51) to bound the index.assume proofs, and no dispatch in this tree feeds a config
+        // from an integer parameter at all (0 sites) -- adopting AMD's shape would be a kernel change, not a dispatch
+        // one. What BOTH designs require is that the value follow the capacity CLASS: this tensor has 3 tokens, the
+        // class is 4 (asserted above), so the span must exceed this tensor's own. That is the property the comment in
+        // match_rope_f32_dispatch promises and that nothing tested before: pin the exact span instead and every token
+        // count gets its own compiled program.
+        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.rope_f32.input_span") == 1);
+        REQUIRE(std::stoll(dispatch.kernel.compile_parameters.at("ggml.rope_f32.input_span")) > hidden_size * token_count);
         require_compile_parameter(dispatch, "ggml.rope_f32.mode", "2");
         REQUIRE(dispatch.bindings.size() == 5);
 
@@ -2404,8 +2412,16 @@ static void run_rope_set_rows_dispatch_checks() {
         // Standalone RoPE shares a capacity class while keeping the actual shape dynamic.
         require_compile_parameter(dispatch, "ggml.rope_f32.token_capacity", "4");
         REQUIRE(dispatch.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
-        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.rope_f32.input_span") == 0);
-        REQUIRE(dispatch.kernel.integer_parameters.at("input_span") == hidden_size * token_count);
+        // AMD's pin (#327) asserts the runtime-parameter design here: `input_span` as an integer parameter and never a
+        // compile parameter. Our line keeps it compile-time, because rope_f32.loom declares it config.decl (:18) and
+        // reads it with config.get (:51) to bound the index.assume proofs, and no dispatch in this tree feeds a config
+        // from an integer parameter at all (0 sites) -- adopting AMD's shape would be a kernel change, not a dispatch
+        // one. What BOTH designs require is that the value follow the capacity CLASS: this tensor has 3 tokens, the
+        // class is 4 (asserted above), so the span must exceed this tensor's own. That is the property the comment in
+        // match_rope_f32_dispatch promises and that nothing tested before: pin the exact span instead and every token
+        // count gets its own compiled program.
+        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.rope_f32.input_span") == 1);
+        REQUIRE(std::stoll(dispatch.kernel.compile_parameters.at("ggml.rope_f32.input_span")) > hidden_size * token_count);
         require_compile_parameter(dispatch, "ggml.rope_f32.mode", "0");
         REQUIRE(dispatch.bindings.size() == 5);
 
