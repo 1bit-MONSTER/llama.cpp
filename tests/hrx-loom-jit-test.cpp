@@ -239,10 +239,13 @@ static std::map<std::string, std::string> flash_attention_config(const char * qu
         { "ggml.flash_attention.key_value_head_count", key_value_head_count },
         { "ggml.flash_attention.qk_head_size",         head_size            },
         { "ggml.flash_attention.value_head_size",      head_size            },
-        // engine#2138: this line's prefill kernel takes the V row stride as a config (#95, MLA shapes);
-        // dispatch-flash-attention.cpp emits it, and test-hrx-loom-jit.cpp passes the same value.
-        { "ggml.flash_attention.value_stride",
-          std::to_string(std::stoll(key_value_head_count) * std::stoll(head_size)) },
+        // engine#2138: this line's prefill kernel takes the V row stride as a config (#95, MLA shapes).
+        // It is ONE ROW: flash_attention_f32_f16_wmma.loom:331 names it `value_row_stride`, and
+        // dispatch-flash-attention.cpp:577 emits `match.value->nb[1] / sizeof(fp16)`. V is
+        // [head_size, kv_capacity, kv_head_count, 1] (the matcher requires ne[2] == key_value_head_count), so
+        // contiguous rows give nb[1]/2 = head_size -- multiplying by the head count would be a stride no
+        // dispatch produces. engine#2404.
+        { "ggml.flash_attention.value_stride",         head_size            },
         { "ggml.flash_attention.attention_scale",      attention_scale      },
         { "ggml.flash_attention.apply_gate",           "0"                  },
         { "ggml.flash_attention.gate_stride_head",     "1"                  },
