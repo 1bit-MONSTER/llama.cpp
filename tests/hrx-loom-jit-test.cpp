@@ -401,7 +401,6 @@ static void run_cache_materialize_case(HrxTestDevice &                     devic
 
     ggml::hrx::Dispatch              dispatch = make_binary_add_dispatch(binary, 64);
     std::vector<uint8_t>             constants;
-    ggml_hrx_loom_jit_launch_config  launch;
     ggml::hrx::KernelExecutableCache cache(mode);
 
     ggml::hrx::KernelExecutableRef ref = cache.get_or_compile(context, binary, dispatch, constants);
@@ -413,15 +412,15 @@ static void run_cache_materialize_case(HrxTestDevice &                     devic
     REQUIRE(executable->executable != nullptr);
     REQUIRE(executable->export_info.binding_count == dispatch.bindings.size());
     REQUIRE(executable->export_info.constant_byte_length == constants.size());
-    REQUIRE(launch.workgroup_count[0] > 0);
-    REQUIRE(launch.workgroup_size[0] > 0);
+    // engine#2404: this line's materialize() returns the launch geometry on the executable, not in an out-parameter
+    REQUIRE(executable->launch.workgroup_count[0] > 0);
+    REQUIRE(executable->launch.workgroup_size[0] > 0);
 
     std::shared_ptr<ggml::hrx::KernelExecutable> loaded_hit =
         cache.materialize(context, ref, constants);
     REQUIRE(loaded_hit == executable);
 
     std::vector<uint8_t>                         constants_for_prepare;
-    ggml_hrx_loom_jit_launch_config              launch_for_prepare;
     std::shared_ptr<ggml::hrx::KernelExecutable> prepared =
         cache.prepare(context, binary, dispatch, constants_for_prepare);
     REQUIRE(prepared == executable);
@@ -448,8 +447,6 @@ static void run_dynamic_cache_materialize_case(HrxTestDevice &                  
     ggml::hrx::KernelExecutableCache cache(mode);
     std::vector<uint8_t>            first_constants;
     std::vector<uint8_t>            second_constants;
-    ggml_hrx_loom_jit_launch_config first_launch;
-    ggml_hrx_loom_jit_launch_config second_launch;
     ggml::hrx::KernelExecutableRef   first_ref  = cache.get_or_compile(context, binary, first, first_constants);
     ggml::hrx::KernelExecutableRef   second_ref = cache.get_or_compile(context, binary, second, second_constants);
     REQUIRE(first_ref.valid());
@@ -462,8 +459,8 @@ static void run_dynamic_cache_materialize_case(HrxTestDevice &                  
         cache.materialize(context, second_ref, second_constants);
     REQUIRE(first_executable != nullptr);
     REQUIRE(second_executable == first_executable);
-    REQUIRE(first_launch.workgroup_count[0] == 1);
-    REQUIRE(second_launch.workgroup_count[0] == 2);
+    REQUIRE(first_executable->launch.workgroup_count[0] == 1);
+    REQUIRE(second_executable->launch.workgroup_count[0] == 2);
     REQUIRE(first_constants.size() == second_constants.size());
     REQUIRE(first_constants != second_constants);
 
@@ -507,16 +504,14 @@ static void run_dynamic_export_reuse_case(
     REQUIRE(second_ref.valid());
     REQUIRE(first_ref.entry == second_ref.entry);
 
-    ggml_hrx_loom_jit_launch_config first_launch;
-    ggml_hrx_loom_jit_launch_config second_launch;
     std::shared_ptr<ggml::hrx::KernelExecutable> first_executable =
         cache.materialize(context, first_ref, first_constants);
     std::shared_ptr<ggml::hrx::KernelExecutable> second_executable =
         cache.materialize(context, second_ref, second_constants);
     REQUIRE(first_executable != nullptr);
     REQUIRE(second_executable == first_executable);
-    REQUIRE(first_launch.workgroup_count[0] > 0);
-    REQUIRE(second_launch.workgroup_count[0] > 0);
+    REQUIRE(first_executable->launch.workgroup_count[0] > 0);
+    REQUIRE(second_executable->launch.workgroup_count[0] > 0);
     REQUIRE(first_constants.size() == second_constants.size());
     REQUIRE(first_constants != second_constants);
     std::printf("dynamic executable reuse materialized %s for two workloads\n", kernel_name);
@@ -544,12 +539,11 @@ static void run_targeted_export_materialize_case(HrxTestDevice & device) {
 
     ggml::hrx::KernelExecutableCache             cache(ggml::hrx::LoomJitMode::Sync);
     std::vector<uint8_t>                         constants;
-    ggml_hrx_loom_jit_launch_config              launch;
     std::shared_ptr<ggml::hrx::KernelExecutable> executable =
         cache.prepare(context, *definition, dispatch, constants);
     REQUIRE(executable != nullptr);
     REQUIRE(executable->executable != nullptr);
-    REQUIRE(launch.workgroup_count[0] == 151936);
+    REQUIRE(executable->launch.workgroup_count[0] == 151936);
     std::printf("KernelExecutableCache materialized targeted %s as export %s for %s\n", definition->symbol,
                 definition->name, device.architecture.c_str());
 }
