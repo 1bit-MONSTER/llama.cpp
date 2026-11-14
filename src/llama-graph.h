@@ -300,7 +300,13 @@ public:
     // used in view offsets, need to match for valid graph reuse
     uint32_t head;
     int32_t rs_z;
+
+    // every s_copy(i) == head + i and no state is cleared: build_rs reads the states in place instead of gathering them
+    bool s_copy_identity = false;
 };
+
+// true when the recurrent state copy of this context moves no state (see llm_graph_input_rs::s_copy_identity)
+bool llm_graph_rs_copy_is_identity(const llama_memory_recurrent_context * mctx);
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
 public:

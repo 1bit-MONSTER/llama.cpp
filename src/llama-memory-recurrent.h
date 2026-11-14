@@ -205,6 +205,8 @@ public:
     ggml_tensor * get_p_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
+    // s_copy(i) == head + i for every i and no state is cleared; reads only (s_copy() resets rollback indices)
+    bool s_copy_is_identity() const;
 
 private:
     const llama_memory_status status;

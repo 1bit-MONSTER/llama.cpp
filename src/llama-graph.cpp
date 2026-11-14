@@ -402,7 +402,8 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
 
     const int64_t n_rs = mctx->get_n_rs();
 
-    if (s_copy) {
+    // no buffer: the states are read in place (s_copy_identity), so nothing reads s_copy
+    if (s_copy && s_copy->buffer) {
         GGML_ASSERT(ggml_backend_buffer_is_host(s_copy->buffer));
         int32_t * data = (int32_t *) s_copy->data;
 
@@ -426,8 +427,13 @@ bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
 
     res &= head == mctx->get_head();
     res &= rs_z == mctx->get_rs_z();
+    res &= s_copy_identity == llm_graph_rs_copy_is_identity(mctx);
 
     return res;
+}
+
+bool llm_graph_rs_copy_is_identity(const llama_memory_recurrent_context * mctx) {
+    return mctx != nullptr && mctx->s_copy_is_identity();
 }
 
 void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
@@ -1187,7 +1193,8 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
 
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
 
-    if (inp_rs->s_copy) {
+    // no buffer: the states are read in place (s_copy_identity), so nothing reads s_copy
+    if (inp_rs->s_copy && inp_rs->s_copy->buffer) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
         int32_t * data = (int32_t *) inp_rs->s_copy->data;
 
@@ -1216,6 +1223,7 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
+    res &= inp_rs->s_copy_identity == llm_graph_rs_copy_is_identity(mctx->get_recr());
 
     return res;
 }
@@ -1233,7 +1241,8 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
 
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
 
-    if (inp_rs->s_copy) {
+    // no buffer: the states are read in place (s_copy_identity), so nothing reads s_copy
+    if (inp_rs->s_copy && inp_rs->s_copy->buffer) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
         int32_t * data = (int32_t *) inp_rs->s_copy->data;
 
@@ -1261,6 +1270,7 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
+    res &= inp_rs->s_copy_identity == llm_graph_rs_copy_is_identity(mctx->get_recr());
 
     return res;
 }
@@ -1306,7 +1316,8 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
 
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
 
-    if (inp_rs->s_copy) {
+    // no buffer: the states are read in place (s_copy_identity), so nothing reads s_copy
+    if (inp_rs->s_copy && inp_rs->s_copy->buffer) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
         int32_t * data = (int32_t *) inp_rs->s_copy->data;
 
@@ -1348,6 +1359,7 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
+    res &= inp_rs->s_copy_identity == llm_graph_rs_copy_is_identity(mctx->get_recr());
 
     return res;
 }
@@ -4005,6 +4017,7 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
 
     inp->head = mctx_cur->get_head();
     inp->rs_z = mctx_cur->get_rs_z();
+    inp->s_copy_identity = llm_graph_rs_copy_is_identity(mctx_cur);
 
     return inp;
 }
@@ -4028,6 +4041,19 @@ ggml_tensor * llm_graph_context::build_rs(
     // a custom getter reads the states of the ubatch straight from the cache, so the gather skips the first
     // state: it still holds the n_rs - n_seqs extra states and copies no state of a single sequence ubatch
     ggml_tensor * state_copy = get_state_rows ? inp->s_copy_tail : inp->s_copy;
+
+    // engine C4-STREAMS: steady decode keeps every sequence in its own cell, so the gather copies each state onto itself
+    // (Qwen3.8-27B, 4 streams: 96 GET_ROWS per step). Read the ubatch's states in place instead. The SSM state is updated
+    // column by column by the gated delta net, each workgroup owning a disjoint slice. The conv state's fused decode kernel
+    // needs its state and cache in distinct storage, so its matcher (dispatch-ssm-conv.cpp) declines an in-place state and
+    // the separate concat / conv / copy kernels run (hrx-ops-test ssm_conv_decode.in_place_state).
+    // measured on the gated-delta-net families only (Qwen3.5/3.6/3.8, Qwen3-Next), and only for one token per sequence:
+    // a continuation prefill (state kept, so the copy is also an identity) keeps the gather and its fused prefill kernels
+    const bool delta_net_arch = arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN3NEXT;
+    if (delta_net_arch && inp->s_copy_identity && !get_state_rows && ubatch.n_seq_tokens == 1) {
+        ggml_tensor * states = ggml_reshape_2d(ctx0, s, state_size, s->ne[1]);
+        return ggml_view_2d(ctx0, states, state_size, n_seqs, states->nb[1], kv_state->get_head()*states->nb[1]);
+    }
 
     return build_rs(s, state_copy, inp->s_copy_main, state_size, n_seqs,
                     kv_state->get_n_rs(), kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(),
