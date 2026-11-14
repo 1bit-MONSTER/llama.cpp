@@ -366,6 +366,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             arch == LLM_ARCH_KOLIBRI1) {
         n_head_kv = 2; // GQA coverage
     }
+    if (arch == LLM_ARCH_BLACKMAMBA) {
+        // engine#2444: blackmamba takes its Switch-MoE branch whenever n_ff(i) != 0 (blackmamba.cpp:58), and that branch
+        // sizes ffn_gate_inp/ffn_* from n_ff_exp -- so a fixture written with the generic non-zero n_ff and no expert
+        // width aborts in the loader (t_meta.ne[dim] >= 1). The generic hparams are not enough for this arch.
+        ms.add_kv(LLM_KV_EXPERT_COUNT,                uint32_t(2));
+        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,           uint32_t(2));
+        ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  n_ff);
+    }
+
     if (arch == LLM_ARCH_BEAM) {
         n_head    = 4;
         n_head_kv = 2;
