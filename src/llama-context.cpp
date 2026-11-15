@@ -249,6 +249,13 @@ llama_context::llama_context(
 
     if (model.arch == LLM_ARCH_EAGLE3 || model.arch == LLM_ARCH_DFLASH || model.arch == LLM_ARCH_QWEN4EXP) {
         if (model.tok_embd == nullptr || model.output == nullptr) {
+            if (params.ctx_other == nullptr && model.arch == LLM_ARCH_DFLASH) {
+                // A DFlash draft without its own tok_embd/output builds its graph from the target's tensors
+                // (dflash.cpp asserts ctx_other), so reserving it here would abort. The memory-fitting probe
+                // (common_fit_params' extra model) creates this context with no target; refuse it so the fitter
+                // falls back to fitting the target alone, as it does for any extra model it cannot measure.
+                throw std::runtime_error("DFlash draft without tok_embd/output needs ctx_other (normal during memory fitting)");
+            }
             if (params.ctx_other == nullptr) {
                 // engine #681: the memory-fitting probe has no target context. The real draft context sets ctx_other
                 // in common_speculative_init; warn here so fitting can measure instead of refusing the draft head.
