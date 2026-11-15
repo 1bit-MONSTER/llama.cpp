@@ -97,6 +97,14 @@ void log_declined_placement(const ggml_tensor * op, const ggml_tensor * weight, 
 
 }  // namespace
 
+// engine#2450: the same classification, exported. The placement observer needs to know whether an off-HRX
+// node is off because its weight is host-resident (by design: ggml's CPU from-ptr buffer type, "CPU_Mapped",
+// which a file-mapped model gets) -- and that is exactly what host_resident_weight() already decides. Sharing
+// it means the observer cannot disagree with the decline logic about what "a host weight" is.
+bool host_weight_is_host_resident(const ggml_tensor * tensor) {
+    return host_resident_weight(tensor);
+}
+
 bool host_weight_exceeds_residency(const ggml_tensor * op) {
     if (op == nullptr) {
         return false;

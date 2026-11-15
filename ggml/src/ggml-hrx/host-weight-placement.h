@@ -40,4 +40,8 @@ namespace ggml::hrx {
 // the GGML_HRX_REPORT census.
 bool host_weight_exceeds_residency(const ggml_tensor * op);
 
+// engine#2450: is this tensor a host-resident model weight (not an HRX-allocated buffer, host-visible, WEIGHTS usage)?
+// Exported so the placement observer classifies a by-design CPU node the same way the residency decline does.
+bool host_weight_is_host_resident(const ggml_tensor * tensor);
+
 }  // namespace ggml::hrx
