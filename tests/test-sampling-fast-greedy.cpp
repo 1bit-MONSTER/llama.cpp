@@ -139,10 +139,12 @@ static int32_t reference_argmax(const float * logits, int32_t n, const char * ma
 static void test_vector_matches_scalar() {
     std::mt19937                          rng(4321);
     std::uniform_real_distribution<float> dist(-20.0f, 20.0f);
-    const int32_t                         n = 248320;
-    std::vector<float>                    logits(n);
-    std::vector<char>                     mask(n, 0);
+    std::vector<float>                    logits;
+    std::vector<char>                     mask;
     for (int trial = 0; trial < 120; ++trial) {
+        const int32_t n = 248320 + trial % 8;  // every remainder mod the vector width: the tail runs on 7 of 8
+        logits.assign(n, 0.0f);
+        mask.assign(n, 0);
         for (auto & v : logits) {
             v = dist(rng);
         }
@@ -173,8 +175,22 @@ static void test_vector_matches_scalar() {
         if (trial % 13 == 5) {
             logits[rng() % n] = INFINITY;
         }
-        const char * m = (trial % 2) ? mask.data() : nullptr;
-        CHECK(common_sampler_fast_greedy_argmax(logits.data(), n, m) == reference_argmax(logits.data(), n, m));
+        if (trial % 6 == 0) {  // ties across lane / vector boundaries and on the last element (in the tail)
+            const int32_t b = 8 * (int32_t) (rng() % (uint32_t) (n / 8 - 2)) + 7;
+            logits[b] = logits[b + 1] = logits[b + 9] = logits[n - 1] = 80.0f;
+        }
+        if (trial % 9 == 7) {  // the last element alone holds the maximum
+            logits[n - 1] = 90.0f;
+        }
+        if (trial % 10 == 8) {  // a vocabulary ban: a large adjacent block at -inf, the max just after it
+            const int32_t a = (int32_t) (rng() % (uint32_t) (n - 70000));
+            std::fill(logits.begin() + a, logits.begin() + a + 65536, -INFINITY);
+            logits[a + 65536] = 85.0f;
+        }
+        const char *  m   = (trial % 2) ? mask.data() : nullptr;
+        const int32_t ref = reference_argmax(logits.data(), n, m);
+        CHECK(common_sampler_fast_greedy_argmax(logits.data(), n, m) == ref);
+        CHECK(common_sampler_fast_greedy_argmax_scalar(logits.data(), n, m) == ref);  // the non-AVX2 path, run here too
     }
     for (const int32_t k : { 1, 7, 8, 9, 15, 16, 17, 31 }) {  // the vector tail
         std::vector<float> s(k);
@@ -182,9 +198,11 @@ static void test_vector_matches_scalar() {
             v = dist(rng);
         }
         CHECK(common_sampler_fast_greedy_argmax(s.data(), k, nullptr) == reference_argmax(s.data(), k, nullptr));
+        CHECK(common_sampler_fast_greedy_argmax_scalar(s.data(), k, nullptr) == reference_argmax(s.data(), k, nullptr));
     }
     std::vector<float> all_inf(16, -INFINITY);
     CHECK(common_sampler_fast_greedy_argmax(all_inf.data(), 16, nullptr) == -1);
+    CHECK(common_sampler_fast_greedy_argmax_scalar(all_inf.data(), 16, nullptr) == -1);
 }
 
 int main() {

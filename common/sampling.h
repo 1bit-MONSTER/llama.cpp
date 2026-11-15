@@ -72,6 +72,8 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 bool    common_sampler_fast_greedy_eligible(const common_params_sampling & params, bool has_grammar, bool has_reasoning_budget);
 // argmax over logits skipping mask[i] != 0 (mask may be null); -1 when a logit is NaN or every id is masked / -inf
 int32_t common_sampler_fast_greedy_argmax(const float * logits, int32_t n_vocab, const char * mask);
+// the portable body the dispatch above falls back to (non-AVX2 hosts); exported so a test can run it on an AVX2 host
+int32_t common_sampler_fast_greedy_argmax_scalar(const float * logits, int32_t n_vocab, const char * mask);
 
 // generalized version of common_sampler_sample
 //
