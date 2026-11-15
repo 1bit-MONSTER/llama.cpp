@@ -165,6 +165,17 @@ if (NOT WIN32 AND LLAMA_BUILD_SERVER)
     # CI leaves ONEBIT_MTP_TEST_MODEL unset, so the row is SKIP there. TIMEOUT must exceed the script's own worst
     # case (health 200 x 5 s + the 600 s request = ~1600 s), or a slow load is cut off before its exit code prints
     set_tests_properties(test-mtp-one-request PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1800)
+
+    # llama.cpp#391: the fast greedy path's log line is the only observable of whether the optimisation was TAKEN.
+    # A round of review pointed out that the line had no consumer, which is the same defect one level up from the
+    # regression it exists to catch; this row is the consumer. Needs a small GGUF (CPU only), else SKIP (77).
+    llama_test_cmd(
+        ${CMAKE_CURRENT_SOURCE_DIR}/test-fast-greedy-log.sh
+        NAME test-fast-greedy-log
+        LABEL behavior
+        ARGS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+    )
+    set_tests_properties(test-fast-greedy-log PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900)
 endif()
 
 if (NOT WIN32)
