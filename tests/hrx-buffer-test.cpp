@@ -233,7 +233,13 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     }
     ggml_backend_buffer_t imported = ggml_backend_dev_buffer_from_host_ptr(device, source.data(), sizeof(source),
                                                                             sizeof(source) / 2);
+
+    // engine#2500: the imported type had no context (name "", device null) since #371, so every imported weight
+    // buffer was nameless and device-less -- announced only as "pre-allocated tensor (...) in a buffer () that
+    // cannot run the operation". Assert the identity here, where the buffer exists, because the type is an extra
+    // buft and no public accessor enumerates it.
     REQUIRE(imported != nullptr);
+    REQUIRE(ggml_backend_buft_name(ggml_backend_buffer_get_type(imported))[0] != '\0');    REQUIRE(imported != nullptr);
     REQUIRE(ggml_backend_buffer_get_base(imported) == source.data());
     // engine #2393: an import is NOT host-typed, and that is the property that broke. #370 relaxed this assertion
     // on the reading that `imported` and `is_host` are independent flags (backend-buffer-binding.cpp:85 keeps them
@@ -806,7 +812,34 @@ static void run_loader_mmap_proc_checks(ggml_backend_t backend) {
     ggml_backend_buffer_free(mapped);
 }
 
+// engine#2500: every buffer type must have an IDENTITY. A context initialised to `{}` gives a type whose name is ""
+// and whose context.device is null, and the only place that shows up is a runtime message with empty parentheses:
+//   pre-allocated tensor (...) in a buffer () that cannot run the operation
+// That is exactly how `imported_buft_context` stayed unset through two rounds of this file's own tests (#371, #2393):
+// the arms asked "is it host" and "is it tagged", never "does it have a name". The invariant is not HRX's -- a buffer
+// type reporting an empty name is malformed in any backend -- so it is asserted over every device's every type here.
+static void run_buffer_type_identity_checks() {
+    const size_t n_dev = ggml_backend_dev_count();
+    REQUIRE(n_dev > 0);
+    for (size_t d = 0; d < n_dev; ++d) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(d);
+        REQUIRE(dev != nullptr);
+        for (size_t b = 0; b < 2; ++b) {
+            ggml_backend_buffer_type_t buft = b == 0 ? ggml_backend_dev_buffer_type(dev)
+                                                     : ggml_backend_dev_host_buffer_type(dev);
+            if (buft == nullptr) {
+                continue;
+            }
+            const char * name = ggml_backend_buft_name(buft);
+            REQUIRE(name != nullptr);
+            REQUIRE(name[0] != '\0');   // the "(...in a buffer ())" defect
+            REQUIRE(ggml_backend_buft_get_alignment(buft) > 0);
+        }
+    }
+}
+
 static void register_hrx_buffer_cases(test_runner::Suite & suite) {
+    suite.device_case("buffer_type_identity", [] { run_buffer_type_identity_checks(); });
     suite.device_case("backend_buffer", [] {
         run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
             run_backend_buffer_checks(backend);
