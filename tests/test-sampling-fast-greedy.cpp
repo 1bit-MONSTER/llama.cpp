@@ -5,6 +5,7 @@
 #include "sampling.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -116,8 +117,79 @@ static void test_nan_and_empty() {
     CHECK(common_sampler_fast_greedy_argmax(all_masked.data(), 2, mask.data()) == -1);  // nothing left: full path decides
 }
 
+// the scalar contract the vectorised path must reproduce exactly (lowest index on ties, masks skipped, NaN -> -1)
+static int32_t reference_argmax(const float * logits, int32_t n, const char * mask) {
+    int32_t best   = -1;
+    float   best_v = -INFINITY;
+    for (int32_t i = 0; i < n; ++i) {
+        if (std::isnan(logits[i])) {
+            return -1;
+        }
+        if (logits[i] > best_v && (mask == nullptr || !mask[i])) {
+            best_v = logits[i];
+            best   = i;
+        }
+    }
+    return best;
+}
+
+// common_sampler_fast_greedy_argmax dispatches to an AVX2 body on x86 hosts that have it (C4-STREAMS); it must agree
+// with the scalar contract on every input shape: ties, masks over the maximum, NaN / inf, and lengths that are not a
+// multiple of the vector width.
+static void test_vector_matches_scalar() {
+    std::mt19937                          rng(4321);
+    std::uniform_real_distribution<float> dist(-20.0f, 20.0f);
+    const int32_t                         n = 248320;
+    std::vector<float>                    logits(n);
+    std::vector<char>                     mask(n, 0);
+    for (int trial = 0; trial < 120; ++trial) {
+        for (auto & v : logits) {
+            v = dist(rng);
+        }
+        std::fill(mask.begin(), mask.end(), 0);
+        if (trial % 3 == 1) {
+            for (int k = 0; k < 50; ++k) {
+                mask[rng() % n] = 1;
+            }
+        }
+        if (trial % 5 == 2) {  // exact tie: the lowest id wins
+            logits[rng() % n] = 50.0f;
+            logits[rng() % n] = 50.0f;
+        }
+        if (trial % 7 == 3) {  // the global maximum is masked: the next one wins
+            const int32_t a = rng() % n;
+            logits[a]       = 60.0f;
+            mask[a]         = 1;
+        }
+        if (trial % 17 == 6) {  // a tie where one copy is masked
+            const int32_t a = rng() % n;
+            logits[a]       = 70.0f;
+            mask[a]         = 1;
+            logits[rng() % n] = 70.0f;
+        }
+        if (trial % 11 == 4) {
+            logits[rng() % n] = NAN;
+        }
+        if (trial % 13 == 5) {
+            logits[rng() % n] = INFINITY;
+        }
+        const char * m = (trial % 2) ? mask.data() : nullptr;
+        CHECK(common_sampler_fast_greedy_argmax(logits.data(), n, m) == reference_argmax(logits.data(), n, m));
+    }
+    for (const int32_t k : { 1, 7, 8, 9, 15, 16, 17, 31 }) {  // the vector tail
+        std::vector<float> s(k);
+        for (auto & v : s) {
+            v = dist(rng);
+        }
+        CHECK(common_sampler_fast_greedy_argmax(s.data(), k, nullptr) == reference_argmax(s.data(), k, nullptr));
+    }
+    std::vector<float> all_inf(16, -INFINITY);
+    CHECK(common_sampler_fast_greedy_argmax(all_inf.data(), 16, nullptr) == -1);
+}
+
 int main() {
     test_eligibility();
+    test_vector_matches_scalar();
     test_equivalence();
     test_nan_and_empty();
     if (failures != 0) {
