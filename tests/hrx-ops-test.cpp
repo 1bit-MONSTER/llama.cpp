@@ -5384,6 +5384,124 @@ static void run_add_f32_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
+// One-token decode whose recurrent state is read in place from the cache rows it is written back to (llama.cpp#388's
+// identity view) must update those rows in place, without the "new state -> cache" copy; a gathered state (its own
+// tensor) keeps the out-of-place kernel and the copy. Both against the CPU backend over chained steps, two sequences.
+static void run_gdn_decode_state_in_place_case(bool in_place) {
+    ggml_backend_t cpu = init_cpu_backend();
+    ggml_backend_t hrx = ggml_backend_hrx_init(0);
+    REQUIRE(hrx != nullptr);
+    constexpr int64_t width      = 128;
+    constexpr int64_t heads      = 2;
+    constexpr int64_t seqs       = 2;
+    constexpr int64_t hidden     = 3 * width * heads;
+    constexpr int64_t state_size = width * width * heads;
+    struct fixture {
+        ggml_context * ctx = nullptr;
+        ggml_cgraph *  graph = nullptr;
+        ggml_tensor *  raw = nullptr, * g = nullptr, * beta = nullptr, * bias = nullptr, * decay = nullptr;
+        ggml_tensor *  cache = nullptr, * state = nullptr, * attention = nullptr;
+        ggml_backend_buffer_t buffer = nullptr;
+    };
+    const auto build = [&](ggml_backend_t backend) {
+        fixture f;
+        f.ctx = ggml_init({ 2 * 1024 * 1024, nullptr, true });
+        REQUIRE(f.ctx != nullptr);
+        f.raw = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, hidden, seqs);
+        const auto view = [&](size_t offset) {
+            return ggml_view_4d(f.ctx, f.raw, width, heads, 1, seqs, width * sizeof(float), hidden * sizeof(float),
+                                hidden * sizeof(float), offset);
+        };
+        ggml_tensor * q = view(0);
+        ggml_tensor * k = view(width * heads * sizeof(float));
+        ggml_tensor * v = view(2 * width * heads * sizeof(float));
+        f.g     = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, heads, seqs);
+        f.beta  = ggml_dup_tensor(f.ctx, f.g);
+        f.bias  = ggml_new_tensor_1d(f.ctx, GGML_TYPE_F32, heads);
+        f.decay = ggml_dup_tensor(f.ctx, f.bias);
+        // the model's gate chain: softplus(alpha + dt) * A, sigmoid(beta), L2-normalised q / k
+        ggml_tensor * gate = ggml_mul(
+            f.ctx, ggml_softplus(f.ctx, ggml_add(f.ctx, ggml_reshape_3d(f.ctx, f.g, heads, 1, seqs), f.bias)), f.decay);
+        gate               = ggml_reshape_4d(f.ctx, gate, 1, heads, 1, seqs);
+        ggml_tensor * beta = ggml_sigmoid(f.ctx, ggml_reshape_4d(f.ctx, f.beta, 1, heads, 1, seqs));
+        q                  = ggml_l2_norm(f.ctx, q, 1.e-6f);
+        k                  = ggml_l2_norm(f.ctx, k, 1.e-6f);
+        f.cache = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, seqs);
+        ggml_tensor * state_rows = nullptr;
+        if (in_place) {
+            state_rows = ggml_view_2d(f.ctx, f.cache, state_size, seqs, f.cache->nb[1], 0);
+        } else {
+            f.state    = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, seqs);
+            state_rows = f.state;
+        }
+        ggml_tensor * state = ggml_reshape_4d(f.ctx, state_rows, width, width, heads, seqs);
+        ggml_tensor * gdn   = ggml_gated_delta_net(f.ctx, q, k, v, gate, beta, state, 1);
+        f.attention = ggml_view_4d(f.ctx, gdn, width, heads, 1, seqs, width * sizeof(float), width * heads * sizeof(float),
+                                   width * heads * sizeof(float), 0);
+        ggml_tensor * new_state = ggml_view_2d(f.ctx, gdn, state_size, seqs, state_size * sizeof(float),
+                                               width * heads * seqs * sizeof(float));
+        f.graph = ggml_new_graph(f.ctx);
+        ggml_build_forward_expand(f.graph,
+                                  ggml_cpy(f.ctx, new_state, ggml_view_2d(f.ctx, f.cache, state_size, seqs, f.cache->nb[1], 0)));
+        f.attention = ggml_scale(f.ctx, f.attention, 0.5f);
+        ggml_build_forward_expand(f.graph, f.attention);
+        f.buffer = ggml_backend_alloc_ctx_tensors(f.ctx, backend);
+        REQUIRE(f.buffer != nullptr);
+        return f;
+    };
+    fixture c = build(cpu);
+    fixture h = build(hrx);
+    const auto sequence = scheduled_kernel_sequence(h.graph);
+    const auto has      = [&](const char * name) { return std::find(sequence.begin(), sequence.end(), name) != sequence.end(); };
+    const bool inplace_kernel = has("loom_libs:llm_gated_delta_net_f32_wmma_head128_inplace") ||
+                                has("loom_libs:llm_gated_delta_net_f32_wmma_head128_inplace_projection_epilogue");
+    const bool copy_kernel = has("loom_libs:ggml_copy_f32");
+    if (inplace_kernel != in_place || copy_kernel == in_place) {
+        for (const std::string & name : sequence) {
+            std::fprintf(stderr, "  scheduled %s\n", name.c_str());
+        }
+    }
+    REQUIRE(inplace_kernel == in_place);
+    REQUIRE(copy_kernel == !in_place);
+
+    const auto set = [&](ggml_tensor * ct, ggml_tensor * ht, const std::vector<float> & values) {
+        set_tensor_pair_bytes(cpu, ct, hrx, ht, values.data(), values.size() * sizeof(float));
+    };
+    const auto initial = make_pattern_f32(state_size * seqs, 23, 0.015625f);
+    set(c.cache, h.cache, initial);
+    if (!in_place) {
+        set(c.state, h.state, initial);
+    }
+    set(c.bias, h.bias, std::vector<float>(heads, 0.0f));
+    set(c.decay, h.decay, { -1.0f, -0.5f });
+    for (int step = 0; step < 4; ++step) {  // each step reads the state the previous one wrote
+        set(c.raw, h.raw, make_pattern_f32(hidden * seqs, 31 + step, 0.03125f));
+        std::vector<float> gate(heads * seqs), beta(heads * seqs);
+        for (size_t i = 0; i < gate.size(); ++i) {
+            gate[i] = -0.1f - 0.05f * (float) i - 0.02f * (float) step;
+            beta[i] = 0.4f + 0.05f * (float) i;
+        }
+        set(c.g, h.g, gate);
+        set(c.beta, h.beta, beta);
+        REQUIRE(ggml_backend_graph_compute(cpu, c.graph) == GGML_STATUS_SUCCESS);
+        REQUIRE(ggml_backend_graph_compute(hrx, h.graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(cpu);
+        ggml_backend_synchronize(hrx);
+        require_close(get_f32_tensor(hrx, h.attention), get_f32_tensor(cpu, c.attention), 5.0e-4f);
+        require_close(get_f32_tensor(hrx, h.cache), get_f32_tensor(cpu, c.cache), 5.0e-4f);
+        if (!in_place) {  // the gathered form reads its own state: carry the written rows forward like a gather would
+            const auto rows = get_f32_tensor(cpu, c.cache);
+            set(c.state, h.state, rows);
+        }
+    }
+    ggml_backend_buffer_free(c.buffer);
+    ggml_backend_buffer_free(h.buffer);
+    ggml_free(c.ctx);
+    ggml_free(h.ctx);
+    ggml_backend_free(cpu);
+    ggml_backend_free(hrx);
+}
+
 static void run_gdn_snapshot_cpu_reference_case(int64_t tokens, bool rms_scale_norm = false) {
     ggml_backend_t cpu = init_cpu_backend();
     ggml_backend_t hrx = ggml_backend_hrx_init(0);
@@ -8790,6 +8908,10 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });
     suite.device_case("add_f32.cpu_reference", [] { run_add_f32_cpu_reference_case(); });
     suite.device_case("dynamic_generic_ops.cpu_reference", [] { run_dynamic_generic_ops_cpu_reference_case(); });
+    // the model's own gate chain (softplus(alpha + dt) * A, sigmoid(beta), L2-normalised q/k): a direct GATED_DELTA_NET
+    // with plain gate/beta inputs reaches no HRX matcher, so it has no form to test here
+    suite.device_case("gdn_decode.state_in_place", [] { run_gdn_decode_state_in_place_case(true); });
+    suite.device_case("gdn_decode.state_gathered", [] { run_gdn_decode_state_in_place_case(false); });
     for (int64_t tokens = 2; tokens <= 5; ++tokens) {
         suite.device_case("gdn_snapshot.cpu_reference." + std::to_string(tokens),
                           [tokens] { run_gdn_snapshot_cpu_reference_case(tokens); });

@@ -921,6 +921,38 @@ static bool match_gated_delta_net_dispatch(const DispatchMatchContext & context,
         dispatch_match.dispatches.push_back(std::move(epilogue));
     }
 
+    // One-token decode whose state input already is the cache rows the copy writes back: build_rs reads an identity
+    // state copy in place (llama.cpp#388), so the "new state -> cache" copy is the cache onto itself. Update the rows
+    // in place instead and drop the copy: 12.6 MB per layer at Qwen3.8-27B x 4 streams, whose write-back otherwise drains
+    // during the next weight stream (engine C4-STREAMS). Each workgroup owns one (head, sequence) slice, so in place is
+    // exact.
+    const bool state_is_cache_rows = match.snapshot_count == 1 && match.token_count == 1 && !fuse_rmsnorm_gate &&
+                                     match.state->storage == match.cache->storage &&
+                                     match.state->storage_offset == match.cache->storage_offset &&
+                                     match.state->byte_count == match.cache->byte_count;
+    if (state_is_cache_rows) {
+        Dispatch gdn;
+        gdn.kernel = make_kernel_specialization(can_fuse_projection_epilogue ? kGatedDeltaNetInplaceProjectionEpilogueKernel :
+                                                                               kGatedDeltaNetInplaceKernel);
+        configure_gated_delta_net_kernel(gdn, match, 1);
+        gdn.bindings.push_back({ match.raw_q->id, 0, match.raw_q->byte_count });
+        gdn.bindings.push_back({ match.raw_k->id, 0, match.raw_k->byte_count });
+        gdn.bindings.push_back({ match.v->id, 0, match.v->byte_count });
+        if (can_fuse_projection_epilogue) {
+            gdn.bindings.push_back({ match.alpha_raw->id, 0, match.alpha_raw->byte_count });
+            gdn.bindings.push_back({ match.beta_raw->id, 0, match.beta_raw->byte_count });
+            gdn.bindings.push_back({ match.bias->id, 0, match.bias->byte_count });
+            gdn.bindings.push_back({ match.a_scale->id, 0, match.a_scale->byte_count });
+        } else {
+            gdn.bindings.push_back({ match.gate->id, 0, match.gate->byte_count });
+            gdn.bindings.push_back({ match.beta->id, 0, match.beta->byte_count });
+        }
+        gdn.bindings.push_back({ match.cache->id, 0, match.cache->byte_count });
+        gdn.bindings.push_back({ match.gdn_output->id, 0, match.gdn_output->byte_count });
+        dispatch_match.dispatches.push_back(std::move(gdn));
+        return true;
+    }
+
     if (match.snapshot_count == 1) {
         Dispatch gdn;
         gdn.kernel = make_kernel_specialization(fuse_rmsnorm_gate ? kGatedDeltaNetRmsNormGateKernel :
