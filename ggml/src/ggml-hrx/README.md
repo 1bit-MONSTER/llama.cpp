@@ -88,8 +88,8 @@ Two families of rows cover this backend, and both report a missing device the sa
 
 | family | rows | a run with no HRX device |
 |---|---|---|
-| `hrx-*-test` | `hrx-buffer-test`, `hrx-backend-test`, `hrx-loom-jit-test` | **Failed.** The suite prints `test skipped: no device available for <suite>` and returns **0**; the registered `FAIL_REGULAR_EXPRESSION` in `tests/CMakeLists.txt` turns that row red |
-| `test-hrx-*` | `test-hrx-hadamard`, `test-hrx-mxfp4`, `test-hrx-loader-mapped`, ... | **Failed.** Prints `test skipped: no device available` and returns **1** |
+| `hrx-*-test` | `hrx-buffer-test`, `hrx-backend-test`, `hrx-loom-jit-test` | **Failed.** The suite prints `test skipped: no device available for <suite>` and returns **0**; the registered `FAIL_REGULAR_EXPRESSION` in `tests/CMakeLists.txt` turns that row red (it returns `0` from `tests/testing_suite.h`, and `tests/CMakeLists.txt` registers `FAIL_REGULAR_EXPRESSION "test skipped: no device available"` for it) |
+| `test-hrx-*` | `test-hrx-hadamard`, `test-hrx-mxfp4`, `test-hrx-loader-mapped`, ... | **Failed.** Prints `test skipped: no device available` and returns **1** at the call site, with the ctest 4.2.3 precedence in a comment beside it |
 | any of the above, needing a model it does not have | `test-hrx-loader-mapped` without `LLAMACPP_TEST_MODELFILE` | **Skipped** (`77`). Nothing to measure, and the reason is in the message — the one case where a skip is the honest answer |
 
 Either way, **an HRX-enabled build that finds no HRX device fails those rows rather than skipping them**. The rows exist to measure the device; a skipped row is green for a required check, so a skip bought nothing and hid the absence.
