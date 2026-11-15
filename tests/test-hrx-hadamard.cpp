@@ -88,8 +88,10 @@ double max_rel_error(const std::vector<float> & got, const std::vector<double> &
 int main() {
     ggml_backend_dev_t dev = ggml_backend_dev_by_name("HRX0");
     if (dev == nullptr) {
-        printf("test-hrx-hadamard: no HRX0 device, skipped\n");
-        return 77;
+        printf("test skipped: no device available\n");
+        // ctest 4.2.3: SKIP_RETURN_CODE wins over FAIL_REGULAR_EXPRESSION, and a skipped
+        // row is green for a required check, so a missing device is a failure here.
+        return 1;
     }
     ggml_backend_t hrx = ggml_backend_dev_init(dev, nullptr);
     ggml_backend_t cpu = ggml_backend_cpu_init();

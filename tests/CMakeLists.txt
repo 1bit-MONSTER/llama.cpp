@@ -519,7 +519,10 @@ if (TARGET ggml-hrx)
         --hrx-buffer-test-jobs 1 --hrx-buffer-test-output all --hrx-buffer-test-filter ".*")
     # engine #2500: the loader's mapping becomes HRX0_Mapped weight buffers (skips without LLAMACPP_TEST_MODELFILE)
     llama_build_and_test(test-hrx-loader-mapped.cpp LABEL "hrx")
-    set_tests_properties(test-hrx-loader-mapped PROPERTIES SKIP_RETURN_CODE 77)
+    # 77 stays for the model skip; the device skip exits 1 and prints this string (test-hrx-ops' convention).
+    # SKIP_RETURN_CODE wins over FAIL_REGULAR_EXPRESSION on ctest 4.2.3, so the exit code is what makes it loud.
+    set_tests_properties(test-hrx-loader-mapped PROPERTIES SKIP_RETURN_CODE 77
+        FAIL_REGULAR_EXPRESSION "test skipped: no device available")
 
     add_executable(hrx-backend-test hrx-backend-test.cpp)
     target_link_libraries(hrx-backend-test PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)

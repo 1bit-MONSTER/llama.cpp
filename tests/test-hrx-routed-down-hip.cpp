@@ -691,8 +691,10 @@ int main(int argc, char ** argv) {
     }
     if (device == nullptr) {
         REQUIRE(failures == 0);
-        std::printf("test-hrx-routed-down-hip: plan cases OK; no HRX0 device, the device cases are skipped\n");
-        return 77;
+        std::printf("test skipped: no device available\n");
+        // ctest 4.2.3: SKIP_RETURN_CODE wins over FAIL_REGULAR_EXPRESSION, and a skipped
+        // row is green for a required check, so a missing device is a failure here.
+        return 1;
     }
     ggml_backend_t hrx = ggml_backend_dev_init(device, nullptr);
     ggml_backend_t cpu = ggml_backend_cpu_init();
