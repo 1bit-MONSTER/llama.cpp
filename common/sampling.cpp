@@ -234,7 +234,7 @@ bool common_sampler_fast_greedy_eligible(const common_params_sampling & params, 
     return ok;
 }
 
-static int32_t fast_greedy_argmax_scalar(const float * logits, int32_t n_vocab, const char * mask) {
+int32_t common_sampler_fast_greedy_argmax_scalar(const float * logits, int32_t n_vocab, const char * mask) {
     int32_t best   = -1;
     float   best_v = -INFINITY;
     for (int32_t i = 0; i < n_vocab; ++i) {
@@ -290,7 +290,7 @@ __attribute__((target("avx2"))) static int32_t fast_greedy_argmax_avx2(const flo
             }
         }
     }
-    return fast_greedy_argmax_scalar(logits, n_vocab, mask);
+    return common_sampler_fast_greedy_argmax_scalar(logits, n_vocab, mask);
 }
 #endif
 
@@ -301,7 +301,7 @@ int32_t common_sampler_fast_greedy_argmax(const float * logits, int32_t n_vocab,
         return fast_greedy_argmax_avx2(logits, n_vocab, mask);
     }
 #endif
-    return fast_greedy_argmax_scalar(logits, n_vocab, mask);
+    return common_sampler_fast_greedy_argmax_scalar(logits, n_vocab, mask);
 }
 
 struct common_sampler * common_sampler_init(
