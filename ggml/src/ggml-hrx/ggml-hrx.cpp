@@ -740,8 +740,18 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
 
     if (level >= 1) {
         reported.store(true);
-        GGML_LOG_INFO("%s: placement: %d nodes, %" PRId64 " off HRX (%s), %d graph splits\n", __func__, graph->n_nodes,
-                      off_nodes, off_detail.c_str(), ggml_backend_sched_get_n_splits(sched));
+        // engine#2511: the two CLASSES, because a reader (and the hardware gate's placement row) has to be able to
+        // tell a misplacement from a placement this file calls by design, and the line printed only the total. The
+        // gate parses `N by design, M unexplained` as OPTIONAL fields, so a binary without them keeps failing closed.
+        const int64_t off_unexplained = off_nodes - off_by_design;
+        // The two counts must agree with the node strict would abort on: if the observer ever classifies a node into
+        // `by_design` while leaving it as `first_unexplained`, the gate would read a clean report and be wrong. An
+        // assertion rather than a comment, because the failure mode is a silent green.
+        GGML_ASSERT((first_unexplained != nullptr) == (off_unexplained > 0));
+        GGML_LOG_INFO("%s: placement: %d nodes, %" PRId64 " off HRX (%s), %" PRId64 " by design, %" PRId64
+                      " unexplained, %d graph splits\n",
+                      __func__, graph->n_nodes, off_nodes, off_detail.c_str(), off_by_design, off_unexplained,
+                      ggml_backend_sched_get_n_splits(sched));
     } else if (off_nodes > 0 && !placement_fallback_quiet() && !fallback_reported.exchange(true)) {
         // engine #991: a model whose hidden size is not a multiple of 256 loses its dense matmuls to the CPU by design, and
         // until this line existed the only way to know was GGML_HRX_STRICT=1. Say it once, at load, with the reason.
