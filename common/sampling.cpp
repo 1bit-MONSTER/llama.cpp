@@ -522,6 +522,15 @@ struct common_sampler * common_sampler_init(
             }
         }
         result->fast_greedy = ok && getenv("LLAMA_NO_FAST_GREEDY") == nullptr;
+        // engine#2452: the fast path had no observable, so an engine-level arm could assert only that the OUTPUT was
+        // right -- which is true whether or not the optimisation ran. A run that silently stops being eligible keeps
+        // producing correct tokens and loses the whole gain, and no test can see that. One line, printed once per
+        // sampler, opt-in so it never pollutes a normal log.
+        if (getenv("LLAMA_LOG_FAST_GREEDY") != nullptr) {
+            fprintf(stderr, "common_sampler: fast_greedy=%d (eligible=%d, LLAMA_NO_FAST_GREEDY=%s)\n",
+                    (int) result->fast_greedy, (int) ok,
+                    getenv("LLAMA_NO_FAST_GREEDY") != nullptr ? "set" : "unset");
+        }
     }
 
     return result;
