@@ -16261,7 +16261,9 @@ int main(int argc, char ** argv) {
         ggml_backend_load_all();
     }
     if (ggml_backend_hrx_get_device_count() == 0) {
-        std::printf("device: skipped, no HRX devices available\n");
+        // the family's no-device line (tests/testing_suite.h:255): the row's FAIL_REGULAR_EXPRESSION matches it and fails
+        // the row; "device: skipped, no HRX devices available" alone matched nothing, so the row passed with no device
+        std::printf("test skipped: no device available for hrx-backend-test (device half; the host cases above ran)\n");
         for (const std::string & name : unmatched) {
             std::printf("[FAIL] no case named '%s' (device cases cannot run without an HRX device)\n", name.c_str());
             ++failed;
