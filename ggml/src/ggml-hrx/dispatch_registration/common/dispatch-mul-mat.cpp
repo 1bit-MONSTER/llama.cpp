@@ -306,7 +306,10 @@ static bool matches_embedded_external_concat_projection(const Graph &     graph,
         second_producer != nullptr && second_producer->op == GGML_OP_GET_ROWS && second_producer->inputs.size() == 2;
     const bool first_is_external  = first_producer == nullptr;
     const bool second_is_external = second_producer == nullptr;
-    return (first_is_embedding && second_is_external) || (second_is_embedding && first_is_external);
+    // DECODE-BW: the MTP draft graph (common/speculative.cpp draft-mtp) gets the token embedding as an input
+    // (mtp_tok_embd), not a GET_ROWS in the graph, so both branches are external there.
+    return (first_is_embedding && second_is_external) || (second_is_embedding && first_is_external) ||
+           (first_is_external && second_is_external);
 }
 
 static bool has_embedded_external_concat_projection_ancestor(const Graph & graph,
@@ -446,6 +449,47 @@ static bool match_symmetric_i4_low_row_dispatch(const DispatchMatchContext & con
     return dispatch_match.status.success();
 }
 
+// DECODE-BW: the q6_k shortlist writes -inf outside its refined candidates. A reader of those logits is safe if it only
+// looks at the best few: a TOP_K whose k fits in the candidates, or a GET_ROWS of the values at such a TOP_K's ids.
+// No consumer at all (a graph output) is the original case. The draft backend sampler (llama_sampler_init_top_k(10),
+// common/speculative.cpp) builds result_output -> PAD -> (reshape) -> TOP_K, plus GET_ROWS(logits, top_k).
+static bool logits_read_only_by_candidate_readers(const Graph & graph, ValueId value, int64_t candidate_count, int depth) {
+    if (depth > 6) {
+        return false;
+    }
+    const std::vector<const GraphNode *> aliases = layout_alias_consumers(graph, value);
+    for (const GraphNode * consumer : graph.index().consumers(value)) {
+        if (consumer == nullptr) {
+            return false;
+        }
+        const bool is_alias = std::find(aliases.begin(), aliases.end(), consumer) != aliases.end();
+        if (is_alias || consumer->op == GGML_OP_PAD) {
+            if (!logits_read_only_by_candidate_readers(graph, consumer->output, candidate_count, depth + 1)) {
+                return false;
+            }
+            continue;
+        }
+        if (consumer->op == GGML_OP_TOP_K) {
+            const Value * out = common_graph_value(graph, consumer->output);
+            if (out == nullptr || out->ne[0] > candidate_count) {
+                return false;
+            }
+            continue;
+        }
+        if (consumer->op == GGML_OP_GET_ROWS && consumer->inputs.size() == 2 && consumer->inputs[0] == value) {
+            const GraphNode * ids       = graph.index().producer(consumer->inputs[1]);
+            const Value *     ids_value = ids != nullptr ? common_graph_value(graph, ids->output) : nullptr;
+            if (ids == nullptr || ids->op != GGML_OP_TOP_K || ids_value == nullptr ||
+                ids_value->ne[0] > candidate_count) {
+                return false;
+            }
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
 static bool match_q6_k_token1_shortlist_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     constexpr int64_t max_selected_groups   = 96;
     constexpr int64_t candidate_count       = 128;
@@ -457,8 +501,9 @@ static bool match_q6_k_token1_shortlist_dispatch(const DispatchMatchContext & co
     if (!match.matched() || !context.graph.has_index() || match.weight->type != GGML_TYPE_Q6_K ||
         match.token_count != 1 || match.weight->alias_source.value >= 0 || match.input_size % 256 != 0 ||
         match.input_size > 8192 || match.output_size < 65536 || match.output_size % 64 != 0 ||
-        match.output_size < 16 * match.input_size || !context.graph.index().consumers(match.output->id).empty() ||
-        !has_embedded_external_concat_projection_ancestor(context.graph, match.input->id, match.input_size)) {
+        match.output_size < 16 * match.input_size ||
+        !has_embedded_external_concat_projection_ancestor(context.graph, match.input->id, match.input_size) ||
+        !logits_read_only_by_candidate_readers(context.graph, match.output->id, candidate_count, 0)) {
         return false;
     }
 
