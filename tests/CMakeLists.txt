@@ -456,6 +456,12 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-pool-refusal-budget PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     target_link_libraries(test-hrx-pool-refusal-budget PRIVATE ggml)
     add_test(NAME test-hrx-pool-refusal-budget COMMAND test-hrx-pool-refusal-budget)
+    # both sides of GGML_HRX_STRICT: the named by-design classes and the unexplained case that still aborts
+    # (pure helper, no device and no ggml link -- engine#2450)
+    add_executable(test-hrx-placement-classification test-hrx-placement-classification.cpp
+                   ../ggml/src/ggml-hrx/placement-classification.cpp)
+    target_include_directories(test-hrx-placement-classification PRIVATE ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-placement-classification COMMAND test-hrx-placement-classification)
     add_executable(test-hrx-arena-refusal test-hrx-arena-refusal.cpp)
     target_include_directories(test-hrx-arena-refusal PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-arena-refusal COMMAND test-hrx-arena-refusal)

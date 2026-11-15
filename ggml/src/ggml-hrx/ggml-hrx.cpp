@@ -11,6 +11,7 @@
 #include "fused-context-claim.h"
 #include "model-buffer-from-mmap.h"
 #include "host-weight-placement.h"
+#include "placement-classification.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "graph/op-params.h"
@@ -623,7 +624,10 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
     int64_t              off_nodes = 0;
     int64_t              off_unaligned_matmuls = 0;
     int64_t              unaligned_input_size  = 0;
+    int64_t              off_by_design         = 0;
+    int64_t              off_mapped_weights    = 0;
     ggml_tensor *        first_off = nullptr;
+    ggml_tensor *        first_unexplained = nullptr;
     for (int i = 0; i < graph->n_nodes; i++) {
         ggml_tensor * node = graph->nodes[i];
         // the scheduler splits on non-view nodes and does not assign backends to views
@@ -642,6 +646,28 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
         if (first_off == nullptr) {
             first_off = node;
         }
+        // engine#2450: two off-HRX classes are BY DESIGN and must not be read as a misplacement:
+        // an unaligned-matmul input (#991: no HRX dense schedule exists for input_size % 256 != 0) and a
+        // weight that lives in the loader's file mapping -- ggml must see that buffer as host memory, so
+        // the CPU legitimately owns the node that consumes it. Strict mode aborts on a MISPLACEMENT; a
+        // placement the code itself calls by design is named instead.
+        ggml::hrx::placement_node_facts facts;
+        facts.is_matmul   = node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID;
+        facts.src0_present = node->src[0] != nullptr;
+        facts.src0_ne0     = node->src[0] != nullptr ? node->src[0]->ne[0] : 0;
+        for (int s = 0; s < GGML_MAX_SRC && !facts.src_host_weight; ++s) {
+            const ggml_tensor * src = node->src[s];
+            if (src != nullptr && ggml::hrx::host_weight_is_host_resident(src->view_src != nullptr ? src->view_src : src)) {
+                facts.src_host_weight = true;
+                off_mapped_weights++;
+            }
+        }
+        const bool by_design = ggml::hrx::placement_node_is_by_design(facts);
+        if (by_design) {
+            off_by_design++;
+        } else if (first_unexplained == nullptr) {
+            first_unexplained = node;
+        }
     }
 
     std::string off_detail;
@@ -659,7 +685,32 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
         off_detail = "none";
     }
 
-    if (strict && first_off != nullptr) {
+    // engine#2450: strict refuses a MISPLACEMENT, not a placement the code calls by design. The
+    // measured case (Qwen3-0.6B, one token): every off-HRX node was the token-embedding GET_ROWS over a
+    // weight in the loader's file mapping, and strict turned that documented default into a load abort
+    // (SIGABRT) whose own message attributed the split to the shared GTT pool -- i.e. a refusal that
+    // flips with what co-tenants hold. Those nodes are named here; only an unexplained one aborts.
+    if (strict && first_unexplained != nullptr) {
+        // engine#2450 diagnostic (remove with the fix): WHY is this node unexplained? Print what the observer
+        // can actually see per source -- buffer presence and buffer-type name -- because the classification
+        // attempt assumed the weight's `buffer` was already the mapped one and it evidently is not.
+        for (int s = 0; s < GGML_MAX_SRC; ++s) {
+            const ggml_tensor * src = first_unexplained->src[s];
+            if (src == nullptr) {
+                continue;
+            }
+            const ggml_tensor * base = src->view_src != nullptr ? src->view_src : src;
+            // engine#2450: print the PREDICATE's own answer, not an inference from the names. The previous
+            // run printed ggml_backend_buffer_name(), which is the buffer's name ("CPU_Mapped"), not the
+            // buffer type's -- so it could not distinguish "not the mapped type" from "wrong accessor".
+            GGML_LOG_ERROR("hrx strict-diag: node '%s' src[%d] '%s' op=%s view_src=%s buffer=%s buf_name=%s buft_name=%s is_host_weight=%d\n",
+                           first_unexplained->name, s, src->name != nullptr ? src->name : "?",
+                           ggml_op_name(first_unexplained->op), src->view_src != nullptr ? "yes" : "no",
+                           base->buffer != nullptr ? "set" : "NULL",
+                           base->buffer != nullptr ? ggml_backend_buffer_name(base->buffer) : "-",
+                           base->buffer != nullptr ? ggml_backend_buft_name(base->buffer->buft) : "-",
+                           (int) ggml::hrx::host_weight_is_host_resident(base));
+        }
         // The split is a function of the *shared* GTT pool, which other processes on this APU move, so a strict refusal is
         // not a property of the model or of the build. Without the pool numbers an operator reads "X is not placed on HRX"
         // as a model problem; with them the same line says which state produced the split and that a fallback exists
@@ -682,8 +733,8 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
             }
         }
         GGML_ABORT("%s: GGML_HRX_STRICT=1: \"%s\" is %s %s ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "] and is not placed on HRX; %" PRId64 " of %d nodes off HRX (%s), %d splits. Shared GTT pool: %s - the split follows that pool, so --no-strict-device (or a retry on a quieter box) runs those nodes on the CPU\n",
-                   __func__, first_off->name, ggml_op_name(first_off->op), ggml_type_name(first_off->type),
-                   first_off->ne[0], first_off->ne[1], first_off->ne[2], first_off->ne[3], off_nodes, graph->n_nodes,
+                   __func__, first_unexplained->name, ggml_op_name(first_unexplained->op), ggml_type_name(first_unexplained->type),
+                   first_unexplained->ne[0], first_unexplained->ne[1], first_unexplained->ne[2], first_unexplained->ne[3], off_nodes, graph->n_nodes,
                    off_detail.c_str(), ggml_backend_sched_get_n_splits(sched), pool_detail);
     }
 
@@ -702,6 +753,12 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
         if (off_unaligned_matmuls > 0) {
             reason = " - " + std::to_string(unaligned_input_size) + " is not a multiple of 256, so " +
                      std::to_string(off_unaligned_matmuls) + " matmuls have no HRX dense schedule (input_size % 256 != 0)";
+        }
+        // engine#2450: name the other by-design class, so a reader of the census sees why the node is on
+        // the CPU instead of concluding the kernel is missing.
+        if (off_mapped_weights > 0) {
+            reason += " - " + std::to_string(off_mapped_weights) +
+                      " node(s) read a weight that lives in the loader's file mapping, which ggml must see as host memory";
         }
         GGML_LOG_WARN("%s: placement: %" PRId64 " of %d nodes on the CPU (%s)%s\n", __func__, off_nodes, graph->n_nodes,
                       off_detail.c_str(), reason.c_str());
