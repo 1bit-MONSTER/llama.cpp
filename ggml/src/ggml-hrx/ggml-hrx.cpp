@@ -740,8 +740,15 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
 
     if (level >= 1) {
         reported.store(true);
-        GGML_LOG_INFO("%s: placement: %d nodes, %" PRId64 " off HRX (%s), %d graph splits\n", __func__, graph->n_nodes,
-                      off_nodes, off_detail.c_str(), ggml_backend_sched_get_n_splits(sched));
+        // engine#2450: say WHICH off-HRX nodes are intended. `off_by_design` (a weight in the loader's file mapping, or an
+        // unaligned matmul with no HRX dense schedule) is incremented above and feeds the strict decision, but it was never
+        // printed -- so the hardware gate's placement row could only compare the raw off-HRX count and failed on a placement
+        // this code documents as correct. With the two counts beside the total, the row decides on `unexplained` and a reader
+        // of the log can see why: e.g. "2 off HRX (GET_ROWS x 2), 2 by design, 0 unexplained, 2 graph splits".
+        GGML_LOG_INFO("%s: placement: %d nodes, %" PRId64 " off HRX (%s), %" PRId64 " by design, %" PRId64
+                      " unexplained, %d graph splits\n", __func__, graph->n_nodes,
+                      off_nodes, off_detail.c_str(), off_by_design, off_nodes - off_by_design,
+                      ggml_backend_sched_get_n_splits(sched));
     } else if (off_nodes > 0 && !placement_fallback_quiet() && !fallback_reported.exchange(true)) {
         // engine #991: a model whose hidden size is not a multiple of 256 loses its dense matmuls to the CPU by design, and
         // until this line existed the only way to know was GGML_HRX_STRICT=1. Say it once, at load, with the reason.
