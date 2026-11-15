@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -774,6 +775,33 @@ static void run_with_hrx_backend(F && f) {
     ggml_backend_free(backend);
 }
 
+// engine #2500: the loader wraps its file mapping through the HRX proc "ggml_backend_hrx_model_buffer_from_mmap"
+// (src/llama-model.cpp), which must give a MAPPED weight buffer (host, file-mapped), while the generic
+// buffer_from_host_ptr stays an import (non-host, #2393). Since #371 the loader got the import, and a weight view an
+// HRX matcher declines (ZAYA's grouped CCA conv) then had no backend at all. The imported type also needs a name.
+static void run_loader_mmap_proc_checks(ggml_backend_t backend) {
+    ggml_backend_dev_t device = ggml_backend_get_device(backend);
+    ggml_backend_reg_t reg    = ggml_backend_dev_backend_reg(device);
+    REQUIRE(reg != nullptr);
+    using fn_t = ggml_backend_buffer_t (*)(ggml_backend_dev_t, void *, size_t, size_t);
+    auto fn = (fn_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_hrx_model_buffer_from_mmap");
+    REQUIRE(fn != nullptr);
+    alignas(TENSOR_ALIGNMENT) std::array<uint32_t, 128> source = {};
+    ggml_backend_buffer_t mapped = fn(device, source.data(), sizeof(source), sizeof(source));
+    REQUIRE(mapped != nullptr);
+    REQUIRE(ggml_backend_buffer_is_host(mapped));
+    REQUIRE(ggml::hrx::buffer_is_file_mapped(mapped));
+    REQUIRE(ggml_backend_dev_supports_buft(device, ggml_backend_buffer_get_type(mapped)));
+    ggml_backend_buffer_t imported = ggml_backend_dev_buffer_from_host_ptr(device, source.data(), sizeof(source), sizeof(source));
+    REQUIRE(imported != nullptr);
+    REQUIRE(!ggml_backend_buffer_is_host(imported));
+    const std::string imported_name = ggml_backend_buft_name(ggml_backend_buffer_get_type(imported));
+    REQUIRE(!imported_name.empty());
+    REQUIRE(imported_name != ggml_backend_buft_name(ggml_backend_buffer_get_type(mapped)));
+    ggml_backend_buffer_free(imported);
+    ggml_backend_buffer_free(mapped);
+}
+
 static void register_hrx_buffer_cases(test_runner::Suite & suite) {
     suite.device_case("backend_buffer", [] {
         run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
@@ -793,6 +821,11 @@ static void register_hrx_buffer_cases(test_runner::Suite & suite) {
     suite.device_case("mapped_host_ptr", [] {
         run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
             run_mapped_host_ptr_checks(backend);
+        });
+    });
+    suite.device_case("loader_mmap_proc", [] {
+        run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
+            run_loader_mmap_proc_checks(backend);
         });
     });
     suite.device_case("host_transfer", [] {

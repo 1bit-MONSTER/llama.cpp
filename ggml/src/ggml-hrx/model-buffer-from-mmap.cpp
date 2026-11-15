@@ -125,6 +125,9 @@ bool buffer_is_file_mapped(ggml_backend_buffer_t buffer) {
 
 void model_buffer_from_mmap_init_type(ggml_backend_hrx_device_context * device) {
     device->mapped_buft_context = { device, device->name + "_Mapped", true };
+    // engine #2500: the imported type had no context (name "", device null) since #371, so every imported weight buffer
+    // was a nameless, device-less type: "pre-allocated tensor (...) in a buffer () that cannot run the operation".
+    device->imported_buft_context = { device, device->name + "_Imported", false };
     device->mapped_buft         = {
         // designated: the merged ggml interface also has alloc_buffer_n and get_alloc_size_n (left null)
         { .get_name = mapped_type_name, .alloc_buffer = mapped_type_alloc, .get_alignment = mapped_type_alignment,
