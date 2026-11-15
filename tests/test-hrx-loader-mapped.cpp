@@ -37,9 +37,12 @@ int main(int argc, char ** argv) {
         }
     }
     if (hrx == nullptr) {
-        std::printf("skipped: no HRX device\n");
+        // ctest's FAIL_REGULAR_EXPRESSION cannot see this if the exit code is SKIP_RETURN_CODE 77: measured on
+        // ctest 4.2.3, rc 77 + this string is reported Skipped and the row is green. Exit 1 so a device runner
+        // fails loudly; 77 stays for the model skip, which a CI runner legitimately cannot judge.
+        std::printf("test skipped: no device available\n");
         llama_backend_free();
-        return 77;
+        return 1;
     }
     llama_log_set(collect, nullptr);
     llama_model_params params = llama_model_default_params();
