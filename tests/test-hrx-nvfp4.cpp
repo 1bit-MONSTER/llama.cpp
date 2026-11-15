@@ -101,8 +101,10 @@ int main() {
         device = ggml_backend_dev_by_name("HRX0");
     }
     if (device == nullptr) {
-        std::printf("test-hrx-nvfp4: no HRX0 device, skipped\n");
-        return 77;
+        std::printf("test skipped: no device available\n");
+        // ctest 4.2.3: SKIP_RETURN_CODE wins over FAIL_REGULAR_EXPRESSION, and a skipped
+        // row is green for a required check, so a missing device is a failure here.
+        return 1;
     }
     ggml_backend_t backend = ggml_backend_dev_init(device, nullptr);
     REQUIRE(backend != nullptr);
