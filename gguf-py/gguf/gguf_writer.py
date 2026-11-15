@@ -712,6 +712,21 @@ class GGUFWriter:
     def add_leading_dense_block_count(self, length: int) -> None:
         self.add_uint32(Keys.LLM.LEADING_DENSE_BLOCK_COUNT.format(arch=self.arch), length)
 
+    # Instella-MoE: Gated MLA and the FarSkip-Collective residual dataflow are both used at inference, so a graph
+    # that ignores them computes a different function (not a slower one). The keys carry the two switches and the
+    # layer range, so the loader never has to infer them from the shape.
+    def add_instella_gated_attention(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.INSTELLA_GATED_ATTENTION.format(arch=self.arch), value)
+
+    def add_instella_farskip(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.INSTELLA_FARSKIP.format(arch=self.arch), value)
+
+    def add_instella_farskip_start_idx(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.INSTELLA_FARSKIP_START_IDX.format(arch=self.arch), value)
+
+    def add_instella_farskip_end_idx(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.INSTELLA_FARSKIP_END_IDX.format(arch=self.arch), value)
+
     def add_full_attention_interval(self, interval: int) -> None:
         self.add_uint32(Keys.LLM.FULL_ATTENTION_INTERVAL.format(arch=self.arch), interval)
 

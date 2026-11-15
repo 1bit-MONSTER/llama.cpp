@@ -117,6 +117,13 @@ class Keys:
         EXPERT_COUNT                      = "{arch}.expert_count"
         EXPERT_USED_COUNT                 = "{arch}.expert_used_count"
         EXPERT_SHARED_COUNT               = "{arch}.expert_shared_count"
+        # Instella-MoE (engine: fork arch). Gated MLA + FarSkip-Collective residual dataflow, both used at
+        # inference: the gate multiplies the flattened attention output before o_proj, and the pair residual
+        # (residual, residual_no_routed) changes which stream each block reads.
+        INSTELLA_GATED_ATTENTION          = "{arch}.instella_gated_attention"
+        INSTELLA_FARSKIP                  = "{arch}.instella_farskip"
+        INSTELLA_FARSKIP_START_IDX        = "{arch}.instella_farskip_start_idx"
+        INSTELLA_FARSKIP_END_IDX          = "{arch}.instella_farskip_end_idx"
         EXPERT_GROUP_COUNT                = "{arch}.expert_group_count"
         EXPERT_GROUP_USED_COUNT           = "{arch}.expert_group_used_count"
         EXPERT_WEIGHTS_SCALE              = "{arch}.expert_weights_scale"
@@ -534,6 +541,7 @@ class MODEL_ARCH(IntEnum):
     DEEPSEEK2OCR     = auto()
     DEEPSEEK32       = auto()
     DEEPSEEK4        = auto()
+    INSTELLA_MOE     = auto()
     DEEPSEEK41       = auto()
     CHATGLM          = auto()
     GLM4             = auto()
@@ -1230,6 +1238,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DEEPSEEK2OCR:     "deepseek2-ocr",
     MODEL_ARCH.DEEPSEEK32:       "deepseek32",
     MODEL_ARCH.DEEPSEEK4:        "deepseek4",
+    MODEL_ARCH.INSTELLA_MOE:     "instella-moe",
     MODEL_ARCH.DEEPSEEK41:       "deepseek41",
     MODEL_ARCH.CHATGLM:          "chatglm",
     MODEL_ARCH.GLM4:             "glm4",
@@ -3578,6 +3587,39 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_SHEXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
+    MODEL_ARCH.INSTELLA_MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_B,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+        MODEL_TENSOR.ATTN_GATE,   # gated MLA: sigma(W_g x) applied to the flattened attention output
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
     MODEL_ARCH.DEEPSEEK2OCR: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -5114,6 +5156,10 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
     MODEL_ARCH.DEEPSEEK2: [
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+    ],
+    MODEL_ARCH.INSTELLA_MOE: [
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],

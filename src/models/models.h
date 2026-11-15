@@ -1217,6 +1217,19 @@ struct llama_model_deepseek32 : public llama_model_base {
 };
 
 
+struct llama_model_instella_moe : public llama_model_base {
+    llama_model_instella_moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 // YaRN attention factor that cancels ggml's rope mscale (the DeepSeek-V4 reference applies none)
 static inline float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
     if (ext_factor == 0.0f) {

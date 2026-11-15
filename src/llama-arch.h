@@ -92,6 +92,7 @@ enum llm_arch {
     LLM_ARCH_DEEPSEEK32,
     LLM_ARCH_DEEPSEEK4,
     LLM_ARCH_DEEPSEEK41,
+    LLM_ARCH_INSTELLA_MOE,   // Gated MLA + FarSkip-Collective pair residual (amd/Instella-MoE)
     LLM_ARCH_CHATGLM,
     LLM_ARCH_GLM4,
     LLM_ARCH_GLM4_MOE,
