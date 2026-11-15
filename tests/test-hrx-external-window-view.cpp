@@ -202,5 +202,13 @@ int main() {
 
     std::printf("test-hrx-external-window-view: %d failures\n", failures);
     REQUIRE(failures == 0);
-    return skipped ? 77 : 0;
+    // A missing device fails this row, like its siblings (README, "A missing HRX device fails"): returning 77 made
+    // ctest report the row Skipped, so the host cases above ran and their result was discarded -- green for a
+    // required check (measured on ctest 4.2.3: an exit code equal to SKIP_RETURN_CODE wins over
+    // FAIL_REGULAR_EXPRESSION). 77 stays for a row that legitimately cannot judge, which is not this one.
+    if (skipped) {
+        std::printf("test skipped: no device available\n");
+        return 1;
+    }
+    return 0;
 }

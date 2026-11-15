@@ -25,7 +25,7 @@ int main(int argc, char ** argv) {
     const char * path = argc > 1 ? argv[1] : std::getenv("LLAMACPP_TEST_MODELFILE");
     if (path == nullptr || path[0] == '\0') {
         std::printf("skipped: no model (argv[1] or LLAMACPP_TEST_MODELFILE)\n");
-        return 77;  // ctest SKIP_RETURN_CODE, as test-hrx-external-window-view
+        return 77;  // ctest SKIP_RETURN_CODE: no model is a row this runner cannot judge (README, device table)
     }
     llama_backend_init();
     ggml_backend_dev_t hrx = nullptr;

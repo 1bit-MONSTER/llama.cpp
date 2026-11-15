@@ -95,11 +95,7 @@ Two families of rows cover this backend. Both report a missing device the same w
 
 Either way, **an HRX-enabled build that finds no HRX device fails those rows rather than skipping them**. The rows exist to measure the device; a skipped row is green for a required check, so a skip bought nothing and hid the absence.
 
-**One row is the exception, and it is named here rather than left to be discovered:** `test-hrx-external-window-view`
-returns **77** in its no-device branch (`skipped ? 77 : 0`, printing `no HRX0 device, the value check is skipped`) and its
-ctest row carries no `FAIL_REGULAR_EXPRESSION`, so on a device-less runner it reports **Skipped / green** while the rows
-above it report Failed. Either give it the same `return 1` plus the regex as its siblings, or keep this paragraph as the
-record of the one row the table does not yet describe.
+**One row used to be the exception and is now fixed rather than recorded**: `test-hrx-external-window-view` returned **77** from its no-device branch (`skipped ? 77 : 0`), so ctest reported it **Skipped / green** and the host cases it had just run were discarded. It now prints the same string and returns **1** like its siblings, and carries the same `FAIL_REGULAR_EXPRESSION`. Nothing else in this table has an exception.
 
 Do not "fix" a red row back to `return 77`: on ctest 4.2.3 an exit code of the row's `SKIP_RETURN_CODE` wins over `FAIL_REGULAR_EXPRESSION` and the row is reported `***Skipped` with `100% tests passed` (measured; four shapes in engine#2526's discussion, llama.cpp#400). `77` is correct only for what a runner legitimately cannot judge, such as a row that needs `LLAMACPP_TEST_MODELFILE` and has none.
 
