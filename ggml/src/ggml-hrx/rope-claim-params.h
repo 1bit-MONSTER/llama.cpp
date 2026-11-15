@@ -59,7 +59,8 @@ inline bool rope_params_supported_by_rope_set_rows(const RopeParams & params, in
     // the same n_offs guard as the attention predicate above: neither rope kernel on this line applies an offset
     if (params.n_offs != 0) { return false; }
     const bool supported_mode = params.mode == GGML_ROPE_TYPE_NORMAL || params.mode == GGML_ROPE_TYPE_NEOX ||
-                                rope_mode_is_collapsible_imrope(params) || rope_mode_is_sectioned_imrope(params);
+                                rope_mode_is_collapsible_imrope(params) || rope_mode_is_sectioned_imrope(params) ||
+                                rope_mode_is_collapsible_mrope(params);
     return params.n_dims >= 4 && params.n_dims <= head_size && params.n_dims % 4 == 0 && supported_mode &&
            std::isfinite(params.freq_base) && params.freq_base > 0.0f && std::isfinite(params.freq_scale) &&
            params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);

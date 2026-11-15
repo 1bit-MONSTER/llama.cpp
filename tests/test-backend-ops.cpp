@@ -6800,6 +6800,10 @@ struct test_rope : public test_case {
             } else {
                 GGML_ASSERT(n_dims/3 > 0);
                 int rope_sections[4] = {n_dims/3, n_dims/3, n_dims/3, 0};
+                if (v & 8) {
+                    // every rotated pair reads p_t: the sections of a DFlash draft for an M-RoPE target ({64,0,0,0} at n_dims 128)
+                    rope_sections[0] = n_dims/2; rope_sections[1] = 0; rope_sections[2] = 0;
+                }
                 if (forward) {
                     if (inplace) {
                         out = ggml_rope_multi_inplace(ctx, a, pos, freq, n_dims, rope_sections, mode, 0, 10000.0f, fs, ef, af, 1.0f, 1.0f);
@@ -10756,6 +10760,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
     test_cases.emplace_back(new test_rope_set_rows(GGML_TYPE_F32, GGML_TYPE_I32, { 128, 32, 8, 1 }, GGML_ROPE_TYPE_IMROPE));
+    // M-RoPE whose sections leave every pair on p_t (Qwen3.8-27B DFlash2: {64,0,0,0} at n_dims 128, 32 q / 8 kv heads)
+    for (int64_t ne1 : {32, 8}) {
+        for (int64_t ne2 : {2, 512}) {
+            test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {128, ne1, ne2, 1}, 128, GGML_ROPE_TYPE_MROPE, 512, 1.0f, 0.0f, 1.0f, false, 8));
+        }
+    }
     // partial rotation
     for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_IMROPE }) {
         for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {

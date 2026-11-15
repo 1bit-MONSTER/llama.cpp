@@ -164,6 +164,44 @@ int main() {
         REQUIRE(rope_params_supported_by_any_fusion(params, 64));
     }
 
+    {
+        // A DFlash draft for an M-RoPE target (Qwen3.8-27B DFlash2): mode MROPE, sections {64,0,0,0} at n_dims
+        // 128. Every rotated pair reads p_t, so it is NEOX on the first token_count positions and the generic
+        // rope kernel may run it; before, the claim refused all MROPE and strict placement aborted the load.
+        RopeParams params  = text_rotation(128, 128);
+        params.mode        = GGML_ROPE_TYPE_MROPE;
+        params.freq_base   = 10000000.0f;
+        params.sections[0] = 64;
+        REQUIRE(rope_mode_is_collapsible_mrope(params));
+        REQUIRE(rope_params_supported_by_rope_set_rows(params, 128));
+        REQUIRE(rope_params_supported_by_any_fusion(params, 128));
+        REQUIRE(rope_expected_positions_ne0(params, 2) == 8);
+        REQUIRE(rope_kernel_mode(params) == GGML_ROPE_TYPE_NEOX);
+        REQUIRE(rope_generic_kernel_mode(params) == GGML_ROPE_TYPE_NEOX);
+    }
+    {
+        // An MROPE whose sections send pairs to p_h/p_w (test-backend-ops' {n/3, n/3, n/3, 0}, or {32,32,0,0}:
+        // pairs 32..63 read p_h) is not a NEOX rotation, so it stays unclaimed.
+        RopeParams params  = text_rotation(128, 128);
+        params.mode        = GGML_ROPE_TYPE_MROPE;
+        params.sections[0] = 42;
+        params.sections[1] = 42;
+        params.sections[2] = 42;
+        REQUIRE(!rope_mode_is_collapsible_mrope(params));
+        REQUIRE(!rope_params_supported_by_rope_set_rows(params, 128));
+        params.sections[0] = 32;
+        params.sections[1] = 32;
+        params.sections[2] = 0;
+        REQUIRE(!rope_mode_is_collapsible_mrope(params));
+        REQUIRE(!rope_params_supported_by_rope_set_rows(params, 128));
+        // the vision rotation carries the MROPE bit (24 & 8) but is its own mode: still refused
+        params.mode        = GGML_ROPE_TYPE_VISION;
+        params.sections[0] = 64;
+        params.sections[1] = 0;
+        REQUIRE(!rope_mode_is_collapsible_mrope(params));
+        REQUIRE(!rope_params_supported_by_rope_set_rows(params, 128));
+    }
+
     // The regression proper: the claim must refuse the vision rotation and keep the text one.
     check_claim_for(/*vision*/ true, /*want_claimed*/ false);
     check_claim_for(/*vision*/ false, /*want_claimed*/ true);
