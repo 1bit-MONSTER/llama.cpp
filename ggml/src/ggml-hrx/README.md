@@ -84,15 +84,23 @@ Use verbose mode to retain output from passing cases as well as failures. Consum
 
 ### A missing HRX device fails, it does not skip
 
-Two families of rows cover this backend, and both report a missing device the same way, by design:
+Two families of rows cover this backend, and they do **not** report a missing device the same way — one family has adopted
+the convention in the heading and the other has not, which is why the row below has a `convention` column:
 
-| family | rows | a run with no HRX device |
-|---|---|---|
-| `hrx-*-test` | `hrx-buffer-test`, `hrx-backend-test`, `hrx-loom-jit-test` | **Failed.** The suite prints `test skipped: no device available for <suite>` and returns **0**; the registered `FAIL_REGULAR_EXPRESSION` in `tests/CMakeLists.txt` turns that row red (it returns `0` from `tests/testing_suite.h`, and `tests/CMakeLists.txt` registers `FAIL_REGULAR_EXPRESSION "test skipped: no device available"` for it) |
+| family | rows | a run with no HRX device | convention |
+|---|---|---|---|
+| `hrx-*-test` | `hrx-buffer-test`, `hrx-backend-test`, `hrx-loom-jit-test` | **Failed, but not by this convention.** `hrx-buffer-test` has no device guard at all (it fails a `REQUIRE` on an absent device); `hrx-loom-jit-test` prints its own `skip …` lines and returns through a different path. There is no `test skipped: no device available for <suite>` anywhere in the tree | **not converted** |
+| (removed row) | | | FAIL_REGULAR_EXPRESSION` in `tests/CMakeLists.txt` turns that row red (it returns `0` from `tests/testing_suite.h`, and `tests/CMakeLists.txt` registers `FAIL_REGULAR_EXPRESSION "test skipped: no device available"` for it) |
 | `test-hrx-*` | `test-hrx-hadamard`, `test-hrx-mxfp4`, `test-hrx-loader-mapped`, ... | **Failed.** Prints `test skipped: no device available` and returns **1** at the call site, with the ctest 4.2.3 precedence in a comment beside it |
 | any of the above, needing a model it does not have | `test-hrx-loader-mapped` without `LLAMACPP_TEST_MODELFILE` | **Skipped** (`77`). Nothing to measure, and the reason is in the message — the one case where a skip is the honest answer |
 
 Either way, **an HRX-enabled build that finds no HRX device fails those rows rather than skipping them**. The rows exist to measure the device; a skipped row is green for a required check, so a skip bought nothing and hid the absence.
+
+**One row is the exception, and it is named here rather than left to be discovered:** `test-hrx-external-window-view`
+returns **77** in its no-device branch (`skipped ? 77 : 0`, printing `no HRX0 device, the value check is skipped`) and its
+ctest row carries no `FAIL_REGULAR_EXPRESSION`, so on a device-less runner it reports **Skipped / green** while the rows
+above it report Failed. Either give it the same `return 1` plus the regex as its siblings, or keep this paragraph as the
+record of the one row the table does not yet describe.
 
 Do not "fix" a red row back to `return 77`: on ctest 4.2.3 an exit code of the row's `SKIP_RETURN_CODE` wins over `FAIL_REGULAR_EXPRESSION` and the row is reported `***Skipped` with `100% tests passed` (measured; four shapes in engine#2526's discussion, llama.cpp#400). `77` is correct only for what a runner legitimately cannot judge, such as a row that needs `LLAMACPP_TEST_MODELFILE` and has none.
 
