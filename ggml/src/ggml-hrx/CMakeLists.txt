@@ -216,6 +216,7 @@ ggml_add_backend_library(ggml-hrx
     backend-buffer-binding.cpp
     hrx-1bit-safety.cpp
     host-weight-placement.cpp
+    placement-classification.cpp
     model-buffer-from-mmap.cpp
     backend-buffer-binding.h
     backend-context.h

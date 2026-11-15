@@ -15,6 +15,10 @@
 
 #pragma once
 
+#include <cstdint>
+
+#include "placement-classification.h"
+
 struct ggml_tensor;
 
 namespace ggml::hrx {

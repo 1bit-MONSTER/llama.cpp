@@ -15,6 +15,8 @@
 
 #include "host-weight-placement.h"
 
+#include "placement-classification.h"
+
 #include "backend-buffer-binding.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
@@ -101,6 +103,12 @@ void log_declined_placement(const ggml_tensor * op, const ggml_tensor * weight, 
 // node is off because its weight is host-resident (by design: ggml's CPU from-ptr buffer type, "CPU_Mapped",
 // which a file-mapped model gets) -- and that is exactly what host_resident_weight() already decides. Sharing
 // it means the observer cannot disagree with the decline logic about what "a host weight" is.
+// engine#2450: the placement classification, as a pure predicate over a graph node, so both branches of
+// GGML_HRX_STRICT are testable without a device:
+//   by design  -> an unaligned matmul input (#991: no HRX dense schedule for ne[0] % 256 != 0), or any source
+//                 that is a host-resident weight (a file-mapped model's weights are in ggml core's CPU
+//                 from-ptr buffer type, so the CPU legitimately owns the consumer).
+//   unexplained -> everything else; strict aborts on this, and only this.
 bool host_weight_is_host_resident(const ggml_tensor * tensor) {
     return host_resident_weight(tensor);
 }

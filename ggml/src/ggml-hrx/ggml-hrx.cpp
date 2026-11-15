@@ -11,6 +11,7 @@
 #include "fused-context-claim.h"
 #include "model-buffer-from-mmap.h"
 #include "host-weight-placement.h"
+#include "placement-classification.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "graph/op-params.h"
@@ -650,26 +651,18 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
         // weight that lives in the loader's file mapping -- ggml must see that buffer as host memory, so
         // the CPU legitimately owns the node that consumes it. Strict mode aborts on a MISPLACEMENT; a
         // placement the code itself calls by design is named instead.
-        bool by_design = (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) &&
-                         node->src[0] != nullptr && node->src[0]->ne[0] % 256 != 0;
-        if (!by_design) {
-            for (int s = 0; s < GGML_MAX_SRC && !by_design; ++s) {
-                const ggml_tensor * src = node->src[s];
-                if (src == nullptr) {
-                    continue;
-                }
-                const ggml_tensor * base = src->view_src != nullptr ? src->view_src : src;
-                // engine#2450: a host-resident weight is BY DESIGN served by the CPU. Measured on Qwen3-0.6B: the
-                // off-node was GET_ROWS over token_embd.weight, whose buffer is ggml core's CPU from-ptr buffer
-                // type ("CPU_Mapped", ggml-backend.cpp) because the model's weights stay in the loader's file
-                // mapping -- not HRX's mapped_buft, which is the import/window path. Share the predicate the
-                // residency decline uses instead of re-deriving what "a host weight" means.
-                if (ggml::hrx::host_weight_is_host_resident(base)) {
-                    by_design = true;
-                    off_mapped_weights++;
-                }
+        ggml::hrx::placement_node_facts facts;
+        facts.is_matmul   = node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID;
+        facts.src0_present = node->src[0] != nullptr;
+        facts.src0_ne0     = node->src[0] != nullptr ? node->src[0]->ne[0] : 0;
+        for (int s = 0; s < GGML_MAX_SRC && !facts.src_host_weight; ++s) {
+            const ggml_tensor * src = node->src[s];
+            if (src != nullptr && ggml::hrx::host_weight_is_host_resident(src->view_src != nullptr ? src->view_src : src)) {
+                facts.src_host_weight = true;
+                off_mapped_weights++;
             }
         }
+        const bool by_design = ggml::hrx::placement_node_is_by_design(facts);
         if (by_design) {
             off_by_design++;
         } else if (first_unexplained == nullptr) {
