@@ -5387,7 +5387,7 @@ static void run_add_f32_cpu_reference_case() {
 // One-token decode whose recurrent state is read in place from the cache rows it is written back to (llama.cpp#388's
 // identity view) must update those rows in place, without the "new state -> cache" copy; a gathered state (its own
 // tensor) keeps the out-of-place kernel and the copy. Both against the CPU backend over chained steps, two sequences.
-static void run_gdn_decode_state_in_place_case(bool in_place, bool projection) {
+static void run_gdn_decode_state_in_place_case(bool in_place) {
     ggml_backend_t cpu = init_cpu_backend();
     ggml_backend_t hrx = ggml_backend_hrx_init(0);
     REQUIRE(hrx != nullptr);
@@ -5419,19 +5419,13 @@ static void run_gdn_decode_state_in_place_case(bool in_place, bool projection) {
         f.beta  = ggml_dup_tensor(f.ctx, f.g);
         f.bias  = ggml_new_tensor_1d(f.ctx, GGML_TYPE_F32, heads);
         f.decay = ggml_dup_tensor(f.ctx, f.bias);
-        ggml_tensor * gate = nullptr;
-        ggml_tensor * beta = nullptr;
-        if (projection) {
-            gate = ggml_mul(f.ctx, ggml_softplus(f.ctx, ggml_add(f.ctx, ggml_reshape_3d(f.ctx, f.g, heads, 1, seqs), f.bias)),
-                            f.decay);
-            gate = ggml_reshape_4d(f.ctx, gate, 1, heads, 1, seqs);
-            beta = ggml_sigmoid(f.ctx, ggml_reshape_4d(f.ctx, f.beta, 1, heads, 1, seqs));
-            q    = ggml_l2_norm(f.ctx, q, 1.e-6f);
-            k    = ggml_l2_norm(f.ctx, k, 1.e-6f);
-        } else {
-            gate = ggml_reshape_4d(f.ctx, f.g, 1, heads, 1, seqs);
-            beta = ggml_reshape_4d(f.ctx, f.beta, 1, heads, 1, seqs);
-        }
+        // the model's gate chain: softplus(alpha + dt) * A, sigmoid(beta), L2-normalised q / k
+        ggml_tensor * gate = ggml_mul(
+            f.ctx, ggml_softplus(f.ctx, ggml_add(f.ctx, ggml_reshape_3d(f.ctx, f.g, heads, 1, seqs), f.bias)), f.decay);
+        gate               = ggml_reshape_4d(f.ctx, gate, 1, heads, 1, seqs);
+        ggml_tensor * beta = ggml_sigmoid(f.ctx, ggml_reshape_4d(f.ctx, f.beta, 1, heads, 1, seqs));
+        q                  = ggml_l2_norm(f.ctx, q, 1.e-6f);
+        k                  = ggml_l2_norm(f.ctx, k, 1.e-6f);
         f.cache = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, seqs);
         ggml_tensor * state_rows = nullptr;
         if (in_place) {
@@ -5484,8 +5478,8 @@ static void run_gdn_decode_state_in_place_case(bool in_place, bool projection) {
         set(c.raw, h.raw, make_pattern_f32(hidden * seqs, 31 + step, 0.03125f));
         std::vector<float> gate(heads * seqs), beta(heads * seqs);
         for (size_t i = 0; i < gate.size(); ++i) {
-            gate[i] = projection ? -0.1f - 0.05f * (float) i : -0.2f - 0.03f * (float) (i + step);
-            beta[i] = projection ? 0.5f : 0.3f + 0.05f * (float) i;
+            gate[i] = -0.1f - 0.05f * (float) i - 0.02f * (float) step;
+            beta[i] = 0.4f + 0.05f * (float) i;
         }
         set(c.g, h.g, gate);
         set(c.beta, h.beta, beta);
@@ -8914,11 +8908,10 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });
     suite.device_case("add_f32.cpu_reference", [] { run_add_f32_cpu_reference_case(); });
     suite.device_case("dynamic_generic_ops.cpu_reference", [] { run_dynamic_generic_ops_cpu_reference_case(); });
-    for (const bool projection : { false, true }) {
-        const std::string form = projection ? ".projection" : ".plain";
-        suite.device_case("gdn_decode.state_in_place" + form, [projection] { run_gdn_decode_state_in_place_case(true, projection); });
-        suite.device_case("gdn_decode.state_gathered" + form, [projection] { run_gdn_decode_state_in_place_case(false, projection); });
-    }
+    // the model's own gate chain (softplus(alpha + dt) * A, sigmoid(beta), L2-normalised q/k): a direct GATED_DELTA_NET
+    // with plain gate/beta inputs reaches no HRX matcher, so it has no form to test here
+    suite.device_case("gdn_decode.state_in_place", [] { run_gdn_decode_state_in_place_case(true); });
+    suite.device_case("gdn_decode.state_gathered", [] { run_gdn_decode_state_in_place_case(false); });
     for (int64_t tokens = 2; tokens <= 5; ++tokens) {
         suite.device_case("gdn_snapshot.cpu_reference." + std::to_string(tokens),
                           [tokens] { run_gdn_snapshot_cpu_reference_case(tokens); });
