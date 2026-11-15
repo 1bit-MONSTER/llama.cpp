@@ -234,7 +234,7 @@ bool common_sampler_fast_greedy_eligible(const common_params_sampling & params, 
     return ok;
 }
 
-int32_t common_sampler_fast_greedy_argmax(const float * logits, int32_t n_vocab, const char * mask) {
+static int32_t fast_greedy_argmax_scalar(const float * logits, int32_t n_vocab, const char * mask) {
     int32_t best   = -1;
     float   best_v = -INFINITY;
     for (int32_t i = 0; i < n_vocab; ++i) {
@@ -248,6 +248,60 @@ int32_t common_sampler_fast_greedy_argmax(const float * logits, int32_t n_vocab,
         }
     }
     return best;
+}
+
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+// The same contract with 8-wide max and NaN lanes (engine C4-STREAMS: the scalar scan of a 248,320-entry vocab was
+// 0.37 ms per slot in-server, 89 us -> 23.5 us offline with this body). Pass 1 takes the maximum over all logits; pass 2
+// returns the first unmasked index holding it, which is the scalar answer whenever that maximum is reachable. When every
+// copy of it is masked, or nothing is above -inf, the scalar loop decides, so masks and ties need no vector logic.
+typedef float   fg_v8f __attribute__((vector_size(32)));
+typedef int32_t fg_v8i __attribute__((vector_size(32)));
+
+__attribute__((target("avx2"))) static int32_t fast_greedy_argmax_avx2(const float * logits, int32_t n_vocab,
+                                                                         const char * mask) {
+    fg_v8f  m   = { -INFINITY, -INFINITY, -INFINITY, -INFINITY, -INFINITY, -INFINITY, -INFINITY, -INFINITY };
+    fg_v8i  nan = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    int32_t i   = 0;
+    for (; i + 8 <= n_vocab; i += 8) {
+        fg_v8f v;
+        std::memcpy(&v, logits + i, sizeof(v));
+        nan |= (v != v);
+        m = v > m ? v : m;
+    }
+    float best_v  = -INFINITY;
+    bool  any_nan = false;
+    for (int l = 0; l < 8; ++l) {
+        any_nan |= nan[l] != 0;
+        best_v = m[l] > best_v ? m[l] : best_v;
+    }
+    for (; i < n_vocab; ++i) {
+        const float v = logits[i];
+        any_nan |= v != v;
+        best_v = v > best_v ? v : best_v;
+    }
+    if (any_nan) {
+        return -1;  // the full path reports it (engine#123/#315)
+    }
+    if (best_v != -INFINITY) {
+        for (int32_t j = 0; j < n_vocab; ++j) {
+            if (logits[j] == best_v && (mask == nullptr || !mask[j])) {
+                return j;
+            }
+        }
+    }
+    return fast_greedy_argmax_scalar(logits, n_vocab, mask);
+}
+#endif
+
+int32_t common_sampler_fast_greedy_argmax(const float * logits, int32_t n_vocab, const char * mask) {
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+    static const bool avx2 = __builtin_cpu_supports("avx2");
+    if (avx2) {
+        return fast_greedy_argmax_avx2(logits, n_vocab, mask);
+    }
+#endif
+    return fast_greedy_argmax_scalar(logits, n_vocab, mask);
 }
 
 struct common_sampler * common_sampler_init(
