@@ -88,9 +88,12 @@ Two families of rows cover this backend, and both report a missing device the sa
 
 | family | rows | a run with no HRX device |
 |---|---|---|
-| `hrx-*-test` | `hrx-buffer-test`, `hrx-backend-test`, `hrx-loom-jit-test` | prints `test skipped: no device available for <suite>` and returns **0**, so the registered `FAIL_REGULAR_EXPRESSION` in `tests/CMakeLists.txt` fails the row |
-| `test-hrx-*` | `test-hrx-hadamard`, `test-hrx-mxfp4`, `test-hrx-loader-mapped`, ... | prints `test skipped: no device available` and returns **1** |
+| `hrx-*-test` | `hrx-buffer-test`, `hrx-backend-test`, `hrx-loom-jit-test` | **Failed.** The suite prints `test skipped: no device available for <suite>` and returns **0**; the registered `FAIL_REGULAR_EXPRESSION` in `tests/CMakeLists.txt` turns that row red |
+| `test-hrx-*` | `test-hrx-hadamard`, `test-hrx-mxfp4`, `test-hrx-loader-mapped`, ... | **Failed.** Prints `test skipped: no device available` and returns **1** |
+| any of the above, needing a model it does not have | `test-hrx-loader-mapped` without `LLAMACPP_TEST_MODELFILE` | **Skipped** (`77`). Nothing to measure, and the reason is in the message — the one case where a skip is the honest answer |
 
 Either way, **an HRX-enabled build that finds no HRX device fails those rows rather than skipping them**. The rows exist to measure the device; a skipped row is green for a required check, so a skip bought nothing and hid the absence.
 
 Do not "fix" a red row back to `return 77`: on ctest 4.2.3 an exit code of the row's `SKIP_RETURN_CODE` wins over `FAIL_REGULAR_EXPRESSION` and the row is reported `***Skipped` with `100% tests passed` (measured; four shapes in engine#2526's discussion, llama.cpp#400). `77` is correct only for what a runner legitimately cannot judge, such as a row that needs `LLAMACPP_TEST_MODELFILE` and has none.
+
+That precedence is ctest's rule, not this repo's, so it is the side to re-check first if the behaviour ever changes: a `cmake_minimum_required` bump or a ctest upgrade could flip the order, and the failure mode would be silence again -- a green row over a skipped test. The `test-hrx-*` family does not depend on the order (it fails on the exit code alone); the `hrx-*-test` family does.
