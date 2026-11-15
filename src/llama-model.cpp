@@ -2007,6 +2007,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             GGML_ASSERT(!ml.no_alloc);
             const size_t max_size = ggml_get_max_tensor_size(ctx);
 
+            // engine #2500: an HRX device wraps the loader's mapping as a mapped (host) weight buffer, not an import
+            using hrx_mmap_buffer_fn = ggml_backend_buffer_t (*)(ggml_backend_dev_t, void *, size_t, size_t);
+            hrx_mmap_buffer_fn hrx_mmap_buffer = nullptr;
+            if (ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                reg != nullptr && std::strcmp(ggml_backend_reg_name(reg), "HRX") == 0) {
+                hrx_mmap_buffer = (hrx_mmap_buffer_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_hrx_model_buffer_from_mmap");
+            }
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 // map the mmap regions that contain the tensors of this context
                 // this is important for metal with apple silicon: a backend buffer pins everything it
@@ -2017,7 +2024,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 void * addr = ml.mappings.at(idx)->addr();
 
                 for (const auto & range : ml.get_mapping_ranges(idx, ctx)) {
-                    ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char *) addr + range.first, range.last - range.first, max_size);
+                    ggml_backend_buffer_t buf = hrx_mmap_buffer != nullptr
+                        ? hrx_mmap_buffer(dev, (char *) addr + range.first, range.last - range.first, max_size)
+                        : ggml_backend_dev_buffer_from_host_ptr(dev, (char *) addr + range.first, range.last - range.first, max_size);
                     if (buf == nullptr) {
                         throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
                     }

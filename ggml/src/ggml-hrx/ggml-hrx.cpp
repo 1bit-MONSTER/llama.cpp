@@ -1804,9 +1804,23 @@ static bool ggml_backend_hrx_buffer_export_dmabuf(ggml_backend_buffer_t buffer, 
            ggml::hrx::export_dmabuf(device_ptr, buffer->size, fd, offset);
 }
 
+// engine #2500: the loader's file mapping is a MAPPED weight (host memory the runtime packs once, model_buffer_from_mmap),
+// not an import. Since #371, device_buffer_from_host_ptr is the import path, and it is the generic entry the loader used,
+// so every mmap-backed weight became a non-host imported buffer: a weight view an HRX matcher declines (ZAYA's grouped
+// CCA conv) then had no backend at all ("pre-allocated tensor ... in a buffer that cannot run the operation").
+// The loader asks for this by name for HRX devices (src/llama-model.cpp); other callers keep the import semantics.
+static ggml_backend_buffer_t ggml_backend_hrx_model_buffer_from_mmap(ggml_backend_dev_t device, void * ptr, size_t size,
+                                                                     size_t max_tensor_size) {
+    GGML_UNUSED(max_tensor_size);
+    return ggml::hrx::model_buffer_from_mmap(device_context(device), ptr, size);
+}
+
 static void * registry_proc(ggml_backend_reg_t registry, const char * name) {
     if (std::strcmp(name, "ggml_backend_buffer_export_dmabuf") == 0) {
         return (void *) ggml_backend_hrx_buffer_export_dmabuf;
+    }
+    if (std::strcmp(name, "ggml_backend_hrx_model_buffer_from_mmap") == 0) {
+        return (void *) ggml_backend_hrx_model_buffer_from_mmap;
     }
     GGML_UNUSED(registry);
     GGML_UNUSED(name);
