@@ -69,16 +69,40 @@ inline bool rope_mode_is_collapsible_imrope(const RopeParams & params) {
     return params.mode == GGML_ROPE_TYPE_IMROPE && imrope_collapses_to_neox(params, params.n_dims);
 }
 
-// Expected positions ne0 for a supported ROPE node. IMROPE carries four position
+// Non-interleaved M-RoPE (GGML_ROPE_TYPE_MROPE, ggml_rope_multi) whose every rotated pair reads p_t: in
+// ggml_mrope_cache_init a pair takes theta_t when (pair % sect_dims) < sections[0], and the rotation pairs i with
+// i + n_dims/2 like NEOX. So it is a NEOX rotation driven by p_t, the first token_count entries of the positions
+// buffer, whatever p_h/p_w/p_e hold. DFlash drafts for M-RoPE targets get this mode (llama-model.cpp, "drafts
+// for M-RoPE targets carry rope sections"): Qwen3.8-27B's DFlash2 has sections {64,0,0,0} at n_dims 128.
+inline bool rope_mode_is_collapsible_mrope(const RopeParams & params) {
+    if (params.mode != GGML_ROPE_TYPE_MROPE || params.n_dims < 2) {
+        return false;
+    }
+    const int64_t sect_dims = static_cast<int64_t>(params.sections[0]) + params.sections[1] + params.sections[2] +
+                              params.sections[3];
+    if (params.sections[0] <= 0 || params.sections[1] < 0 || params.sections[2] < 0 || params.sections[3] < 0 ||
+        sect_dims > params.n_dims) {
+        return false;
+    }
+    for (int64_t pair = 0; pair < params.n_dims / 2; ++pair) {
+        if (pair % sect_dims >= params.sections[0]) {
+            return false;  // this pair reads p_h, p_w or p_e
+        }
+    }
+    return true;
+}
+
+// Expected positions ne0 for a supported ROPE node. IMROPE and MROPE carry four position
 // sections of token_count each; the collapse path reads only the first (p_t).
 inline int64_t rope_expected_positions_ne0(const RopeParams & params, int64_t token_count) {
-    return params.mode == GGML_ROPE_TYPE_IMROPE ? token_count * 4 : token_count;
+    return params.mode == GGML_ROPE_TYPE_IMROPE || params.mode == GGML_ROPE_TYPE_MROPE ? token_count * 4 : token_count;
 }
 
 // Mode value handed to the rope_f32 / rope_set_rows_f32 kernels. A collapsible
-// IMROPE runs the kernel's NEOX path.
+// IMROPE or MROPE runs the kernel's NEOX path.
 inline int rope_kernel_mode(const RopeParams & params) {
-    return params.mode == GGML_ROPE_TYPE_IMROPE ? GGML_ROPE_TYPE_NEOX : params.mode;
+    return params.mode == GGML_ROPE_TYPE_IMROPE || params.mode == GGML_ROPE_TYPE_MROPE ? GGML_ROPE_TYPE_NEOX
+                                                                                         : params.mode;
 }
 
 // Mode 3 of the generic rope_f32 / rope_set_rows_f32 kernels: an IMROPE whose sections leave some pairs on the fourth
