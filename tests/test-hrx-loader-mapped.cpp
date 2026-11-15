@@ -2,7 +2,7 @@
 // ones. llama.cpp#371 routed every mmap-backed weight through the import path (non-host), and zaya1-8b then aborted at
 // load because a weight view HRX declines had no backend; llama.cpp#393 restored the mapped path. This loads a model on
 // HRX and reads the loader's own "model buffer size" lines, so a revert of the loader hunk fails here, not only in the
-// hw-gate. Model: argv[1] or LLAMACPP_TEST_MODELFILE; skipped (exit 0) without a model or an HRX device.
+// hw-gate. Model: argv[1] or LLAMACPP_TEST_MODELFILE; skipped (exit 77, ctest SKIP_RETURN_CODE) without a model or an HRX device.
 #include "llama.h"
 
 #include <cstdio>
@@ -25,7 +25,7 @@ int main(int argc, char ** argv) {
     const char * path = argc > 1 ? argv[1] : std::getenv("LLAMACPP_TEST_MODELFILE");
     if (path == nullptr || path[0] == '\0') {
         std::printf("skipped: no model (argv[1] or LLAMACPP_TEST_MODELFILE)\n");
-        return EXIT_SUCCESS;
+        return 77;  // ctest SKIP_RETURN_CODE, as test-hrx-external-window-view
     }
     llama_backend_init();
     ggml_backend_dev_t hrx = nullptr;
@@ -39,7 +39,7 @@ int main(int argc, char ** argv) {
     if (hrx == nullptr) {
         std::printf("skipped: no HRX device\n");
         llama_backend_free();
-        return EXIT_SUCCESS;
+        return 77;
     }
     llama_log_set(collect, nullptr);
     llama_model_params params = llama_model_default_params();
