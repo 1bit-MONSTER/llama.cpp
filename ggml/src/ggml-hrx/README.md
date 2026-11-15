@@ -84,14 +84,13 @@ Use verbose mode to retain output from passing cases as well as failures. Consum
 
 ### A missing HRX device fails, it does not skip
 
-Two families of rows cover this backend, and they do **not** report a missing device the same way — one family has adopted
-the convention in the heading and the other has not, which is why the row below has a `convention` column:
+Two families of rows cover this backend. Both report a missing device the same way **by design**, and the
+`convention` column says how each one makes that report *fail* rather than skip:
 
 | family | rows | a run with no HRX device | convention |
 |---|---|---|---|
-| `hrx-*-test` | `hrx-buffer-test`, `hrx-backend-test`, `hrx-loom-jit-test` | **Failed, but not by this convention.** `hrx-buffer-test` has no device guard at all (it fails a `REQUIRE` on an absent device); `hrx-loom-jit-test` prints its own `skip …` lines and returns through a different path. There is no `test skipped: no device available for <suite>` anywhere in the tree | **not converted** |
-| (removed row) | | | FAIL_REGULAR_EXPRESSION` in `tests/CMakeLists.txt` turns that row red (it returns `0` from `tests/testing_suite.h`, and `tests/CMakeLists.txt` registers `FAIL_REGULAR_EXPRESSION "test skipped: no device available"` for it) |
-| `test-hrx-*` | `test-hrx-hadamard`, `test-hrx-mxfp4`, `test-hrx-loader-mapped`, ... | **Failed.** Prints `test skipped: no device available` and returns **1** at the call site, with the ctest 4.2.3 precedence in a comment beside it |
+| `hrx-*-test` | `hrx-buffer-test`, `hrx-backend-test`, `hrx-loom-jit-test` | **Failed.** The shared suite prints `test skipped: no device available for <suite>` and returns **0** (`tests/testing_suite.h:255-257`); the rows are registered with `FAIL_REGULAR_EXPRESSION "test skipped: no device available"` (`tests/CMakeLists.txt:695`), and that registration is what turns the row red | **regex** |
+| `test-hrx-*` | `test-hrx-hadamard`, `test-hrx-mxfp4`, `test-hrx-loader-mapped`, … (14 files) | **Failed.** Prints `test skipped: no device available` and returns **1** (14 of 14 files); three of the rows also carry the same `FAIL_REGULAR_EXPRESSION` as belt and braces | **exit code** |
 | any of the above, needing a model it does not have | `test-hrx-loader-mapped` without `LLAMACPP_TEST_MODELFILE` | **Skipped** (`77`). Nothing to measure, and the reason is in the message — the one case where a skip is the honest answer |
 
 Either way, **an HRX-enabled build that finds no HRX device fails those rows rather than skipping them**. The rows exist to measure the device; a skipped row is green for a required check, so a skip bought nothing and hid the absence.
