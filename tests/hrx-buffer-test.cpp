@@ -797,6 +797,10 @@ static void run_loader_mmap_proc_checks(ggml_backend_t backend) {
     REQUIRE(!ggml_backend_buffer_is_host(imported));
     const std::string imported_name = ggml_backend_buft_name(ggml_backend_buffer_get_type(imported));
     REQUIRE(!imported_name.empty());
+    // the device-less type was the other half of #2500: a zeroed imported_buft_context
+    const auto * imported_type = static_cast<const ggml_backend_hrx_buffer_type_context *>(
+        ggml_backend_buffer_get_type(imported)->context);
+    REQUIRE(imported_type != nullptr && imported_type->device != nullptr);
     REQUIRE(imported_name != ggml_backend_buft_name(ggml_backend_buffer_get_type(mapped)));
     ggml_backend_buffer_free(imported);
     ggml_backend_buffer_free(mapped);
