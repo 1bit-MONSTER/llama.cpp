@@ -81,3 +81,16 @@ ctest --test-dir build -L '^hrx$' --no-tests=error --parallel 2 --verbose
 ```
 
 Use verbose mode to retain output from passing cases as well as failures. Consumers executing the discovered commands outside CTest must also honor the returned test properties, including timeout and failure regex.
+
+### A missing HRX device fails, it does not skip
+
+Two families of rows cover this backend, and both report a missing device the same way, by design:
+
+| family | rows | a run with no HRX device |
+|---|---|---|
+| `hrx-*-test` | `hrx-buffer-test`, `hrx-backend-test`, `hrx-loom-jit-test` | prints `test skipped: no device available for <suite>` and returns **0**, so the registered `FAIL_REGULAR_EXPRESSION` in `tests/CMakeLists.txt` fails the row |
+| `test-hrx-*` | `test-hrx-hadamard`, `test-hrx-mxfp4`, `test-hrx-loader-mapped`, ... | prints `test skipped: no device available` and returns **1** |
+
+Either way, **an HRX-enabled build that finds no HRX device fails those rows rather than skipping them**. The rows exist to measure the device; a skipped row is green for a required check, so a skip bought nothing and hid the absence.
+
+Do not "fix" a red row back to `return 77`: on ctest 4.2.3 an exit code of the row's `SKIP_RETURN_CODE` wins over `FAIL_REGULAR_EXPRESSION` and the row is reported `***Skipped` with `100% tests passed` (measured; four shapes in engine#2526's discussion, llama.cpp#400). `77` is correct only for what a runner legitimately cannot judge, such as a row that needs `LLAMACPP_TEST_MODELFILE` and has none.
