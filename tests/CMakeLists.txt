@@ -517,6 +517,8 @@ if (TARGET ggml-hrx)
     target_include_directories(hrx-buffer-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME hrx-buffer-test COMMAND hrx-buffer-test
         --hrx-buffer-test-jobs 1 --hrx-buffer-test-output all --hrx-buffer-test-filter ".*")
+    # engine #2500: the loader's mapping becomes HRX0_Mapped weight buffers (skips without LLAMACPP_TEST_MODELFILE)
+    llama_build_and_test(test-hrx-loader-mapped.cpp LABEL "hrx")
 
     add_executable(hrx-backend-test hrx-backend-test.cpp)
     target_link_libraries(hrx-backend-test PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
