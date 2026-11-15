@@ -4073,6 +4073,70 @@ static void schedule_q6k_token1_shortlist_group_count(int64_t hidden_size, int64
     ggml_free(ctx);
 }
 
+// DECODE-BW: the MTP draft head (common/speculative.cpp draft-mtp) as the fork builds it. The token embedding arrives as
+// a graph input (mtp_tok_embd), not a GET_ROWS, and with draft backend sampling (the default) the logits feed a
+// TOP_K(10). The shortlist must take that head. It must decline a TOP_K wider than its 128 refined candidates and a
+// plain lm_head with no MTP concat projection above it.
+enum class DraftEmbedding { External, GetRows, NoConcat };
+// chain: 0 = TOP_K straight on the logits (top_k > 0) or none; 1 = the backend sampler's chain as the fork builds it
+// (PAD -> reshape -> TOP_K, plus GET_ROWS of the values at the TOP_K ids); 2 = that chain plus a SCALE over all the
+// logits, which reads values the shortlist does not compute.
+static void schedule_mtp_draft_shortlist(DraftEmbedding embedding, int top_k, bool expect_shortlist, int chain = 0) {
+    constexpr int64_t hidden_size = 2560;
+    constexpr int64_t vocab_size  = 65536;
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * external   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+    ggml_tensor * scale_a    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+    ggml_tensor * scale_b    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+    ggml_tensor * projection = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2 * hidden_size, hidden_size);
+    ggml_tensor * head       = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, hidden_size, vocab_size);
+    ggml_tensor * head_input = nullptr;
+    if (embedding == DraftEmbedding::NoConcat) {
+        head_input = ggml_mul(ctx, ggml_rms_norm(ctx, external, 0.000001f), scale_b);
+    } else {
+        ggml_tensor * token = nullptr;
+        if (embedding == DraftEmbedding::GetRows) {
+            ggml_tensor * table = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 8);
+            ggml_tensor * ids   = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+            token               = ggml_get_rows(ctx, table, ids);
+        } else {
+            token = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+        }
+        ggml_tensor * branch_a = ggml_mul(ctx, ggml_rms_norm(ctx, token, 0.000001f), scale_a);
+        ggml_tensor * branch_b = ggml_mul(ctx, ggml_rms_norm(ctx, external, 0.000001f), scale_b);
+        head_input             = ggml_mul_mat(ctx, projection, ggml_concat(ctx, branch_a, branch_b, 0));
+    }
+    ggml_tensor * logits = ggml_mul_mat(ctx, head, head_input);
+    ggml_cgraph * graph  = ggml_new_graph(ctx);
+    if (chain == 0) {
+        ggml_build_forward_expand(graph, top_k > 0 ? ggml_top_k(ctx, logits, top_k) : logits);
+    } else {
+        ggml_tensor * padded = ggml_pad(ctx, logits, 0, 1, 0, 0);
+        ggml_tensor * row    = ggml_reshape_2d(ctx, ggml_view_1d(ctx, padded, vocab_size, 0), vocab_size, 1);
+        ggml_tensor * ids    = ggml_top_k(ctx, row, top_k);
+        ggml_tensor * values = ggml_get_rows(ctx, ggml_reshape_2d(ctx, row, 1, vocab_size), ids);
+        ggml_build_forward_expand(graph, values);
+        if (chain == 2) {
+            ggml_build_forward_expand(graph, ggml_scale(ctx, logits, 0.5f));
+        }
+    }
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+    size_t scan_count = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        scan_count += kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_q6_k_symmetric_i2_scan_token1";
+    }
+    REQUIRE(scan_count == (expect_shortlist ? 1u : 0u));
+    ggml_free(ctx);
+}
+
 static void schedule_qwen_terminal_q6k_q8_command(int64_t token_count) {
     ggml_init_params params = {};
     params.mem_size         = 4 * 1024 * 1024;
@@ -16143,6 +16207,13 @@ int main(int argc, char ** argv) {
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 100, true); } },
         { "packed_layout_follows_weight.q6_k.file_mapped.stored_copy.tokens12",
           [] { schedule_packed_layout_follows_weight(GGML_TYPE_Q6_K, true, 12, true); } },
+        { "mtp_draft_shortlist.external_embedding", [] { schedule_mtp_draft_shortlist(DraftEmbedding::External, 0, true); } },
+        { "mtp_draft_shortlist.external_embedding.top_k10", [] { schedule_mtp_draft_shortlist(DraftEmbedding::External, 10, true); } },
+        { "mtp_draft_shortlist.get_rows_embedding.top_k10", [] { schedule_mtp_draft_shortlist(DraftEmbedding::GetRows, 10, true); } },
+        { "mtp_draft_shortlist.top_k_wider_than_candidates", [] { schedule_mtp_draft_shortlist(DraftEmbedding::External, 200, false); } },
+        { "mtp_draft_shortlist.sampler_chain", [] { schedule_mtp_draft_shortlist(DraftEmbedding::External, 10, true, 1); } },
+        { "mtp_draft_shortlist.sampler_chain_plus_full_reader", [] { schedule_mtp_draft_shortlist(DraftEmbedding::External, 10, false, 2); } },
+        { "mtp_draft_shortlist.plain_lm_head_declines", [] { schedule_mtp_draft_shortlist(DraftEmbedding::NoConcat, 10, false); } },
         { "q6k_token1_shortlist_group_count.256", [] { schedule_q6k_token1_shortlist_group_count(256, 65536, 8); } },
         { "q6k_token1_shortlist_group_count.2560",
           [] { schedule_q6k_token1_shortlist_group_count(2560, 248320, 80); } },
