@@ -1709,13 +1709,27 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         op->src[0]->type == GGML_TYPE_IQ3_S && op->src[0]->ne[2] * op->src[0]->ne[3] > 1) {
         return false;
     }
-    // engine#2639: EVERY GET_ROWS matcher in dispatch-get-rows.cpp gates on `->contiguous` (the source, the ids and the
-    // output, seven sites), while this predicate -- for any op not declined above -- reduces to
-    // `eager_capability_declared(op->op)`, which is a property of the op code and says nothing about the tensors.
-    // So a GET_ROWS from a non-contiguous source (a strided VIEW of an f16 embedding) was CLAIMED here and had no
-    // dispatch at compute time: "unsupported HRX node … GET_ROWS … <-VIEW", graph_compute -1, nothing generated.
-    // Claim only what a matcher can execute (the rule stated for TOP_K below, engine #679). Narrow on purpose: a
-    // contiguous GET_ROWS keeps its placement, including the token-embedding rows the census counts as off-HRX.
+    // engine#2639: a GET_ROWS from a non-contiguous source (a strided VIEW of an f16 embedding) was CLAIMED here and
+    // had no dispatch at compute time -- "unsupported HRX node 489: GET_ROWS ... <- GET_ROWS inputs=[585:f16[...]<-VIEW,
+    // ...]" then graph_compute -1, nothing generated -- because this predicate, for any op not declined above, reduces
+    // to `eager_capability_declared(op->op)`, an op-code property that says nothing about the tensors.
+    //
+    // Source contiguity is the one layout requirement every GET_ROWS matcher in
+    // dispatch_registration/common/dispatch-get-rows.cpp shares, so declining exactly that keeps this predicate as
+    // narrow as the matchers it predicts:
+    //   match_get_rows_f32       (line 524)  `!weight->contiguous` -- and the matchers that delegate to it inherit the
+    //                                        test: match_get_rows_f32_dispatch (592), match_get_rows_f32_next (603),
+    //                                        match_get_rows_scale_f32 (297), match_get_rows_rmsnorm_binary (344).
+    //                                        The last two look like they do not gate the source only if the wrapper is
+    //                                        read instead of followed to the predicate at 514.
+    //   match_get_rows_scalar_3d_f32 (265)   `scales->contiguous`, on the GET_ROWS source.
+    //
+    // Do NOT extend this to the ids or to the output, and do not narrow it per source type: match_get_rows_scalar_3d_f32
+    // deliberately admits strided ids (route_stride is ids->nb[1] / 4), so an ids test here would refuse a path that
+    // dispatches, and no registered family accepts a non-contiguous source, so a per-type form has nothing smaller to
+    // say. The durable form is for device_supports_op to ask the dispatch registration rather than predict it by hand
+    // (engine#2704); until then this clause sits beside the TOP_K one below, on the same rule (engine #679: claim only
+    // the shapes it executes).
     if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr && !ggml_is_contiguous(op->src[0])) {
         return false;
     }
