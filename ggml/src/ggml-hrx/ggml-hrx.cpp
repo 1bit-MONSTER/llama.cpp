@@ -700,7 +700,7 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
     // THE PARTS SUM TO THE WHOLE. Every off-device node is by design, host-non-weight, or neither; if that ever fails
     // the census is missing a class, and the summary would under-report without saying so. WARN, not assert: this is
     // a diagnostic path and a broken census must not abort a run it was only describing.
-    if (off_by_design + off_host_nonweight + off_unexplained != off_nodes) {
+    if (!ggml::hrx::census_partitions(off_by_design, off_host_nonweight, off_unexplained, off_nodes)) {
         GGML_LOG_WARN("%s: census does not partition: %" PRId64 " by design + %" PRId64 " host-non-weight + %" PRId64
                       " neither != %" PRId64 " off-device node(s) -- a class is missing from this census\n", __func__,
                       off_by_design, off_host_nonweight, off_unexplained, off_nodes);
