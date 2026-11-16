@@ -1,3 +1,4 @@
+#include "dispatch_registration/common/dispatch-get-rows-support.h"
 #include "dispatch_registration/common/dispatch-small-rows.h"
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
@@ -1704,34 +1705,35 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (!ggml::hrx::moe_tail_claimable(device, op)) {
         return false;
     }
-    // GET_ROWS gives wrong rows for batched IQ3_S sources (test-backend-ops GET_ROWS)
-    if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr &&
-        op->src[0]->type == GGML_TYPE_IQ3_S && op->src[0]->ne[2] * op->src[0]->ne[3] > 1) {
-        return false;
-    }
-    // engine#2639: a GET_ROWS from a non-contiguous source (a strided VIEW of an f16 embedding) was CLAIMED here and
-    // had no dispatch at compute time -- "unsupported HRX node 489: GET_ROWS ... <- GET_ROWS inputs=[585:f16[...]<-VIEW,
-    // ...]" then graph_compute -1, nothing generated -- because this predicate, for any op not declined above, reduces
-    // to `eager_capability_declared(op->op)`, an op-code property that says nothing about the tensors.
+    // GET_ROWS: one predicate, two callers (engine#2704). #408 settled WHICH requirement to state -- source contiguity,
+    // derived from each matcher's predicate rather than from the file -- and why the clause must not be extended to the
+    // ids or the output as a conjunction: match_get_rows_scalar_3d_f32 admits strided ids on purpose (route_stride is
+    // ids->nb[1] / 4), so a flat `ids contiguous` would refuse a path that dispatches.
     //
-    // Source contiguity is the one layout requirement every GET_ROWS matcher in
-    // dispatch_registration/common/dispatch-get-rows.cpp shares, so declining exactly that keeps this predicate as
-    // narrow as the matchers it predicts:
-    //   match_get_rows_f32       (line 524)  `!weight->contiguous` -- and the matchers that delegate to it inherit the
-    //                                        test: match_get_rows_f32_dispatch (592), match_get_rows_f32_next (603),
-    //                                        match_get_rows_scale_f32 (297), match_get_rows_rmsnorm_binary (344).
-    //                                        The last two look like they do not gate the source only if the wrapper is
-    //                                        read instead of followed to the predicate at 514.
-    //   match_get_rows_scalar_3d_f32 (265)   `scales->contiguous`, on the GET_ROWS source.
+    // That is a two-form problem, not a one-condition problem, so it is no longer stated here at all. The facts are
+    // built once (dispatch_registration/common/dispatch-get-rows-support.h), each form is a named predicate its own
+    // matcher calls, and this line asks the union: can SOME form execute this node. Both contiguities that #408 warned
+    // about are therefore safe to add: a strided ids keeps its claim through the route-table form, and a strided output
+    // (which no form accepts) falls back to the CPU instead of failing the graph with "unsupported HRX node".
     //
-    // Do NOT extend this to the ids or to the output, and do not narrow it per source type: match_get_rows_scalar_3d_f32
-    // deliberately admits strided ids (route_stride is ids->nb[1] / 4), so an ids test here would refuse a path that
-    // dispatches, and no registered family accepts a non-contiguous source, so a per-type form has nothing smaller to
-    // say. The durable form is for device_supports_op to ask the dispatch registration rather than predict it by hand
-    // (engine#2704); until then this clause sits beside the TOP_K one below, on the same rule (engine #679: claim only
-    // the shapes it executes).
-    if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr && !ggml_is_contiguous(op->src[0])) {
-        return false;
+    // What is NOT moved here: the conditions that need the graph (a supported hidden size, a token-count bound, an exact
+    // id span, a 3-D output only one fused pattern serves). Those stay in the matchers, and the tail of this function
+    // covers them -- it asks the registry (can_execute_standalone_op_as_graph -> DispatchScheduler::supports_node), so
+    // declining them here would refuse paths that do dispatch. Measured at engine#2704: an F16 destination gets no
+    // standalone dispatch (the tail refuses it), a 3-D destination gets one (the tail claims it, correctly).
+    if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr) {
+        ggml::hrx::get_rows_tensor_facts facts;
+        facts.src_contiguous   = ggml_is_contiguous(op->src[0]);
+        facts.ids_contiguous   = op->src[1] == nullptr || ggml_is_contiguous(op->src[1]);
+        facts.ids_column_table = op->src[1] != nullptr && op->src[1]->nb[0] == sizeof(int32_t) &&
+                                 op->src[1]->nb[1] % sizeof(int32_t) == 0;
+        facts.out_contiguous   = ggml_is_contiguous(op);
+        facts.src_type         = static_cast<int32_t>(op->src[0]->type);
+        facts.src_ne2          = op->src[0]->ne[2];
+        facts.src_ne3          = op->src[0]->ne[3];
+        if (!ggml::hrx::get_rows_tensor_supported(facts)) {
+            return false;
+        }
     }
     // Qwen3.8-Flash-Next routed experts have no correct/compilable HRX MUL_MAT_ID
     // kernel (IQ4_NL/IQ2_S weight types, or a 640-wide contraction that violates the

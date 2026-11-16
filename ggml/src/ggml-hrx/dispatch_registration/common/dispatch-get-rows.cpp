@@ -1,5 +1,7 @@
 #include "dispatch-get-rows.h"
 
+#include "dispatch-get-rows-support.h"
+
 #include "../qwen/dispatch-llm-profiles.h"
 #include "dispatch-activation-publication.h"
 #include "dispatch-mul-mat-common.h"
@@ -521,8 +523,23 @@ static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * no
     const Value *            ids    = graph_value(graph, node->inputs[1]);
     const Value *            output = graph_value(graph, node->output);
     if (weight == nullptr || ids == nullptr || output == nullptr || ids->type != GGML_TYPE_I32 ||
-        output->type != GGML_TYPE_F32 || !weight->contiguous || !ids->contiguous || !output->contiguous ||
-        !is_2d(*weight) || !is_1d_or_2d_column(*ids) || !is_2d(*output)) {
+        output->type != GGML_TYPE_F32 || !is_2d(*weight) || !is_1d_or_2d_column(*ids) || !is_2d(*output)) {
+        return {};
+    }
+
+    // engine#2704: the contiguity conditions are asked through the SAME named predicate the placement path calls
+    // (ggml-hrx.cpp device_supports_op), built from the graph's values here and from the ggml tensors there. This form
+    // is the contiguous one; the routed form has its own predicate in the same file, so a condition cannot be in one
+    // caller and not the other.
+    ggml::hrx::get_rows_tensor_facts facts;
+    facts.src_contiguous   = weight->contiguous;
+    facts.ids_contiguous   = ids->contiguous;
+    facts.ids_column_table = ids->nb[0] == sizeof(int32_t) && ids->nb[1] % sizeof(int32_t) == 0;
+    facts.out_contiguous   = output->contiguous;
+    facts.src_type         = static_cast<int32_t>(weight->type);
+    facts.src_ne2          = weight->ne[2];
+    facts.src_ne3          = weight->ne[3];
+    if (!ggml::hrx::get_rows_contiguous_form_supported(facts)) {
         return {};
     }
 
