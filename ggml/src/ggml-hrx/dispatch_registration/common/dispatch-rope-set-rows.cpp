@@ -298,6 +298,10 @@ struct SetRowsMatch {
     int64_t           token_count     = 0;
     int64_t           cache_row_count = 0;
     int64_t           hidden_size     = 0;
+    // 0: a packed cache. Otherwise the elements between cache rows of a strided 2-D cache view (engine #2639), which
+    // only the standalone matcher admits, bound at the view's own storage offset for exactly its own bytes.
+    int64_t           cache_stride    = 0;
+    size_t            cache_span_bytes = 0;
 
     bool matched() const { return node != nullptr && rows != nullptr && indices != nullptr && output != nullptr; }
 };
@@ -411,10 +415,32 @@ static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Sta
     return match;
 }
 
+// A 2-D cache view whose rows are `stride` elements apart, every row aligned for the kernel's 4-element stores: what
+// qwen4exp's kpool_access::scatter_pooled writes (the pooled half of each indexer-cache row, engine #2639).
+static bool strided_set_rows_cache(const Value & cache, const Value & output, int64_t hidden_size, int64_t & stride,
+                                   size_t & span_bytes) {
+    const size_t elem = ggml_type_size(cache.type);
+    if ((cache.type != GGML_TYPE_F16 && cache.type != GGML_TYPE_F32) || cache.nb[0] != elem || cache.nb[1] % elem != 0 ||
+        cache.ne[2] != 1 || cache.ne[3] != 1 || cache.ne[1] < 1) {
+        return false;
+    }
+    stride = static_cast<int64_t>(cache.nb[1] / elem);
+    if (stride < hidden_size || stride % 4 != 0 || stride > 1048576 || cache.storage_offset % (4 * elem) != 0) {
+        return false;
+    }
+    if (output.storage_root != cache.storage_root || output.storage_offset != cache.storage_offset ||
+        output.nb[0] != cache.nb[0] || output.nb[1] != cache.nb[1]) {
+        return false;
+    }
+    span_bytes = static_cast<size_t>(cache.ne[1] - 1) * cache.nb[1] + static_cast<size_t>(hidden_size) * elem;
+    return true;
+}
+
 static SetRowsMatch match_set_rows_2d(const Graph & graph,
                                       const GraphNode * node,
                                       Status *          status     = nullptr,
-                                      int64_t           max_tokens = kSetRowsKernelMaxTokens) {
+                                      int64_t           max_tokens = kSetRowsKernelMaxTokens,
+                                      bool              allow_strided_cache = false) {
     SetRowsMatch match;
     if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->inputs.size() != 3) {
         log_set_rows_reject(status, "root is not a supported SET_ROWS arity", nullptr, nullptr, nullptr, nullptr);
@@ -425,8 +451,12 @@ static SetRowsMatch match_set_rows_2d(const Graph & graph,
     const Value * indices = graph_value(graph, node->inputs[1]);
     const Value * cache   = graph_value(graph, node->inputs[2]);
     const Value * output  = graph_value(graph, node->output);
+    int64_t cache_stride     = 0;
+    size_t  cache_span_bytes = 0;
+    const bool strided = allow_strided_cache && cache != nullptr && output != nullptr && !cache->contiguous && rows != nullptr &&
+                         strided_set_rows_cache(*cache, *output, rows->ne[0], cache_stride, cache_span_bytes);
     if (rows == nullptr || indices == nullptr || cache == nullptr || output == nullptr || !indices->contiguous ||
-        !cache->contiguous || indices->type != GGML_TYPE_I64 || output->type != cache->type ||
+        (!cache->contiguous && !strided) || indices->type != GGML_TYPE_I64 || output->type != cache->type ||
         !same_shape(*cache, *output) || !graph.values().same_storage(cache->id, output->id)) {
         log_set_rows_reject(status, "input/output shape or storage is unsupported", rows, indices, cache, output);
         return {};
@@ -470,6 +500,8 @@ static SetRowsMatch match_set_rows_2d(const Graph & graph,
     match.token_count     = token_count;
     match.cache_row_count = cache_row_count;
     match.hidden_size     = hidden_size;
+    match.cache_stride    = strided ? cache_stride : 0;
+    match.cache_span_bytes = strided ? cache_span_bytes : 0;
     return match;
 }
 
@@ -496,6 +528,7 @@ static void add_set_rows_compile_parameters(Dispatch & dispatch, const SetRowsMa
     dispatch.kernel.compile_parameters.emplace("ggml.set_rows.input_format", to_config_value(match.row_format));
     dispatch.kernel.compile_parameters.emplace("ggml.set_rows.output_format", to_config_value(match.output_format));
     dispatch.kernel.compile_parameters.emplace("ggml.set_rows.input_stride", to_config_value(match.input_stride));
+    dispatch.kernel.compile_parameters.emplace("ggml.set_rows.output_stride", to_config_value(match.cache_stride));
 }
 
 static ValueId add_constant_binding(const DispatchMatchContext & context,
@@ -573,7 +606,11 @@ static Dispatch make_set_rows_dispatch(const SetRowsMatch & match) {
     add_set_rows_compile_parameters(dispatch, match);
     dispatch.bindings.push_back({ match.rows->storage_root, match.rows->storage_offset, match.rows_span_bytes });
     dispatch.bindings.push_back({ match.indices->id, 0, match.indices->byte_count });
-    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    if (match.cache_stride != 0) {   // a strided cache view: its own bytes, from its own offset in the cache storage
+        dispatch.bindings.push_back({ match.output->storage_root, match.output->storage_offset, match.cache_span_bytes });
+    } else {
+        dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    }
     return dispatch;
 }
 
@@ -922,7 +959,7 @@ static bool match_set_rows_dispatch(const DispatchMatchContext & context, Dispat
         return true;
     }
     const SetRowsMatch match =
-        match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status, kUbatchMaxTokens);
+        match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status, kUbatchMaxTokens, true);
     if (!match.matched()) {
         return false;
     }
