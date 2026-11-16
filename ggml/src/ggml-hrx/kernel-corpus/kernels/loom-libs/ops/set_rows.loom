@@ -19,6 +19,11 @@ config.decl @ggml.set_rows.output_format : %value: index where [range(%value, 16
 
 config.decl @ggml.set_rows.input_stride : %value: index where [range(%value, 4, 1048576)]
 
+// Elements between cache rows; 0 is a packed cache (rows hidden_size apart: the stores below are the ones this kernel
+// always had). Otherwise the cache is a strided 2-D view of wider rows - qwen4exp's pooled half of each indexer-cache
+// row (engine #2639) - stored through a [stride, 1] layout that covers exactly the view's own rows.
+config.decl @ggml.set_rows.output_stride : %value: index where [range(%value, 0, 1048576)]
+
 template.def<@ggml.set_rows.load_f32_vector4> device @ggml_set_rows_load_f32_vector4(%input_format: index, %token: index, %channel: index, %token_count: index, %input_stride: index, %rows: buffer) -> (vector<4xf32>) {
   %c16 = index.constant 16 : index
   %c32 = index.constant 32 : index
@@ -52,8 +57,27 @@ template.def<@ggml.set_rows.store_f32_vector4> device @ggml_set_rows_store_f32_v
   %c0_offset = index.constant 0 : offset
   %is_f16 = index.cmp eq, %output_format, %c16 : index
   %is_f32 = index.cmp eq, %output_format, %c32 : index
-  %publish_f16 = scalar.andi %publish, %is_f16 : i1
-  %publish_f32 = scalar.andi %publish, %is_f32 : i1
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %output_stride = config.get @ggml.set_rows.output_stride : index
+  %packed = index.cmp eq, %output_stride, %c0 : index
+  %strided = index.cmp ne, %output_stride, %c0 : index
+  %publish_f16_any = scalar.andi %publish, %is_f16 : i1
+  %publish_f32_any = scalar.andi %publish, %is_f32 : i1
+  %publish_f16 = scalar.andi %publish_f16_any, %packed : i1
+  %publish_f32 = scalar.andi %publish_f32_any, %packed : i1
+  %publish_f16_strided = scalar.andi %publish_f16_any, %strided : i1
+  %publish_f32_strided = scalar.andi %publish_f32_any, %strided : i1
+  %cache_layout = encoding.layout.strided [%output_stride, %c1] : encoding<layout>
+  scf.if %publish_f16_strided {
+    %strided_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%hidden_size]xf16, %cache_layout>
+    %narrowed = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+    vector.store %narrowed, %strided_view[%cache_row, %channel] : vector<4xf16>, view<[%cache_row_count]x[%hidden_size]xf16, %cache_layout>
+  }
+  scf.if %publish_f32_strided {
+    %strided_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%hidden_size]xf32, %cache_layout>
+    vector.store %values, %strided_view[%cache_row, %channel] : vector<4xf32>, view<[%cache_row_count]x[%hidden_size]xf32, %cache_layout>
+  }
   scf.if %publish_f16 {
     %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%hidden_size]xf16>
     %truncated = vector.fptrunc %values : vector<4xf32> to vector<4xf16>

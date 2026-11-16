@@ -2734,6 +2734,50 @@ static void init_set_rows_row_ids(ggml_tensor * t, int num_rows) {
 }
 
 // GGML_OP_SET_ROWS
+// GGML_OP_SET_ROWS into a strided 2-D view of a wider tensor: qwen4exp's kpool_access::scatter_pooled writes the pooled
+// half of each indexer-cache row (row = key | pooled), a view n elements wide every `wide` elements, `col0` in (engine
+// #2639). The output is that view; reading it back returns its whole byte span, so the untouched half between its rows
+// is compared too, and a write that lands outside the view's columns fails.
+struct test_set_rows_strided_dst : public test_case {
+    const ggml_type type_dst;
+    const int64_t n, wide, col0, rows;
+    const int r;
+
+    std::string vars() override {
+        return VARS_TO_STR6(type_dst, n, wide, col0, rows, r);
+    }
+
+    test_set_rows_strided_dst(ggml_type type_dst, int64_t n, int64_t wide, int64_t col0, int64_t rows, int r)
+        : type_dst(type_dst), n(n), wide(wide), col0(col0), rows(rows), r(r) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * cache = ggml_new_tensor_2d(ctx, type_dst, wide, rows);
+        ggml_set_name(cache, "cache");
+        ggml_tensor * dst = ggml_view_2d(ctx, cache, n, rows, cache->nb[1], ggml_row_size(type_dst, col0));
+        ggml_set_name(dst, "dst_view");
+        ggml_tensor * src = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, r);
+        ggml_set_name(src, "src");
+        ggml_tensor * row_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, r);
+        ggml_set_name(row_idxs, "row_idxs");
+        ggml_tensor * out = ggml_set_rows(ctx, dst, src, row_idxs);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) {
+                continue;
+            }
+            if (t->type == GGML_TYPE_I64) {
+                init_set_rows_row_ids(t, rows);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 struct test_set_rows : public test_case {
     const ggml_type type_src;
     const ggml_type type_dst;
@@ -10716,6 +10760,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // and the plain 2-D contraction at the same token count (no planes): the CLIP MLP projections are this shape
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 1024, 8464, 1024, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0));
 
+    // engine #2639: the pooled half (col0 = n) and the key half (col0 = 0) of a key|pooled row, f16 and f32
+    for (ggml_type t : { GGML_TYPE_F16, GGML_TYPE_F32 }) {
+        for (int64_t col0 : { 128, 0 }) {
+            for (int r : { 1, 2, 7 }) {
+                test_cases.emplace_back(new test_set_rows_strided_dst(t, 128, 256, col0, 64, r));
+            }
+        }
+    }
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     // engine #1251: the Qwen4-exp QSA mask rebuild is an element-wise (hidden == 1) scatter batched over the ubatch,
