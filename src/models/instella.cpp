@@ -109,6 +109,11 @@ void llama_model_instella_moe::load_arch_tensors(llama_model_loader &) {
         }
 
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * n_embd_head_v_mla, n_embd}, 0);
+        // Gated MLA: one gate per layer, applied to the flattened attention output BEFORE wo.
+        // `gated_attention` is true in every Instella-MoE Think checkpoint; the {n_embd, heads*v_dim}
+        // shape is what MLAGatedAttention.gate_proj declares (bias=False).
+        layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i),
+                                        {n_embd, n_head * n_embd_head_v_mla}, 0);
 
         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
@@ -199,6 +204,8 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
         // norm
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
+        // the gate reads the NORMED layer input (x in sigma(W_g x)), so keep it before the attention overwrites cur
+        ggml_tensor * attn_inp = cur;
 
         // self_attention
         if (is_ocr) {
@@ -362,9 +369,21 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
                 }
 
                 // note: MLA without the absorption optimization converts into MHA (ie: GQA with full n_head groups)
+                // Gated MLA (engine: instella-moe): the gate multiplies the FLATTENED attention output and only then
+                // does wo run — `o = cat(per-head out)`, `y = W_o[ sigma(W_g x) * o ]` with x the normed layer input
+                // (modeling_instella_moe.py, MLAGatedAttention.forward). So build_attn is asked for the pre-wo output
+                // (wo = NULL), the gate is applied, and wo runs here. Same sequence as afmoe.cpp:182-190.
                 cur = build_attn(inp_attn_kv,
-                            model.layers[il].wo, NULL, model.layers[il].wo_s,
+                            nullptr, NULL, nullptr,
                             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+                {
+                    ggml_tensor * attn_gate = build_lora_mm(model.layers[il].wqkv_gate, attn_inp);
+                    cb(attn_gate, "attn_gate_proj", il);
+                    attn_gate = ggml_sigmoid(ctx0, attn_gate);
+                    cur = ggml_mul(ctx0, cur, attn_gate);
+                    cb(cur, "attn_gated", il);
+                    cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+                }
             }
         }
         if (il == n_layer - 1 && inp_out_ids) {
