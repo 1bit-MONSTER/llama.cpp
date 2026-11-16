@@ -1705,23 +1705,26 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (!ggml::hrx::moe_tail_claimable(device, op)) {
         return false;
     }
-    // GET_ROWS: one predicate, two callers (engine#2704). The condition used to be written here -- twice, and neither
-    // time as strict as the matchers -- while every GET_ROWS matcher in dispatch-get-rows.cpp gated the same three
-    // contiguities from the other side. So a strided source (engine#2639) and a batched IQ3_S source (llama.cpp#407)
-    // were each CLAIMED here and executed by nobody: "unsupported HRX node … GET_ROWS … <-VIEW", graph_compute -1.
-    // Now both sides build `get_rows_tensor_facts` and ask `get_rows_tensor_supported`, so a condition cannot be in one
-    // and not the other. A decline here only moves the node to the CPU; the claim itself still has to pass the
-    // fused/standalone question at the end of this function, exactly as before.
+    // GET_ROWS: one predicate, two callers (engine#2704). #408 settled WHICH requirement to state -- source contiguity,
+    // derived from each matcher's predicate rather than from the file -- and why the clause must not be extended to the
+    // ids or the output as a conjunction: match_get_rows_scalar_3d_f32 admits strided ids on purpose (route_stride is
+    // ids->nb[1] / 4), so a flat `ids contiguous` would refuse a path that dispatches.
+    //
+    // That is a two-form problem, not a one-condition problem, so it is no longer stated here at all. The facts are
+    // built once (dispatch_registration/common/dispatch-get-rows-support.h), each form is a named predicate its own
+    // matcher calls, and this line asks the union: can SOME form execute this node. Both contiguities that #408 warned
+    // about are therefore safe to add: a strided ids keeps its claim through the route-table form, and a strided output
+    // (which no form accepts) falls back to the CPU instead of failing the graph with "unsupported HRX node".
     if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr) {
         ggml::hrx::get_rows_tensor_facts facts;
-        facts.src_contiguous  = ggml_is_contiguous(op->src[0]);
-        facts.ids_contiguous  = op->src[1] == nullptr || ggml_is_contiguous(op->src[1]);
-        facts.ids_column_table = op->src[1] != nullptr && op->src[1]->nb[0] == static_cast<size_t>(sizeof(int32_t)) &&
+        facts.src_contiguous   = ggml_is_contiguous(op->src[0]);
+        facts.ids_contiguous   = op->src[1] == nullptr || ggml_is_contiguous(op->src[1]);
+        facts.ids_column_table = op->src[1] != nullptr && op->src[1]->nb[0] == sizeof(int32_t) &&
                                  op->src[1]->nb[1] % sizeof(int32_t) == 0;
-        facts.out_contiguous  = ggml_is_contiguous(op);
-        facts.src_type        = static_cast<int32_t>(op->src[0]->type);
-        facts.src_ne2         = op->src[0]->ne[2];
-        facts.src_ne3         = op->src[0]->ne[3];
+        facts.out_contiguous   = ggml_is_contiguous(op);
+        facts.src_type         = static_cast<int32_t>(op->src[0]->type);
+        facts.src_ne2          = op->src[0]->ne[2];
+        facts.src_ne3          = op->src[0]->ne[3];
         if (!ggml::hrx::get_rows_tensor_supported(facts)) {
             return false;
         }
