@@ -1743,8 +1743,17 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     }
     // TOP_K is declared by hip/dispatch-hip-top-k.cpp (hip_declare_eager_op); claim only the shapes it executes,
     // so anything else keeps its CPU fallback instead of becoming an unsupported HRX node (engine #679).
+    //
+    // engine#2704: the shape test alone was the whole answer, and it says nothing about whether the registration
+    // exists. `register_hip_top_k_dispatch` returns BEFORE `hip_declare_eager_op` when the hip_top_k_f32 code object is
+    // not embedded, so on such a build this line claimed every well-shaped TOP_K while no matcher could execute it --
+    // the engine#2639 class (claimed, then "unsupported HRX node", graph_compute -1). Measured on exactly that build
+    // (kernel source absent, so the embedded table has no object): shape predicate yes, dispatch registry no,
+    // hip_eager_op_declared(TOP_K) no. `eager_capability_declared` is the flag that call sets, so asking it here makes
+    // the claim follow the registration without the one-node graph build and registry match that the generic tail
+    // below would charge to every router layer.
     if (op->op == GGML_OP_TOP_K) {
-        return ggml::hrx::hip_top_k_tensor_supported(op);
+        return eager_capability_declared(GGML_OP_TOP_K) && ggml::hrx::hip_top_k_tensor_supported(op);
     }
     // ARGSORT ids are produced only by common/dispatch-small-rows.cpp (common.argsort_rows_f32): claim only the shapes
     // that matcher executes, so a declined shape - or that registration switched off with GGML_HRX_DISABLE_DISPATCH -
