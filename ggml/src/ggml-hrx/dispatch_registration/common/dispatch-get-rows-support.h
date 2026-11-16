@@ -36,9 +36,17 @@
 // looks at one matcher at a time stayed green -- which is why this file has three predicates and an arm per form.
 //
 // The rule for adding a condition: it belongs HERE only if the placement path can see it too, i.e. it is a property of
-// the node's own tensors. Conditions that need the graph -- a consumer's type, an exact id span, a hidden size -- stay
-// in the matcher; the placement claim is then an over-approximation, which is the safe direction (it can only cost a CPU
-// fallback for a node that no matcher claims, never a claimed node with no dispatch).
+// the node's own tensors. Conditions that need the graph -- a consumer's type, an exact id span, a supported hidden size
+// -- stay in the matcher, and they are NOT left unguarded: `device_supports_op` ends by asking the dispatch registry
+// itself (`can_execute_standalone_op_as_graph` -> `DispatchScheduler::supports_node`), so a shape no matcher matches is
+// refused there. What these predicates add is the answer for the shapes that tail cannot see, plus the one thing it
+// cannot do at all: state a condition once, next to the matcher that means it.
+//
+// Measured on this box (dispatch registry, target gfx1151, 8 GET_ROWS registrations): a GET_ROWS with an F16 destination
+// gets no standalone dispatch, so the tail already declines it; a GET_ROWS with a 3-D destination DOES get one, so
+// declining it here would be the #407 error -- refusing a path that works -- and it is claimed on purpose.
+//
+// So the honest claim is the narrow one: the contiguity and batch conditions can no longer drift between the two callers.
 //
 // No ggml dependency: the two adapters (one from ggml_tensor in ggml-hrx.cpp, one from a dispatch Value in
 // dispatch-get-rows.cpp) build these facts wherever those types already live, so tests/test-hrx-get-rows-facts.cpp runs

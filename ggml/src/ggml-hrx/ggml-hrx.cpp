@@ -1715,6 +1715,12 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     // matcher calls, and this line asks the union: can SOME form execute this node. Both contiguities that #408 warned
     // about are therefore safe to add: a strided ids keeps its claim through the route-table form, and a strided output
     // (which no form accepts) falls back to the CPU instead of failing the graph with "unsupported HRX node".
+    //
+    // What is NOT moved here: the conditions that need the graph (a supported hidden size, a token-count bound, an exact
+    // id span, a 3-D output only one fused pattern serves). Those stay in the matchers, and the tail of this function
+    // covers them -- it asks the registry (can_execute_standalone_op_as_graph -> DispatchScheduler::supports_node), so
+    // declining them here would refuse paths that do dispatch. Measured at engine#2704: an F16 destination gets no
+    // standalone dispatch (the tail refuses it), a 3-D destination gets one (the tail claims it, correctly).
     if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr) {
         ggml::hrx::get_rows_tensor_facts facts;
         facts.src_contiguous   = ggml_is_contiguous(op->src[0]);
