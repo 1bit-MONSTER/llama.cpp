@@ -264,11 +264,25 @@ static bool match_get_rows_scalar_3d_f32_dispatch(const DispatchMatchContext & c
                                   output->ne[3] == 1;
     const bool has_types = scales->type == GGML_TYPE_F32 && ids->type == GGML_TYPE_I32 &&
                            output->type == GGML_TYPE_F32;
-    const bool has_contiguous_values = scales->contiguous && output->contiguous;
-    const bool has_id_columns = ids->nb[0] == sizeof(int32_t) && ids->nb[1] % sizeof(int32_t) == 0;
     const bool has_supported_shape = has_supported_tokens && has_scale_shape && has_id_shape &&
-                                     has_output_shape && has_types && has_contiguous_values && has_id_columns;
+                                     has_output_shape && has_types;
     if (!has_supported_shape) {
+        return false;
+    }
+
+    // engine#2704 (follow-up to llama.cpp#412): the contiguity and id-column conditions are asked through the SAME named
+    // predicate the placement path calls, built from the graph's values here and from the ggml tensors there. They were
+    // the last copy in this file that no placement-side condition compiled against -- the one way the two callers could
+    // still drift apart after #412 wired the contiguous form.
+    ggml::hrx::get_rows_tensor_facts facts;
+    facts.src_contiguous   = scales->contiguous;
+    facts.ids_contiguous   = ids->contiguous;
+    facts.ids_column_table = ids->nb[0] == sizeof(int32_t) && ids->nb[1] % sizeof(int32_t) == 0;
+    facts.out_contiguous   = output->contiguous;
+    facts.src_type         = static_cast<int32_t>(scales->type);
+    facts.src_ne2          = scales->ne[2];
+    facts.src_ne3          = scales->ne[3];
+    if (!ggml::hrx::get_rows_route_table_form_supported(facts)) {
         return false;
     }
 
