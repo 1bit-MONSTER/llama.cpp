@@ -1,3 +1,4 @@
+#include "dispatch_registration/common/dispatch-get-rows.h"
 #include "dispatch_registration/common/dispatch-small-rows.h"
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
@@ -1683,8 +1684,9 @@ static bool supported_full_max_pool_1d_f32_tensor(const ggml_tensor * op) {
 //
 //   1. DECLINED BY NAME, below: GET_ROWS (batched IQ3_S sources; the dispatch matchers have shape conditions the
 //      capability list cannot see), MUL_MAT_ID (mul_mat_id_requires_cpu), TOP_K (hip_top_k_tensor_supported),
-//      ARGSORT (small_rows_argsort_tensor_supported). Each exists because a MATCHER disagreed with a claim, and each
-//      therefore encodes a property of a matcher that lives in another file.
+//      ARGSORT (small_rows_argsort_tensor_supported), GET_ROWS (get_rows_tensor_supported). Each exists because a
+//      MATCHER disagreed with a claim, and each therefore encodes a property of a matcher that lives in another file.
+//      GET_ROWS is the first one whose predicate is SHARED with its matchers instead of restated here (engine#2704).
 //   2. GUARDED BY A PREDICATE, through supported_*_tensor(op): binary, unary, scale, repeat_scalar_3d, full_max_pool_1d,
 //      and the qwen_* fused forms. These check the OP AND THE TENSORS, and they cover families rather than single ops
 //      (supported_unary_f32_tensor covers every unary op, supported_binary_f32_tensor every binary one).
@@ -1709,15 +1711,13 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         op->src[0]->type == GGML_TYPE_IQ3_S && op->src[0]->ne[2] * op->src[0]->ne[3] > 1) {
         return false;
     }
-    // engine#2639: EVERY GET_ROWS matcher in dispatch-get-rows.cpp gates on `->contiguous` (the source, the ids and the
-    // output, seven sites), while this predicate -- for any op not declined above -- reduces to
-    // `eager_capability_declared(op->op)`, which is a property of the op code and says nothing about the tensors.
-    // So a GET_ROWS from a non-contiguous source (a strided VIEW of an f16 embedding) was CLAIMED here and had no
-    // dispatch at compute time: "unsupported HRX node … GET_ROWS … <-VIEW", graph_compute -1, nothing generated.
-    // Claim only what a matcher can execute (the rule stated for TOP_K below, engine #679). Narrow on purpose: a
-    // contiguous GET_ROWS keeps its placement, including the token-embedding rows the census counts as off-HRX.
-    if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr && !ggml_is_contiguous(op->src[0])) {
-        return false;
+    // GET_ROWS is claimed only for the shapes dispatch-get-rows.cpp's matchers execute, through the same predicate the
+    // matchers call (engine#2704). The one condition here used to be the contiguity of the source (engine#2639, where a
+    // strided VIEW of an f16 embedding was claimed and had no dispatch: "unsupported HRX node … GET_ROWS … <-VIEW",
+    // graph_compute -1); an unsupported weight format, a hidden size the kernel cannot take, more than 2048 ids or an
+    // f16 output had the same outcome and are now declined here too, so those nodes keep their CPU fallback.
+    if (op->op == GGML_OP_GET_ROWS) {
+        return ggml::hrx::get_rows_tensor_supported(op);
     }
     // Qwen3.8-Flash-Next routed experts have no correct/compilable HRX MUL_MAT_ID
     // kernel (IQ4_NL/IQ2_S weight types, or a 640-wide contraction that violates the

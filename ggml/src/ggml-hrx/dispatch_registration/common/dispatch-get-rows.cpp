@@ -42,11 +42,43 @@ static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
 }
 
-static bool is_1d_or_2d_column(const Value & value) {
+// A GET_ROWS-family condition belongs to the MATCHER that executes the node, but device_supports_op has to answer the
+// same question from a ggml node and has no Graph to hand a matcher. Expressed over these properties instead, one
+// predicate answers both, so a claim and a matcher cannot drift apart -- the drift that produced #407's clause,
+// engine#2146's TOP_K decline and the three before them (engine#2704).
+struct GetRowsTensorView {
+    ggml_type                          type       = GGML_TYPE_COUNT;
+    std::array<int64_t, GGML_MAX_DIMS> ne         = { 0, 0, 0, 0 };
+    std::array<size_t, GGML_MAX_DIMS>  nb         = { 0, 0, 0, 0 };
+    size_t                             byte_count = 0;
+    bool                               contiguous = false;
+};
+
+static GetRowsTensorView get_rows_view(const Value & value) {
+    GetRowsTensorView view;
+    view.type       = value.type;
+    view.ne         = value.ne;
+    view.nb         = value.nb;
+    view.byte_count = value.byte_count;
+    view.contiguous = value.contiguous;
+    return view;
+}
+
+static GetRowsTensorView get_rows_view(const ggml_tensor * tensor) {
+    GetRowsTensorView view;
+    view.type       = tensor->type;
+    view.ne         = { tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3] };
+    view.nb         = { tensor->nb[0], tensor->nb[1], tensor->nb[2], tensor->nb[3] };
+    view.byte_count = ggml_nbytes(tensor);
+    view.contiguous = ggml_is_contiguous(tensor);
+    return view;
+}
+
+static bool is_1d_or_2d_column(const GetRowsTensorView & value) {
     return value.ne[0] > 0 && value.ne[1] == 1 && value.ne[2] == 1 && value.ne[3] == 1;
 }
 
-static bool is_2d(const Value & value) {
+static bool is_2d(const GetRowsTensorView & value) {
     return value.ne[0] > 0 && value.ne[1] > 0 && value.ne[2] == 1 && value.ne[3] == 1;
 }
 
@@ -69,6 +101,79 @@ static bool is_supported_row_count(int64_t row_count) {
 
 static std::string to_config_value(int64_t value) {
     return std::to_string(value);
+}
+
+static bool get_rows_format_for_type(ggml_type type, int64_t & format);
+
+// The predicate common.get_rows.f32 applies, shared with device_supports_op (engine#2704). Outputs are the values the
+// dispatch needs; they are only meaningful when this returns true.
+struct GetRowsShape {
+    int64_t weight_format_value = -1;
+    int64_t token_count         = 0;
+    int64_t row_count           = 0;
+    int64_t hidden_size         = 0;
+};
+
+static bool get_rows_rows_supported(const GetRowsTensorView & weight, const GetRowsTensorView & ids,
+                                   const GetRowsTensorView & output, GetRowsShape & shape) {
+    if (ids.type != GGML_TYPE_I32 || output.type != GGML_TYPE_F32 || !weight.contiguous || !ids.contiguous ||
+        !output.contiguous || !is_2d(weight) || !is_1d_or_2d_column(ids) || !is_2d(output)) {
+        return false;
+    }
+
+    int64_t weight_format_value = 0;
+    if (!get_rows_format_for_type(weight.type, weight_format_value)) {
+        return false;
+    }
+
+    const int64_t hidden_size = weight.ne[0];
+    const int64_t row_count   = weight.ne[1];
+    const int64_t token_count = ids.ne[0];
+    if (output.ne[0] != hidden_size || output.ne[1] != token_count ||
+        !is_supported_hidden_size(weight.type, hidden_size) || !is_supported_row_count(row_count) ||
+        !is_supported_token_count(token_count)) {
+        return false;
+    }
+
+    shape.weight_format_value = weight_format_value;
+    shape.hidden_size         = hidden_size;
+    shape.row_count           = row_count;
+    shape.token_count         = token_count;
+    return true;
+}
+
+// common.get_rows.scalar_3d_f32's predicate, shared the same way: a GET_ROWS whose source is that narrow scales tensor
+// (ne[0] == 1, 128 rows) is outside the rows predicate but inside this one, so a claim that only asked the rows predicate
+// would take a placement away from a shape the gate runs (test-backend-ops GET_ROWS on the 3d family).
+static bool get_rows_scalar_3d_supported(const GetRowsTensorView & scales, const GetRowsTensorView & ids,
+                                        const GetRowsTensorView & output, int64_t & token_count,
+                                        size_t & route_stride) {
+    const int64_t tokens = output.ne[2];
+    const bool has_supported_tokens = is_supported_token_count(tokens);
+    const bool has_scale_shape = scales.ne[0] == 1 && scales.ne[1] == 128 &&
+                                 scales.ne[2] == tokens && scales.ne[3] == 1;
+    const bool has_id_shape = ids.ne[0] == 8 && ids.ne[1] == tokens &&
+                              ids.ne[2] == 1 && ids.ne[3] == 1;
+    const bool has_output_shape = output.ne[0] == 1 && output.ne[1] == 8 &&
+                                  output.ne[3] == 1;
+    const bool has_types = scales.type == GGML_TYPE_F32 && ids.type == GGML_TYPE_I32 &&
+                           output.type == GGML_TYPE_F32;
+    const bool has_contiguous_values = scales.contiguous && output.contiguous;
+    const bool has_id_columns = ids.nb[0] == sizeof(int32_t) && ids.nb[1] % sizeof(int32_t) == 0;
+    if (!(has_supported_tokens && has_scale_shape && has_id_shape && has_output_shape && has_types &&
+          has_contiguous_values && has_id_columns)) {
+        return false;
+    }
+
+    const size_t stride = ids.nb[1] / sizeof(int32_t);
+    const size_t expected_id_bytes = (static_cast<size_t>(tokens) - 1) * ids.nb[1] + 8 * sizeof(int32_t);
+    if (stride < 8 || stride > 512 || ids.byte_count != expected_id_bytes) {
+        return false;
+    }
+
+    token_count  = tokens;
+    route_stride = stride;
+    return true;
 }
 
 static size_t row_byte_count(ggml_type type, int64_t token_count, int64_t hidden_size) {
@@ -252,29 +357,10 @@ static bool match_get_rows_scalar_3d_f32_dispatch(const DispatchMatchContext & c
         return false;
     }
 
-    const int64_t token_count = output->ne[2];
-    const bool has_supported_tokens = is_supported_token_count(token_count);
-    const bool has_scale_shape = scales->ne[0] == 1 && scales->ne[1] == 128 &&
-                                 scales->ne[2] == token_count && scales->ne[3] == 1;
-    const bool has_id_shape = ids->ne[0] == 8 && ids->ne[1] == token_count &&
-                              ids->ne[2] == 1 && ids->ne[3] == 1;
-    const bool has_output_shape = output->ne[0] == 1 && output->ne[1] == 8 &&
-                                  output->ne[3] == 1;
-    const bool has_types = scales->type == GGML_TYPE_F32 && ids->type == GGML_TYPE_I32 &&
-                           output->type == GGML_TYPE_F32;
-    const bool has_contiguous_values = scales->contiguous && output->contiguous;
-    const bool has_id_columns = ids->nb[0] == sizeof(int32_t) && ids->nb[1] % sizeof(int32_t) == 0;
-    const bool has_supported_shape = has_supported_tokens && has_scale_shape && has_id_shape &&
-                                     has_output_shape && has_types && has_contiguous_values && has_id_columns;
-    if (!has_supported_shape) {
-        return false;
-    }
-
-    const size_t route_stride = ids->nb[1] / sizeof(int32_t);
-    const bool has_supported_stride = route_stride >= 8 && route_stride <= 512;
-    const size_t expected_id_bytes = (static_cast<size_t>(token_count) - 1) * ids->nb[1] + 8 * sizeof(int32_t);
-    const bool has_exact_id_span = ids->byte_count == expected_id_bytes;
-    if (!has_supported_stride || !has_exact_id_span) {
+    int64_t token_count  = output->ne[2];
+    size_t  route_stride = 0;
+    if (!get_rows_scalar_3d_supported(get_rows_view(*scales), get_rows_view(*ids), get_rows_view(*output), token_count,
+                                      route_stride)) {
         return false;
     }
 
@@ -517,36 +603,27 @@ static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * no
         return match;
     }
 
-    const Value *            weight = graph_value(graph, node->inputs[0]);
-    const Value *            ids    = graph_value(graph, node->inputs[1]);
-    const Value *            output = graph_value(graph, node->output);
-    if (weight == nullptr || ids == nullptr || output == nullptr || ids->type != GGML_TYPE_I32 ||
-        output->type != GGML_TYPE_F32 || !weight->contiguous || !ids->contiguous || !output->contiguous ||
-        !is_2d(*weight) || !is_1d_or_2d_column(*ids) || !is_2d(*output)) {
+    const Value * weight = graph_value(graph, node->inputs[0]);
+    const Value * ids    = graph_value(graph, node->inputs[1]);
+    const Value * output = graph_value(graph, node->output);
+    if (weight == nullptr || ids == nullptr || output == nullptr) {
         return {};
     }
 
-    int64_t weight_format_value = 0;
-    if (!get_rows_format_for_type(weight->type, weight_format_value)) {
-        return {};
-    }
-
-    const int64_t hidden_size = weight->ne[0];
-    const int64_t row_count   = weight->ne[1];
-    const int64_t token_count = ids->ne[0];
-    if (output->ne[0] != hidden_size || output->ne[1] != token_count ||
-        !is_supported_hidden_size(weight->type, hidden_size) || !is_supported_row_count(row_count) ||
-        !is_supported_token_count(token_count)) {
+    // The same predicate device_supports_op asks through get_rows_tensor_supported, so the claim and this matcher cannot
+    // disagree about the shapes a GET_ROWS may take on HRX (engine#2704).
+    GetRowsShape shape;
+    if (!get_rows_rows_supported(get_rows_view(*weight), get_rows_view(*ids), get_rows_view(*output), shape)) {
         return {};
     }
 
     match.ids                 = ids;
     match.weight              = weight;
     match.output              = output;
-    match.weight_format_value = weight_format_value;
-    match.token_count         = token_count;
-    match.row_count           = row_count;
-    match.hidden_size         = hidden_size;
+    match.weight_format_value = shape.weight_format_value;
+    match.token_count         = shape.token_count;
+    match.row_count           = shape.row_count;
+    match.hidden_size         = shape.hidden_size;
     return match;
 }
 
@@ -698,4 +775,49 @@ void register_get_rows_dispatches(DispatchRegistryBuilder & registry) {
     });
 }
 
+bool get_rows_tensor_supported(const struct ggml_tensor * op) {
+    // Claim only the GET_ROWS a matcher in THIS file executes, so a shape the matchers decline keeps its CPU fallback
+    // instead of becoming an unsupported HRX node (the rule stated for TOP_K/ARGSORT in ggml-hrx.cpp, engine#679
+    // and engine#1259). Before this, the only shape condition here was the contiguity of the source (engine#2639),
+    // so every other refusal by a matcher -- an unsupported weight format, a hidden size the kernel cannot take, more
+    // than 2048 ids, an f16 output -- was claimed here and failed the whole graph at compute time (engine#2704).
+    if (op == nullptr || op->op != GGML_OP_GET_ROWS) {
+        return false;
+    }
+    const ggml_tensor * weight = op->src[0];
+    const ggml_tensor * ids    = op->src[1];
+    if (weight == nullptr || ids == nullptr) {
+        return false;
+    }
+    // Every GET_ROWS matcher in this file gates on the contiguous source, the ids and the output (seven sites), and one
+    // of them gates the scales/output pair too. A strided source is therefore declined by all of them (engine#2639).
+    if (!ggml_is_contiguous(weight)) {
+        return false;
+    }
+
+    const GetRowsTensorView weight_view = get_rows_view(weight);
+    const GetRowsTensorView ids_view    = get_rows_view(ids);
+    const GetRowsTensorView output_view = get_rows_view(op);
+
+    // common.get_rows.f32 first: it is the family every other GET_ROWS registration builds on (the scale and rmsnorm
+    // matchers call match_get_rows_f32 and add their consumer to the same dispatch).
+    const bool rows_enabled = !dispatch_name_disabled("common.get_rows.f32", DispatchMatchKind::SingleOp) ||
+                              !dispatch_name_disabled("common.get_rows.f32_next", DispatchMatchKind::Fused);
+    GetRowsShape shape;
+    if (rows_enabled && get_rows_rows_supported(weight_view, ids_view, output_view, shape)) {
+        return true;
+    }
+
+    // common.get_rows.scalar_3d_f32: a narrow scales tensor (ne[0] == 1, 128 rows) with 8 route ids per token, which the
+    // rows predicate refuses on the hidden size and this one accepts. Asking only the rows predicate here would move a
+    // shape the gate runs onto the CPU.
+    int64_t token_count  = 0;
+    size_t  route_stride = 0;
+    if (!dispatch_name_disabled("common.get_rows.scalar_3d_f32", DispatchMatchKind::SingleOp) &&
+        get_rows_scalar_3d_supported(weight_view, ids_view, output_view, token_count, route_stride)) {
+        return true;
+    }
+
+    return false;
+}
 }  // namespace ggml::hrx

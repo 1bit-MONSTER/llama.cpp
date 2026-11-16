@@ -10,6 +10,7 @@
 #include "dispatch/dispatch-scheduler.h"
 #include "dispatch/dispatch-shape-log.h"
 #include "dispatch_registration/common/dispatch-gather-add.h"
+#include "dispatch_registration/common/dispatch-get-rows.h"
 #include "dispatch_registration/dispatch-registry.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -10635,6 +10636,78 @@ static void run_zero_output_scheduler_elision_checks() {
     ggml_free(ctx);
 }
 
+// engine#2704: a GET_ROWS is claimed for exactly the shapes dispatch-get-rows.cpp's matchers execute, through the
+// predicate those matchers call, so a shape they refuse keeps its CPU fallback instead of being placed on HRX with no
+// dispatch ("unsupported HRX node ... GET_ROWS"). Before this the claim restated one condition (the contiguous source,
+// engine#2639) and every other refusal -- an unsupported weight type, a hidden size the kernel cannot take, more than
+// 2048 ids -- was claimed anyway and failed the graph at compute time.
+static void run_get_rows_claim_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * ids4 = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 4);
+    REQUIRE(ids4 != nullptr);
+
+    // the token-embedding shape the census counts: a k-quant table, 4 ids, f32 output -- claimed
+    ggml_tensor * q6k = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, 2560, 512);
+    ggml_tensor * rows_q6k = ggml_get_rows(ctx, q6k, ids4);
+    REQUIRE(rows_q6k != nullptr);
+    REQUIRE(ggml::hrx::get_rows_tensor_supported(rows_q6k));
+
+    // a strided VIEW of the same table: every matcher gates the source (engine#2639), so it is not claimed
+    ggml_tensor * f32_table = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 8);
+    ggml_tensor * f32_view  = ggml_view_2d(ctx, f32_table, 64, 8, 2 * f32_table->nb[1], 0);
+    REQUIRE(!ggml_is_contiguous(f32_view));
+    ggml_tensor * rows_view = ggml_get_rows(ctx, f32_view, ids4);
+    REQUIRE(rows_view != nullptr);
+    REQUIRE(!ggml::hrx::get_rows_tensor_supported(rows_view));
+
+    // an f16 table IS a format the kernel takes (the format map lists F16/F32/BF16 and the k-quants): claimed
+    ggml_tensor * f16_table  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 256, 64);
+    ggml_tensor * rows_f16   = ggml_get_rows(ctx, f16_table, ids4);
+    REQUIRE(rows_f16 != nullptr);
+    REQUIRE(ggml::hrx::get_rows_tensor_supported(rows_f16));
+
+    // a weight type get_rows_format_for_type does not carry (Q8_K): every matcher refuses it, so the node keeps its CPU
+    // fallback instead of being claimed and failing at compute time
+    ggml_tensor * q8k_table = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_K, 256, 64);
+    ggml_tensor * rows_q8k   = ggml_get_rows(ctx, q8k_table, ids4);
+    REQUIRE(rows_q8k != nullptr);
+    REQUIRE(!ggml::hrx::get_rows_tensor_supported(rows_q8k));
+
+    // a hidden size the kernel cannot take (q6_K blocks of 256: 100 is not a multiple)
+    ggml_tensor * narrow = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, 100, 64);
+    ggml_tensor * rows_narrow = ggml_get_rows(ctx, narrow, ids4);
+    REQUIRE(rows_narrow != nullptr);
+    REQUIRE(!ggml::hrx::get_rows_tensor_supported(rows_narrow));
+
+    // more ids than is_supported_token_count takes (2048)
+    ggml_tensor * ids4096 = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 4096);
+    ggml_tensor * rows_wide = ggml_get_rows(ctx, q6k, ids4096);
+    REQUIRE(rows_wide != nullptr);
+    REQUIRE(!ggml::hrx::get_rows_tensor_supported(rows_wide));
+
+    // the narrow scalar_3d family is the one shape the rows predicate refuses on the hidden size and its own predicate
+    // accepts (weight ne[0] == 1, 128 rows, 8 ids per token): it must stay claimed, or the gate's row moves to the CPU
+    ggml_tensor * scales   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 128, 2);
+    ggml_tensor * route_ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 8, 2);
+    ggml_tensor * rows_3d  = ggml_get_rows(ctx, scales, route_ids);
+    REQUIRE(rows_3d != nullptr);
+    REQUIRE(ggml::hrx::get_rows_tensor_supported(rows_3d));
+
+    // and the same scalar_3d shape whose id span is wider than that predicate's route stride bound (512 int32) is
+    // refused: the claim follows the predicate, not the op code
+    ggml_tensor * route_ids_view = ggml_view_2d(ctx, route_ids, 8, 2, 600 * sizeof(int32_t), 0);
+    ggml_tensor * rows_3d_view   = ggml_get_rows(ctx, scales, route_ids_view);
+    REQUIRE(rows_3d_view != nullptr);
+    REQUIRE(!ggml::hrx::get_rows_tensor_supported(rows_3d_view));
+
+    ggml_free(ctx);
+}
+
 // engine #679: a node only a fused HIP dispatch executes is placed on HRX only through a matcher's own claim
 // predicate (hip/hip-capabilities.h). The QSA indexer's f16 gather at Flash-Next's 18.8k shape is the case: standalone
 // it has no dispatch, so supports_op says no and the scheduler puts it on the CPU, and hip.qsa_pool_blocks (the add-on
@@ -16148,6 +16221,7 @@ int main(int argc, char ** argv) {
         { "rope_set_rows_dispatch", [] { run_rope_set_rows_dispatch_checks(); } },
         { "graph_traversal", [] { run_graph_traversal_checks(); } },
         { "qwen_token_embedding_dispatch", [] { run_qwen_token_embedding_dispatch_checks(); } },
+        { "get_rows_claim", [] { run_get_rows_claim_checks(); } },
         { "gather_add_dispatch", [] { run_gather_add_dispatch_checks(); } },
         { "qwen_flash_attention_dispatch", [] { run_qwen_flash_attention_dispatch_checks(); } },
         { "qwen_attention_postprocess_dispatch", [] { run_qwen_attention_postprocess_dispatch_checks(); } },
