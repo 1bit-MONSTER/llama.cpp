@@ -1,3 +1,4 @@
+#include "dispatch_registration/common/dispatch-get-rows-support.h"
 #include "dispatch_registration/common/dispatch-small-rows.h"
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
@@ -1704,20 +1705,26 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (!ggml::hrx::moe_tail_claimable(device, op)) {
         return false;
     }
-    // GET_ROWS gives wrong rows for batched IQ3_S sources (test-backend-ops GET_ROWS)
-    if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr &&
-        op->src[0]->type == GGML_TYPE_IQ3_S && op->src[0]->ne[2] * op->src[0]->ne[3] > 1) {
-        return false;
-    }
-    // engine#2639: EVERY GET_ROWS matcher in dispatch-get-rows.cpp gates on `->contiguous` (the source, the ids and the
-    // output, seven sites), while this predicate -- for any op not declined above -- reduces to
-    // `eager_capability_declared(op->op)`, which is a property of the op code and says nothing about the tensors.
-    // So a GET_ROWS from a non-contiguous source (a strided VIEW of an f16 embedding) was CLAIMED here and had no
-    // dispatch at compute time: "unsupported HRX node … GET_ROWS … <-VIEW", graph_compute -1, nothing generated.
-    // Claim only what a matcher can execute (the rule stated for TOP_K below, engine #679). Narrow on purpose: a
-    // contiguous GET_ROWS keeps its placement, including the token-embedding rows the census counts as off-HRX.
-    if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr && !ggml_is_contiguous(op->src[0])) {
-        return false;
+    // GET_ROWS: one predicate, two callers (engine#2704). The condition used to be written here -- twice, and neither
+    // time as strict as the matchers -- while every GET_ROWS matcher in dispatch-get-rows.cpp gated the same three
+    // contiguities from the other side. So a strided source (engine#2639) and a batched IQ3_S source (llama.cpp#407)
+    // were each CLAIMED here and executed by nobody: "unsupported HRX node … GET_ROWS … <-VIEW", graph_compute -1.
+    // Now both sides build `get_rows_tensor_facts` and ask `get_rows_tensor_supported`, so a condition cannot be in one
+    // and not the other. A decline here only moves the node to the CPU; the claim itself still has to pass the
+    // fused/standalone question at the end of this function, exactly as before.
+    if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr) {
+        ggml::hrx::get_rows_tensor_facts facts;
+        facts.src_contiguous  = ggml_is_contiguous(op->src[0]);
+        facts.ids_contiguous  = op->src[1] == nullptr || ggml_is_contiguous(op->src[1]);
+        facts.ids_column_table = op->src[1] != nullptr && op->src[1]->nb[0] == static_cast<size_t>(sizeof(int32_t)) &&
+                                 op->src[1]->nb[1] % sizeof(int32_t) == 0;
+        facts.out_contiguous  = ggml_is_contiguous(op);
+        facts.src_type        = static_cast<int32_t>(op->src[0]->type);
+        facts.src_ne2         = op->src[0]->ne[2];
+        facts.src_ne3         = op->src[0]->ne[3];
+        if (!ggml::hrx::get_rows_tensor_supported(facts)) {
+            return false;
+        }
     }
     // Qwen3.8-Flash-Next routed experts have no correct/compilable HRX MUL_MAT_ID
     // kernel (IQ4_NL/IQ2_S weight types, or a 640-wide contraction that violates the

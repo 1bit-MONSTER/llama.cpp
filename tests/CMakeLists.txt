@@ -480,6 +480,15 @@ if (TARGET ggml-hrx)
     add_test(NAME test-hrx-host-resident COMMAND test-hrx-host-resident)
     target_include_directories(test-hrx-placement-classification PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-placement-classification COMMAND test-hrx-placement-classification)
+    # engine#2704: the GET_ROWS accept predicate both the placement path and the matchers call. Compiles the predicate's
+    # own translation unit only -- no device, no libhrx, no graph -- because the defect it prevents is the two callers
+    # disagreeing, which neither caller's own test can catch.
+    add_executable(test-hrx-get-rows-facts test-hrx-get-rows-facts.cpp
+                   ../ggml/src/ggml-hrx/dispatch_registration/common/dispatch-get-rows-support.cpp)
+    target_include_directories(test-hrx-get-rows-facts PRIVATE ../ggml/include ../ggml/src/ggml-hrx)
+    # ggml.h is included for the GGML_TYPE_IQ3_S enum check only; nothing from the library is called.
+    target_link_libraries(test-hrx-get-rows-facts PRIVATE ggml)
+    add_test(NAME test-hrx-get-rows-facts COMMAND test-hrx-get-rows-facts)
     add_executable(test-hrx-arena-refusal test-hrx-arena-refusal.cpp)
     target_include_directories(test-hrx-arena-refusal PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-arena-refusal COMMAND test-hrx-arena-refusal)
