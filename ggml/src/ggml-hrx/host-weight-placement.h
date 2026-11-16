@@ -48,4 +48,10 @@ bool host_weight_exceeds_residency(const ggml_tensor * op);
 // Exported so the placement observer classifies a by-design CPU node the same way the residency decline does.
 bool host_weight_is_host_resident(const ggml_tensor * tensor);
 
+// engine#2494: the two questions behind the one above, separately. `tensor_is_host_resident` is true for ANY tensor
+// whose storage is host memory that the GPU therefore cannot dereference without a mapping, whatever the buffer's
+// usage; `host_resident_weight` adds the WEIGHTS test. The census wants the first: a host-resident tensor that is
+// not a weight is exactly the state nothing could see (see the non-weight counter in ggml-hrx.cpp).
+bool tensor_is_host_resident(const ggml_tensor * tensor);
+
 }  // namespace ggml::hrx

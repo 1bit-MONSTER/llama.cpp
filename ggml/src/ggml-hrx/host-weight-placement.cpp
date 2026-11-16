@@ -36,7 +36,11 @@ namespace {
 
 // True for a model weight that is NOT in an HRX-allocated buffer, i.e. a tensor the executor would have to copy
 // into device memory before it could bind it.
-bool host_resident_weight(const ggml_tensor * tensor) {
+// engine#2494: residence and usage are two different questions and only the pair answers "is this a host weight".
+// A tensor can be host-resident and NOT a weight -- an index, a cache, a bias, an activation kept on the host -- and
+// `host_resident_weight()` returns false for all of those, so the placement census never mentions them even though the
+// GPU cannot read them. Asking residence on its own makes that state countable.
+bool tensor_is_host_resident(const ggml_tensor * tensor) {
     if (tensor == nullptr) {
         return false;
     }
@@ -47,9 +51,14 @@ bool host_resident_weight(const ggml_tensor * tensor) {
     if (buffer->iface.get_base == ggml_backend_hrx_buffer_base) {
         return false;
     }
-    if (!ggml_backend_buffer_is_host(buffer)) {
+    return ggml_backend_buffer_is_host(buffer);
+}
+
+bool host_resident_weight(const ggml_tensor * tensor) {
+    if (!tensor_is_host_resident(tensor)) {
         return false;
     }
+    ggml_backend_buffer_t buffer = tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
     return ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 }
 
