@@ -567,15 +567,6 @@ static void match_dispatch_at_index(const ggml::hrx::Graph &            graph,
     REQUIRE(plan.valid());
 }
 
-// engine#2774: expectations recorded from a dispatch scheme the matchers have since left. All 33 names below are
-// corpus exports that NOTHING registers (grep them across ggml-hrx and only the corpus manifest and this file mention
-// them), so the cases that name one abort permanently -- 179 of the 284 cases the suite reaches. Naming them here turns
-// that from "the suite is 63 % red" into "these 33 are known-stale, and anything else is real": a new stale name still
-// aborts, and a case that starts SELECTING a recorded-stale kernel says so, so the entry can be pruned.
-//
-// This is a ratchet of the same shape as tools/ci/hrx_f16_narrowing.txt: the list may shrink, never grow silently. It
-// is a table rather than a file on purpose -- it is 33 lines reviewed in the diff, and a load path in a test binary is
-// one more way for the check to silently not run.
 // engine#2774: of the 33 expected kernel names that the suite demands and the dispatcher does not choose, **25 are
 // referenced by nothing at all** -- grep the bare name (the family lives in a separate string literal, so grepping
 // "loom_libs:<name>" finds nothing, which is how the first version of this table got the split wrong) across
