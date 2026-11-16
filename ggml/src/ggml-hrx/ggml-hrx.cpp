@@ -1678,6 +1678,25 @@ static bool supported_full_max_pool_1d_f32_tensor(const ggml_tensor * op) {
     return f32_values && contiguous_values && full_row && matching_rows && max_pool && exact_window && bounded;
 }
 
+// HOW A NODE EARNS ITS PLACEMENT, and there are THREE mechanisms in this function with no marker between them
+// (engine#2639, which is engine#2146 arriving through a shape rather than a name):
+//
+//   1. DECLINED BY NAME, below: GET_ROWS (batched IQ3_S sources; the dispatch matchers have shape conditions the
+//      capability list cannot see), MUL_MAT_ID (mul_mat_id_requires_cpu), TOP_K (hip_top_k_tensor_supported),
+//      ARGSORT (small_rows_argsort_tensor_supported). Each exists because a MATCHER disagreed with a claim, and each
+//      therefore encodes a property of a matcher that lives in another file.
+//   2. GUARDED BY A PREDICATE, through supported_*_tensor(op): binary, unary, scale, repeat_scalar_3d, full_max_pool_1d,
+//      and the qwen_* fused forms. These check the OP AND THE TENSORS, and they cover families rather than single ops
+//      (supported_unary_f32_tensor covers every unary op, supported_binary_f32_tensor every binary one).
+//   3. BARE CAPABILITY: eager_capability_declared(op->op) on its own, for everything else. This is where a new kernel
+//      must be wired in explicitly -- if the matcher for an op has any condition the capability list does not, that
+//      condition belongs here, or the scheduler keeps the node on HRX with no dispatch and the graph fails with
+//      "unsupported HRX node" (the registry header states the same rule for GGML_HRX_DISABLE_DISPATCH).
+//
+// A reader adding a kernel cannot tell from this function which of the three applies to their op, which is why a fifth
+// by-name decline keeps being written. The durable fix is to ask the registered DispatchMatch instead of maintaining
+// this list (see dispatch-registry.h: DispatchRegistry::match + find_dispatch_registry); that needs a per-graph context
+// question and a re-entrancy guard settled first, so this map is the cheap half of it.
 static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op) {
     if (op == nullptr) {
         return false;
