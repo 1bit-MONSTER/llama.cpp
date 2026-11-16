@@ -626,6 +626,10 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
     int64_t              unaligned_input_size  = 0;
     int64_t              off_by_design         = 0;
     int64_t              off_mapped_weights    = 0;
+    // engine#2494: a host-resident source that is NOT a weight. `host_resident_weight()` requires the WEIGHTS usage, so
+    // an index/cache/bias/activation kept in host memory was invisible here -- the one state that a GPU cannot read
+    // without a mapping, and the one this census could not name.
+    int64_t              off_host_nonweight    = 0;
     ggml_tensor *        first_off = nullptr;
     ggml_tensor *        first_unexplained = nullptr;
     for (int i = 0; i < graph->n_nodes; i++) {
@@ -660,6 +664,15 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
             if (src != nullptr && ggml::hrx::host_weight_is_host_resident(src->view_src != nullptr ? src->view_src : src)) {
                 facts.src_host_weight = true;
                 off_mapped_weights++;
+            }
+        }
+        if (!facts.src_host_weight) {
+            for (int s = 0; s < GGML_MAX_SRC; ++s) {
+                const ggml_tensor * src = node->src[s];
+                if (src != nullptr && ggml::hrx::tensor_is_host_resident(src->view_src != nullptr ? src->view_src : src)) {
+                    off_host_nonweight++;
+                    break;   // per node, like the counters above
+                }
             }
         }
         const bool by_design = ggml::hrx::placement_node_is_by_design(facts);
@@ -763,6 +776,11 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
         }
         // engine#2450: name the other by-design class, so a reader of the census sees why the node is on
         // the CPU instead of concluding the kernel is missing.
+        if (off_host_nonweight > 0) {
+            reason += " - " + std::to_string(off_host_nonweight) +
+                      " node(s) read a source that is host-resident and not a weight (index, cache or bias kept on "
+                      "the host), which the GPU cannot dereference without a mapping";
+        }
         if (off_mapped_weights > 0) {
             reason += " - " + std::to_string(off_mapped_weights) +
                       " node(s) read a weight that lives in the loader's file mapping, which ggml must see as host memory";
