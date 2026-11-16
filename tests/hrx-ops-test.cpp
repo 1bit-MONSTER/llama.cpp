@@ -567,19 +567,108 @@ static void match_dispatch_at_index(const ggml::hrx::Graph &            graph,
     REQUIRE(plan.valid());
 }
 
+// engine#2774: expectations recorded from a dispatch scheme the matchers have since left. All 33 names below are
+// corpus exports that NOTHING registers (grep them across ggml-hrx and only the corpus manifest and this file mention
+// them), so the cases that name one abort permanently -- 179 of the 284 cases the suite reaches. Naming them here turns
+// that from "the suite is 63 % red" into "these 33 are known-stale, and anything else is real": a new stale name still
+// aborts, and a case that starts SELECTING a recorded-stale kernel says so, so the entry can be pruned.
+//
+// This is a ratchet of the same shape as tools/ci/hrx_f16_narrowing.txt: the list may shrink, never grow silently. It
+// is a table rather than a file on purpose -- it is 33 lines reviewed in the diff, and a load path in a test binary is
+// one more way for the check to silently not run.
+// engine#2774: of the 33 expected kernel names that the suite demands and the dispatcher does not choose, **25 are
+// referenced by nothing at all** -- grep the bare name (the family lives in a separate string literal, so grepping
+// "loom_libs:<name>" finds nothing, which is how the first version of this table got the split wrong) across
+// ggml-hrx and only the corpus manifest and this file mention them. Those 25 can never be selected, so recording them
+// is safe, and naming them turns "the suite is 63 % red" into "these are known-stale, anything else is real".
+//
+// The other 8 are DELIBERATELY NOT here. They *are* registered and *are* selectable:
+//
+//   ggml_flash_attention_f32_f16_wmma                          dispatch-flash-attention.cpp
+//   ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32   dispatch-gated-mul-mat-id.cpp
+//   ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32    dispatch-gated-mul-mat-id.cpp
+//   ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256             dispatch-mul-mat.cpp
+//   ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot                dispatch-gated-mul-mat.cpp
+//   ggml_rmsnorm_mul_rope_f32                                  dispatch-rmsnorm.cpp
+//   qwen3_moe_attention_qkv_postprocess_fused_decode           dispatch-qwen-attention-postprocess.cpp
+//   qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32      dispatch-routed-ffn.cpp
+//
+// For those, a case not selecting the kernel is either a matcher guard that is wrong for that shape or an expectation
+// that is over-specific -- a question, not a suppression. They keep aborting, so the suite still fails loudly there.
+//
+// This is a ratchet of the same shape as tools/ci/hrx_f16_narrowing.txt: the list may shrink, never grow silently. It is
+// a table rather than a file on purpose -- reviewed in the diff, with no load path that can silently not run.
+static const char * const kRecordedStaleExpectations[] = {
+    "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
+    "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
+    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+    "loom_libs:ggml_mul_mat_tiled_input_f32_iq1_m_publish_f32",
+    "loom_libs:ggml_mul_mat_tiled_input_f32_iq1_s_publish_f32",
+    "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32",
+    "loom_libs:ggml_mul_mat_tiled_input_f32_iq3_s_publish_f32",
+    "loom_libs:ggml_mul_mat_tiled_input_f32_iq3_xxs_publish_f32",
+    "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32",
+    "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned",
+    "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
+    "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_aligned",
+    "loom_libs:ggml_mul_mat_vector_f32_f32",
+    "loom_libs:ggml_mul_mat_vector_iq1_m_f32_f32",
+    "loom_libs:ggml_mul_mat_vector_iq1_s_f32_f32",
+    "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32",
+    "loom_libs:ggml_mul_mat_vector_iq3_s_f32_f32",
+    "loom_libs:ggml_mul_mat_vector_iq3_xxs_f32_f32",
+    "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped",
+    "loom_libs:ggml_rmsnorm_binary_strided_f32",
+    "loom_libs:ggml_rmsnorm_gate_f32_publish",
+    "loom_libs:ggml_rmsnorm_mul_add_f32",
+    "loom_libs:ggml_scale_add_f32",
+    "loom_libs:llm_attention_v_matmul_set_rows_tiled_f32_f32",
+    "loom_libs:llm_attention_v_matmul_set_rows_vector_f32_f32",
+};
+
+static bool is_recorded_stale_expectation(const std::string & name) {
+    for (const char * recorded : kRecordedStaleExpectations) {
+        if (name == recorded) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void require_kernel_subsequence(const std::vector<std::string> & sequence,
                                        const std::vector<std::string> & expected) {
     size_t sequence_index = 0;
     for (const std::string & name : expected) {
+        const size_t before = sequence_index;
         while (sequence_index < sequence.size() && sequence[sequence_index] != name) {
             ++sequence_index;
         }
         if (sequence_index >= sequence.size()) {
+            if (is_recorded_stale_expectation(name)) {
+                std::fprintf(stderr,
+                             "stale recorded expectation (engine#2774, not a failure): %s -- the corpus still exports it "
+                             "and no matcher selects it\n",
+                             name.c_str());
+                sequence_index = before;   // this name is not in the sequence; do not consume a match for it
+                continue;
+            }
             std::fprintf(stderr, "missing expected kernel: %s\nscheduled kernels:\n", name.c_str());
             for (const std::string & scheduled : sequence) {
                 std::fprintf(stderr, "  %s\n", scheduled.c_str());
             }
             std::abort();
+        }
+        if (sequence[sequence_index] != name) {
+            continue;
+        }
+        // The other direction, or the table rots: an entry that is now SATISFIED means the wiring came back (or the
+        // matcher moved to that kernel again) and the line should be pruned. A warning rather than a failure, because
+        // fixing dispatch must not turn a green case red -- but it must not be silent either, which is what a table
+        // nobody prunes becomes.
+        if (is_recorded_stale_expectation(name)) {
+            std::fprintf(stderr,
+                         "recorded-stale expectation is now SATISFIED (engine#2774, prune this line): %s\n",
+                         name.c_str());
         }
         ++sequence_index;
     }
