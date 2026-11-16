@@ -1690,6 +1690,16 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         op->src[0]->type == GGML_TYPE_IQ3_S && op->src[0]->ne[2] * op->src[0]->ne[3] > 1) {
         return false;
     }
+    // engine#2639: EVERY GET_ROWS matcher in dispatch-get-rows.cpp gates on `->contiguous` (the source, the ids and the
+    // output, seven sites), while this predicate -- for any op not declined above -- reduces to
+    // `eager_capability_declared(op->op)`, which is a property of the op code and says nothing about the tensors.
+    // So a GET_ROWS from a non-contiguous source (a strided VIEW of an f16 embedding) was CLAIMED here and had no
+    // dispatch at compute time: "unsupported HRX node … GET_ROWS … <-VIEW", graph_compute -1, nothing generated.
+    // Claim only what a matcher can execute (the rule stated for TOP_K below, engine #679). Narrow on purpose: a
+    // contiguous GET_ROWS keeps its placement, including the token-embedding rows the census counts as off-HRX.
+    if (op->op == GGML_OP_GET_ROWS && op->src[0] != nullptr && !ggml_is_contiguous(op->src[0])) {
+        return false;
+    }
     // Qwen3.8-Flash-Next routed experts have no correct/compilable HRX MUL_MAT_ID
     // kernel (IQ4_NL/IQ2_S weight types, or a 640-wide contraction that violates the
     // kernel's 256-multiple input_size constraint), so keep the expert GEMM on CPU.
