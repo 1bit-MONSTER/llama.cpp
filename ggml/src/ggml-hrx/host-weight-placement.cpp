@@ -32,8 +32,9 @@
 
 namespace ggml::hrx {
 
-namespace {
-
+// engine (fork #403 follow-up): defined OUTSIDE the anonymous namespace. host-weight-placement.h declares it as
+// ggml::hrx::tensor_is_host_resident and ggml-hrx.cpp calls it; inside `namespace {` it had internal linkage, so
+// libggml-hrx.so linked with the symbol undefined and the first call died with a symbol lookup error.
 // True for a model weight that is NOT in an HRX-allocated buffer, i.e. a tensor the executor would have to copy
 // into device memory before it could bind it.
 // engine#2494: residence and usage are two different questions and only the pair answers "is this a host weight".
@@ -53,6 +54,8 @@ bool tensor_is_host_resident(const ggml_tensor * tensor) {
     }
     return ggml_backend_buffer_is_host(buffer);
 }
+
+namespace {
 
 bool host_resident_weight(const ggml_tensor * tensor) {
     if (!tensor_is_host_resident(tensor)) {
