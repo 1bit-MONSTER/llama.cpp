@@ -125,8 +125,31 @@ int main() {
         expect(get_rows_tensor_supported(facts), true, "batched f32 source is not an IQ limitation");
     }
 
+    // 9. The routed form owns two conditions the scalar_3d matcher used to restate inline (llama.cpp#412 review): the
+    //    ids must be an i32 column table and the output must be contiguous. They are asked here so the matcher and the
+    //    placement path cannot disagree about them while both remain green.
+    {
+        auto facts = route_table();
+        facts.ids_column_table = false;
+        expect(get_rows_route_table_form_supported(facts), false, "routed: ids are not an i32 column table");
+        expect(get_rows_tensor_supported(facts), false, "routed: ids not a column table -> placement declines");
+    }
+    {
+        auto facts = route_table();
+        facts.out_contiguous = false;
+        expect(get_rows_route_table_form_supported(facts), false, "routed: non-contiguous output");
+    }
+    // 10. The scalar_3d form is a strided-ids form, not a strided-source form: a strided scales tensor leaves both forms
+    //     with nothing to read.
+    {
+        auto facts = route_table();
+        facts.src_contiguous = false;
+        expect(get_rows_route_table_form_supported(facts), false, "routed: strided scales");
+        expect(get_rows_tensor_supported(facts), false, "routed: strided scales -> placement declines");
+    }
+
     if (failures == 0) {
-        std::printf("ok: 9 arms\n");
+        std::printf("ok: 12 arms\n");
         return 0;
     }
     std::printf("FAILURES: %d\n", failures);
