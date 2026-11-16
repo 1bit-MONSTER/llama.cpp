@@ -666,7 +666,16 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
                 off_mapped_weights++;
             }
         }
-        if (!facts.src_host_weight) {
+        const bool by_design = ggml::hrx::placement_node_is_by_design(facts);
+        if (by_design) {
+            off_by_design++;
+        } else if (first_unexplained == nullptr) {
+            first_unexplained = node;
+        }
+        // engine#2494: counted only for a node that is NOT already explained by design, so the reasons in the census
+        // PARTITION the off-device nodes instead of overlapping. A reader who adds the counters up should get the
+        // total; two explanations for one node is how a summary stops summing.
+        if (!by_design && !facts.src_host_weight) {
             for (int s = 0; s < GGML_MAX_SRC; ++s) {
                 const ggml_tensor * src = node->src[s];
                 if (src != nullptr && ggml::hrx::tensor_is_host_resident(src->view_src != nullptr ? src->view_src : src)) {
@@ -674,12 +683,6 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
                     break;   // per node, like the counters above
                 }
             }
-        }
-        const bool by_design = ggml::hrx::placement_node_is_by_design(facts);
-        if (by_design) {
-            off_by_design++;
-        } else if (first_unexplained == nullptr) {
-            first_unexplained = node;
         }
     }
 
