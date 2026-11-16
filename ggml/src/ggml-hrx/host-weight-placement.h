@@ -54,4 +54,11 @@ bool host_weight_is_host_resident(const ggml_tensor * tensor);
 // not a weight is exactly the state nothing could see (see the non-weight counter in ggml-hrx.cpp).
 bool tensor_is_host_resident(const ggml_tensor * tensor);
 
+// engine#2494 review: the census explains every off-device node by exactly one class -- by design, host-non-weight, or
+// neither. That partition is the thing a reader checks by adding the printed counters up, so it is a pure predicate
+// rather than an inline comparison: a claim nothing can call with made-up numbers is a claim nothing can test.
+inline bool census_partitions(int64_t by_design, int64_t host_nonweight, int64_t unexplained, int64_t off_nodes) {
+    return by_design + host_nonweight + unexplained == off_nodes;
+}
+
 }  // namespace ggml::hrx

@@ -630,6 +630,10 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
     // an index/cache/bias/activation kept in host memory was invisible here -- the one state that a GPU cannot read
     // without a mapping, and the one this census could not name.
     int64_t              off_host_nonweight    = 0;
+    // engine#2494 review: the classes must PARTITION the off-device nodes -- by design + host-non-weight + neither.
+    // Counting only the first two made "the parts sum to the whole" a claim nothing checked, and a counter that is
+    // written but never summarised is how a class goes missing from a census without anyone noticing.
+    int64_t              off_unexplained       = 0;
     ggml_tensor *        first_off = nullptr;
     ggml_tensor *        first_unexplained = nullptr;
     for (int i = 0; i < graph->n_nodes; i++) {
@@ -666,21 +670,40 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
                 off_mapped_weights++;
             }
         }
-        if (!facts.src_host_weight) {
+        const bool by_design = ggml::hrx::placement_node_is_by_design(facts);
+        if (by_design) {
+            off_by_design++;
+        } else {
+            off_unexplained++;             // neither by design nor (below) host-non-weight: a candidate for strict mode
+            if (first_unexplained == nullptr) {
+                first_unexplained = node;
+            }
+        }
+        // engine#2494: counted only for a node that is NOT already explained by design, so the reasons in the census
+        // PARTITION the off-device nodes instead of overlapping. A reader who adds the counters up should get the
+        // total; two explanations for one node is how a summary stops summing.
+        if (!by_design && !facts.src_host_weight) {
             for (int s = 0; s < GGML_MAX_SRC; ++s) {
                 const ggml_tensor * src = node->src[s];
                 if (src != nullptr && ggml::hrx::tensor_is_host_resident(src->view_src != nullptr ? src->view_src : src)) {
                     off_host_nonweight++;
+                    off_unexplained--;     // explained now; the partition below depends on it
+                    if (first_unexplained == node) {
+                        first_unexplained = nullptr;   // strict mode must not abort on an explained node
+                    }
                     break;   // per node, like the counters above
                 }
             }
         }
-        const bool by_design = ggml::hrx::placement_node_is_by_design(facts);
-        if (by_design) {
-            off_by_design++;
-        } else if (first_unexplained == nullptr) {
-            first_unexplained = node;
-        }
+    }
+
+    // THE PARTS SUM TO THE WHOLE. Every off-device node is by design, host-non-weight, or neither; if that ever fails
+    // the census is missing a class, and the summary would under-report without saying so. WARN, not assert: this is
+    // a diagnostic path and a broken census must not abort a run it was only describing.
+    if (!ggml::hrx::census_partitions(off_by_design, off_host_nonweight, off_unexplained, off_nodes)) {
+        GGML_LOG_WARN("%s: census does not partition: %" PRId64 " by design + %" PRId64 " host-non-weight + %" PRId64
+                      " neither != %" PRId64 " off-device node(s) -- a class is missing from this census\n", __func__,
+                      off_by_design, off_host_nonweight, off_unexplained, off_nodes);
     }
 
     std::string off_detail;

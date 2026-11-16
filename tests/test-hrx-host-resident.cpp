@@ -88,6 +88,14 @@ int main() {
     CHECK(ggml::hrx::tensor_is_host_resident(t) && ggml::hrx::host_weight_is_host_resident(t),
           "a WEIGHTS buffer is host-resident AND a weight");
 
+    // engine#2494 review: THE CENSUS MUST PARTITION. Pure arithmetic, so it needs no graph and no backend -- the
+    // property a reader checks by adding the printed counters up, checked here instead.
+    CHECK(ggml::hrx::census_partitions(3, 2, 0, 5), "3 by design + 2 host-non-weight == 5 off-device");
+    CHECK(ggml::hrx::census_partitions(0, 0, 4, 4), "all unexplained still partitions");
+    CHECK(ggml::hrx::census_partitions(0, 0, 0, 0), "no node on the CPU partitions trivially");
+    CHECK(!ggml::hrx::census_partitions(3, 2, 0, 6), "one node counted twice must NOT partition");
+    CHECK(!ggml::hrx::census_partitions(3, 2, 0, 4), "one node missed must NOT partition");
+
     ggml_backend_buffer_free(buf);
     ggml_free(ctx);
     ggml_backend_free(backend);
