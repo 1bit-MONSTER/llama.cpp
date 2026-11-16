@@ -6453,11 +6453,12 @@ static void add_cases(test_runner::Suite & suite) {
     // case cannot see. Measured on gfx1151 at a5cf1f2c4: V=100 passes, V=500 passes, V=60000 passes (the merged
     // online_softmax floor), and **V=1000 fails with a FINITE output** -- `|v - value_magnitude| <= 5.0e-2f`
     // misses while nothing is non-finite. That band is the dangerous one: a NaN aborts a run and is reported,
-    // a plausible wrong number is not. Pinned as known-fail so the suite stays green, and so the fix turns it
+      // a plausible wrong number is not. Known-fail for engine#2374 item 2 until it became an
+      // UNEXPECTED-PASS on a device run at fork 148e7f329 (108 ms, v100/v60000 passing beside it); re-add with a
+      // date and a capture if it ever goes intermittent.
     // into an UNEXPECTED-PASS instead of nobody noticing.
-    suite.known_fail_device_case("flash_attention.accumulator_range.128.1024.v1000",
-                                 "engine#2374 item 2: the f16 PV accumulator is finite and wrong at V=1000",
-                                 [=] { run_flash_attention_accumulator_range_case(128, 1024, 1000.0f); });
+      add(suite, "flash_attention.accumulator_range.128.1024.v1000",
+          [=] { run_flash_attention_accumulator_range_case(128, 1024, 1000.0f); });
     add(suite, "flash_attention.64.2.65.1/sqrt(static_cast<float>(64)).flash_attention_decode_split_f32_f16_wmma",
         [=] { run_common_flash_attention_cpu_reference_case(64,
                                    2,
