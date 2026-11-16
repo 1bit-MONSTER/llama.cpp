@@ -471,6 +471,13 @@ if (TARGET ggml-hrx)
     # (pure helper, no device and no ggml link -- engine#2450)
     add_executable(test-hrx-placement-classification test-hrx-placement-classification.cpp
                    ../ggml/src/ggml-hrx/placement-classification.cpp)
+    # engine#2494: residence is not usage. Links ggml because it needs a real backend buffer to mark USAGE_WEIGHTS,
+    # and the CPU device is the only one guaranteed present -- no GPU, no HRX runtime, no model.
+    add_executable(test-hrx-host-resident test-hrx-host-resident.cpp
+                   ../ggml/src/ggml-hrx/host-weight-placement.cpp)
+    target_include_directories(test-hrx-host-resident PRIVATE ../ggml/src/ggml-hrx)
+    target_link_libraries(test-hrx-host-resident PRIVATE ggml)
+    add_test(NAME test-hrx-host-resident COMMAND test-hrx-host-resident)
     target_include_directories(test-hrx-placement-classification PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-placement-classification COMMAND test-hrx-placement-classification)
     add_executable(test-hrx-arena-refusal test-hrx-arena-refusal.cpp)
