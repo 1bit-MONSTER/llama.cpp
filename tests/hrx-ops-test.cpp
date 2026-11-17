@@ -5041,6 +5041,10 @@ static void run_qwen_flash_attention_case() {
     ggml_backend_free(backend);
 }
 
+static constexpr const char * kDecodeSplitKernelName =
+    "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8";
+static constexpr int64_t kDecodeKvTileSize = 64;
+
 static void run_common_flash_attention_cpu_reference_case(int64_t      head_size,
                                                           int64_t      query_token_count,
                                                           int64_t      key_value_token_count,
@@ -5066,8 +5070,15 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     REQUIRE(ctx != nullptr);
 
     ggml_tensor * query = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, query_token_count, 1);
-    ggml_tensor * key   = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_value_token_count, 1);
-    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, value_head_size, key_value_token_count, 1);
+    // engine#2494: the decode-split kernel reads K/V in whole 64-token blocks, so its storage must be the PADDED
+    // capacity while the mask carries the real token count. Allocating `key_value_token_count` here made the 65-key
+    // cases (kv65) hand the kernel 65 slots for a 128-slot walk: a page fault and a MODE2 reset on the box.
+    const int64_t key_value_capacity =
+        expected_kernel != nullptr && std::string(expected_kernel) == kDecodeSplitKernelName
+            ? ((key_value_token_count + kDecodeKvTileSize - 1) / kDecodeKvTileSize) * kDecodeKvTileSize
+            : key_value_token_count;
+    ggml_tensor * key   = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_value_capacity, 1);
+    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, value_head_size, key_value_capacity, 1);
     ggml_tensor * mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_token_count, query_token_count);
     REQUIRE(query != nullptr);
     REQUIRE(key != nullptr);
@@ -5090,8 +5101,12 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     REQUIRE(buffer != nullptr);
 
     const std::vector<float>       query_data = make_flash_query(query_token_count, head_size);
-    const std::vector<ggml_fp16_t> key_data   = make_flash_key_value(key_value_token_count, 3, head_size);
-    const std::vector<ggml_fp16_t> value_data = make_flash_key_value(key_value_token_count, 11, value_head_size);
+    std::vector<ggml_fp16_t> key_data   = make_flash_key_value(key_value_token_count, 3, head_size);
+    std::vector<ggml_fp16_t> value_data = make_flash_key_value(key_value_token_count, 11, value_head_size);
+    // the padded tail of the storage is read by the kernel in whole blocks and masked out: fill it with zeros so the
+    // case never depends on uninitialised device memory (engine#2494)
+    key_data.resize(static_cast<size_t>(key_value_capacity * head_size), ggml_fp32_to_fp16(0.0f));
+    value_data.resize(static_cast<size_t>(key_value_capacity * value_head_size), ggml_fp32_to_fp16(0.0f));
     const std::vector<ggml_fp16_t> mask_data  = make_flash_mask(query_token_count, key_value_token_count);
     const std::vector<float>       expected =
         flash_attention_reference(query_data, key_data, value_data, mask_data, query_token_count, key_value_token_count,

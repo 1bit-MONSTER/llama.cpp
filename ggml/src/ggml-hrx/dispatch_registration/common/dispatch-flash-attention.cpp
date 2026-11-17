@@ -374,6 +374,19 @@ static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16
     if (match.key_value_capacity > kDecodeSplitMaxKeyValueTokenCapacity) {
         return {};
     }
+    // engine#2494 (2026-11-17): the split kernel walks the K/V in WHOLE 64-token blocks (its body pads
+    // `key_value_token_count` up to a block: produce_partials.active computes
+    // `active_key_value_block_count = ceil(count/64)` and reads `block_ordinal * 64`), while the bindings below
+    // cover only `key->byte_count` / `value->byte_count`. So the storage has to be at least the PADDED capacity, not
+    // just the token count: a graph whose K/V tensor is exactly `key_value_token_count` long (65 keys, capacity 65,
+    // padded 128) had the kernel read 63 slots past the end of its binding -- measured on the box as
+    // `[gfxhub] page fault ... PERMISSION_FAULTS 0x3, RW 0x0` followed by a MODE2 reset, three times in 80 minutes,
+    // every time from `hrx-ops-test`'s `common_flash_attention.decode.headNN.query2.kv65` cases (the only shapes in
+    // the suite that build K/V with capacity == an odd token count). Production decode graphs carry a cache capacity
+    // >= ctx, so they never hit it; the claim was unsafe for a legal ggml shape, which is this guard.
+    if (key->ne[1] < match.key_value_capacity || value->ne[1] < match.key_value_capacity) {
+        return {};
+    }
 
     // engine#123 step 6: the decode-split pack handoff is only PROVEN with the production
     // partial-transient alignment. Any other layout is a test rig whose safety is not
