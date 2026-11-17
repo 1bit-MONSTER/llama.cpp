@@ -437,12 +437,16 @@ static ggml_tensor * build_qwen_flash_attention_graph(ggml_context * ctx,
                                                       float          scale           = 1.0f / std::sqrt(128.0f),
                                                       int64_t        value_head_size = -1,
                                                       float          max_bias        = 0.0f,
-                                                      float          logit_softcap   = 0.0f) {
+                                                      float          logit_softcap   = 0.0f,
+                                                      int64_t        key_value_capacity = -1) {
     const int64_t actual_value_head_size = value_head_size > 0 ? value_head_size : head_size;
+    // engine#2494: the K/V STORAGE can be larger than the token count the mask declares. The decode-split kernel walks
+    // whole 64-token blocks, so its storage must be the padded capacity; every other user gets the token count.
+    const int64_t storage_capacity = key_value_capacity > 0 ? key_value_capacity : key_value_token_count;
     ggml_tensor * query = ggml_new_tensor_3d(ctx, query_type, head_size, query_token_count, query_head_count);
-    ggml_tensor * key = ggml_new_tensor_3d(ctx, key_value_type, head_size, key_value_token_count, key_value_head_count);
+    ggml_tensor * key = ggml_new_tensor_3d(ctx, key_value_type, head_size, storage_capacity, key_value_head_count);
     ggml_tensor * value =
-        ggml_new_tensor_3d(ctx, key_value_type, actual_value_head_size, key_value_token_count, key_value_head_count);
+        ggml_new_tensor_3d(ctx, key_value_type, actual_value_head_size, storage_capacity, key_value_head_count);
     REQUIRE(query != nullptr);
     REQUIRE(key != nullptr);
     REQUIRE(value != nullptr);
@@ -5179,6 +5183,7 @@ static void schedule_common_flash_attention_decode_split_command(ggml_context * 
     REQUIRE(commands.commands.front().bindings[9].name == "next_q8_output");
 }
 
+
 static void run_qwen_flash_attention_dispatch_checks() {
     static constexpr const char * kDisableQwenDispatchEnv = "GGML_HRX_DISABLE_QWEN_DISPATCH";
     const char *                  original_env            = std::getenv(kDisableQwenDispatchEnv);
@@ -5207,8 +5212,41 @@ static void run_qwen_flash_attention_dispatch_checks() {
     }
 
     {
-        ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 4, 8, 4, 2);
+        // engine#2494: storage at the PADDED capacity (8 keys -> 64 slots) is what the split kernel reads.
+        ggml_tensor * output =
+            build_qwen_flash_attention_graph(ctx, 4, 8, 4, 2, GGML_TYPE_F32, GGML_TYPE_F16, true, false,
+                                             kQwenFlashHeadSize, 1.0f / std::sqrt(128.0f), -1, 0.0f, 0.0f, 64);
         schedule_common_flash_attention_decode_split_command(ctx, output, 4, 8, 4, 2);
+    }
+    {
+        // engine#2494 regression arm: the same 65-key decode shape the box crashes on, with the storage the OLD harness
+        // built (capacity == the odd token count). The split kernel walks ceil(65/64) blocks = 128 slots, so this graph
+        // must NOT be claimed: it falls back to the generic prefill/decode kernel instead of reading past its binding.
+        ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 2, 65, 4, 2);
+        ggml_cgraph *  graph  = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, output);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        REQUIRE(scheduler.plan().valid());
+        std::vector<std::string> kernels;
+        for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+            kernels.push_back(kernel_name_for_id(dispatch.kernel.kernel_id));
+        }
+        REQUIRE(std::find(kernels.begin(), kernels.end(),
+                          "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8") == kernels.end());
+        REQUIRE(std::find(kernels.begin(), kernels.end(), "loom_libs:ggml_flash_attention_f32_f16_wmma") !=
+                kernels.end());
+    }
+    {
+        // ...and the same shape with the capacity the kernel actually reads: the split path IS taken, which is what the
+        // kv65 device cases are meant to exercise (engine#2494)
+        ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 2, 65, 4, 2, GGML_TYPE_F32, GGML_TYPE_F16, true,
+                                                                false, kQwenFlashHeadSize, 1.0f / std::sqrt(128.0f),
+                                                                -1, 0.0f, 0.0f, 128);
+        schedule_common_flash_attention_decode_split_command(ctx, output, 2, 65, 4, 2);
     }
     {
         ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 16, 16, 4, 2);
@@ -5242,7 +5280,10 @@ static void run_qwen_flash_attention_dispatch_checks() {
         REQUIRE(unsetenv(kDisableQwenDispatchEnv) == 0);
     }
     {
-        ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 1, 8, 4, 2);
+        // engine#2494: 8 keys -> the kernel walks one 64-token block, so the storage is the padded capacity
+        ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 1, 8, 4, 2, GGML_TYPE_F32, GGML_TYPE_F16, true,
+                                                                false, kQwenFlashHeadSize, 1.0f / std::sqrt(128.0f),
+                                                                -1, 0.0f, 0.0f, 64);
         schedule_common_flash_attention_decode_split_command(ctx, output, 1, 8, 4, 2);
     }
     {
