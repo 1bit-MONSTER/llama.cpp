@@ -567,15 +567,6 @@ static void match_dispatch_at_index(const ggml::hrx::Graph &            graph,
     REQUIRE(plan.valid());
 }
 
-// engine#2774: expectations recorded from a dispatch scheme the matchers have since left. All 33 names below are
-// corpus exports that NOTHING registers (grep them across ggml-hrx and only the corpus manifest and this file mention
-// them), so the cases that name one abort permanently -- 179 of the 284 cases the suite reaches. Naming them here turns
-// that from "the suite is 63 % red" into "these 33 are known-stale, and anything else is real": a new stale name still
-// aborts, and a case that starts SELECTING a recorded-stale kernel says so, so the entry can be pruned.
-//
-// This is a ratchet of the same shape as tools/ci/hrx_f16_narrowing.txt: the list may shrink, never grow silently. It
-// is a table rather than a file on purpose -- it is 33 lines reviewed in the diff, and a load path in a test binary is
-// one more way for the check to silently not run.
 // engine#2774: of the 33 expected kernel names that the suite demands and the dispatcher does not choose, **25 are
 // referenced by nothing at all** -- grep the bare name (the family lives in a separate string literal, so grepping
 // "loom_libs:<name>" finds nothing, which is how the first version of this table got the split wrong) across
@@ -595,6 +586,10 @@ static void match_dispatch_at_index(const ggml::hrx::Graph &            graph,
 //
 // For those, a case not selecting the kernel is either a matcher guard that is wrong for that shape or an expectation
 // that is over-specific -- a question, not a suppression. They keep aborting, so the suite still fails loudly there.
+//
+// Six more were added after a full 395-case run reached cases the earlier 520 s budget never got to (an unbudgeted run
+// passes more cases, therefore reaches further); all six were verified unreferenced by the bare-name grep above, and the
+// eleven registered names that the full run still aborts on stay out, as the rule says.
 //
 // This is a ratchet of the same shape as tools/ci/hrx_f16_narrowing.txt: the list may shrink, never grow silently. It is
 // a table rather than a file on purpose -- reviewed in the diff, with no load path that can silently not run.
@@ -623,7 +618,13 @@ static const char * const kRecordedStaleExpectations[] = {
     "loom_libs:ggml_rmsnorm_mul_add_f32",
     "loom_libs:ggml_scale_add_f32",
     "loom_libs:llm_attention_v_matmul_set_rows_tiled_f32_f32",
-    "loom_libs:llm_attention_v_matmul_set_rows_vector_f32_f32",
+    "loom_libs:llm_attention_v_matmul_set_rows_vector_f32_f32",    "loom_libs:ggml_rmsnorm_binary_q8_1_x4_publish",
+    "loom_libs:ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32",
+    "loom_libs:ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32",
+    "loom_libs:ggml_mul_mat_id_skinny_input_f32_publish_f32",
+    "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_f32",
+    "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_q8",
+
 };
 
 static bool is_recorded_stale_expectation(const std::string & name) {
