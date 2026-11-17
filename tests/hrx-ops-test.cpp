@@ -624,6 +624,17 @@ static const char * const kRecordedStaleExpectations[] = {
     "loom_libs:ggml_mul_mat_id_skinny_input_f32_publish_f32",
     "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_f32",
     "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_q8",
+    // engine#2774: four names the cases below still demand and no matcher can select. They are EXPORTED by a corpus
+    // manifest and absent from every GGML_HRX_KERNEL_REF (checked over loom_libs, qwen3_moe and hrx), which is this
+    // table's own criterion, and `ggml/src/ggml-hrx/tools/check_stale_expectations.py` enforces both halves at every
+    // pin. Sites: :8726/:8727 (`routed_pair` wave32/wave64 weighted q8), :8968-:8980 (`vector` bias+residual),
+    // :1875 (`vector` q6 after an rmsnorm). Dispatch answers these shapes with the format-generic
+    // `ggml_mul_mat_f32_f32_wmma`, which is registered with an any-format matcher -- so the per-format expectation is
+    // the stale half, not the registration.
+    "loom_libs:ggml_mul_mat_id_vector_weighted_wave32_publish_q8",
+    "loom_libs:ggml_mul_mat_id_vector_weighted_wave64_publish_q8",
+    "loom_libs:ggml_mul_mat_vector_bias_residual_f32_f32",
+    "loom_libs:ggml_mul_mat_vector_q6_f32_f32",
 
 };
 
