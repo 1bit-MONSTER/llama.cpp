@@ -442,6 +442,15 @@ target_include_directories(test-server-health PRIVATE ../tools/server)
 add_test(NAME test-server-health COMMAND test-server-health)
 
 if (TARGET ggml-hrx)
+    # engine#2774: the recorded-stale expectation table in hrx-ops-test.cpp must stay honest, and its own rot detector
+    # can only fire on a device run that reaches the case. This answers it from the source: every recorded kernel is
+    # absent from every GGML_HRX_KERNEL_REF and present in a corpus manifest. No GPU, no build, ~1 s.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if (Python3_Interpreter_FOUND)
+        add_test(NAME test-hrx-stale-expectations
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-hrx/tools/check_stale_expectations.py
+                         --check --root ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    endif()
     # the program cache's byte budget and LRU order: pure policy, no device and no HRX link
     # Which rotations the fused registrations accept, i.e. what the claim may assert (engine #1467).
     # Header-only: no device, no model, and the vision rotation must be rejected here.
