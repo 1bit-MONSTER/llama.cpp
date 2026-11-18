@@ -1820,6 +1820,9 @@ func.def public inline @ggml_kquant_iq1s_grid_fill(%grid: buffer, %chunk: index)
   }
   func.return
 }
+// IQ1_S / IQ1_M: lane l16 owns group l16 / 2, slots 2 (l16 % 2) and +1: values 32 (l16 / 2) +
+// 16 (l16 % 2) .. +15, one scale. The grid (2048 16-bit codes, 2 bits per value: value + 1) is
+// staged in workgroup memory two codes per word.
 func.def public inline @ggml_kquant_iq1_code(%grid: buffer, %index: i32) -> (i32) {
   %zero_offset = index.constant 0 : offset
   %gv = buffer.view %grid[%zero_offset] : buffer -> view<1024xi32>
@@ -1859,6 +1862,8 @@ func.def public inline @ggml_kquant_iq1_slot_values(%code: i32, %delta: f32) -> 
   %v = vector.addf %tf, %dv : vector<8xf32>
   func.return %v : vector<8xf32>
 }
+// IQ1_S (50 bytes: d, qs[32], qh[8] u16): qh[g] = high index bits (slot l at bit 3l), scale s at
+// bit 12, delta sign at bit 15: value = d * (2 s + 1) * (grid + delta).
 func.def public inline @ggml_kquant_iq1s_lane_parts(%grid: buffer, %weight: buffer, %row_base: offset, %block: index, %lane16: index) -> (vector<16xf32>, f32, index) {
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
