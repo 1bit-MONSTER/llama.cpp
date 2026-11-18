@@ -335,7 +335,12 @@ def split_blocks(text, names):
         j = i
         while lines[j].strip() != '}':
             j += 1
-        blocks[hit] = '\n'.join(lines[i:j + 1])
+        # the comment block describing the function travels with it, so sharing does not drop it
+        start = i
+        while start > 0 and lines[start - 1].lstrip().startswith('//'):
+            start -= 1
+        del kept[len(kept) - (i - start):]
+        blocks[hit] = '\n'.join(lines[start:j + 1])
         i = j + 1
     return '\n'.join(kept), blocks
 
