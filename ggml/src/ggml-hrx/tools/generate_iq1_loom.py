@@ -320,8 +320,16 @@ GRID_FILL_DECL = 'func.decl @ggml_kquant_iq1s_grid_fill(%grid: buffer, %chunk: i
 
 
 def split_blocks(text, names):
-    """Return (text without those blocks, {name: block text}). A block runs from its func.def line
-    to the first line that is a lone closing brace at column 0."""
+    """Return (text without those blocks, {name: block text}).
+
+    A block starts at its func.def line and ends when the brace depth it opened returns to
+    zero, so a body containing scf.if/scf.for is not cut at its first inner closing brace.
+
+    shortcut: the comment block immediately above a func.def is taken to document THAT
+    function, so a trailing comment on the preceding function would move with the block.
+    kquant_common has no such comment; if one appears, mark the intended owner explicitly
+    instead of relying on adjacency.
+    """
     lines = text.split('\n')
     kept, blocks = [], {}
     i = 0
@@ -332,14 +340,23 @@ def split_blocks(text, names):
             kept.append(line)
             i += 1
             continue
+        if hit in blocks:
+            sys.exit(f"split_blocks: {hit} is defined twice in the same generated text")
+        depth = 0
         j = i
-        while lines[j].strip() != '}':
+        while True:
+            if j >= len(lines):
+                sys.exit(f"split_blocks: {hit} has no closing brace")
+            depth += lines[j].count('{') - lines[j].count('}')
+            if depth == 0:
+                break
             j += 1
-        # the comment block describing the function travels with it, so sharing does not drop it
         start = i
         while start > 0 and lines[start - 1].lstrip().startswith('//'):
             start -= 1
-        del kept[len(kept) - (i - start):]
+        absorbed = i - start
+        if absorbed:
+            del kept[len(kept) - absorbed:]
         blocks[hit] = '\n'.join(lines[start:j + 1])
         i = j + 1
     return '\n'.join(kept), blocks
@@ -379,13 +396,16 @@ func.def public inline @ggml_iq1s_join16(%a: vector<8xf32>, %b: vector<8xf32>) -
 # The f16 pair the prefill tile's weight staging wants: two 16-value packets, i.e. both lanes of one
 # group, folded to the scale the reader returns. Emitted into the motif only.
 IQ1S_F16_PAIR = '''
-// Both packets of one IQ1_S group as f16, for a prefill tile that stages f16 weights: the reader
-// reports value * scale per lane, so this only splats the scale and narrows. Two fptruncs, one per
-// 16-value packet, which is the same shape the Q6_K pair reader publishes (engine #1962 baselines them).
+// Both packets of one IQ1_S group as f16, for a prefill tile that stages f16 weights.
+// @ggml_kquant_iq1s_lane_parts returns UNSCALED slot values plus the lane's f32 scale, so this
+// splats that scale and narrows -- multiply then fptrunc, the order @ggml_kquant_iq1s_lane_weights
+// uses. Not the Q6_K pair reader's shape: @ggml_q6k_f16_pair takes a half_packet flag and pairs
+// word packet with packet+8, while this pairs the two lanes of one packet index.
 func.def public inline @ggml_iq1s_f16_pair(%grid: buffer, %weight: buffer, %row_byte_base: offset, %block: index, %packet: index) -> (vector<16xf16>, vector<16xf16>) {
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
-  %lane0 = index.mul %packet, %c2 : index
+  %p = index.assume %packet [range(%packet, 0, 7)] : index
+  %lane0 = index.mul %p, %c2 : index
   %lane1 = index.add %lane0, %c1 : index
   %v0, %s0, %p0 = func.call @ggml_kquant_iq1s_lane_parts(%grid, %weight, %row_byte_base, %block, %lane0) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, f32, index)
   %v1, %s1, %p1 = func.call @ggml_kquant_iq1s_lane_parts(%grid, %weight, %row_byte_base, %block, %lane1) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, f32, index)
@@ -684,6 +704,17 @@ func.def inline @ggml_kquant_{fmt}_lane_weights(%grid: buffer, %weight: buffer, 
 '''
 
 
+def tidy(text):
+    """Collapse runs of blank lines. The corpus files carry single blank separators (they were
+    pasted by hand), so emitting runs of blanks would turn a regeneration into a diff."""
+    out = []
+    for line in text.split('\n'):
+        if line == '' and out and out[-1] == '':
+            continue
+        out.append(line)
+    return '\n'.join(out)
+
+
 if mode == "dequant":
     out = lookup('ggml_iq1s_grid_code_i32', 'iq1s_code', grid()) + dequant_common
 elif mode == "motif":
@@ -703,4 +734,8 @@ elif mode == "kquant":
            + rest + dot_and_weights('iq1s') + dot_and_weights('iq1m'))
 else:
     sys.exit(f"unknown mode {mode}")
-sys.stdout.write(out)
+# A truncated function still parses as text and would land in the corpus silently, so refuse any
+# output whose braces do not balance (the failure mode split_blocks had before it counted depth).
+if out.count('{') != out.count('}'):
+    sys.exit(f"mode {mode}: unbalanced braces in the generated output ({out.count('{')} '{{' vs {out.count('}')} '}}')")
+sys.stdout.write(tidy(out))
