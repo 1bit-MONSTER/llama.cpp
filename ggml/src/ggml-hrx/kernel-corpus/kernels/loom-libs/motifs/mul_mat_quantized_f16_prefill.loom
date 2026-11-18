@@ -358,11 +358,8 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
     // An IQ1 packet is 32 values where a q6 pair is 32 values plus load_k, so the window offset is the packet index:
     // local_group + load_half, with the same 32-value step the groups use.
     %load_k_iq1 = index.mul %load_half, %c32 : index
-    %load_k_used = scf.select %iq1_weights, %load_k_iq1, %load_k : index
-    %weight_k0 = index.add %weight_k_base, %load_k_used : index
-    %weight_k1_q6 = index.add %weight_k0, %c32 : index
-    %weight_k1_iq1 = index.add %weight_k0, %c16 : index
-    %weight_k1 = scf.select %iq1_weights, %weight_k1_iq1, %weight_k1_q6 : index
+    %weight_k0 = index.add %weight_k_base, %load_k : index
+    %weight_k1 = index.add %weight_k0, %c32 : index
     %channel_in_tile = scf.select %paired, %weight_half_row, %weight_local_row : index
     %channel = index.add %channel_tile_base, %channel_in_tile : index
     %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
@@ -414,8 +411,19 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
       vector.store %half1, %weight_stage_view[%weight_local_row, %weight_k1] : vector<8xf16>, view<[%weight_rows]x[%weight_stride]xf16>
       scf.yield
     } else {
-      vector.store %weight_values0, %weight_stage_view[%weight_local_row, %weight_k0] : vector<16xf16>, view<[%weight_rows]x[%weight_stride]xf16>
-      vector.store %weight_values1, %weight_stage_view[%weight_local_row, %weight_k1] : vector<16xf16>, view<[%weight_rows]x[%weight_stride]xf16>
+      // IQ1 keeps its own pair of offsets: a select over the two windows leaves the union of both
+      // spans for the store-footer proof, and the 16-wide store then has an origin it cannot bound.
+      %iq1_weights_stored = scf.if %iq1_weights -> (index) {
+        %iq1_k0 = index.add %weight_k_base, %load_k_iq1 : index
+        %iq1_k1 = index.add %iq1_k0, %c16 : index
+        vector.store %weight_values0, %weight_stage_view[%weight_local_row, %iq1_k0] : vector<16xf16>, view<[%weight_rows]x[%weight_stride]xf16>
+        vector.store %weight_values1, %weight_stage_view[%weight_local_row, %iq1_k1] : vector<16xf16>, view<[%weight_rows]x[%weight_stride]xf16>
+        scf.yield %iq1_k1 : index
+      } else {
+        vector.store %weight_values0, %weight_stage_view[%weight_local_row, %weight_k0] : vector<16xf16>, view<[%weight_rows]x[%weight_stride]xf16>
+        vector.store %weight_values1, %weight_stage_view[%weight_local_row, %weight_k1] : vector<16xf16>, view<[%weight_rows]x[%weight_stride]xf16>
+        scf.yield %weight_k1 : index
+      }
       scf.yield
     }
     scf.yield

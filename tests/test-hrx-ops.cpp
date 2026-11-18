@@ -5733,6 +5733,20 @@ static void add_cases(test_runner::Suite & suite) {
                                                  512,
                                                  4096,
                                                  2560); });
+    // The two shapes Qwen3.8-27B actually asks for: the MLP down (6144 -> 5120) and the MLP up
+    // (17408 -> 5120). Both have a 256-multiple depth and a 64-multiple output, so both take the arm.
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.5120.6144",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 5120,
+                                                 6144); });
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.5120.17408",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 5120,
+                                                 17408); });
     add(suite, "dense_unary.f32.mul_mat_f32_f32_wmma.3.47",
         [=] { run_dense_matmul_unary_cpu_reference_case( GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
     add(suite, "get_rows.f32.262144.4.1",
