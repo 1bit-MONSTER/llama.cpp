@@ -18,9 +18,6 @@ func.def inline @ggml_kquant_iq2_join16(%a: vector<8xf32>, %b: vector<8xf32>) ->
   %v = vector.from_elements %a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %b0, %b1, %b2, %b3, %b4, %b5, %b6, %b7 : vector<16xf32>
   func.return %v : vector<16xf32>
 }
-func.decl @ggml_kquant_iq1_code(%grid: buffer, %index: i32) -> (i32)
-func.decl @ggml_kquant_iq1_slot_values(%code: i32, %delta: f32) -> (vector<8xf32>)
-func.decl @ggml_kquant_iq1s_lane_parts(%grid: buffer, %weight: buffer, %row_base: offset, %block: index, %lane16: index) -> (vector<16xf32>, f32, index)
 // Copyright 2026 bong-water-water-bong
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -5377,6 +5374,9 @@ func.def inline @ggml_kquant_iq2s_lane_weights(%grid: buffer, %weight: buffer, %
 }
 
 func.decl @ggml_kquant_iq1s_grid_fill(%grid: buffer, %chunk: index)
+func.decl @ggml_kquant_iq1_code(%grid: buffer, %index: i32) -> (i32)
+func.decl @ggml_kquant_iq1_slot_values(%code: i32, %delta: f32) -> (vector<8xf32>)
+func.decl @ggml_kquant_iq1s_lane_parts(%grid: buffer, %weight: buffer, %row_base: offset, %block: index, %lane16: index) -> (vector<16xf32>, f32, index)
 
 // IQ1_M's fp16 block scale (as motifs/dequant.loom's ggml_iq1m_block_scale).
 func.def inline @ggml_kquant_iq1m_block_scale(%weight: buffer, %block_byte_base: offset) -> (f32) {
