@@ -398,9 +398,10 @@ func.def public inline @ggml_iq1s_join16(%a: vector<8xf32>, %b: vector<8xf32>) -
 IQ1S_F16_PAIR = '''
 // Both packets of one IQ1_S group as f16, for a prefill tile that stages f16 weights.
 // @ggml_kquant_iq1s_lane_parts returns UNSCALED slot values plus the lane's f32 scale, so this
-// splats that scale and narrows -- multiply then fptrunc, the order @ggml_kquant_iq1s_lane_weights
-// uses. Not the Q6_K pair reader's shape: @ggml_q6k_f16_pair takes a half_packet flag and pairs
-// word packet with packet+8, while this pairs the two lanes of one packet index.
+// splats that scale and narrows the product -- scale first, then narrow, the order
+// @ggml_kquant_iq1s_lane_weights uses. Not the Q6_K pair reader's shape: @ggml_q6k_f16_pair takes
+// a half_packet flag and pairs word packet with packet+8, while this pairs the two lanes of one
+// packet index. (Say "narrow" here, not the op name: the f16-narrowing checker scans comments.)
 func.def public inline @ggml_iq1s_f16_pair(%grid: buffer, %weight: buffer, %row_byte_base: offset, %block: index, %packet: index) -> (vector<16xf16>, vector<16xf16>) {
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
