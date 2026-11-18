@@ -5700,6 +5700,17 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_BF16, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
     add(suite, "dense.f32.mul_mat_f32_f32_wmma.3.47",
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
+    // engine #2832: IQ1_S reads stored 50-byte blocks with a 4 KiB codebook staged once per workgroup, and its
+    // prefill kernel takes 256-token tiles only. 9 and 64 stay on the generic wmma matmul, 512 takes the arm.
+    add(suite, "dense.iq1_s.mul_mat_f32_f32_wmma.9.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S, "loom_libs:ggml_mul_mat_f32_f32_wmma", 9, 4096); });
+    add(suite, "dense.iq1_s.mul_mat_f32_f32_wmma.64.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S, "loom_libs:ggml_mul_mat_f32_f32_wmma", 64, 4096); });
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096); });
     add(suite, "dense_unary.f32.mul_mat_f32_f32_wmma.3.47",
         [=] { run_dense_matmul_unary_cpu_reference_case( GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
     add(suite, "get_rows.f32.262144.4.1",
