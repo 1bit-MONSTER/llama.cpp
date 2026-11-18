@@ -605,17 +605,26 @@ static std::vector<ggml_fp16_t> make_pattern_f16(size_t element_count, int seed,
 static std::vector<uint8_t> make_quantized_rows(ggml_type type, int64_t row_length, int64_t row_count, int seed) {
     const ggml_type_traits * traits = ggml_get_type_traits(type);
     REQUIRE(traits != nullptr);
-    REQUIRE(traits->from_float_ref != nullptr);
+    // IQ1_S and the IQ2/IQ3 family have no from_float_ref: they quantize against an importance matrix,
+    // which the same entry point takes (the dummy matrix test-backend-ops uses).
+    const bool imatrix_only = traits->from_float_ref == nullptr;
+    REQUIRE(!imatrix_only || ggml_quantize_requires_imatrix(type));
     ggml_quantize_init(type);
     const size_t         row_size = ggml_row_size(type, row_length);
     std::vector<uint8_t> data(static_cast<size_t>(row_count) * row_size);
     std::vector<float>   row(static_cast<size_t>(row_length));
+    std::vector<float>   imatrix(static_cast<size_t>(row_length), 1.0f);
     for (int64_t r = 0; r < row_count; ++r) {
         for (int64_t c = 0; c < row_length; ++c) {
             const int value             = static_cast<int>((r * 13 + c * 7 + seed * 31) % 101) - 50;
             row[static_cast<size_t>(c)] = static_cast<float>(value) * 0.005f;
         }
-        traits->from_float_ref(row.data(), data.data() + static_cast<size_t>(r) * row_size, row_length);
+        uint8_t * dst = data.data() + static_cast<size_t>(r) * row_size;
+        if (imatrix_only) {
+            ggml_quantize_chunk(type, row.data(), dst, 0, 1, row_length, imatrix.data());
+        } else {
+            traits->from_float_ref(row.data(), dst, row_length);
+        }
     }
     return data;
 }
@@ -5700,6 +5709,17 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_BF16, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
     add(suite, "dense.f32.mul_mat_f32_f32_wmma.3.47",
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
+    // engine #2832: IQ1_S reads stored 50-byte blocks with a 4 KiB codebook staged once per workgroup, and its
+    // prefill kernel takes 256-token tiles only. 9 and 64 stay on the generic wmma matmul, 512 takes the arm.
+    add(suite, "dense.iq1_s.mul_mat_f32_f32_wmma.9.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S, "loom_libs:ggml_mul_mat_f32_f32_wmma", 9, 4096); });
+    add(suite, "dense.iq1_s.mul_mat_f32_f32_wmma.64.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S, "loom_libs:ggml_mul_mat_f32_f32_wmma", 64, 4096); });
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096); });
     add(suite, "dense_unary.f32.mul_mat_f32_f32_wmma.3.47",
         [=] { run_dense_matmul_unary_cpu_reference_case( GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
     add(suite, "get_rows.f32.262144.4.1",

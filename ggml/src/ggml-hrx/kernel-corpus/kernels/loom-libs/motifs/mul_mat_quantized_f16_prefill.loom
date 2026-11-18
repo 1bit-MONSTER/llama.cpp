@@ -279,10 +279,11 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
   %q6_stored_weights = index.cmp eq, %weight_format, %q6_format : index
   %q6_packed_weights = index.cmp eq, %weight_format, %q6_packed_format : index
   %q6_weights = scalar.ori %q6_stored_weights, %q6_packed_weights : i1
-  // 19 = IQ1_S (ggml.h GGML_TYPE_IQ1_S): 50-byte blocks of 256 values reading a 4 KiB codebook that
-  // _body stages once. A packet p owns [32p, 32p+16) and [32p+16, 32p+32) -- 16 apart, where the q6 pair
-  // is 32 apart -- so IQ1 pins the load offset and stores both halves 16 wide from one producer.
-  %iq1_format = index.constant 19 : index
+  // 26 = IQ1_S, the value common_mul_mat_format_config_value passes for that type: 50-byte blocks of 256
+  // values reading a 4 KiB codebook that _body stages once. A packet p owns [32p, 32p+16) and
+  // [32p+16, 32p+32) -- 16 apart, where the q6 pair is 32 apart -- so IQ1 pins the load offset and
+  // stores both halves 16 wide from one producer.
+  %iq1_format = index.constant 26 : index
   %iq1_stored_weights = index.cmp eq, %weight_format, %iq1_format : index
   %iq1_weights = scalar.ori %iq1_stored_weights, %iq1_stored_weights : i1
   %iq1_true = scalar.constant true : i1
@@ -637,7 +638,7 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
   // The IQ1 codebook is constant for the launch: each subgroup fills its own chunk once here, not per epoch.
   %grid_bytes = index.constant 4096 : offset
   %grid = buffer.alloca<workgroup> align(16) %grid_bytes : buffer
-  %iq1_format_body = index.constant 19 : index
+  %iq1_format_body = index.constant 26 : index
   %iq1_stored_body = index.cmp eq, %weight_format, %iq1_format_body : index
   %iq1_body = scalar.ori %iq1_stored_body, %iq1_stored_body : i1
   scf.if %iq1_body {
