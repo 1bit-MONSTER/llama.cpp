@@ -484,7 +484,17 @@ if (TARGET ggml-hrx)
     # and the CPU device is the only one guaranteed present -- no GPU, no HRX runtime, no model.
     add_executable(test-hrx-host-resident test-hrx-host-resident.cpp
                    ../ggml/src/ggml-hrx/host-weight-placement.cpp)
-    target_include_directories(test-hrx-host-resident PRIVATE ../ggml/src/ggml-hrx)
+    # backend-context.h pulls ggml-backend-impl.h and kernel-executable-cache.h pulls hrx_runtime.h, so the unit
+    # needs ggml/src and the HRX headers; it still links no HRX library, which is the point of the test.
+    target_include_directories(test-hrx-host-resident PRIVATE ../ggml/src/ggml-hrx ../ggml/include ../ggml/src)
+    if(HRX_SOURCE_DIR)
+        target_include_directories(test-hrx-host-resident PRIVATE "${HRX_SOURCE_DIR}/libhrx/include")
+    elseif(TARGET hrx::hrx)
+        get_target_property(_hrx_header_dirs hrx::hrx INTERFACE_INCLUDE_DIRECTORIES)
+        if(_hrx_header_dirs)
+            target_include_directories(test-hrx-host-resident PRIVATE ${_hrx_header_dirs})
+        endif()
+    endif()
     target_link_libraries(test-hrx-host-resident PRIVATE ggml)
     add_test(NAME test-hrx-host-resident COMMAND test-hrx-host-resident)
     target_include_directories(test-hrx-placement-classification PRIVATE ../ggml/src/ggml-hrx)
