@@ -18,7 +18,7 @@
 # and grid fill for ops/kquant_decode_f32.loom (mode "kquant"), generated from ggml-common.h
 # (iq1s_grid: MIT, the ggml authors). Every grid byte is -1, 0 or 1, so an entry is stored as a
 # 16-bit code: 2 bits per value, value + 1.
-# Usage: generate_iq1_loom.py ggml/src/ggml-common.h dequant|kquant > out.loom
+# Usage: generate_iq1_loom.py ggml/src/ggml-common.h dequant|kquant|motif > out.loom
 # The output sits verbatim in kernel-corpus/kernels/loom-libs/motifs/dequant.loom (dequant) or
 # kernel-corpus/kernels/loom-libs/ops/kquant_decode_f32.loom (kquant).
 import re
@@ -280,13 +280,13 @@ func.def inline @ggml_iq1m_f16_vector4(%weight: buffer, %row_byte_base: offset, 
 '''
 
 
-def fill(fname, codes):
+def fill(fname, codes, visibility='inline'):
     words = [codes[2 * w] | (codes[2 * w + 1] << 16) for w in range(len(codes) // 2)]
     words = [w - (1 << 32) if w >= 1 << 31 else w for w in words]  # i32 constants are signed
     per = len(words) // 4
     o = [f'// Stages the IQ1 grid as {len(words)} words (two 16-bit codes each); subgroup %chunk (0..3) writes',
          f'// words {per} %chunk .. +{per - 1}.',
-         f'func.def inline @{fname}(%grid: buffer, %chunk: index) {{',
+         f'func.def {visibility} @{fname}(%grid: buffer, %chunk: index) {{',
          '  %zero_offset = index.constant 0 : offset',
          f'  %gv = buffer.view %grid[%zero_offset] : buffer -> view<{len(words)}xi32>']
     for c in range(4):
@@ -302,6 +302,105 @@ def fill(fname, codes):
     o += ['  func.return', '}', '']
     return '\n'.join(o)
 
+
+
+# engine #2832: the IQ1 grid fill, the codebook lookup and the IQ1_S lane reader are also called from
+# motifs/kquant_iq1_s.loom, so the codebook has one implementation shared by the decode kernel
+# (mode "kquant") and the prefill tile (mode "motif"). A function moved into the motif keeps its body
+# byte for byte and only changes visibility; loom-link cannot see an inline helper across files.
+SHARED_KQUANT = ('ggml_kquant_iq1_code', 'ggml_kquant_iq1_slot_values', 'ggml_kquant_iq1s_lane_parts')
+
+SHARED_DECLS = {
+    'ggml_kquant_iq1_code': 'func.decl @ggml_kquant_iq1_code(%grid: buffer, %index: i32) -> (i32)',
+    'ggml_kquant_iq1_slot_values': 'func.decl @ggml_kquant_iq1_slot_values(%code: i32, %delta: f32) -> (vector<8xf32>)',
+    'ggml_kquant_iq1s_lane_parts': 'func.decl @ggml_kquant_iq1s_lane_parts(%grid: buffer, %weight: buffer, %row_base: offset, %block: index, %lane16: index) -> (vector<16xf32>, f32, index)',
+}
+
+GRID_FILL_DECL = 'func.decl @ggml_kquant_iq1s_grid_fill(%grid: buffer, %chunk: index)'
+
+
+def split_blocks(text, names):
+    """Return (text without those blocks, {name: block text}). A block runs from its func.def line
+    to the first line that is a lone closing brace at column 0."""
+    lines = text.split('\n')
+    kept, blocks = [], {}
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        hit = next((n for n in names if line.startswith(f'func.def inline @{n}(')), None)
+        if hit is None:
+            kept.append(line)
+            i += 1
+            continue
+        j = i
+        while lines[j].strip() != '}':
+            j += 1
+        blocks[hit] = '\n'.join(lines[i:j + 1])
+        i = j + 1
+    return '\n'.join(kept), blocks
+
+
+def share(block):
+    return block.replace('func.def inline @', 'func.def public inline @', 1)
+
+
+# @ggml_kquant_iq2_join16 lives in the op because generate_iq2_kquant_loom.py emits it there, and the
+# IQ2 lanes need it. The motif cannot see it (inline helpers are per file), so it gets its own copy of
+# the same six lines rather than making the IQ2 generator share a helper from an IQ1 motif.
+JOIN16 = '''// vector<8xf32> pair -> vector<16xf32>; the same body as the op's @ggml_kquant_iq2_join16.
+func.def public inline @ggml_iq1s_join16(%a: vector<8xf32>, %b: vector<8xf32>) -> (vector<16xf32>) {
+  %a0 = vector.extract %a[0] : vector<8xf32> -> f32
+  %a1 = vector.extract %a[1] : vector<8xf32> -> f32
+  %a2 = vector.extract %a[2] : vector<8xf32> -> f32
+  %a3 = vector.extract %a[3] : vector<8xf32> -> f32
+  %a4 = vector.extract %a[4] : vector<8xf32> -> f32
+  %a5 = vector.extract %a[5] : vector<8xf32> -> f32
+  %a6 = vector.extract %a[6] : vector<8xf32> -> f32
+  %a7 = vector.extract %a[7] : vector<8xf32> -> f32
+  %b0 = vector.extract %b[0] : vector<8xf32> -> f32
+  %b1 = vector.extract %b[1] : vector<8xf32> -> f32
+  %b2 = vector.extract %b[2] : vector<8xf32> -> f32
+  %b3 = vector.extract %b[3] : vector<8xf32> -> f32
+  %b4 = vector.extract %b[4] : vector<8xf32> -> f32
+  %b5 = vector.extract %b[5] : vector<8xf32> -> f32
+  %b6 = vector.extract %b[6] : vector<8xf32> -> f32
+  %b7 = vector.extract %b[7] : vector<8xf32> -> f32
+  %v = vector.from_elements %a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7, %b0, %b1, %b2, %b3, %b4, %b5, %b6, %b7 : vector<16xf32>
+  func.return %v : vector<16xf32>
+}
+'''
+
+
+# The f16 pair the prefill tile's weight staging wants: two 16-value packets, i.e. both lanes of one
+# group, folded to the scale the reader returns. Emitted into the motif only.
+IQ1S_F16_PAIR = '''
+// Both packets of one IQ1_S group as f16, for a prefill tile that stages f16 weights: the reader
+// reports value * scale per lane, so this only splats the scale and narrows. Two fptruncs, one per
+// 16-value packet, which is the same shape the Q6_K pair reader publishes (engine #1962 baselines them).
+func.def public inline @ggml_iq1s_f16_pair(%grid: buffer, %weight: buffer, %row_byte_base: offset, %block: index, %packet: index) -> (vector<16xf16>, vector<16xf16>) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %lane0 = index.mul %packet, %c2 : index
+  %lane1 = index.add %lane0, %c1 : index
+  %v0, %s0, %p0 = func.call @ggml_kquant_iq1s_lane_parts(%grid, %weight, %row_byte_base, %block, %lane0) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, f32, index)
+  %v1, %s1, %p1 = func.call @ggml_kquant_iq1s_lane_parts(%grid, %weight, %row_byte_base, %block, %lane1) : (buffer, buffer, offset, index, index) -> (vector<16xf32>, f32, index)
+  %s0v = vector.splat %s0 : vector<16xf32>
+  %s1v = vector.splat %s1 : vector<16xf32>
+  %a = vector.mulf %v0, %s0v : vector<16xf32>
+  %b = vector.mulf %v1, %s1v : vector<16xf32>
+  %af = vector.fptrunc %a : vector<16xf32> to vector<16xf16>
+  %bf = vector.fptrunc %b : vector<16xf32> to vector<16xf16>
+  func.return %af, %bf : vector<16xf16>, vector<16xf16>
+}
+'''
+
+MOTIF_HEADER = '''// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// The IQ1_S codebook, shared by the decode kernel and the prefill tile so the 2048-entry grid, the
+// qh bit packing and the lane reader have exactly one implementation in the corpus (engine #2832).
+// Generated by tools/generate_iq1_loom.py (mode "motif") from ggml-common.h -- do not edit by hand.
+'''
 
 kquant_common = '''
 // IQ1_M's fp16 block scale (as motifs/dequant.loom's ggml_iq1m_block_scale).
@@ -582,8 +681,21 @@ func.def inline @ggml_kquant_{fmt}_lane_weights(%grid: buffer, %weight: buffer, 
 
 if mode == "dequant":
     out = lookup('ggml_iq1s_grid_code_i32', 'iq1s_code', grid()) + dequant_common
+elif mode == "motif":
+    rest, blocks = split_blocks(kquant_common, SHARED_KQUANT)
+    missing = [n for n in SHARED_KQUANT if n not in blocks]
+    if missing:
+        sys.exit(f"mode motif: these shared functions are not in kquant_common any more: {missing}")
+    out = (MOTIF_HEADER
+           + '\n' + fill('ggml_kquant_iq1s_grid_fill', grid(), 'public inline')
+           + '\n'.join(share(blocks[n]).replace('ggml_kquant_iq2_join16', 'ggml_iq1s_join16') for n in SHARED_KQUANT)
+           + '\n' + JOIN16
+           + '\n' + IQ1S_F16_PAIR)
 elif mode == "kquant":
-    out = fill('ggml_kquant_iq1s_grid_fill', grid()) + kquant_common + dot_and_weights('iq1s') + dot_and_weights('iq1m')
+    rest, blocks = split_blocks(kquant_common, SHARED_KQUANT)
+    out = (GRID_FILL_DECL + '\n'
+           + '\n'.join(SHARED_DECLS[n] for n in SHARED_KQUANT) + '\n'
+           + rest + dot_and_weights('iq1s') + dot_and_weights('iq1m'))
 else:
     sys.exit(f"unknown mode {mode}")
 sys.stdout.write(out)
