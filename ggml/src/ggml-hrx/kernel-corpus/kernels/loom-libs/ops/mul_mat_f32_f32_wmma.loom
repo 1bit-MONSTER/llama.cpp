@@ -196,8 +196,6 @@ kernel.def target(@ggml_mul_mat_gfx11_wave32) @ggml_mul_mat_iq1_s_f16_wmma_prefi
   %c128 = index.constant 128 : index
   %c256 = index.constant 256 : index
   %c512 = index.constant 512 : index
-  %c1024 = index.constant 1024 : index
-  %minimum_workgroups = index.constant 32 : index
   %twice_input_size = index.mul %input_size, %c2 : index
   %contracts = index.cmp ule, %output_size, %input_size : index
   %large_expansion = index.cmp uge, %output_size, %twice_input_size : index
@@ -207,23 +205,14 @@ kernel.def target(@ggml_mul_mat_gfx11_wave32) @ggml_mul_mat_iq1_s_f16_wmma_prefi
   %wide_tile = scalar.andi %wide_shape, %full_wide_tile : i1
   %ordinary_tile_channels = scf.select %wide_tile, %c128, %c64 : index
   %ordinary_workgroup_size = scf.select %wide_tile, %c512, %c256 : index
-  %active_token_tiles = index.div %token_count, %c256 : index
-  %larger_output_tiles = index.div %output_size, %c256 : index
-  %larger_grid = index.mul %active_token_tiles, %larger_output_tiles : index
-  %enough_workgroups = index.cmp uge, %larger_grid, %minimum_workgroups : index
-  %larger_channel_tail = index.rem %output_size, %c256 : index
-  %full_larger_channels = index.cmp eq, %larger_channel_tail, %c0 : index
-  %multiple_token_tiles = index.cmp ugt, %active_token_tiles, %c1 : index
-  %larger_shape = scalar.andi %contracts, %full_larger_channels : i1
-  %larger_grid_tile = scalar.andi %larger_shape, %enough_workgroups : i1
-  %larger_tile = scalar.andi %larger_grid_tile, %multiple_token_tiles : i1
-  %staged_tile_channels = scf.select %larger_tile, %c256, %ordinary_tile_channels : index
-  %staged_workgroup_size = scf.select %larger_tile, %c1024, %ordinary_workgroup_size : index
-  %staged_output_tiles = index.div %output_size, %staged_tile_channels : index
+  // No wider tile here: at 1024 threads the publish stages four halves of 32 values into the 64-value
+  // window the mma reads, and an IQ1 packet covers [32p, 32p+32) only two halves tile. The 512-thread
+  // tile gives two halves of 32 and lands on [0, 64) exactly.
+  %staged_output_tiles = index.div %output_size, %ordinary_tile_channels : index
   %staged_token_tiles = index.div %token_capacity, %c256 : index
   %input_layout = config.get @ggml.mul_mat.f16_input_layout : index
   %packed = index.cmp eq, %input_layout, %c1 : index
-  %workgroup_size = scf.select %packed, %c512, %staged_workgroup_size : index
+  %workgroup_size = scf.select %packed, %c512, %ordinary_workgroup_size : index
   %token_tiles = scf.select %packed, %c1, %staged_token_tiles : index
   %packed_output_tiles = index.div %output_size, %c64 : index
   %output_tiles = scf.select %packed, %packed_output_tiles, %staged_output_tiles : index
