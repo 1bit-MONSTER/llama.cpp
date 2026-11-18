@@ -5720,6 +5720,19 @@ static void add_cases(test_runner::Suite & suite) {
                                                  "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
                                                  512,
                                                  4096); });
+    // The stage-A gate asks for the depth too: one 256-value block per row, and ten of them.
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.4096.256",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096,
+                                                 256); });
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.4096.2560",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096,
+                                                 2560); });
     add(suite, "dense_unary.f32.mul_mat_f32_f32_wmma.3.47",
         [=] { run_dense_matmul_unary_cpu_reference_case( GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
     add(suite, "get_rows.f32.262144.4.1",
