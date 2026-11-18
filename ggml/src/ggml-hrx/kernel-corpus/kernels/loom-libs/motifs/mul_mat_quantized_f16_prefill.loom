@@ -355,7 +355,9 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
     %weight_local_group = scf.select %wide_tile, %c0, %weight_local_group0 : index
     %weight_group = index.add %weight_group_base, %weight_local_group : index
     %weight_k_base = index.mul %weight_local_group, %c32 : index
-    %load_k_iq1 = index.constant 0 : index
+    // An IQ1 packet is 32 values where a q6 pair is 32 values plus load_k, so the window offset is the packet index:
+    // local_group + load_half, with the same 32-value step the groups use.
+    %load_k_iq1 = index.mul %load_half, %c32 : index
     %load_k_used = scf.select %iq1_weights, %load_k_iq1, %load_k : index
     %weight_k0 = index.add %weight_k_base, %load_k_used : index
     %weight_k1_q6 = index.add %weight_k0, %c32 : index
@@ -369,7 +371,8 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
         %iq1_block_bytes = index.constant 50 : offset
         %iq1_row_bytes = index.scale %quant_block_count, %iq1_block_bytes : index, offset -> offset
         %iq1_row_byte_base = index.scale %channel, %iq1_row_bytes : index, offset -> offset
-        %iq1_packet = index.assume %weight_group [range(%weight_group, 0, 8)] : index
+        %iq1_packet0 = index.add %weight_group, %load_half : index
+        %iq1_packet = index.assume %iq1_packet0 [range(%iq1_packet0, 0, 8)] : index
         %q0, %q1 = func.call @ggml_iq1s_f16_pair(%grid, %weight_noalias, %iq1_row_byte_base, %quant_block, %iq1_packet) : (buffer, buffer, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
         scf.yield %q0, %q1 : vector<16xf16>, vector<16xf16>
       } else {
