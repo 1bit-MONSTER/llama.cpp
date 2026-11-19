@@ -605,10 +605,10 @@ static std::vector<ggml_fp16_t> make_pattern_f16(size_t element_count, int seed,
 static std::vector<uint8_t> make_quantized_rows(ggml_type type, int64_t row_length, int64_t row_count, int seed) {
     const ggml_type_traits * traits = ggml_get_type_traits(type);
     REQUIRE(traits != nullptr);
-    // IQ1_S and the IQ2/IQ3 family have no from_float_ref: they quantize against an importance matrix,
-    // which the same entry point takes (the dummy matrix test-backend-ops uses).
+    // IQ1_S and the IQ2/IQ3 family have no from_float_ref: those that need one quantize against an
+    // importance matrix through the same entry point (the dummy matrix test-backend-ops uses), and
+    // IQ1_M does not, so it takes the row alone.
     const bool imatrix_only = traits->from_float_ref == nullptr;
-    REQUIRE(!imatrix_only || ggml_quantize_requires_imatrix(type));
     ggml_quantize_init(type);
     const size_t         row_size = ggml_row_size(type, row_length);
     std::vector<uint8_t> data(static_cast<size_t>(row_count) * row_size);
@@ -621,7 +621,8 @@ static std::vector<uint8_t> make_quantized_rows(ggml_type type, int64_t row_leng
         }
         uint8_t * dst = data.data() + static_cast<size_t>(r) * row_size;
         if (imatrix_only) {
-            ggml_quantize_chunk(type, row.data(), dst, 0, 1, row_length, imatrix.data());
+            ggml_quantize_chunk(type, row.data(), dst, 0, 1, row_length,
+                                ggml_quantize_requires_imatrix(type) ? imatrix.data() : nullptr);
         } else {
             traits->from_float_ref(row.data(), dst, row_length);
         }
@@ -5718,6 +5719,26 @@ static void add_cases(test_runner::Suite & suite) {
     add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.4096",
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
                                                  "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096); });
+    add(suite, "dense.iq2_xxs.mul_mat_iq2_xxs_f16_wmma_prefill_wave32.256.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ2_XXS,
+                                                 "loom_libs:ggml_mul_mat_iq2_xxs_f16_wmma_prefill_wave32",
+                                                 256,
+                                                 4096); });
+    add(suite, "dense.iq2_xxs.mul_mat_iq2_xxs_f16_wmma_prefill_wave32.512.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ2_XXS,
+                                                 "loom_libs:ggml_mul_mat_iq2_xxs_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096); });
+    add(suite, "dense.iq2_xs.mul_mat_iq2_xs_f16_wmma_prefill_wave32.512.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ2_XS,
+                                                 "loom_libs:ggml_mul_mat_iq2_xs_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096); });
+    add(suite, "dense.iq1_m.mul_mat_iq1_m_f16_wmma_prefill_wave32.512.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_M,
+                                                 "loom_libs:ggml_mul_mat_iq1_m_f16_wmma_prefill_wave32",
                                                  512,
                                                  4096); });
     // The stage-A gate asks for the depth too: one 256-value block per row, and ten of them.
