@@ -8,11 +8,96 @@ config.def @ggml.f16_prefill.activation_scale_log2 = 0 : index
 
 template.decl @ggml.binary_f32.apply_vector8(%op: index, %lhs: vector<8xf32>, %rhs: vector<8xf32>) -> (vector<8xf32>)
 
+func.decl @ggml_iq2xxs_f16_vector4(%weight: buffer, %row_byte_base: offset, %iq2_block: index, %iq2_group: index, %packet: index) -> (vector<4xf16>)
 func.decl @ggml_iq1s_f16_pair(%grid: buffer, %weight: buffer, %row_byte_base: offset, %block: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
 func.decl @ggml_kquant_iq1s_grid_fill(%grid: buffer, %chunk: index)
 func.decl @ggml_q4k_native_row64_f16_pair(%half_packet: i1, %paired: i1, %weight: buffer, %peer: buffer, %is_up: i1, %row_base: offset, %group0: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
 func.decl @ggml_q6k_f16_pair(%half_packet: i1, %weight: buffer, %weight_row_byte_base: offset, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
+func.decl @ggml_iq2xs_f16_vector4(%weight: buffer, %row_byte_base: offset, %iq2_block: index, %iq2_group: index, %packet: index) -> (vector<4xf16>)
+func.decl @ggml_iq1m_f16_vector4(%weight: buffer, %row_byte_base: offset, %iq1_block: index, %iq1_group: index, %packet: index) -> (vector<4xf16>)
 func.decl @ggml_q6k_packed_row64_f16_pair(%half_packet: i1, %weight: buffer, %row: index, %input_size: index, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
+
+// One IQ2_XXS group is 32 values in eight 4-value packets: the first four fill the window at k0, the
+// last four the window at k0 + 16, which is the pair an IQ1 packet yields directly.
+func.def inline @ggml_iq2xxs_f16_pair(%weight: buffer, %row_byte_base: offset, %iq2_block: index, %iq2_group: index) -> (vector<16xf16>, vector<16xf16>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %v0 = func.call @ggml_iq2xxs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c0) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v1 = func.call @ggml_iq2xxs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c1) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v2 = func.call @ggml_iq2xxs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c2) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v3 = func.call @ggml_iq2xxs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c3) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v4 = func.call @ggml_iq2xxs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c4) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v5 = func.call @ggml_iq2xxs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c5) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v6 = func.call @ggml_iq2xxs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c6) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v7 = func.call @ggml_iq2xxs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c7) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %w0 = vector.concat<0> %v0, %v1 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %w1 = vector.concat<0> %v2, %v3 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %w4 = vector.concat<0> %v4, %v5 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %w5 = vector.concat<0> %v6, %v7 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %lower = vector.concat<0> %w0, %w1 : vector<8xf16>, vector<8xf16> -> vector<16xf16>
+  %upper = vector.concat<0> %w4, %w5 : vector<8xf16>, vector<8xf16> -> vector<16xf16>
+  func.return %lower, %upper : vector<16xf16>, vector<16xf16>
+}
+
+// IQ2_XS is the same eight-packet 32-value group as IQ2_XXS, with 74-byte blocks.
+func.def inline @ggml_iq2xs_f16_pair(%weight: buffer, %row_byte_base: offset, %iq2_block: index, %iq2_group: index) -> (vector<16xf16>, vector<16xf16>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %v0 = func.call @ggml_iq2xs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c0) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v1 = func.call @ggml_iq2xs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c1) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v2 = func.call @ggml_iq2xs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c2) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v3 = func.call @ggml_iq2xs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c3) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v4 = func.call @ggml_iq2xs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c4) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v5 = func.call @ggml_iq2xs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c5) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v6 = func.call @ggml_iq2xs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c6) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v7 = func.call @ggml_iq2xs_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c7) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %w0 = vector.concat<0> %v0, %v1 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %w1 = vector.concat<0> %v2, %v3 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %w4 = vector.concat<0> %v4, %v5 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %w5 = vector.concat<0> %v6, %v7 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %lower = vector.concat<0> %w0, %w1 : vector<8xf16>, vector<8xf16> -> vector<16xf16>
+  %upper = vector.concat<0> %w4, %w5 : vector<8xf16>, vector<8xf16> -> vector<16xf16>
+  func.return %lower, %upper : vector<16xf16>, vector<16xf16>
+}
+
+// IQ1_M is the same eight-packet 32-value group, with 56-byte blocks and its own scale coding.
+func.def inline @ggml_iq1m_f16_pair(%weight: buffer, %row_byte_base: offset, %iq2_block: index, %iq2_group: index) -> (vector<16xf16>, vector<16xf16>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %v0 = func.call @ggml_iq1m_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c0) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v1 = func.call @ggml_iq1m_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c1) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v2 = func.call @ggml_iq1m_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c2) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v3 = func.call @ggml_iq1m_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c3) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v4 = func.call @ggml_iq1m_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c4) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v5 = func.call @ggml_iq1m_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c5) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v6 = func.call @ggml_iq1m_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c6) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %v7 = func.call @ggml_iq1m_f16_vector4(%weight, %row_byte_base, %iq2_block, %iq2_group, %c7) : (buffer, offset, index, index, index) -> (vector<4xf16>)
+  %w0 = vector.concat<0> %v0, %v1 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %w1 = vector.concat<0> %v2, %v3 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %w4 = vector.concat<0> %v4, %v5 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %w5 = vector.concat<0> %v6, %v7 : vector<4xf16>, vector<4xf16> -> vector<8xf16>
+  %lower = vector.concat<0> %w0, %w1 : vector<8xf16>, vector<8xf16> -> vector<16xf16>
+  %upper = vector.concat<0> %w4, %w5 : vector<8xf16>, vector<8xf16> -> vector<16xf16>
+  func.return %lower, %upper : vector<16xf16>, vector<16xf16>
+}
 
 func.def inline @ggml_f16_prefill_load_pair(%input: buffer, %token_count: index, %input_size: index, %token_origin: index, %k_origin: index) -> (vector<8xf16>, vector<8xf16>) {
   %c0_offset = index.constant 0 : offset
@@ -286,9 +371,24 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
   %iq1_format = index.constant 26 : index
   %iq1_stored_weights = index.cmp eq, %weight_format, %iq1_format : index
   %iq1_weights = scalar.ori %iq1_stored_weights, %iq1_stored_weights : i1
+  // 24 = IQ2_XXS: 66-byte blocks of 256 values reading a codebook _body stages once. A 32-value group
+  // is eight 4-value packets, so one group fills the same two 16-value windows an IQ1 packet does.
+  %iq2_xxs_format = index.constant 24 : index
+  %iq2_xxs_stored_weights = index.cmp eq, %weight_format, %iq2_xxs_format : index
+  %iq2_xxs_weights = scalar.ori %iq2_xxs_stored_weights, %iq2_xxs_stored_weights : i1
+  // 25 = IQ2_XS and 27 = IQ1_M, the same 32-value group of eight 4-value packets as IQ2_XXS.
+  %iq2_xs_format = index.constant 25 : index
+  %iq2_xs_stored_weights = index.cmp eq, %weight_format, %iq2_xs_format : index
+  %iq2_xs_weights = scalar.ori %iq2_xs_stored_weights, %iq2_xs_stored_weights : i1
+  %iq1_m_format = index.constant 27 : index
+  %iq1_m_stored_weights = index.cmp eq, %weight_format, %iq1_m_format : index
+  %iq1_m_weights = scalar.ori %iq1_m_stored_weights, %iq1_m_stored_weights : i1
   %iq1_true = scalar.constant true : i1
-  %not_iq1_weights = scalar.xori %iq1_weights, %iq1_true : i1
-  %short_packets_non_iq1 = scalar.andi %short_weight_packets, %not_iq1_weights : i1
+  %staged32_packets = scalar.ori %iq2_xxs_weights, %iq2_xs_weights : i1
+  %staged32_small = scalar.ori %staged32_packets, %iq1_m_weights : i1
+  %staged32_weights = scalar.ori %iq1_weights, %staged32_small : i1
+  %not_staged32_weights = scalar.xori %staged32_weights, %iq1_true : i1
+  %short_packets_native = scalar.andi %short_weight_packets, %not_staged32_weights : i1
   %c16 = index.constant 16 : index
   %layout_true = scalar.constant true : i1
   %staged_input = scalar.xori %packed_input, %layout_true : i1
@@ -358,30 +458,53 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
     // An IQ1 packet is 32 values where a q6 pair is 32 values plus load_k, so the window offset is the packet index:
     // local_group + load_half, with the same 32-value step the groups use.
     %load_k_iq1 = index.mul %load_half, %c32 : index
-    %load_k_used = scf.select %iq1_weights, %load_k_iq1, %load_k : index
+    %load_k_used = scf.select %staged32_weights, %load_k_iq1, %load_k : index
     %weight_k0 = index.add %weight_k_base, %load_k_used : index
     %weight_k1_q6 = index.add %weight_k0, %c32 : index
     %weight_k1_iq1 = index.add %weight_k0, %c16 : index
-    %weight_k1 = scf.select %iq1_weights, %weight_k1_iq1, %weight_k1_q6 : index
+    %weight_k1 = scf.select %staged32_weights, %weight_k1_iq1, %weight_k1_q6 : index
     %channel_in_tile = scf.select %paired, %weight_half_row, %weight_local_row : index
     %channel = index.add %channel_tile_base, %channel_in_tile : index
     %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
     %weight_values0, %weight_values1 = scf.if %valid_channel -> (vector<16xf16>, vector<16xf16>) {
-      %decoded0, %decoded1 = scf.if %iq1_weights -> (vector<16xf16>, vector<16xf16>) {
-        %iq1_block_bytes = index.constant 50 : offset
-        %iq1_row_bytes = index.scale %quant_block_count, %iq1_block_bytes : index, offset -> offset
-        %iq1_row_byte_base = index.scale %channel, %iq1_row_bytes : index, offset -> offset
-        %iq1_packet0 = index.add %weight_group, %load_half : index
-        %iq1_packet = index.assume %iq1_packet0 [range(%iq1_packet0, 0, 8)] : index
+      %decoded0, %decoded1 = scf.if %staged32_weights -> (vector<16xf16>, vector<16xf16>) {
+        %c50_offset = index.constant 50 : offset
+        %c56_offset = index.constant 56 : offset
+        %c66_offset = index.constant 66 : offset
+        %c74_offset = index.constant 74 : offset
+        %staged_block_bytes_m = scf.select %iq1_m_weights, %c56_offset, %c50_offset : offset
+        %staged_block_bytes_xs = scf.select %iq2_xs_weights, %c74_offset, %staged_block_bytes_m : offset
+        %staged_block_bytes = scf.select %iq2_xxs_weights, %c66_offset, %staged_block_bytes_xs : offset
+        %staged_row_bytes = index.scale %quant_block_count, %staged_block_bytes : index, offset -> offset
+        %staged_row_byte_base = index.scale %channel, %staged_row_bytes : index, offset -> offset
         // A paired tile stages the gate rows and the up rows from two buffers; an unpaired one always reads the gate.
-        %q0, %q1 = scf.if %weight_is_up -> (vector<16xf16>, vector<16xf16>) {
-          %u0, %u1 = func.call @ggml_iq1s_f16_pair(%grid, %up_weight, %iq1_row_byte_base, %quant_block, %iq1_packet) : (buffer, buffer, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
-          scf.yield %u0, %u1 : vector<16xf16>, vector<16xf16>
+        %iq_weight = scf.if %weight_is_up -> (buffer) {
+          scf.yield %up_weight : buffer
         } else {
-          %g0, %g1 = func.call @ggml_iq1s_f16_pair(%grid, %weight_noalias, %iq1_row_byte_base, %quant_block, %iq1_packet) : (buffer, buffer, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
-          scf.yield %g0, %g1 : vector<16xf16>, vector<16xf16>
+          scf.yield %weight_noalias : buffer
         }
-        scf.yield %q0, %q1 : vector<16xf16>, vector<16xf16>
+        %iq_packet = index.add %weight_group, %load_half : index
+        %s0, %s1 = scf.if %iq2_xxs_weights -> (vector<16xf16>, vector<16xf16>) {
+          %r0, %r1 = func.call @ggml_iq2xxs_f16_pair(%iq_weight, %staged_row_byte_base, %quant_block, %iq_packet) : (buffer, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
+          scf.yield %r0, %r1 : vector<16xf16>, vector<16xf16>
+        } else {
+          %x0, %x1 = scf.if %iq2_xs_weights -> (vector<16xf16>, vector<16xf16>) {
+            %r0, %r1 = func.call @ggml_iq2xs_f16_pair(%iq_weight, %staged_row_byte_base, %quant_block, %iq_packet) : (buffer, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
+            scf.yield %r0, %r1 : vector<16xf16>, vector<16xf16>
+          } else {
+            %m0, %m1 = scf.if %iq1_m_weights -> (vector<16xf16>, vector<16xf16>) {
+              %r0, %r1 = func.call @ggml_iq1m_f16_pair(%iq_weight, %staged_row_byte_base, %quant_block, %iq_packet) : (buffer, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
+              scf.yield %r0, %r1 : vector<16xf16>, vector<16xf16>
+            } else {
+              %bounded_packet = index.assume %iq_packet [range(%iq_packet, 0, 8)] : index
+              %r0, %r1 = func.call @ggml_iq1s_f16_pair(%grid, %iq_weight, %staged_row_byte_base, %quant_block, %bounded_packet) : (buffer, buffer, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
+              scf.yield %r0, %r1 : vector<16xf16>, vector<16xf16>
+            }
+            scf.yield %m0, %m1 : vector<16xf16>, vector<16xf16>
+          }
+          scf.yield %x0, %x1 : vector<16xf16>, vector<16xf16>
+        }
+        scf.yield %s0, %s1 : vector<16xf16>, vector<16xf16>
       } else {
       %decoded0, %decoded1 = scf.if %q6_weights -> (vector<16xf16>, vector<16xf16>) {
         %decoded0, %decoded1 = scf.if %q6_packed_weights -> (vector<16xf16>, vector<16xf16>) {
@@ -414,7 +537,7 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
     } else {
       scf.yield %zero_weight_values, %zero_weight_values : vector<16xf16>, vector<16xf16>
     }
-    scf.if %short_packets_non_iq1 {
+    scf.if %short_packets_native {
       %half0 = vector.slice %weight_values0[0] : vector<16xf16> -> vector<8xf16>
       %half1 = vector.slice %weight_values1[0] : vector<16xf16> -> vector<8xf16>
       vector.store %half0, %weight_stage_view[%weight_local_row, %weight_k0] : vector<8xf16>, view<[%weight_rows]x[%weight_stride]xf16>
