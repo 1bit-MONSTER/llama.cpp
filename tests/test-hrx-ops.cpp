@@ -5954,6 +5954,20 @@ static void add_cases(test_runner::Suite & suite) {
         add(suite, "ffn.q4_k.prefill.large_activation." + std::to_string(tokens),
             [=] { run_ffn_prefill_large_activation_case(tokens, 640.0f); });
     }
+    add(suite, "swiglu.iq1_s.iq1_s.iq1_s_swiglu_f16_wmma_prefill_wave32.256.4096.swiglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_IQ1_S,
+                                   GGML_TYPE_IQ1_S,
+                                   "loom_libs:ggml_mul_mat_iq1_s_swiglu_f16_wmma_prefill_wave32",
+                                   256,
+                                   4096,
+                                   GGML_GLU_OP_SWIGLU); });
+    add(suite, "swiglu.iq1_s.iq1_s.iq1_s_swiglu_f16_wmma_prefill_wave32.512.4096.swiglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_IQ1_S,
+                                   GGML_TYPE_IQ1_S,
+                                   "loom_libs:ggml_mul_mat_iq1_s_swiglu_f16_wmma_prefill_wave32",
+                                   512,
+                                   4096,
+                                   GGML_GLU_OP_SWIGLU); });
     add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.128.swiglu",
         [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
                                    GGML_TYPE_Q4_K,

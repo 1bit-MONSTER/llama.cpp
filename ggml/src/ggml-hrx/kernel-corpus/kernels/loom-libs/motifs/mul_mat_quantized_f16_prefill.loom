@@ -373,7 +373,14 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
         %iq1_row_byte_base = index.scale %channel, %iq1_row_bytes : index, offset -> offset
         %iq1_packet0 = index.add %weight_group, %load_half : index
         %iq1_packet = index.assume %iq1_packet0 [range(%iq1_packet0, 0, 8)] : index
-        %q0, %q1 = func.call @ggml_iq1s_f16_pair(%grid, %weight_noalias, %iq1_row_byte_base, %quant_block, %iq1_packet) : (buffer, buffer, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
+        // A paired tile stages the gate rows and the up rows from two buffers; an unpaired one always reads the gate.
+        %q0, %q1 = scf.if %weight_is_up -> (vector<16xf16>, vector<16xf16>) {
+          %u0, %u1 = func.call @ggml_iq1s_f16_pair(%grid, %up_weight, %iq1_row_byte_base, %quant_block, %iq1_packet) : (buffer, buffer, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
+          scf.yield %u0, %u1 : vector<16xf16>, vector<16xf16>
+        } else {
+          %g0, %g1 = func.call @ggml_iq1s_f16_pair(%grid, %weight_noalias, %iq1_row_byte_base, %quant_block, %iq1_packet) : (buffer, buffer, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
+          scf.yield %g0, %g1 : vector<16xf16>, vector<16xf16>
+        }
         scf.yield %q0, %q1 : vector<16xf16>, vector<16xf16>
       } else {
       %decoded0, %decoded1 = scf.if %q6_weights -> (vector<16xf16>, vector<16xf16>) {
