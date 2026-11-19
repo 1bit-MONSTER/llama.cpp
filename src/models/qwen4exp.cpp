@@ -1,4 +1,5 @@
 #include "models.h"
+#include "onebit-moe-predict.h"
 #include "llama-impl.h"
 #include "llama-memory-hybrid-idx.h"
 #include "llama-memory-recurrent.h"
@@ -431,6 +432,10 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+    // next-layer routing predictor (src/onebit-moe-predict.*): single-token steps only, and only
+    // when ONEBIT_MOE_PREDICT asks for it; it allocates this graph's readback tensors
+    onebit::moe::graph_begin(ctx0, gf, n_tokens == 1 ? n_layer : 0, onebit::moe::depth(n_expert_used), n_expert_used);
+
     ggml_tensor * ple_emb = nullptr;
     if (hparams.ple_n_heads > 0) {
         ple_emb = build_inp_ple(mctx_hyb);
@@ -480,6 +485,13 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
         }
 
         res_hc = build_hc_combine(res_hc, cur, inject, il);
+
+        // predict layer il+1's routing from this residual, before this layer's MoE output exists,
+        // so its expert reads overlap this layer's compute (ONEBIT_MOE_PREDICT)
+        if (n_tokens == 1 && il + 1 < n_layer && onebit::moe::wanted(il + 1)) {
+            build_moe_predict(inp->get_recr(), inp->get_attn(), mctx_hyb, inp_kpool, ple_emb, res_hc,
+                              inp_pos, sections, il);
+        }
 
         cur = build_hc_mix(res_hc,
                 model.layers[il].hc_ffn_norm,
@@ -741,7 +753,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
         ggml_tensor *                           inp_pos,
         ggml_tensor *                           kq_mask,
         int *                                   sections,
-        int                                     il) {
+        int                                     il,
+        bool                                    spec) {
     const llama_kv_cache_context * mctx_idx = mctx_hyb->get_idx();
 
     const int64_t idx_dim = hparams.indexer_head_size;
@@ -802,7 +815,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
     // which is the lightning indexer with every head weight set to that scale
     ggml_tensor * weights = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_idx_h, n_tokens), 1.0f/sqrtf((float) idx_dim));
     ggml_tensor * score = ggml_lightning_indexer(ctx0, q, pooled, weights, inp_kpool->pool_mask); // [n_pool, n_tokens]
-    res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
+    // a speculative pass is not part of a layer's fused dispatch (see build_layer_attn_linear)
+    if (!spec) {
+        res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
+    }
     cb(score, "indexer_score", il);
 
     const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool);
@@ -931,14 +947,15 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
         int *                     sections,
-        int                       il) {
+        int                       il,
+        bool                      spec) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     // indexer reads the same block input as q/k/v; no cache or no ratio means dense
     const bool qsa = inp_kpool != nullptr && hparams.dsv4_compress_ratios[il] > 0;
 
-    ggml_tensor * sel = qsa ? build_qsa_sel(mctx_hyb, inp_kpool, cur, inp_pos, inp->get_kq_mask(), sections, il) : nullptr;
+    ggml_tensor * sel = qsa ? build_qsa_sel(mctx_hyb, inp_kpool, cur, inp_pos, inp->get_kq_mask(), sections, il, spec) : nullptr;
 
     // Qwen3Next uses a single Q projection that outputs query + gate
     ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s); // [ (n_embd_head * 2) * n_head, n_tokens ]
@@ -1014,7 +1031,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
 ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
         llm_graph_input_rs * inp,
         ggml_tensor *        cur,
-        int                  il) {
+        int                  il,
+        ggml_tensor *        ssm_override,
+        ggml_tensor *        conv_override,
+        bool                 spec) {
     const auto * mctx_cur = inp->mctx;
 
     const int64_t d_inner      = hparams.ssm_d_inner;
@@ -1054,8 +1074,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
 
     gate = ggml_reshape_4d(ctx0, gate, 1, num_v_heads, n_seq_tokens, n_seqs);
 
-    ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
-    ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
+    // the routing predictor's speculative pass writes this layer's new state and conv tail into
+    // scratch: the exact block later reads the state this token has to update
+    ggml_tensor * conv_states_all = conv_override != nullptr ? conv_override : mctx_cur->get_r_l(il);
+    ggml_tensor * ssm_states_all  = ssm_override  != nullptr ? ssm_override  : mctx_cur->get_s_l(il);
 
     ggml_tensor * conv_kernel      = model.layers[il].ssm_conv1d;
     const int64_t conv_kernel_size = conv_kernel->ne[0];
@@ -1120,7 +1142,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
     cb(k_conv, "k_conv_predelta", il);
     cb(v_conv, "v_conv_predelta", il);
 
-    ggml_tensor * output = build_recurrent_attn(inp, ssm_states_all, q_conv, k_conv, v_conv, gate, beta, state, il);
+    ggml_tensor * output = build_recurrent_attn(inp, ssm_states_all, q_conv, k_conv, v_conv, gate, beta, state, il, !spec);
 
     ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
 
@@ -1186,6 +1208,100 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, co
     }
 
     return cur;
+}
+
+ggml_tensor * llama_model_qwen4exp::graph::build_moe_predict_scratch(ggml_tensor * proto, ggml_tensor ** slot) {
+    if (proto == nullptr) {
+        return nullptr;
+    }
+    if (*slot != nullptr) {
+        const bool same = (*slot)->type == proto->type &&
+                          (*slot)->ne[0] == proto->ne[0] && (*slot)->ne[1] == proto->ne[1] &&
+                          (*slot)->ne[2] == proto->ne[2] && (*slot)->ne[3] == proto->ne[3];
+        // a different geometry: skip the prediction rather than write a state of the wrong shape
+        return same ? *slot : nullptr;
+    }
+    ggml_tensor * t = ggml_new_tensor_4d(ctx0, proto->type,
+            proto->ne[0], proto->ne[1], proto->ne[2], proto->ne[3]);
+    cb(t, "moe_predict_scratch", -1);
+    *slot = t;
+    return t;
+}
+
+// Predict layer j = il + 1's routing from this layer's residual, which is missing this layer's MoE
+// output. The cheap form (mode=router) applies j's FFN mixer and router to it; the full form
+// (mode=block) runs j's own mixer block first, because that block's output is the largest term of
+// j's router input that a residual-only predictor cannot see. State writes of the speculative
+// pass are redirected: the recurrent state and the conv histories go to scratch (the exact block
+// reads what this token has to update), and an attention successor needs nothing because the
+// exact block rewrites the same cache cell before anything reads it. Nothing here changes the
+// output of the model: only which experts a prefetch reads.
+void llama_model_qwen4exp::graph::build_moe_predict(
+        llm_graph_input_rs * inp_recr,
+        llm_graph_input_attn_kv * inp_attn,
+        const llama_memory_hybrid_idx_context * mctx_hyb,
+        llm_graph_input_kpool * inp_kpool,
+        ggml_tensor * ple_emb,
+        ggml_tensor * res_hc,
+        ggml_tensor * inp_pos,
+        int * sections,
+        int il) {
+    const int j = il + 1;
+    if (j >= n_layer || res_hc == nullptr) {
+        return;
+    }
+
+    const auto & cfg = onebit::moe::config();
+    const bool block = cfg.mode == onebit::moe::predict_mode::block &&
+                       (hparams.is_recr(j) || cfg.attn);
+
+    // j's PLE injection sits before its attention mixer in the layer, and its conv history is
+    // read-modify-write like the recurrent state: always to scratch, block or not
+    ggml_tensor * rp = res_hc;
+    if (hparams.is_ple(j) && ple_emb != nullptr && inp_recr != nullptr) {
+        rp = build_ple(inp_recr, ple_emb, rp, j,
+                       build_moe_predict_scratch(inp_recr->mctx->get_p_l(j), &pred_ple_));
+    }
+
+    if (block) {
+        ggml_tensor * inj = nullptr;
+        ggml_tensor * cur = build_hc_mix(rp,
+                model.layers[j].hc_attn_norm, model.layers[j].hc_attn_down,
+                model.layers[j].hc_attn_up,   model.layers[j].hc_attn_inject, &inj, j);
+        ggml_tensor * blk = nullptr;
+        if (hparams.is_recr(j)) {
+            ggml_tensor * ssm  = build_moe_predict_scratch(inp_recr->mctx->get_s_l(j), &pred_ssm_);
+            ggml_tensor * conv = build_moe_predict_scratch(inp_recr->mctx->get_r_l(j), &pred_conv_);
+            if (ssm != nullptr && conv != nullptr) {
+                blk = build_layer_attn_linear(inp_recr, cur, j, ssm, conv, /*spec=*/true);
+            }
+        } else {
+            blk = build_layer_attn(inp_attn, mctx_hyb, inp_kpool, cur, inp_pos, sections, j, /*spec=*/true);
+        }
+        if (blk != nullptr) {
+            rp = build_hc_combine(rp, blk, inj, j);
+            cb(rp, "moe_predict_res", j);
+        }
+    }
+
+    // j's FFN mixer, then its router; only the ranking of the logits is used
+    ggml_tensor * inj2 = nullptr;
+    ggml_tensor * cur = build_hc_mix(rp,
+            model.layers[j].hc_ffn_norm, model.layers[j].hc_ffn_down,
+            model.layers[j].hc_ffn_up,   model.layers[j].hc_ffn_inject, &inj2, j);
+    ggml_tensor * logits = build_lora_mm(model.layers[j].ffn_gate_inp, cur);   // [n_expert, 1]
+    cb(logits, "moe_predict_logits", j);
+
+    const int k = onebit::moe::depth((int) n_expert_used);
+    ggml_tensor * ids = ggml_argsort_top_k(ctx0, logits, k);   // [k, 1], best first
+    cb(ids, "moe_predict_ids", j);
+    // the candidates' own logits, for the margin gate
+    ggml_tensor * scores = ggml_get_rows(ctx0,
+            ggml_reshape_3d(ctx0, logits, 1, logits->ne[0], logits->ne[1]), ids);   // [1, k, 1]
+    scores = ggml_reshape_2d(ctx0, scores, k, 1);
+    cb(scores, "moe_predict_scores", j);
+
+    onebit::moe::graph_prediction(ctx0, gf, j, ids, scores);
 }
 
 // PLE n-gram hash embedding: each token gathers ple_n_heads rows of a shared table.
@@ -1369,7 +1485,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_ple(
         llm_graph_input_rs * inp,
         ggml_tensor *        emb,
         ggml_tensor *        hidden,
-        int                  il) {
+        int                  il,
+        ggml_tensor *        conv_override) {
     const int64_t hc      = hparams.dsv4_hc_mult;
     const int64_t hc_dim  = hc * n_embd;
 
@@ -1418,7 +1535,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_ple(
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
     // [hist + n_seq_tokens, hc_dim, n_seqs], tokens on ne[0]
-    ggml_tensor * padded = build_conv_state_at(inp, inp->mctx->get_p_l(il),
+    ggml_tensor * padded = build_conv_state_at(inp,
+            conv_override != nullptr ? conv_override : inp->mctx->get_p_l(il),
             ggml_reshape_3d(ctx0, normalized, hc_dim, n_seq_tokens, n_seqs),
             hist, hc_dim, il);
 

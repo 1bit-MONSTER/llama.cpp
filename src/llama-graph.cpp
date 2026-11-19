@@ -1,5 +1,7 @@
 #include "llama-graph.h"
 
+#include "onebit-moe-predict.h"
+
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
@@ -2176,6 +2178,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     } else {
         probs = ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens);
     }
+
+    // the routing predictor rates its next-layer prediction against this layer's real routing
+    onebit::moe::graph_actual(ctx0, gf, il, selected_experts);
 
     ggml_tensor * weights = ggml_get_rows(ctx0, probs, selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
