@@ -6617,6 +6617,37 @@ static void add_cases(test_runner::Suite & suite) {
                                    1.0f / std::sqrt(320.0f),
                                    "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8",
                                    64); });
+    // engine#679: the decode-split registration is offered only where the split kernel wins, i.e. up to
+    // the measured multipass/general crossover (~2.9-3.0k tokens; see
+    // kDecodeSplitMaxKeyValueTokenCapacity). Above it the general kernel takes the node. These rows pin
+    // both arms against the CPU reference: kv=2048 is the cooperative reducer, kv=2304 is the multipass
+    // arm (the one the cap keeps for the 2048-2944 band), and kv=4096/16384 are the general kernel the
+    // decode falls through to above the cap. All four are capacity-64-aligned, so engine#2494's storage
+    // guard (K/V storage >= padded capacity) does not decline them for the wrong reason.
+    add(suite, "flash_attention.128.1.2048.1/sqrt(128).flash_attention_decode_split_f32_f16_wmma_next_q8",
+        [=] { run_common_flash_attention_cpu_reference_case(128,
+                                   1,
+                                   2048,
+                                   1.0f / std::sqrt(static_cast<float>(128)),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"); });
+    add(suite, "flash_attention.128.1.2304.1/sqrt(128).flash_attention_decode_split_f32_f16_wmma_next_q8",
+        [=] { run_common_flash_attention_cpu_reference_case(128,
+                                   1,
+                                   2304,
+                                   1.0f / std::sqrt(static_cast<float>(128)),
+                                   "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8"); });
+    add(suite, "flash_attention.128.1.4096.1/sqrt(128).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(128,
+                                   1,
+                                   4096,
+                                   1.0f / std::sqrt(static_cast<float>(128)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
+    add(suite, "flash_attention.128.1.16384.1/sqrt(128).flash_attention_f32_f16_wmma",
+        [=] { run_common_flash_attention_cpu_reference_case(128,
+                                   1,
+                                   16384,
+                                   1.0f / std::sqrt(static_cast<float>(128)),
+                                   "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
     add(suite, "fa_decode_split.1.512",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512); });
     add(suite, "fa_decode_split.4.513",

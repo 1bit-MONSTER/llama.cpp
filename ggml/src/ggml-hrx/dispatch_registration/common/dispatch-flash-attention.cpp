@@ -46,14 +46,23 @@ static constexpr KernelCatalogRef kCopyTransposeF16Kernel =
 static constexpr int64_t kDecodeRowCapacity         = 16;
 static constexpr int64_t kDecodeKvTileSize          = 64;
 // The decode-split reduce kernel (ggml.flash_attention.decode_split.reduce_fused, in the loom-libs
-// kernel corpus) has exactly two template.def implementations: one for key_value_token_capacity
-// 64-256, one for 257-2048. Nothing covers above 2048 - its cooperative reducer gives each
-// subgroup lane one partial KV block (capped at 32) and its per-workgroup scratch buffer is sized
-// for exactly 32 blocks x 64 tokens. Offering this dispatch above the ceiling makes the kernel
-// selector reject every candidate ("all_rejected") and the whole decode fail; match this bound so
-// the scheduler falls through to the general flash_attention_f32_f16_wmma dispatch instead (lower
-// priority, still correct here, just not split-parallelized for very long decode contexts).
-static constexpr int64_t kDecodeSplitMaxKeyValueTokenCapacity = 32768;
+// kernel corpus) serves key_value_token_capacity 64-2048 with its cooperative reducer (one subgroup
+// lane per partial KV block, at most 32 blocks) and everything above through
+// `reduce_completed.multipass`, which folds the per-head partials with one workgroup per KV head and
+// a serial per-lane block loop. The multipass arm costs more the longer the context, and on gfx1151
+// it overtakes the general flash_attention_f32_f16_wmma at a measured crossover of ~2.9-3.0k tokens:
+// Qwen3-4B-Q4_K_M, llama-bench -p 0 -n 128 -r 2, split-on vs registration-disabled (the general
+// kernel), arms interleaved in one claim, tok/s split/general: d=2048 59.84/55.87 (+7.1%), d=2304
+// 57.44/53.63 (+7.1%), d=3072 49.10/49.43 (parity), d=3584 45.50/46.78 (-2.7%), d=4096 40.66/43.96
+// (-7.5%), d=8192 22.25/31.78 (-30%), d=16384 10.41/20.02 (-48%). So the split dispatch is offered up
+// to 46 blocks (2944 tokens, just below that crossover) and the scheduler falls through to the
+// general kernel (priority 50) above it. The general kernel is correct for arbitrary
+// key_value_token_count - it already serves prefill - it is just not split-parallelized.
+// The 2048-2944 band runs the multipass arm, which has its own CPU-reference row (kv=2304) in
+// tests/test-hrx-ops.cpp. The crossover is shape-dependent - the reducer gets one workgroup per KV
+// head - and this bound is measured on an 8-KV-head shape; a parallel reducer or a shape-aware bound
+// is the follow-up, not another constant. engine#679.
+static constexpr int64_t kDecodeSplitMaxKeyValueTokenCapacity = 2944;
 // ggml.copy_transpose_f16 declares row_count and column_count in [32, 32768] (copy_f32.loom).
 // Past that the JIT refuses the specialization ("violates constraint 'range'") and the whole
 // prompt batch fails, so a longer context keeps V in the row-major cache layout instead.
