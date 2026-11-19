@@ -77,7 +77,17 @@ static constexpr KernelCatalogRef kMulMatQ6KF32WmmaPrefillWave32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_q6_k_f32_wmma_prefill_wave32");
 static constexpr KernelCatalogRef kMulMatQ6KF16WmmaPrefillWave32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_q6_k_f16_wmma_prefill_wave32");
-// engine #856: the same f16 prefill kernel reading the REPACKED int8 tiles the decode consumer already uses, so a
+// engine #2832: the same schedule for an IQ1_S weight, whose motif arm reads stored 50-byte blocks and stages the
+// 4 KiB codebook once per workgroup. IQ1_S reaches the corpus as format 26 (dispatch-mul-mat-weight-format.h).
+static constexpr KernelCatalogRef kMulMatIQ1SF16WmmaPrefillWave32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32");
+static constexpr KernelCatalogRef kMulMatIQ2XXSF16WmmaPrefillWave32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_iq2_xxs_f16_wmma_prefill_wave32");
+
+static constexpr KernelCatalogRef kMulMatIQ2XSF16WmmaPrefillWave32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_iq2_xs_f16_wmma_prefill_wave32");
+static constexpr KernelCatalogRef kMulMatIQ1MF16WmmaPrefillWave32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_iq1_m_f16_wmma_prefill_wave32");// engine #856: the same f16 prefill kernel reading the REPACKED int8 tiles the decode consumer already uses, so a
 // q6_k weight needs ONE resident copy instead of one per layout. Opt-in (GGML_HRX_Q6K_PACKED_PREFILL=1): the stored
 // path stays the default until PPL and tok/s are measured against it.
 static constexpr KernelCatalogRef kMulMatQ6KF16WmmaPrefillFromPackedKernel =
@@ -812,6 +822,157 @@ static bool match_q6_k_prefill_wave32_dispatch(const DispatchMatchContext & cont
                                                           : kMulMatQ6KF16WmmaPrefillWave32Kernel,
                                               context.root_index,
                                               dispatch_match, packed_rows);
+}
+
+static bool match_iq1_s_prefill_wave32_dispatch(const DispatchMatchContext & context,
+                                                DispatchMatch &              dispatch_match) {
+    const CommonMulMatMatch match = common_match_mul_mat_any_format(
+        context.graph, context.root_node, kMulMatIQ1SF16WmmaPrefillWave32Kernel, false);
+    // The 256-token floor is the kernel's own assume (ops/mul_mat_f32_f32_wmma.loom); a 128-token batch would break it.
+    if (!match.matched() || match.weight->type != GGML_TYPE_IQ1_S || match.weight->alias_source.value >= 0 ||
+        match.token_count < 256 || match.token_count > 2048 || match.token_count % 256 != 0 ||
+        match.input_size % 256 != 0 || match.output_size % 64 != 0) {
+        return false;
+    }
+
+    // IQ1_S has no packed row layout, so the weight is bound as stored and the k16-major activation copy (a Q4_K/Q6_K
+    // layout) does not apply; common_mul_mat_uses_k16_major_f16 already answers false for it.
+    DispatchBinding activation;
+    int             activation_scale_log2 = 0;
+    if (!common_prepare_f16_input(context, *match.input, match.input_size, match.token_count, dispatch_match,
+                                  activation, activation_scale_log2)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kMulMatIQ1SF16WmmaPrefillWave32Kernel);
+    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.input_size", common_to_config_value(match.input_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_size", common_to_config_value(match.output_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
+                                               common_to_config_value(match.token_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", "0");
+    common_set_f16_prefill_activation_scale(dispatch, activation_scale_log2);
+    dispatch.bindings.push_back({ activation.value, 0, activation.length });
+    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+static bool match_iq2_xxs_prefill_wave32_dispatch(const DispatchMatchContext & context,
+                                                DispatchMatch &              dispatch_match) {
+    const CommonMulMatMatch match = common_match_mul_mat_any_format(
+        context.graph, context.root_node, kMulMatIQ2XXSF16WmmaPrefillWave32Kernel, false);
+    // The 256-token floor is the kernel's own assume (ops/mul_mat_f32_f32_wmma.loom); a 128-token batch would break it.
+    if (!match.matched() || match.weight->type != GGML_TYPE_IQ2_XXS || match.weight->alias_source.value >= 0 ||
+        match.token_count < 256 || match.token_count > 2048 || match.token_count % 256 != 0 ||
+        match.input_size % 256 != 0 || match.output_size % 64 != 0) {
+        return false;
+    }
+
+    // IQ2_XXS has no packed row layout, so the weight is bound as stored and the k16-major activation copy (a Q4_K/Q6_K
+    // layout) does not apply; common_mul_mat_uses_k16_major_f16 already answers false for it.
+    DispatchBinding activation;
+    int             activation_scale_log2 = 0;
+    if (!common_prepare_f16_input(context, *match.input, match.input_size, match.token_count, dispatch_match,
+                                  activation, activation_scale_log2)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kMulMatIQ2XXSF16WmmaPrefillWave32Kernel);
+    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.input_size", common_to_config_value(match.input_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_size", common_to_config_value(match.output_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
+                                               common_to_config_value(match.token_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", "0");
+    common_set_f16_prefill_activation_scale(dispatch, activation_scale_log2);
+    dispatch.bindings.push_back({ activation.value, 0, activation.length });
+    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
+static bool match_iq2_xs_prefill_wave32_dispatch(const DispatchMatchContext & context,
+                                                DispatchMatch &              dispatch_match) {
+    const CommonMulMatMatch match = common_match_mul_mat_any_format(
+        context.graph, context.root_node, kMulMatIQ2XSF16WmmaPrefillWave32Kernel, false);
+    // The 256-token floor is the kernel's own assume (ops/mul_mat_f32_f32_wmma.loom); a 128-token batch would break it.
+    if (!match.matched() || match.weight->type != GGML_TYPE_IQ2_XS || match.weight->alias_source.value >= 0 ||
+        match.token_count < 256 || match.token_count > 2048 || match.token_count % 256 != 0 ||
+        match.input_size % 256 != 0 || match.output_size % 64 != 0) {
+        return false;
+    }
+
+    // IQ2_XS has no packed row layout, so the weight is bound as stored and the k16-major activation copy (a Q4_K/Q6_K
+    // layout) does not apply; common_mul_mat_uses_k16_major_f16 already answers false for it.
+    DispatchBinding activation;
+    int             activation_scale_log2 = 0;
+    if (!common_prepare_f16_input(context, *match.input, match.input_size, match.token_count, dispatch_match,
+                                  activation, activation_scale_log2)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kMulMatIQ2XSF16WmmaPrefillWave32Kernel);
+    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.input_size", common_to_config_value(match.input_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_size", common_to_config_value(match.output_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
+                                               common_to_config_value(match.token_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", "0");
+    common_set_f16_prefill_activation_scale(dispatch, activation_scale_log2);
+    dispatch.bindings.push_back({ activation.value, 0, activation.length });
+    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
+static bool match_iq1_m_prefill_wave32_dispatch(const DispatchMatchContext & context,
+                                                DispatchMatch &              dispatch_match) {
+    const CommonMulMatMatch match = common_match_mul_mat_any_format(
+        context.graph, context.root_node, kMulMatIQ1MF16WmmaPrefillWave32Kernel, false);
+    // The 256-token floor is the kernel's own assume (ops/mul_mat_f32_f32_wmma.loom); a 128-token batch would break it.
+    if (!match.matched() || match.weight->type != GGML_TYPE_IQ1_M || match.weight->alias_source.value >= 0 ||
+        match.token_count < 256 || match.token_count > 2048 || match.token_count % 256 != 0 ||
+        match.input_size % 256 != 0 || match.output_size % 64 != 0) {
+        return false;
+    }
+
+    // IQ1_M has no packed row layout, so the weight is bound as stored and the k16-major activation copy (a Q4_K/Q6_K
+    // layout) does not apply; common_mul_mat_uses_k16_major_f16 already answers false for it.
+    DispatchBinding activation;
+    int             activation_scale_log2 = 0;
+    if (!common_prepare_f16_input(context, *match.input, match.input_size, match.token_count, dispatch_match,
+                                  activation, activation_scale_log2)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kMulMatIQ1MF16WmmaPrefillWave32Kernel);
+    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.input_size", common_to_config_value(match.input_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_size", common_to_config_value(match.output_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
+                                               common_to_config_value(match.token_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", "0");
+    common_set_f16_prefill_activation_scale(dispatch, activation_scale_log2);
+    dispatch.bindings.push_back({ activation.value, 0, activation.length });
+    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
 }
 
 static bool match_symmetric_i4_prefill_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
@@ -1683,6 +1844,41 @@ void register_mul_mat_dispatches(DispatchRegistryBuilder & registry) {
         295,
         DispatchSource::Common,
         match_q6_k_prefill_wave32_dispatch,
+    });
+    registry.add({
+        "common.mul_mat.iq1_s_prefill_wave32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        294,
+        DispatchSource::Common,
+        match_iq1_s_prefill_wave32_dispatch,
+    });
+
+registry.add({
+        "common.mul_mat.iq2_xxs_prefill_wave32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        293,
+        DispatchSource::Common,
+        match_iq2_xxs_prefill_wave32_dispatch,
+    });
+
+registry.add({
+        "common.mul_mat.iq2_xs_prefill_wave32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        292,
+        DispatchSource::Common,
+        match_iq2_xs_prefill_wave32_dispatch,
+    });
+
+registry.add({
+        "common.mul_mat.iq1_m_prefill_wave32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        291,
+        DispatchSource::Common,
+        match_iq1_m_prefill_wave32_dispatch,
     });
     registry.add({
         "common.mul_mat.q6_k_token1_final_projection_q8",

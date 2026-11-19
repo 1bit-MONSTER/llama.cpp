@@ -2477,6 +2477,7 @@
      "motifs/bf16_f16.loom",
      "motifs/f32_f16.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom"
@@ -2494,6 +2495,7 @@
     "motifs/bf16_f16.loom",
     "motifs/f32_f16.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom"
@@ -2550,6 +2552,7 @@
      "motifs/bf16_f16.loom",
      "motifs/f32_f16.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom"
@@ -2567,6 +2570,7 @@
     "motifs/bf16_f16.loom",
     "motifs/f32_f16.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom"
@@ -2617,6 +2621,7 @@
      "motifs/bf16_f16.loom",
      "motifs/f32_f16.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom"
@@ -2634,6 +2639,283 @@
     "motifs/bf16_f16.loom",
     "motifs/f32_f16.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
+    "motifs/elementwise/binary_apply.loom",
+    "motifs/dequant_prism.loom",
+    "motifs/dequant_1bit.loom"
+   ]
+  },
+  {
+   "name": "ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+   "family": "loom_libs",
+   "symbol": "ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+   "source": "ops/mul_mat_f32_f32_wmma.loom",
+   "workload_parameters": [
+    {
+     "name": "token_count",
+     "type": "index"
+    }
+   ],
+   "launch_parameters": [
+    {
+     "name": "token_count",
+     "type": "index"
+    }
+   ],
+   "bindings": [
+    "input",
+    "weight",
+    "output"
+   ],
+   "binding_access": [
+    "read",
+    "read",
+    "write"
+   ],
+   "target_selector": "",
+   "compile_recipe": {
+    "mode": "direct",
+    "primary_sources": [
+     "ops/mul_mat_f32_f32_wmma.loom"
+    ],
+    "library_sources": [
+     "motifs/mul_mat_f32_f32_wmma_core.loom",
+     "motifs/dequant.loom",
+     "motifs/elementwise/unary_apply.loom",
+     "motifs/q4_k_f16.loom",
+     "motifs/q6_k_f16.loom",
+     "motifs/q8_0_f16.loom",
+     "motifs/q8_1_f16.loom",
+     "motifs/f16_f16.loom",
+     "motifs/bf16_f16.loom",
+     "motifs/f32_f16.loom",
+     "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
+     "motifs/elementwise/binary_apply.loom",
+     "motifs/dequant_prism.loom",
+     "motifs/dequant_1bit.loom"
+    ]
+   },
+   "compile_dependencies": [
+    "motifs/mul_mat_f32_f32_wmma_core.loom",
+    "motifs/dequant.loom",
+    "motifs/elementwise/unary_apply.loom",
+    "motifs/q4_k_f16.loom",
+    "motifs/q6_k_f16.loom",
+    "motifs/q8_0_f16.loom",
+    "motifs/q8_1_f16.loom",
+    "motifs/f16_f16.loom",
+    "motifs/bf16_f16.loom",
+    "motifs/f32_f16.loom",
+    "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
+    "motifs/elementwise/binary_apply.loom",
+    "motifs/dequant_prism.loom",
+    "motifs/dequant_1bit.loom"
+   ]
+  },
+  {
+   "name": "ggml_mul_mat_iq2_xxs_f16_wmma_prefill_wave32",
+   "family": "loom_libs",
+   "symbol": "ggml_mul_mat_iq2_xxs_f16_wmma_prefill_wave32",
+   "source": "ops/mul_mat_f32_f32_wmma.loom",
+   "workload_parameters": [
+    {
+     "name": "token_count",
+     "type": "index"
+    }
+   ],
+   "launch_parameters": [
+    {
+     "name": "token_count",
+     "type": "index"
+    }
+   ],
+   "bindings": [
+    "input",
+    "weight",
+    "output"
+   ],
+   "binding_access": [
+    "read",
+    "read",
+    "write"
+   ],
+   "target_selector": "",
+   "compile_recipe": {
+    "mode": "direct",
+    "primary_sources": [
+     "ops/mul_mat_f32_f32_wmma.loom"
+    ],
+    "library_sources": [
+     "motifs/mul_mat_f32_f32_wmma_core.loom",
+     "motifs/dequant.loom",
+     "motifs/elementwise/unary_apply.loom",
+     "motifs/q4_k_f16.loom",
+     "motifs/q6_k_f16.loom",
+     "motifs/q8_0_f16.loom",
+     "motifs/q8_1_f16.loom",
+     "motifs/f16_f16.loom",
+     "motifs/bf16_f16.loom",
+     "motifs/f32_f16.loom",
+     "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
+     "motifs/elementwise/binary_apply.loom",
+     "motifs/dequant_prism.loom",
+     "motifs/dequant_1bit.loom"
+    ]
+   },
+   "compile_dependencies": [
+    "motifs/mul_mat_f32_f32_wmma_core.loom",
+    "motifs/dequant.loom",
+    "motifs/elementwise/unary_apply.loom",
+    "motifs/q4_k_f16.loom",
+    "motifs/q6_k_f16.loom",
+    "motifs/q8_0_f16.loom",
+    "motifs/q8_1_f16.loom",
+    "motifs/f16_f16.loom",
+    "motifs/bf16_f16.loom",
+    "motifs/f32_f16.loom",
+    "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
+    "motifs/elementwise/binary_apply.loom",
+    "motifs/dequant_prism.loom",
+    "motifs/dequant_1bit.loom"
+   ]
+  },
+  {
+   "name": "ggml_mul_mat_iq2_xs_f16_wmma_prefill_wave32",
+   "family": "loom_libs",
+   "symbol": "ggml_mul_mat_iq2_xs_f16_wmma_prefill_wave32",
+   "source": "ops/mul_mat_f32_f32_wmma.loom",
+   "workload_parameters": [
+    {
+     "name": "token_count",
+     "type": "index"
+    }
+   ],
+   "launch_parameters": [
+    {
+     "name": "token_count",
+     "type": "index"
+    }
+   ],
+   "bindings": [
+    "input",
+    "weight",
+    "output"
+   ],
+   "binding_access": [
+    "read",
+    "read",
+    "write"
+   ],
+   "target_selector": "",
+   "compile_recipe": {
+    "mode": "direct",
+    "primary_sources": [
+     "ops/mul_mat_f32_f32_wmma.loom"
+    ],
+    "library_sources": [
+     "motifs/mul_mat_f32_f32_wmma_core.loom",
+     "motifs/dequant.loom",
+     "motifs/elementwise/unary_apply.loom",
+     "motifs/q4_k_f16.loom",
+     "motifs/q6_k_f16.loom",
+     "motifs/q8_0_f16.loom",
+     "motifs/q8_1_f16.loom",
+     "motifs/f16_f16.loom",
+     "motifs/bf16_f16.loom",
+     "motifs/f32_f16.loom",
+     "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
+     "motifs/elementwise/binary_apply.loom",
+     "motifs/dequant_prism.loom",
+     "motifs/dequant_1bit.loom"
+    ]
+   },
+   "compile_dependencies": [
+    "motifs/mul_mat_f32_f32_wmma_core.loom",
+    "motifs/dequant.loom",
+    "motifs/elementwise/unary_apply.loom",
+    "motifs/q4_k_f16.loom",
+    "motifs/q6_k_f16.loom",
+    "motifs/q8_0_f16.loom",
+    "motifs/q8_1_f16.loom",
+    "motifs/f16_f16.loom",
+    "motifs/bf16_f16.loom",
+    "motifs/f32_f16.loom",
+    "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
+    "motifs/elementwise/binary_apply.loom",
+    "motifs/dequant_prism.loom",
+    "motifs/dequant_1bit.loom"
+   ]
+  },
+  {
+   "name": "ggml_mul_mat_iq1_m_f16_wmma_prefill_wave32",
+   "family": "loom_libs",
+   "symbol": "ggml_mul_mat_iq1_m_f16_wmma_prefill_wave32",
+   "source": "ops/mul_mat_f32_f32_wmma.loom",
+   "workload_parameters": [
+    {
+     "name": "token_count",
+     "type": "index"
+    }
+   ],
+   "launch_parameters": [
+    {
+     "name": "token_count",
+     "type": "index"
+    }
+   ],
+   "bindings": [
+    "input",
+    "weight",
+    "output"
+   ],
+   "binding_access": [
+    "read",
+    "read",
+    "write"
+   ],
+   "target_selector": "",
+   "compile_recipe": {
+    "mode": "direct",
+    "primary_sources": [
+     "ops/mul_mat_f32_f32_wmma.loom"
+    ],
+    "library_sources": [
+     "motifs/mul_mat_f32_f32_wmma_core.loom",
+     "motifs/dequant.loom",
+     "motifs/elementwise/unary_apply.loom",
+     "motifs/q4_k_f16.loom",
+     "motifs/q6_k_f16.loom",
+     "motifs/q8_0_f16.loom",
+     "motifs/q8_1_f16.loom",
+     "motifs/f16_f16.loom",
+     "motifs/bf16_f16.loom",
+     "motifs/f32_f16.loom",
+     "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
+     "motifs/elementwise/binary_apply.loom",
+     "motifs/dequant_prism.loom",
+     "motifs/dequant_1bit.loom"
+    ]
+   },
+   "compile_dependencies": [
+    "motifs/mul_mat_f32_f32_wmma_core.loom",
+    "motifs/dequant.loom",
+    "motifs/elementwise/unary_apply.loom",
+    "motifs/q4_k_f16.loom",
+    "motifs/q6_k_f16.loom",
+    "motifs/q8_0_f16.loom",
+    "motifs/q8_1_f16.loom",
+    "motifs/f16_f16.loom",
+    "motifs/bf16_f16.loom",
+    "motifs/f32_f16.loom",
+    "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom"
@@ -2684,6 +2966,7 @@
      "motifs/bf16_f16.loom",
      "motifs/f32_f16.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom"
@@ -2701,6 +2984,7 @@
     "motifs/bf16_f16.loom",
     "motifs/f32_f16.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom"
@@ -5180,6 +5464,7 @@
      "motifs/bf16_f16.loom",
      "motifs/f32_f16.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/quantize_q8_1_x4.loom",
      "motifs/dequant_1bit.loom",
@@ -5198,6 +5483,7 @@
     "motifs/bf16_f16.loom",
     "motifs/f32_f16.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/quantize_q8_1_x4.loom",
     "motifs/dequant_1bit.loom",
@@ -5253,6 +5539,7 @@
      "motifs/bf16_f16.loom",
      "motifs/f32_f16.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/quantize_q8_1_x4.loom",
      "motifs/dequant_1bit.loom",
@@ -5271,6 +5558,82 @@
     "motifs/bf16_f16.loom",
     "motifs/f32_f16.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
+    "motifs/elementwise/binary_apply.loom",
+    "motifs/quantize_q8_1_x4.loom",
+    "motifs/dequant_1bit.loom",
+    "motifs/dequant_prism.loom"
+   ]
+  },
+  {
+   "name": "ggml_mul_mat_iq1_s_swiglu_f16_wmma_prefill_wave32",
+   "family": "loom_libs",
+   "symbol": "ggml_mul_mat_iq1_s_swiglu_f16_wmma_prefill_wave32",
+   "source": "ops/mul_mat_swiglu_f32_f32_wmma.loom",
+   "workload_parameters": [
+    {
+     "name": "token_count",
+     "type": "index"
+    }
+   ],
+   "launch_parameters": [
+    {
+     "name": "token_count",
+     "type": "index"
+    }
+   ],
+   "bindings": [
+    "input",
+    "weight",
+    "up_weight",
+    "output",
+    "f16_output"
+   ],
+   "binding_access": [
+    "read",
+    "read",
+    "read",
+    "write",
+    "write"
+   ],
+   "target_selector": "",
+   "compile_recipe": {
+    "mode": "direct",
+    "primary_sources": [
+     "ops/mul_mat_swiglu_f32_f32_wmma.loom"
+    ],
+    "library_sources": [
+     "motifs/mul_mat_f32_f32_wmma_core.loom",
+     "motifs/dequant.loom",
+     "motifs/elementwise/unary_apply.loom",
+     "motifs/q4_k_f16.loom",
+     "motifs/q6_k_f16.loom",
+     "motifs/q8_0_f16.loom",
+     "motifs/q8_1_f16.loom",
+     "motifs/f16_f16.loom",
+     "motifs/bf16_f16.loom",
+     "motifs/f32_f16.loom",
+     "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
+     "motifs/elementwise/binary_apply.loom",
+     "motifs/quantize_q8_1_x4.loom",
+     "motifs/dequant_1bit.loom",
+     "motifs/dequant_prism.loom"
+    ]
+   },
+   "compile_dependencies": [
+    "motifs/mul_mat_f32_f32_wmma_core.loom",
+    "motifs/dequant.loom",
+    "motifs/elementwise/unary_apply.loom",
+    "motifs/q4_k_f16.loom",
+    "motifs/q6_k_f16.loom",
+    "motifs/q8_0_f16.loom",
+    "motifs/q8_1_f16.loom",
+    "motifs/f16_f16.loom",
+    "motifs/bf16_f16.loom",
+    "motifs/f32_f16.loom",
+    "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/quantize_q8_1_x4.loom",
     "motifs/dequant_1bit.loom",
@@ -5324,6 +5687,7 @@
      "motifs/bf16_f16.loom",
      "motifs/f32_f16.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/quantize_q8_1_x4.loom",
      "motifs/dequant_1bit.loom",
@@ -5342,6 +5706,7 @@
     "motifs/bf16_f16.loom",
     "motifs/f32_f16.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/quantize_q8_1_x4.loom",
     "motifs/dequant_1bit.loom",
@@ -5397,6 +5762,7 @@
      "motifs/bf16_f16.loom",
      "motifs/f32_f16.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/quantize_q8_1_x4.loom",
      "motifs/dequant_1bit.loom",
@@ -5415,6 +5781,7 @@
     "motifs/bf16_f16.loom",
     "motifs/f32_f16.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/quantize_q8_1_x4.loom",
     "motifs/dequant_1bit.loom",
@@ -5468,6 +5835,7 @@
      "motifs/bf16_f16.loom",
      "motifs/f32_f16.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/quantize_q8_1_x4.loom",
      "motifs/dequant_1bit.loom",
@@ -5486,6 +5854,7 @@
     "motifs/bf16_f16.loom",
     "motifs/f32_f16.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/quantize_q8_1_x4.loom",
     "motifs/dequant_1bit.loom",
@@ -6380,6 +6749,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -6395,6 +6765,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
@@ -6443,6 +6814,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -6458,6 +6830,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
@@ -6535,6 +6908,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -6550,6 +6924,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
@@ -6592,6 +6967,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -6607,6 +6983,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
@@ -6655,6 +7032,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -6670,6 +7048,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
@@ -6720,6 +7099,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -6735,6 +7115,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
@@ -6779,6 +7160,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -6794,6 +7176,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
@@ -10364,6 +10747,7 @@
      "motifs/bf16_f16.loom",
      "motifs/f32_f16.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom"
@@ -10381,6 +10765,7 @@
     "motifs/bf16_f16.loom",
     "motifs/f32_f16.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom"
@@ -11474,6 +11859,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -11489,6 +11875,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
@@ -11537,6 +11924,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -11552,6 +11940,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
@@ -11600,6 +11989,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -11615,6 +12005,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
@@ -11675,6 +12066,7 @@
      "motifs/q6_k_f16.loom",
      "motifs/dequant.loom",
      "motifs/mul_mat_quantized_f16_prefill.loom",
+     "motifs/kquant_iq1_s.loom",
      "motifs/elementwise/binary_apply.loom",
      "motifs/dequant_prism.loom",
      "motifs/dequant_1bit.loom",
@@ -11690,6 +12082,7 @@
     "motifs/q6_k_f16.loom",
     "motifs/dequant.loom",
     "motifs/mul_mat_quantized_f16_prefill.loom",
+    "motifs/kquant_iq1_s.loom",
     "motifs/elementwise/binary_apply.loom",
     "motifs/dequant_prism.loom",
     "motifs/dequant_1bit.loom",
