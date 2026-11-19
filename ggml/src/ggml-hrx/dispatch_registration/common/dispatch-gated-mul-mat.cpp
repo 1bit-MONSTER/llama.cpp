@@ -29,6 +29,8 @@ static constexpr KernelCatalogRef kMulMatSwiGLUQ4Q8OutputKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot_q8_output");
 static constexpr KernelCatalogRef kMulMatSwiGLUQ4Q8PrefillKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32");
+static constexpr KernelCatalogRef kMulMatSwiGLUIQ1SF16WmmaPrefillWave32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_iq1_s_swiglu_f16_wmma_prefill_wave32");
 static constexpr KernelCatalogRef kQuantizeF32SymmetricI4K32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_quantize_f32_symmetric_i4_k32");
 static constexpr KernelCatalogRef kMulMatSymmetricI4LowRowAdjacentDualWmmaKernel =
@@ -823,6 +825,74 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
     return true;
 }
 
+static bool match_mul_mat_iq1_s_swiglu_prefill_dispatch(const DispatchMatchContext & context,
+                                                       DispatchMatch &              dispatch_match) {
+    const MulMatSwiGLUMatch match = match_mul_mat_swiglu(context);
+    // The 256-token floor and the 256-token depth step are the kernel's own assumes; output_size % 64 is its tile.
+    if (!match.matched() || match.gate_format != CommonMulMatWeightFormat::IQ1_S ||
+        match.up_format != CommonMulMatWeightFormat::IQ1_S || match.token_count < 256 ||
+        match.token_count > 2048 || match.token_count % 256 != 0 || match.input_size % 256 != 0 ||
+        match.output_size % 64 != 0 || match.gate_weight->alias_source.value >= 0 ||
+        match.up_weight->alias_source.value >= 0 ||
+        !distinct_storage(context.graph, *match.gate_weight, *match.up_weight) ||
+        !distinct_storage(context.graph, *match.gate_output, *match.up_output)) {
+        return false;
+    }
+
+    // IQ1_S has no packed row layout and no k16-major activation copy, and the published schedule is the staged one:
+    // the activation goes in as plain f16 and the fused copy comes back un-packed, both pinned in the kernel.def.
+    DispatchBinding activation;
+    int             activation_scale_log2 = 0;
+    if (!common_prepare_f16_input(context, *match.input, match.input_size, match.token_count, dispatch_match,
+                                  activation, activation_scale_log2)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kMulMatSwiGLUIQ1SF16WmmaPrefillWave32Kernel);
+    common_set_f16_prefill_activation_scale(dispatch, activation_scale_log2);
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.f16_output_layout", "0");
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.op",
+                                               common_to_config_value(static_cast<int64_t>(binary_kind_config_value(match.op))));
+    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.input_size",
+                                               common_to_config_value(match.input_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.output_size",
+                                               common_to_config_value(match.output_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
+                                               common_to_config_value(match.token_count));
+    dispatch.bindings.push_back({ activation.value, 0, activation.length });
+    for (const Value * weight : { match.gate_weight, match.up_weight }) {
+        dispatch.bindings.push_back({ weight->id, 0, weight->byte_count });
+    }
+    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+
+    const size_t f16_bytes = match.output->byte_count / 2;
+    const ValueId f16_output(context.next_plan_value.value + static_cast<int32_t>(dispatch_match.transients.size()));
+    constexpr const char * f16_name = "common.mul_mat_swiglu.f16";
+    dispatch.bindings.push_back({ f16_output, 0, f16_bytes });
+    dispatch_match.transients.push_back({ f16_output, f16_name, f16_bytes, 256 });
+    // The kernel publishes this f16 copy of the fused result as value * 2^-6 (engine #1539, #1962).
+    Status status;
+    if (!dispatch_match.metadata.append_alternate_value(
+            { match.output->id, f16_output, GGML_TYPE_F16, f16_bytes, f16_name, kCommonF16ActivationScaleLog2 },
+            status)) {
+        dispatch_match.status.append(status);
+        return false;
+    }
+
+    if (!append_covered_node_index_once(context.graph, context.covered_nodes, match.gate_node,
+                                        dispatch_match.covered_nodes) ||
+        !append_covered_node_index_once(context.graph, context.covered_nodes, match.up_node,
+                                        dispatch_match.covered_nodes) ||
+        !append_covered_node_index_once(context.graph, context.covered_nodes, match.glu_node,
+                                        dispatch_match.covered_nodes)) {
+        return false;
+    }
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool match_decode_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const MulMatSwiGLUMatch match = match_mul_mat_swiglu(context);
     if (!match.decode_matched()) {
@@ -883,7 +953,15 @@ void register_gated_mul_mat_dispatches(DispatchRegistryBuilder & registry) {
         match_mul_mat_swiglu_symmetric_i4_lowrow_dispatch,
     });
     registry.add({
-        "common.mul_mat_swiglu_q5_projection.symmetric_i4_q8_plane",
+        "common.mul_mat_swiglu.iq1_s_prefill_wave32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        305,
+        DispatchSource::Common,
+        match_mul_mat_iq1_s_swiglu_prefill_dispatch,
+    });
+    registry.add({
+        "common.mul_mat_swiglu.q5_projection.symmetric_i4_q8_plane",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::Fused,
         300,

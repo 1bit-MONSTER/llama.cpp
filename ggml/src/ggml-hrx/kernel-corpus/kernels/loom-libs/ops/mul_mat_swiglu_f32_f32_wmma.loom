@@ -1530,3 +1530,35 @@ kernel.def target(@ggml_mul_mat_swiglu_gfx11_wave32) export("ggml_mul_mat_swiglu
   func.call @ggml_mul_mat_quantized_f16_prefill_wave32(%prefill_weight_format, %binary_op, %paired, %packed_input, %packed_output, %bounded_token_count, %input_size, %bounded_output_size, %channel_tile, %token_tile, %input, %weight, %up_weight, %output, %f16_output) : (index, index, i1, i1, i1, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
+
+// IQ1_S: 50-byte blocks of 256 values reading a 4 KiB codebook the body stages once. The published schedule is the
+// staged one (no K16-major packed input, no packed f16 output), the only shape the IQ1 publish is proven at, so both
+// layouts are pinned here instead of being derived from ggml_swiglu_use_packed_f16.
+kernel.def target(@ggml_mul_mat_swiglu_gfx11_wave32) export("ggml_mul_mat_iq1_s_swiglu_f16_wmma_prefill_wave32") @ggml_mul_mat_iq1_s_swiglu_f16_wmma_prefill_wave32(%token_count: index) {
+  %output_size = config.get @ggml.mul_mat_swiglu.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %c512 = index.constant 512 : index
+  %token_tile = index.constant 256 : index
+  %channel_tile = index.constant 64 : index
+  %output_tiles = index.div %output_size, %channel_tile : index
+  %token_tiles = index.div %token_capacity, %token_tile : index
+  kernel.launch.config workgroups(%token_tiles, %output_tiles, %c1) workgroup_size(%c512, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %up_weight: buffer, %output: buffer, %f16_output: buffer) {
+  %input_size = config.get @ggml.mul_mat_swiglu.input_size : index
+  %output_size = config.get @ggml.mul_mat_swiglu.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 256, 2048), multiple_of(%token_count, 256), le(%token_count, %token_capacity)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 64, 262144), multiple_of(%output_size, 64)] : index
+  %channel_tile = kernel.workgroup.id<y> : index
+  %token_tile = kernel.workgroup.id<x> : index
+  %paired = scalar.constant true : i1
+  %packed_input = scalar.constant false : i1
+  %packed_output = scalar.constant false : i1
+  %prefill_weight_format = index.constant 26 : index
+  %binary_op = config.get @ggml.mul_mat_swiglu.op : index
+  func.call @ggml_mul_mat_quantized_f16_prefill_wave32(%prefill_weight_format, %binary_op, %paired, %packed_input, %packed_output, %bounded_token_count, %input_size, %bounded_output_size, %channel_tile, %token_tile, %input, %weight, %up_weight, %output, %f16_output) : (index, index, i1, i1, i1, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
