@@ -441,6 +441,13 @@ target_link_libraries(test-server-health PRIVATE ggml)
 target_include_directories(test-server-health PRIVATE ../tools/server)
 add_test(NAME test-server-health COMMAND test-server-health)
 
+# engine#2912: a device case that cannot see a device must not answer success. The caller runs one case to test a
+# hypothesis and reads the exit code; on 2026-11-20 three device cases came back rc 0 in one second inside a held
+# gpu-hold ticket, because another tenant was initialising into the GPU. The runner answers 77 now (the same "skipped"
+# the engine's ctest rows use), and this row is the arm: no device, no model, ~0 s, and it fails on the old behaviour.
+add_executable(test-testing-suite-skip test-testing-suite-skip.cpp)
+add_test(NAME test-testing-suite-skip COMMAND test-testing-suite-skip)
+
 if (TARGET ggml-hrx)
     # engine#2774: the recorded-stale expectation table in hrx-ops-test.cpp must stay honest, and its own rot detector
     # can only fire on a device run that reaches the case. This answers it from the source: every recorded kernel is

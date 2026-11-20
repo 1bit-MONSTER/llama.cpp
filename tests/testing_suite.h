@@ -252,8 +252,12 @@ inline int run_single_case_in_process(const Config &           config,
         return 2;
     }
     if (test_case->requires_device && !has_device) {
-        std::fprintf(stderr, "test skipped: no device available for %s\n", config.suite_name.c_str());
-        return 0;
+        // 77, not 0 (engine#2912): a caller running one case to test a hypothesis reads the exit code, and a skipped
+        // case that answers success is a green tick over nothing -- measured on this box in a held gpu-hold ticket,
+        // where three device cases came back rc 0 in one second because another tenant held the GPU. 77 is the same
+        // "skipped" the engine's ctest rows use (SKIP_RETURN_CODE 77), so one convention covers both.
+        std::fprintf(stderr, "test skipped (77): no device available for %s\n", config.suite_name.c_str());
+        return 77;
     }
     test_case->run();
     return 0;
