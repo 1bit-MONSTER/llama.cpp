@@ -948,12 +948,23 @@ static bool match_routed_ffn_gate_up_swiglu_f16_wmma_dispatch(const DispatchMatc
                                                to_config_value(kRoutedFfnExpertHiddenSize));
     dispatch.kernel.compile_parameters.emplace(config_prefix + ".gate_weight_format", weight_format_config);
     dispatch.kernel.compile_parameters.emplace(config_prefix + ".up_weight_format", weight_format_config);
+    // engine#2861: decode the table with the layout it was WRITTEN with, not with the common constants by name. This
+    // kernel takes the three values as parameters (loom-libs/motifs/matmul_id/f16_pair_schedule.loom:116 passes them into
+    // `unpack_expert_partition_descriptor`), while the router chooses Qwen for `expert_count <= 128` when no common
+    // consumer reads the table -- so hard-coding the common values here decodes a Qwen-laid table with 511/9/15 at 128
+    // experts, which is engine#2861's failure one consumer over. The bundle records the values it was written with
+    // (engine#438 added the fields for exactly this question); a bundle that predates them answers 0, and then the
+    // common constants are the only defensible default.
+    const auto descriptor_value = [](int32_t recorded, int32_t fallback) {
+        return std::to_string(recorded > 0 ? recorded : fallback);
+    };
+    const CommandPlanMoeRoutingBundle & routing = *match.routing_bundle;
     dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_expert_mask",
-                                               std::to_string(kMoePartitionExpertMask));
+                                               descriptor_value(routing.descriptor_expert_mask, kMoePartitionExpertMask));
     dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_partition_shift",
-                                               std::to_string(kMoePartitionShift));
+                                               descriptor_value(routing.descriptor_partition_shift, kMoePartitionShift));
     dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_row_count_shift",
-                                               std::to_string(kMoePartitionRowCountShift));
+                                               descriptor_value(routing.descriptor_row_count_shift, kMoePartitionRowCountShift));
 
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
     dispatch.bindings.push_back(
