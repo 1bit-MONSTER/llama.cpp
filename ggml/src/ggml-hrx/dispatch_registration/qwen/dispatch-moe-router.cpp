@@ -369,15 +369,32 @@ static void add_routed_gate_up_compile_parameters(Dispatch & dispatch, const Rou
                                                to_config_value(router_match.route_count));
 }
 
-static void add_moe_routing_compile_parameters(Dispatch & dispatch, const RouterTop8Match & router_match) {
+// A plain GGML_OP_MUL_MAT_ID consuming the route ids is decoded by the common mul_mat_id dispatch, which decodes the
+// common layout at every expert count it accepts. The qwen fused routed kernels are the Qwen-layout readers, and they
+// reach the ids through their own fused pattern rather than a bare mul_mat_id node.
+static bool route_ids_feed_plain_mul_mat_id(const DispatchMatchContext & context, const RouterTop8Match & router_match) {
+    if (!context.graph.has_index() || router_match.route_ids == nullptr) {
+        return false;
+    }
+    // "does ANY plain MUL_MAT_ID read these ids", not "does exactly one": the single-consumer helper answers nullptr
+    // for zero AND for two or more, and the second case would send the Qwen layout to consumers that decode the common
+    // one -- engine#2861 again, arriving through a graph shape instead of an expert count.
+    return !consumers_with_op_through_layout_aliases(context.graph, router_match.route_ids->id, GGML_OP_MUL_MAT_ID)
+                .empty();
+}
+
+static void add_moe_routing_compile_parameters(Dispatch &                    dispatch,
+                                              const RouterTop8Match &      router_match,
+                                              bool                         consumer_reads_common_layout) {
     dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
                                                to_config_value(router_match.token_count));
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.route_count",
                                                to_config_value(router_match.route_count));
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.expert_count",
                                                to_config_value(router_match.expert_count));
-    // the descriptor layout depends on the expert count (dispatch-moe-routing-layout.h)
-    const MoeRoutingDescriptorLayout layout = moe_router_descriptor_layout(router_match.expert_count);
+    // the descriptor layout depends on who decodes the table (dispatch-moe-routing-layout.h)
+    const MoeRoutingDescriptorLayout layout =
+        moe_router_descriptor_layout(router_match.expert_count, consumer_reads_common_layout);
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_expert_mask", layout.expert_mask);
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_partition_shift", layout.partition_shift);
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_row_count_shift", layout.row_count_shift);
@@ -608,7 +625,9 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
     const size_t  partition_table_bytes =
         partition_table_size(router_match.token_count, router_match.route_count, router_match.expert_count);
     const bool use_fused_prefill_expert_table_partition = supports_fused_prefill_expert_table_partition(router_match);
-    const MoeRoutingDescriptorLayout router_layout       = moe_router_descriptor_layout(router_match.expert_count);
+    const bool                       consumer_reads_common = route_ids_feed_plain_mul_mat_id(context, router_match);
+    const MoeRoutingDescriptorLayout router_layout =
+        moe_router_descriptor_layout(router_match.expert_count, consumer_reads_common);
     dispatch_match.transients.push_back(
         { expert_table_value, "qwen.router.expert_table", expert_table_bytes, kMoeRouterPlanTransientAlignment });
     dispatch_match.transients.push_back({ partition_table_value, "qwen.router.partition_table", partition_table_bytes,
@@ -685,7 +704,7 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
         expert_table_dispatch.kernel.integer_parameters.emplace("route_count", router_match.route_count);
         expert_table_dispatch.kernel.integer_parameters.emplace("route_stride", router_match.route_stride);
         expert_table_dispatch.kernel.integer_parameters.emplace("expert_count", router_match.expert_count);
-        add_moe_routing_compile_parameters(expert_table_dispatch, router_match);
+        add_moe_routing_compile_parameters(expert_table_dispatch, router_match, consumer_reads_common);
         expert_table_dispatch.bindings.push_back({ router_match.route_ids->id, 0, route_id_length });
         expert_table_dispatch.bindings.push_back({ expert_table_value, 0, expert_table_bytes });
         dispatch_match.dispatches.push_back(std::move(expert_table_dispatch));
@@ -695,7 +714,7 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
         partition_table_dispatch.kernel.integer_parameters.emplace("token_count", router_match.token_count);
         partition_table_dispatch.kernel.integer_parameters.emplace("route_count", router_match.route_count);
         partition_table_dispatch.kernel.integer_parameters.emplace("expert_count", router_match.expert_count);
-        add_moe_routing_compile_parameters(partition_table_dispatch, router_match);
+        add_moe_routing_compile_parameters(partition_table_dispatch, router_match, consumer_reads_common);
         partition_table_dispatch.bindings.push_back({ expert_table_value, 0, expert_table_bytes });
         partition_table_dispatch.bindings.push_back({ partition_table_value, 0, partition_table_bytes });
         dispatch_match.dispatches.push_back(std::move(partition_table_dispatch));

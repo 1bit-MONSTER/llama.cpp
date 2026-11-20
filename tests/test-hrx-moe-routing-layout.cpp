@@ -46,12 +46,22 @@ static int32_t decoded_row_count(int32_t descriptor) {
 
 int main() {
     // 1. The layout boundary is the expert count, and it is 128.
-    const MoeRoutingDescriptorLayout qwen   = moe_router_descriptor_layout(128);
-    const MoeRoutingDescriptorLayout common = moe_router_descriptor_layout(129);
+    const MoeRoutingDescriptorLayout qwen   = moe_router_descriptor_layout(128, false);
+    const MoeRoutingDescriptorLayout common = moe_router_descriptor_layout(129, false);
     check(qwen.expert_mask_value == 127 && qwen.partition_shift_value == 7 && qwen.row_count_shift_value == 13,
-          "128 experts selects the Qwen layout (127/7/13)");
+          "128 experts with a Qwen-layout consumer selects the Qwen layout (127/7/13)");
     check(common.expert_mask_value == 511 && common.partition_shift_value == 9 && common.row_count_shift_value == 15,
           "129 experts selects the common layout (511/9/15)");
+    // The consumer decides, not the count: this is the change that makes the guard a backstop rather than the fix.
+    for (int64_t experts : { 1, 64, 128, 129, 256, 512 }) {
+        const MoeRoutingDescriptorLayout for_common = moe_router_descriptor_layout(experts, true);
+        check(for_common.expert_mask_value == 511 && for_common.partition_shift_value == 9 &&
+                  for_common.row_count_shift_value == 15,
+              "a common mul_mat_id consumer always gets a common-laid table, whatever the expert count");
+        check(moe_routing_descriptor_is_common_layout(for_common.expert_mask_value, for_common.partition_shift_value,
+                                                      for_common.row_count_shift_value),
+              "and the reader can reuse it instead of building a second table, which a plan does not allow");
+    }
 
     // 2. The reuse guard: a table written with one layout must not be read with the other.
     check(!moe_routing_descriptor_is_common_layout(qwen.expert_mask_value, qwen.partition_shift_value,
