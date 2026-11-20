@@ -865,10 +865,13 @@ static QwenFlashAttentionLayoutGraph build_qwen_flash_attention_layout_graph(
 
     ggml_tensor * query_storage =
         ggml_new_tensor_3d(ctx, GGML_TYPE_F32, qk_head_size, query_head_count, query_token_count);
+    // A cache is allocated to the kernel's 64-token tile, not to the token count. engine#2870 sized K/V at exactly
+    // key_value_token_count, which the split matcher refuses (dispatch-flash-attention.cpp:387, engine#2494).
+    const int64_t key_value_capacity = ((key_value_token_count + 63) / 64) * 64;
     ggml_tensor * key_storage =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, qk_head_size, key_value_head_count, key_value_token_count);
+        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, qk_head_size, key_value_head_count, key_value_capacity);
     ggml_tensor * value_storage =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, value_head_size, key_value_head_count, key_value_token_count);
+        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, value_head_size, key_value_head_count, key_value_capacity);
     REQUIRE(query_storage != nullptr);
     REQUIRE(key_storage != nullptr);
     REQUIRE(value_storage != nullptr);
@@ -876,7 +879,7 @@ static QwenFlashAttentionLayoutGraph build_qwen_flash_attention_layout_graph(
     graph.query = ggml_permute(ctx, query_storage, 0, 2, 1, 3);
     graph.key   = ggml_permute(ctx, key_storage, 0, 2, 1, 3);
     graph.value = ggml_permute(ctx, value_storage, 0, 2, 1, 3);
-    graph.mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_token_count, query_token_count);
+    graph.mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_capacity, query_token_count);
     REQUIRE(graph.query != nullptr);
     REQUIRE(graph.key != nullptr);
     REQUIRE(graph.value != nullptr);
@@ -2522,13 +2525,13 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     REQUIRE(q8_alternate->alternate_value == plan.transients[3].value);
 
     const size_t query_row_bytes  = static_cast<size_t>(query_hidden_size) * sizeof(float);
-    const size_t mask_row_bytes   = static_cast<size_t>(key_value_token_count) * sizeof(ggml_fp16_t);
+    const size_t mask_row_bytes   = static_cast<size_t>(key_value_capacity) * sizeof(ggml_fp16_t);
     const size_t output_row_bytes = static_cast<size_t>(output_hidden_size) * sizeof(float);
     for (int64_t row = 0; row < query_token_count; ++row) {
         const ggml::hrx::Dispatch & dispatch = plan.dispatches[static_cast<size_t>(row)];
         const char * expected_kernel         = "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8";
         REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == expected_kernel);
-        REQUIRE(dispatch.kernel.integer_parameters.at("key_value_token_count") == key_value_token_count);
+        REQUIRE(dispatch.kernel.integer_parameters.at("key_value_token_count") == key_value_capacity);
         REQUIRE(dispatch.kernel.compile_parameters.at("ggml.flash_attention.query_head_count") ==
                 std::to_string(query_head_count));
         REQUIRE(dispatch.kernel.compile_parameters.at("ggml.flash_attention.key_value_head_count") ==
