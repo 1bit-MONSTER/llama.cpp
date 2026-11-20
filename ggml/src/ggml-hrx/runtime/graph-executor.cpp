@@ -1,3 +1,4 @@
+#include <optional>
 #include "graph-executor.h"
 
 #include "backend-buffer-binding.h"
@@ -91,8 +92,11 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
 
     const uint64_t     graph_start_ns = host_gap_enabled() ? hrx_graph_replay_now_ns() : 0;
     host_gap_begin_graph();
+    std::optional<HostGapScope> x_scope;   // CL-220GBS scratch (cl-npuperf): the unscoped parts of the graph wall
+    x_scope.emplace("x.corpus+stats");
     const KernelCorpus & corpus = get_qwen_kernel_corpus();
     const uint64_t       builds_before = context_.graph_programs.stats().builds;
+    x_scope.reset();
     GraphProgramLookup   lookup;
     {
         // a graph-program cache hit, or a match of every node against the dispatch registry
@@ -100,6 +104,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         lookup = context_.graph_programs.get_or_build(graph, corpus, context_.device->architecture);
     }
     if (lookup.valid()) {
+        const HostGapScope scope("x.trim");
         trim_graph_programs(context_, lookup.program, builds_before);  // graph-program-cache-limit.h
     }
     if (!lookup.valid()) {
@@ -111,10 +116,14 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         return result;
     }
 
+    x_scope.emplace("x.prepared_check");
     const bool        use_graph_prepared = lookup.program->can_use_prepared_fast_path(graph);
+    x_scope.reset();
     GraphProgramMatch binding_match = std::move(lookup.match);
     if (use_graph_prepared && lookup.program->has_prepared_program()) {
+        x_scope.emplace("x.host_staging");
         binding_match = lookup.program->match_host_staging_graph(graph);
+        x_scope.reset();
         if (!binding_match.valid()) {
             result.status.append(binding_match.status);
             if (result.status.success()) {

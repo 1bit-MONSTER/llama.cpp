@@ -81,6 +81,18 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
+
+// CL-220GBS scratch instrument (cl-npuperf, never pushed): LLAMA_PHASE_TIMES=1 sums host time per decode phase.
+#include <atomic>
+#include <cstdio>
+namespace {
+struct PhaseT { const char * name; std::atomic<long long> ns{0}; std::atomic<long long> n{0}; };
+PhaseT g_ph[8] = {{"apply"},{"params+can_reuse"},{"build+alloc"},{"set_inputs"},{"graph_compute"},{"decode_total"},{"decode_after_ubatch"},{"decode_before_ubatch"}};
+bool ph_on() { static const bool on = getenv("LLAMA_PHASE_TIMES") != nullptr; return on; }
+struct PhPrint { ~PhPrint() { if (!ph_on()) return; for (auto & p : g_ph) if (p.n) fprintf(stderr, "llama phase %-22s n=%5lld total=%9.3f ms mean=%8.1f us\n", p.name, (long long)p.n, p.ns/1e6, p.ns/1e3/p.n); } } g_php;
+inline void ph_add(int i, int64_t t0) { if (ph_on()) { g_ph[i].ns += ggml_time_us()*1000 - t0*1000; g_ph[i].n++; } }
+}
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -1339,6 +1351,7 @@ bool llama_context::set_adapter_cvec(
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    int64_t ph_t = ggml_time_us();
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1350,9 +1363,12 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
+    ph_add(0, ph_t); ph_t = ggml_time_us();
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
-    if (!graph_reuse_disable && res->can_reuse(gparams)) {
+    const bool ph_reuse = !graph_reuse_disable && res->can_reuse(gparams);
+    ph_add(1, ph_t); ph_t = ggml_time_us();
+    if (ph_reuse) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
 
         // with pipeline parallelism, the previous graph_compute_async may still be running
@@ -1388,6 +1404,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
     }
 
+    ph_add(2, ph_t); ph_t = ggml_time_us();
     // set the input data for the input tensors
     {
         //const auto t_start_us = ggml_time_us();
@@ -1398,7 +1415,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    ph_add(3, ph_t); ph_t = ggml_time_us();
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    ph_add(4, ph_t);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
@@ -1721,6 +1740,8 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
 }
 
 int llama_context::decode(const llama_batch & batch_inp) {
+    struct PhDec { int64_t t = ggml_time_us(); ~PhDec() { ph_add(5, t); } } ph_dec;
+    int64_t ph_dec_t = ggml_time_us();
     // MTP hook batches carry both token (next-token id) and embd (h_nextn row),
     // so accept either present rather than requiring exactly one.
     GGML_ASSERT(batch_inp.token || batch_inp.embd);
@@ -1890,7 +1911,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         ggml_status status;
 
+        ph_add(7, ph_dec_t);
         const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
+        ph_dec_t = ggml_time_us();
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
