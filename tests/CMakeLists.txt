@@ -508,6 +508,12 @@ if (TARGET ggml-hrx)
     # ggml.h is included for the GGML_TYPE_IQ3_S enum check only; nothing from the library is called.
     target_link_libraries(test-hrx-get-rows-facts PRIVATE ggml)
     add_test(NAME test-hrx-get-rows-facts COMMAND test-hrx-get-rows-facts)
+    # engine#2861: the MoE partition table is written with one descriptor layout and read with another. Header-only --
+    # no device, no libhrx, no graph -- because the defect is two separately-compiled sides disagreeing about bit
+    # positions, and a device run can only report the fault it causes, not which pair of constants disagreed.
+    add_executable(test-hrx-moe-routing-layout test-hrx-moe-routing-layout.cpp)
+    target_include_directories(test-hrx-moe-routing-layout PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-moe-routing-layout COMMAND test-hrx-moe-routing-layout)
     add_executable(test-hrx-arena-refusal test-hrx-arena-refusal.cpp)
     target_include_directories(test-hrx-arena-refusal PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-arena-refusal COMMAND test-hrx-arena-refusal)

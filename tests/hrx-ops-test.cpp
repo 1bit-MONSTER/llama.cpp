@@ -9690,8 +9690,13 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     for (int64_t tokens : { 1, 2, 4, 8 }) {
         suite.device_case("router_top8.tokens" + std::to_string(tokens), [=] { run_router_top8_case(tokens); });
     }
+    // tokens=33 is the smallest batch in which one expert owns more than 32 rows, which is the first shape whose
+    // partition table carries a partition index above zero. Until engine#2861 that was decoded with the wrong
+    // descriptor layout and gathered past the expert weight tensor, so the 512-token case below was the only one that
+    // reached it; a suite that can only see a defect at 512 tokens is a suite that runs it in a sweep and resets the
+    // GPU. Keep the small shape: it fails faster and it fails on its own.
     for (int64_t experts : { 128, 256, 512 }) {
-        for (int64_t tokens : { 1, 2, 512 }) {
+        for (int64_t tokens : { 1, 2, 33, 512 }) {
             suite.device_case("router_common_matmul.experts" + std::to_string(experts) + ".tokens" + std::to_string(tokens),
                               [=] { run_router_common_matmul_case(experts, tokens); });
         }
