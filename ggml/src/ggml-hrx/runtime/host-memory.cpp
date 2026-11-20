@@ -1421,8 +1421,42 @@ const std::string & HostWeightLease::layout() const {
     return buffer_ != nullptr ? layout_ : empty;
 }
 
+// Diagnostic only (NOT part of any PR, does nothing unless GGML_HRX_ARENA_TRACE=1). engine #900: a parked slot that
+// outlives the arena that parked it is reclaimed into the *new* free list at its old offset, where it can overlap a
+// live allocation and be handed out again. The numbers prove the leak; this says whether the extent is ever taken.
+namespace {
+bool arena_extent_overlaps(size_t off_a, size_t len_a, size_t off_b, size_t len_b) {
+    return off_a < off_b + len_b && off_b < off_a + len_a;
+}
+struct ArenaTraceStats {
+    bool     enabled          = false;
+    uint64_t takes            = 0;
+    uint64_t reclaims         = 0;
+    uint64_t grows            = 0;
+    uint64_t take_overlaps    = 0;
+    uint64_t reclaim_overlaps = 0;
+    ArenaTraceStats() {
+        const char * value = std::getenv("GGML_HRX_ARENA_TRACE");
+        enabled            = value != nullptr && std::atoi(value) != 0;
+    }
+};
+ArenaTraceStats & arena_trace_stats() {
+    static ArenaTraceStats stats;
+    return stats;
+}
+}  // namespace
+
 HostWeightCache::~HostWeightCache() {
     clear();
+    ArenaTraceStats & trace = arena_trace_stats();
+    if (trace.enabled) {
+        GGML_LOG_INFO("ARENA TRACE summary: takes %llu, reclaims %llu, grows %llu, take_overlaps %llu, "
+                      "reclaim_overlaps %llu\n",
+                      static_cast<unsigned long long>(trace.takes), static_cast<unsigned long long>(trace.reclaims),
+                      static_cast<unsigned long long>(trace.grows),
+                      static_cast<unsigned long long>(trace.take_overlaps),
+                      static_cast<unsigned long long>(trace.reclaim_overlaps));
+    }
 }
 
 size_t HostWeightCache::SourceKeyHash::operator()(const SourceKey & key) const {
@@ -1530,6 +1564,29 @@ void HostWeightCache::arena_reclaim_locked(size_t offset, size_t slot) {
         // Someone may still be binding this slot: it goes back to the free list when the execution ends.
         arena_deferred_.emplace_back(offset, slot);
         return;
+    }
+    ArenaTraceStats & trace = arena_trace_stats();
+    if (trace.enabled) {
+        ++trace.reclaims;
+        for (const auto & entry : entries_) {
+            if (entry.second == nullptr) {
+                continue;
+            }
+            const size_t live_offset = entry.second->offset;
+            const size_t live_slot   = entry.second->slot;
+            if (live_offset == offset && live_slot == slot) {
+                continue;  // the entry being reclaimed: its own slot, by construction
+            }
+            if (arena_extent_overlaps(offset, slot, live_offset, live_slot)) {
+                ++trace.reclaim_overlaps;
+                GGML_LOG_ERROR("ARENA ALIAS reclaim: [%.3f MiB at %.3f] overlaps a live entry [%.3f MiB at %.3f] "
+                               "(resident %.1f of %.1f MiB, executions %zu, parked %zu)\n",
+                               slot / (1024.0 * 1024.0), offset / (1024.0 * 1024.0),
+                               live_slot / (1024.0 * 1024.0), live_offset / (1024.0 * 1024.0),
+                               resident_bytes_ / (1024.0 * 1024.0), arena_capacity_ / (1024.0 * 1024.0),
+                               executions_, arena_deferred_.size());
+            }
+        }
     }
     auto position = arena_free_.begin();
     while (position != arena_free_.end() && position->first < offset) {
@@ -1649,6 +1706,26 @@ bool HostWeightCache::arena_take_locked(size_t aligned, hrx_buffer_t & buffer, s
         offset = free_block->first;
         slot   = aligned;
         buffer = arena_;
+        ArenaTraceStats & trace = arena_trace_stats();
+        if (trace.enabled) {
+            ++trace.takes;
+            for (const auto & entry : entries_) {
+                if (entry.second == nullptr) {
+                    continue;
+                }
+                const size_t live_offset = entry.second->offset;
+                const size_t live_slot   = entry.second->slot;
+                if (arena_extent_overlaps(offset, slot, live_offset, live_slot)) {
+                    ++trace.take_overlaps;
+                    GGML_LOG_ERROR("ARENA ALIAS take: [%.3f MiB at %.3f] overlaps a live entry [%.3f MiB at %.3f] "
+                                   "(resident %.1f of %.1f MiB, executions %zu, free %zu blocks)\n",
+                                   slot / (1024.0 * 1024.0), offset / (1024.0 * 1024.0),
+                                   live_slot / (1024.0 * 1024.0), live_offset / (1024.0 * 1024.0),
+                                   resident_bytes_ / (1024.0 * 1024.0), arena_capacity_ / (1024.0 * 1024.0),
+                                   executions_, arena_free_.size());
+                }
+            }
+        }
         if (free_block->second == aligned) {
             arena_free_.erase(free_block);
         } else {
@@ -1766,6 +1843,13 @@ bool HostWeightCache::arena_reserve(hrx_device_t device,
         buffer = arena_;
         offset = 0;
         slot   = aligned;
+    }
+    if (arena_trace_stats().enabled) {
+        ++arena_trace_stats().grows;
+        GGML_LOG_INFO("ARENA TRACE grow #%llu: capacity %.1f MiB (was %.1f), entries %zu, parked %zu, "
+                      "deferred reclaimed at end_execution\n",
+                      static_cast<unsigned long long>(arena_trace_stats().grows), target / (1024.0 * 1024.0),
+                      previous_capacity / (1024.0 * 1024.0), entries_.size(), arena_deferred_.size());
     }
     if (const char * trace = std::getenv("GGML_HRX_HOST_WEIGHT_TRACE")) {
         if (std::atoi(trace) != 0) {
@@ -1988,6 +2072,30 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         entry->slot        = materialized_length;
     }
     result.status = transfers.upload_synchronous(stream, upload_data, entry->buffer, entry->offset, upload_size);
+    if (result.status.success() && std::getenv("GGML_HRX_HOST_WEIGHT_VERIFY") != nullptr) {
+        // engine#900 instrument (not part of the fix): the upload has just written [offset, offset+upload_size) of the
+        // arena, immediately after the slot was taken. Reading it back answers "did this allocation land on bytes
+        // another resident weight owns" - what a stale parked extent would cause, and what no greedy-token comparison
+        // can see (FACTS §8.11). A slot number only looks unique between allocations; the bytes cannot.
+        std::vector<uint8_t> readback(upload_size);
+        Status read_status =
+            transfers.download_synchronous(stream, entry->buffer, entry->offset, readback.data(), readback.size());
+        if (!read_status.success()) {
+            GGML_LOG_WARN("%s: verify could not read back %zu bytes\n", __func__, upload_size);
+        } else {
+            size_t bad = 0;
+            for (size_t i = 0; i < upload_size; ++i) {
+                bad += readback[i] != static_cast<const uint8_t *>(upload_data)[i];
+            }
+            GGML_LOG_INFO("hrx host weights: verify offset=%zu len=%zu slot=%zu mismatched=%zu\n", entry->offset,
+                          upload_size, entry->slot, bad);
+            if (bad != 0) {
+                GGML_LOG_ERROR("%s: engine#900 ALIAS: a %.1f MiB weight at arena offset %zu does not match its source "
+                               "in %zu of %zu bytes\n",
+                               __func__, upload_size / 1048576.0, entry->offset, bad, upload_size);
+            }
+        }
+    }
     if (!result.status.success()) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!entry->owns_buffer) {

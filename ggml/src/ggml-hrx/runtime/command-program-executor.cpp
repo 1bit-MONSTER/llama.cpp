@@ -580,6 +580,13 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             found_access != access_by_value.end() ? found_access->second : GraphValueAccess{};
         const bool materialize_weight = binding.weight && access.read && !access.write &&
                                         (binding.requires_materialization() || access.transformed_read);
+        if (std::getenv("GGML_HRX_HOST_WEIGHT_VERIFY") != nullptr) {
+            // engine#900 instrument: says WHY an arm performs no residency read-back (weight? read? write? transform?)
+            GGML_LOG_INFO("hrx verify probe: value %d weight=%d host=%d dev=%d read=%d write=%d xform=%d len=%zu\n",
+                          binding.value.value, (int) binding.weight, (int) (binding.host_data != nullptr),
+                          (int) (binding.buffer != nullptr), (int) access.read, (int) access.write,
+                          (int) access.transformed_read, binding.length);
+        }
         if (binding.length == 0 || (!binding.requires_materialization() && !materialize_weight)) {
             materialized.push_back(binding);
             continue;
