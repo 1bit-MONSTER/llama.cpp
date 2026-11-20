@@ -25,6 +25,7 @@
 #include <mutex>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 
 namespace ggml::hrx::onebit {
@@ -68,9 +69,21 @@ size_t pool_reserve_bytes(size_t gtt_total) {
     constexpr size_t kDefaultReserveMiB = 16384;
     constexpr size_t kReservePermille   = 250;
     const char *     env                = std::getenv("GGML_HRX_GTT_RESERVE_MB");
+    // engine#2986 follow-up: only a whole, non-negative number of MiB is an override. std::atoll read an empty or mistyped
+    // value ("", "abc") as 0, so GGML_HRX_GTT_RESERVE_MB= removed the reserve outright -- failing open, the direction
+    // a guardrail must not fail. Anything else is ignored and the default stands. Whitespace around the number is
+    // accepted on both ends ("512\n" from a file or a shell substitution is 512), so the knob never half-works.
+    // The bound, 2^43 MiB, keeps the MiB-to-bytes product inside 64 bits. The engine's app/mem_admit.h parses it with
+    // the same rule and the same bound, written the same way.
     if (env != nullptr) {
-        const long long mb = std::atoll(env);
-        if (mb >= 0) {
+        constexpr long long kMaxOverrideMiB = 1LL << 43;
+        char *              end             = nullptr;
+        const long long     mb              = std::strtoll(env, &end, 10);
+        const bool          digits          = end != env;
+        while (digits && std::isspace(static_cast<unsigned char>(*end))) {
+            ++end;
+        }
+        if (digits && *end == '\0' && mb >= 0 && mb <= kMaxOverrideMiB) {
             return static_cast<size_t>(mb) * kMiB;
         }
     }
