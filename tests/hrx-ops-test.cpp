@@ -1548,12 +1548,16 @@ static QwenFlashAttentionLayoutGraph build_qwen_flash_attention_layout_graph(
     constexpr int64_t             query_head_count     = 32;
     constexpr int64_t             key_value_head_count = 4;
 
+    // A cache is allocated to the kernel's 64-token tile, not to the token count: the split matcher declines K/V
+    // storage shorter than the padded capacity (engine#2494). The mask keeps the graph's logical key length -- it
+    // is what tells the matcher how many keys are real.
+    const int64_t key_value_capacity = ((key_value_token_count + 63) / 64) * 64;
     ggml_tensor * query_storage =
         ggml_new_tensor_3d(ctx, GGML_TYPE_F32, qk_head_size, query_head_count, query_token_count);
     ggml_tensor * key_storage =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, qk_head_size, key_value_head_count, key_value_token_count);
+        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, qk_head_size, key_value_head_count, key_value_capacity);
     ggml_tensor * value_storage =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, value_head_size, key_value_head_count, key_value_token_count);
+        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, value_head_size, key_value_head_count, key_value_capacity);
     REQUIRE(query_storage != nullptr);
     REQUIRE(key_storage != nullptr);
     REQUIRE(value_storage != nullptr);
@@ -5238,10 +5242,7 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     const int64_t     output_hidden_size   = query_head_count * value_head_size;
     const size_t      q8_row_bytes         = ggml_row_size(GGML_TYPE_Q8_1, output_hidden_size);
     const size_t      q8_output_bytes      = static_cast<size_t>(query_token_count) * q8_row_bytes;
-    int64_t key_value_capacity = 64;
-    while (key_value_capacity < key_value_token_count) {
-        key_value_capacity *= 2;
-    }
+    const int64_t     key_value_capacity   = (key_value_token_count + 63) / 64 * 64;
     const int64_t     key_value_blocks     = key_value_capacity / 64;
     const size_t      partial_scalar_bytes =
         static_cast<size_t>(key_value_head_count * key_value_blocks * 16) * sizeof(float);
@@ -5295,7 +5296,7 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     REQUIRE(output_value != nullptr);
     REQUIRE(publication_value != nullptr);
     const ggml::hrx::CommandPlanAlternateValue * q8_alternate =
-        plan.metadata.find_alternate_value(publication_value->id, GGML_TYPE_Q8_1, q8_output_bytes);
+        ggml::hrx::find_alternate_value(imported.graph, plan, publication_value->id, GGML_TYPE_Q8_1, q8_output_bytes);
     REQUIRE(q8_alternate != nullptr);
     REQUIRE(q8_alternate->alternate_value == plan.transients[3].value);
 
@@ -5306,7 +5307,7 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
         const ggml::hrx::Dispatch & dispatch = plan.dispatches[static_cast<size_t>(row)];
         const char * expected_kernel         = "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8";
         REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == expected_kernel);
-        REQUIRE(dispatch.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+        REQUIRE(dispatch.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Exact);
         REQUIRE(dispatch.kernel.integer_parameters.at("key_value_token_count") == key_value_token_count);
         REQUIRE(dispatch.kernel.compile_parameters.at("ggml.flash_attention.query_head_count") ==
                 std::to_string(query_head_count));

@@ -863,12 +863,17 @@ static QwenFlashAttentionLayoutGraph build_qwen_flash_attention_layout_graph(
     constexpr int64_t             query_head_count     = 32;
     constexpr int64_t             key_value_head_count = 4;
 
+    // A cache is allocated to the kernel's 64-token tile, not to the token count: the split matcher declines K/V
+    // storage shorter than the padded capacity (engine#2494). The mask keeps the graph's logical key length -- it
+    // is what tells the matcher how many keys are real.
+    const int64_t key_value_capacity = ((key_value_token_count + 63) / 64) * 64;
+
     ggml_tensor * query_storage =
         ggml_new_tensor_3d(ctx, GGML_TYPE_F32, qk_head_size, query_head_count, query_token_count);
     ggml_tensor * key_storage =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, qk_head_size, key_value_head_count, key_value_token_count);
+        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, qk_head_size, key_value_head_count, key_value_capacity);
     ggml_tensor * value_storage =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, value_head_size, key_value_head_count, key_value_token_count);
+        ggml_new_tensor_3d(ctx, GGML_TYPE_F16, value_head_size, key_value_head_count, key_value_capacity);
     REQUIRE(query_storage != nullptr);
     REQUIRE(key_storage != nullptr);
     REQUIRE(value_storage != nullptr);
@@ -2500,6 +2505,19 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }, &diagnostics));
     const ggml::hrx::CommandPlan & plan = scheduler.plan();
     REQUIRE(plan.valid());
+    // engine#679/#429: above the measured crossover the split dispatch is not offered at all, so a row past the
+    // cap keeps one launch per query row and the general kernel takes the node. The rows within the cap, padded or
+    // not, reach the split arm because their storage is the tile the matcher requires (engine#2494).
+    if (key_value_token_count > 2944) {
+        REQUIRE(plan.dispatches.size() == static_cast<size_t>(query_token_count));
+        for (const auto & dispatch : plan.dispatches) {
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                    "loom_libs:ggml_flash_attention_f32_f16_wmma");
+        }
+        ggml_free(ctx);
+        restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
+        return;
+    }
     REQUIRE(plan.dispatches.size() == static_cast<size_t>(query_token_count));
     REQUIRE(plan.transients.size() == 4);
     REQUIRE(plan.completion_counter_requests.size() == 1);
@@ -6740,6 +6758,13 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true, 96, 64, 1.0f / std::sqrt(96.0f)); });
     add(suite, "fa_decode_split.4.513.true.96.64.1/sqrt(96.0f)",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f)); });
+    // engine#2494 blamed kv=65 (capacity 128) for the page faults. It is legal for the split arm now.
+    add(suite, "fa_decode_split.1.65",
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 65); });
+    // Smallest 64-token multiple past the engine#679 cap: the only shape where the general matcher accepts the
+    // padded storage and the split matcher declines on the cap, i.e. the fallback below is actually reached.
+    add(suite, "fa_decode_split.1.3008",
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 3008); });
     add(suite, "fa_decode_next_q8.",
         [=] { run_qwen_decode_attention_output_next_q8_scheduling_case(false); });
     add(suite, "fa_decode_next_q8.true",
