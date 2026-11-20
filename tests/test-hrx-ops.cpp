@@ -2060,10 +2060,15 @@ static void run_qwen_flash_attention_case() {
     ggml_context * ctx      = ggml_init(params);
     REQUIRE(ctx != nullptr);
 
+    // engine#2870: this row names the decode-split kernel, whose K/V walk is in whole 64-token blocks; #2494's
+    // storage guard (dispatch-flash-attention.cpp:392) refuses a 4-slot binding (needs 64), so the row asked for a
+    // kernel the dispatcher is required to decline. The fixture allocates the padded capacity instead -- this case
+    // schedules only and uploads no data, so the padded slots need no values.
+    static constexpr int64_t kPaddedKeyValueCapacity = (kKeyValueTokenCount + 63) / 64 * 64;
     ggml_tensor * query = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize, kQueryTokenCount, 1);
-    ggml_tensor * key   = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kQwenFlashHeadSize, kKeyValueTokenCount, 1);
-    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kQwenFlashHeadSize, kKeyValueTokenCount, 1);
-    ggml_tensor * mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, kKeyValueTokenCount, kQueryTokenCount);
+    ggml_tensor * key   = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kQwenFlashHeadSize, kPaddedKeyValueCapacity, 1);
+    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kQwenFlashHeadSize, kPaddedKeyValueCapacity, 1);
+    ggml_tensor * mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, kPaddedKeyValueCapacity, kQueryTokenCount);
     REQUIRE(query != nullptr);
     REQUIRE(key != nullptr);
     REQUIRE(value != nullptr);
@@ -2231,6 +2236,17 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     if (value_head_size < 0) {
         value_head_size = head_size;
     }
+    // engine#2870: a row that names the decode-split kernel has to hand it storage that satisfies engine#2494's
+    // guard (dispatch-flash-attention.cpp:392): the kernel walks K/V in WHOLE 64-token blocks, so a binding of
+    // exactly `key_value_token_count` slots is refused (65 needs 128) and the general wmma kernel is scheduled
+    // instead -- which is the abort these rows report, and the reason #2494 exists (the short binding read 63
+    // slots past its binding and produced three MODE2 resets). Rows that name any other kernel keep the exact
+    // shape they always had, so this changes nothing outside the split family.
+    static constexpr const char * kDecodeSplitKernelName =
+        "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8";
+    const bool    wants_decode_split = std::string(expected_kernel) == kDecodeSplitKernelName;
+    const int64_t key_value_capacity =
+        wants_decode_split ? (key_value_token_count + 63) / 64 * 64 : key_value_token_count;
     static constexpr const char * kDisableQwenDispatchEnv = "GGML_HRX_DISABLE_QWEN_DISPATCH";
     const char *                  original_env            = std::getenv(kDisableQwenDispatchEnv);
     const bool                    had_original_env        = original_env != nullptr;
@@ -2249,9 +2265,9 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     REQUIRE(ctx != nullptr);
 
     ggml_tensor * query = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, query_token_count, 1);
-    ggml_tensor * key   = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_value_token_count, 1);
-    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, value_head_size, key_value_token_count, 1);
-    ggml_tensor * mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_token_count, query_token_count);
+    ggml_tensor * key   = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_value_capacity, 1);
+    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, value_head_size, key_value_capacity, 1);
+    ggml_tensor * mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_capacity, query_token_count);
     REQUIRE(query != nullptr);
     REQUIRE(key != nullptr);
     REQUIRE(value != nullptr);
@@ -2275,10 +2291,32 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
         flash_attention_reference(query_data, key_data, value_data, mask_data, query_token_count, key_value_token_count,
                                   head_size, value_head_size, scale);
 
+    // The padded slots carry the same `-10000.0f` this fixture's mask already uses for a masked slot, so the extra
+    // columns contribute exp(-10000) == 0 and the reference -- computed over the true `key_value_token_count` -- stays
+    // exact. With no padding these stay empty and the upload is byte-identical to before.
+    std::vector<ggml_fp16_t> key_storage;
+    std::vector<ggml_fp16_t> value_storage;
+    std::vector<ggml_fp16_t> mask_storage;
+    if (key_value_capacity != key_value_token_count) {
+        key_storage   = make_flash_key_value(key_value_capacity, 3, head_size);
+        value_storage = make_flash_key_value(key_value_capacity, 11, value_head_size);
+        mask_storage.assign(static_cast<size_t>(query_token_count) * static_cast<size_t>(key_value_capacity),
+                            ggml_fp32_to_fp16(-10000.0f));
+        for (int64_t q = 0; q < query_token_count; ++q) {
+            for (int64_t k = 0; k < key_value_token_count; ++k) {
+                mask_storage[static_cast<size_t>(q) * static_cast<size_t>(key_value_capacity) + static_cast<size_t>(k)] =
+                    mask_data[static_cast<size_t>(q) * static_cast<size_t>(key_value_token_count) + static_cast<size_t>(k)];
+            }
+        }
+    }
+    const std::vector<ggml_fp16_t> & key_upload   = key_storage.empty() ? key_data : key_storage;
+    const std::vector<ggml_fp16_t> & value_upload = value_storage.empty() ? value_data : value_storage;
+    const std::vector<ggml_fp16_t> & mask_upload  = mask_storage.empty() ? mask_data : mask_storage;
+
     ggml_backend_tensor_set(query, query_data.data(), 0, query_data.size() * sizeof(float));
-    ggml_backend_tensor_set(key, key_data.data(), 0, key_data.size() * sizeof(ggml_fp16_t));
-    ggml_backend_tensor_set(value, value_data.data(), 0, value_data.size() * sizeof(ggml_fp16_t));
-    ggml_backend_tensor_set(mask, mask_data.data(), 0, mask_data.size() * sizeof(ggml_fp16_t));
+    ggml_backend_tensor_set(key, key_upload.data(), 0, key_upload.size() * sizeof(ggml_fp16_t));
+    ggml_backend_tensor_set(value, value_upload.data(), 0, value_upload.size() * sizeof(ggml_fp16_t));
+    ggml_backend_tensor_set(mask, mask_upload.data(), 0, mask_upload.size() * sizeof(ggml_fp16_t));
 
     REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
