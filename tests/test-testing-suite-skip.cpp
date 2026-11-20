@@ -59,6 +59,23 @@ int main() {
           "a device case with a device returns 0");
     check(ran_device == 1, "and that one does run its body");
 
+    // The whole-run half of engine#2912: a suite whose every selected case needs a device, run with no device, must
+    // not answer success either -- that is the "green row for a suite that never touched a device" #2393 fixed with a
+    // regex, and the exit code should say it too for a caller that reads only the code.
+    {
+        Config whole;
+        whole.suite_name = "whole-run-fixture";
+        Suite suite(whole);
+        int ran = 0;
+        suite.device_case("device-only-a", [&ran]() { ran++; });
+        suite.device_case("device-only-b", [&ran]() { ran++; });
+        Options whole_options;
+        whole_options.executable = "fixture";
+        check(suite.run(whole_options, /*has_device=*/false) == 77,
+              "a whole run of device cases with no device returns 77, not 0");
+        check(ran == 0, "and no case body runs");
+    }
+
     // engine#2393's guard, pinned from this side: seven HRX ctest rows set
     // FAIL_REGULAR_EXPRESSION "test skipped: no device available" so that a device-less run of a hardware suite FAILS
     // rather than passing. That substring has to survive every edit to the skip line -- the first version of this
