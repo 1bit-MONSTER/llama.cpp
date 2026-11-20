@@ -856,16 +856,22 @@ static QwenFlashAttentionLayoutGraph build_qwen_flash_attention_layout_graph(
     ggml_context * ctx,
     int64_t        query_token_count,
     int64_t        key_value_token_count,
-    int64_t        qk_head_size    = kQwenFlashHeadSize,
-    int64_t        value_head_size = kQwenFlashHeadSize,
-    float          scale           = 0.0f) {
+    int64_t        qk_head_size      = kQwenFlashHeadSize,
+    int64_t        value_head_size   = kQwenFlashHeadSize,
+    float          scale             = 0.0f,
+    bool           mask_is_capacity  = false) {
     QwenFlashAttentionLayoutGraph graph;
     constexpr int64_t             query_head_count     = 32;
     constexpr int64_t             key_value_head_count = 4;
 
     // A cache is allocated to the kernel's 64-token tile, not to the token count: the split matcher declines K/V
-    // storage shorter than the padded capacity (engine#2494). The mask keeps the graph's logical key length -- it
-    // is what tells the matcher how many keys are real.
+    // storage shorter than the padded capacity (engine#2494).
+    //
+    // engine#2870: the mask defaults to the graph's logical key length, but the split matcher requires the mask width
+    // to EQUAL the K/V capacity (`if (!mask_is_capacity) { return {}; }` in dispatch-flash-attention.cpp) -- so a row
+    // that expects the split kernel on a token count that is not already a 64-multiple (513) has to ask for the
+    // capacity-wide mask, with the padded columns masked out. Rows whose capacity equals their token count are
+    // unaffected either way, which is why this is an opt-in flag and not the default.
     const int64_t key_value_capacity = ((key_value_token_count + 63) / 64) * 64;
 
     ggml_tensor * query_storage =
@@ -881,7 +887,8 @@ static QwenFlashAttentionLayoutGraph build_qwen_flash_attention_layout_graph(
     graph.query = ggml_permute(ctx, query_storage, 0, 2, 1, 3);
     graph.key   = ggml_permute(ctx, key_storage, 0, 2, 1, 3);
     graph.value = ggml_permute(ctx, value_storage, 0, 2, 1, 3);
-    graph.mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_token_count, query_token_count);
+    graph.mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, mask_is_capacity ? key_value_capacity : key_value_token_count,
+                                     query_token_count);
     REQUIRE(graph.query != nullptr);
     REQUIRE(graph.key != nullptr);
     REQUIRE(graph.value != nullptr);
@@ -2499,7 +2506,8 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
                                                                   bool    use_common_dispatch = false,
                                                                   int64_t qk_head_size        = kQwenFlashHeadSize,
                                                                   int64_t value_head_size     = kQwenFlashHeadSize,
-                                                                  float   scale               = 0.0f) {
+                                                                  float   scale               = 0.0f,
+                                                                  bool    mask_is_capacity    = false) {
     static constexpr const char * kDisableQwenDispatchEnv = "GGML_HRX_DISABLE_QWEN_DISPATCH";
     const char *                  original_env            = std::getenv(kDisableQwenDispatchEnv);
     const bool                    had_original_env        = original_env != nullptr;
@@ -2530,7 +2538,7 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     REQUIRE(ctx != nullptr);
 
     QwenFlashAttentionLayoutGraph attention = build_qwen_flash_attention_layout_graph(
-        ctx, query_token_count, key_value_token_count, qk_head_size, value_head_size, scale);
+        ctx, query_token_count, key_value_token_count, qk_head_size, value_head_size, scale, mask_is_capacity);
 
     ggml_cgraph * cgraph = ggml_new_graph(ctx);
     REQUIRE(cgraph != nullptr);
@@ -2578,7 +2586,8 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     REQUIRE(q8_alternate->alternate_value == plan.transients[3].value);
 
     const size_t query_row_bytes  = static_cast<size_t>(query_hidden_size) * sizeof(float);
-    const size_t mask_row_bytes   = static_cast<size_t>(key_value_token_count) * sizeof(ggml_fp16_t);
+    const size_t mask_row_bytes   =
+        static_cast<size_t>(mask_is_capacity ? key_value_capacity : key_value_token_count) * sizeof(ggml_fp16_t);
     const size_t output_row_bytes = static_cast<size_t>(output_hidden_size) * sizeof(float);
     for (int64_t row = 0; row < query_token_count; ++row) {
         const ggml::hrx::Dispatch & dispatch = plan.dispatches[static_cast<size_t>(row)];
@@ -6815,13 +6824,14 @@ static void add_cases(test_runner::Suite & suite) {
     add(suite, "fa_decode_split.1.512",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512); });
     add(suite, "fa_decode_split.4.513",
-        [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513); });
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513, false, kQwenFlashHeadSize,
+                                                                  kQwenFlashHeadSize, 0.0f, true); });
     add(suite, "fa_decode_split.1.512.true",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true); });
     add(suite, "fa_decode_split.1.512.true.96.64.1/sqrt(96.0f)",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true, 96, 64, 1.0f / std::sqrt(96.0f)); });
     add(suite, "fa_decode_split.4.513.true.96.64.1/sqrt(96.0f)",
-        [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f)); });
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f), true); });
     // engine#2494 blamed kv=65 (capacity 128) for the page faults. It is legal for the split arm now.
     add(suite, "fa_decode_split.1.65",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 65); });
