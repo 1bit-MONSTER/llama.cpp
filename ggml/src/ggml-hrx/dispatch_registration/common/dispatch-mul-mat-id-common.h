@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../dispatch-registry.h"
+#include "dispatch-moe-routing-layout.h"
 #include "dispatch-mul-mat-weight-format.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
