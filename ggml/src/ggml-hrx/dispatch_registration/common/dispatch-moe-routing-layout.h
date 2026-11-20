@@ -54,8 +54,12 @@ struct MoeRoutingDescriptorLayout {
 
 inline constexpr int64_t kMoeRoutingQwenLayoutMaxExpertCount = 128;
 
-inline MoeRoutingDescriptorLayout moe_router_descriptor_layout(int64_t expert_count) {
-    if (expert_count <= kMoeRoutingQwenLayoutMaxExpertCount) {
+// The layout has to be the one the CONSUMER decodes, not the one that follows from the expert count. The qwen fused
+// routed kernels decode the Qwen layout and only run at 128 experts; the common mul_mat_id decodes the common layout
+// and runs for 1..512 experts. A plan carries one table per route-ids value, so the writer cannot satisfy both and must
+// ask who is reading (engine#2861).
+inline MoeRoutingDescriptorLayout moe_router_descriptor_layout(int64_t expert_count, bool consumer_reads_common_layout) {
+    if (!consumer_reads_common_layout && expert_count <= kMoeRoutingQwenLayoutMaxExpertCount) {
         return { "127", "7", "13", "128", 127, 7, 13 };
     }
     return { "511", "9", "15", "512", 511, 9, 15 };
