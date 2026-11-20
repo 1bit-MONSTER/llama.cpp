@@ -253,7 +253,16 @@ inline int run_single_case_in_process(const Config &           config,
     }
     if (test_case->requires_device && !has_device) {
         std::fprintf(stderr, "test skipped: no device available for %s\n", config.suite_name.c_str());
-        return 0;
+        // engine#2912: `--hrx-test-case NAME` is a caller asking "did this case run?". Returning 0 for a case that
+        // never ran makes a skip indistinguishable from a pass -- measured on `ROCR_VISIBLE_DEVICES="" hrx-ops-test
+        // --hrx-test-case attention_v_matmul.q4_K.cache_f16`: rc 0, empty stdout, one line on stderr. 77 is the
+        // fleet's skip code (ctest SKIP_RETURN_CODE, fork_ctest_known_fail.sh's skip()).
+        //
+        // ONLY this path changes. The full-suite path must keep exiting 0 and printing this line: tests/CMakeLists.txt
+        // makes a skipped suite loud with FAIL_REGULAR_EXPRESSION "test skipped: no device available" (engine#2393),
+        // and SKIP_RETURN_CODE wins over FAIL_REGULAR_EXPRESSION on ctest 4.2.3, so a code here plus that property
+        // would turn a red row green and reopen #2393.
+        return 77;
     }
     test_case->run();
     return 0;
