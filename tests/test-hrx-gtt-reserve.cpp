@@ -35,9 +35,11 @@ int main() {
     using ggml::hrx::onebit::pool_reserve_bytes;
 
     // The pools that exist in the field, and what each must keep free.
-    check(pool_reserve_bytes(8 * kGiB) == 1 * kGiB, "an 8 GiB pool (a 16 GB machine) keeps 1 GiB free");
-    check(pool_reserve_bytes(16 * kGiB) == 2 * kGiB, "a 16 GiB pool (a 32 GB machine) keeps 2 GiB free");
-    check(pool_reserve_bytes(120 * kGiB) == 15 * kGiB, "this box's 120 GiB pool keeps 15 GiB free");
+    check(pool_reserve_bytes(8 * kGiB) == 2 * kGiB, "an 8 GiB pool (a 16 GB machine) keeps 2 GiB free");
+    check(pool_reserve_bytes(16 * kGiB) == 4 * kGiB, "a 16 GiB pool (a 32 GB machine) keeps 4 GiB free");
+    check(pool_reserve_bytes(32 * kGiB) == 8 * kGiB, "a 32 GiB pool keeps 8 GiB free");
+    check(pool_reserve_bytes(64 * kGiB) == 16 * kGiB, "64 GiB is the crossover: a quarter is exactly the measured cap");
+    check(pool_reserve_bytes(120 * kGiB) == 16 * kGiB, "so this box's 120 GiB pool keeps the measured 16 GiB, unchanged");
     // The cap: 12.5 % of 200 GiB would be 25 GiB, so the measured value wins instead of scaling past it.
     check(pool_reserve_bytes(200 * kGiB) == 16 * kGiB, "a 200 GiB pool is capped at the measured 16 GiB");
     check(pool_reserve_bytes(1024 * kGiB) == 16 * kGiB, "and stays capped at any larger total");

@@ -57,11 +57,16 @@ size_t pool_reserve_bytes(size_t gtt_total) {
     //
     // engine#2986: that figure is a CAP now, not a constant. Applied flat it left a 16 GB machine (about 8 GiB of GTT)
     // and a 32 GB one (about 16 GiB) at a ceiling of zero, so this refused the device at registration for every model --
-    // the range the owner's direction is in. 12.5 % of the total, capped at the measured 16 GiB. The explicit knob still
-    // wins, and an unknown total keeps the flat value: a caller that cannot measure GTT must not get a smaller reserve
-    // than the one that was measured to be safe.
+    // the range the owner's direction is in.
+    //
+    // A QUARTER of the pool, capped at the measured 16 GiB -- the same number the engine's planner landed on
+    // (1bit-MONSTER/engine#2995), because the two are a pair: the planner refuses a load the backstop would allow, or the
+    // reverse, if they disagree. The cap takes over from 64 GiB upward, so this box's 120 GiB keeps the ceiling #680
+    // measured (104 GiB) bit for bit and only the pools that were at zero change. The explicit knob still wins, and an
+    // unknown total keeps the flat value: a caller that cannot measure GTT must not get a smaller reserve than the one
+    // that was measured to be safe.
     constexpr size_t kDefaultReserveMiB = 16384;
-    constexpr size_t kReservePermille   = 125;
+    constexpr size_t kReservePermille   = 250;
     const char *     env                = std::getenv("GGML_HRX_GTT_RESERVE_MB");
     if (env != nullptr) {
         const long long mb = std::atoll(env);

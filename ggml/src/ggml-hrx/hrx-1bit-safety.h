@@ -117,8 +117,9 @@ pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, 
 //
 // engine#2986: the value is a CAP, not a constant. A flat 16 GiB left a 16 GB machine (about 8 GiB of GTT by default) and
 // a 32 GB one (about 16 GiB) with a ceiling of zero, so this refused the device at registration for every model -- and
-// the owner's direction is machines with 16 GB or less. Pass the device's GTT total to get min(16 GiB, 12.5 % of it);
-// pass 0 (the default) when the total is unknown, which keeps the flat value the #680 measurement established.
+// the owner's direction is machines with 16 GB or less. Pass the device's GTT total to get min(16 GiB, a quarter of
+// it) -- the engine's planner uses the same quarter (engine#2995), and the two must not disagree; pass 0 (the default)
+// when the total is unknown, which keeps the flat value the #680 measurement established.
 size_t pool_reserve_bytes(size_t gtt_total = 0);
 
 // GTT total and currently used bytes, from the driver's own counters (/sys/class/drm/card*/device/mem_info_gtt_*).
