@@ -3274,6 +3274,23 @@ static void require_matmul_route(const std::vector<std::string> & sequence, cons
             }
         }
     }
+    // engine#2774 follow-up (measured 2026-11-20 at fork head 47c95e15c): `q4_1` is not one of the formats
+    // `kquant_decode_covers()` lists, because that predicate describes the **Loom** kquant family -- but the private
+    // add-on registers its own q4_1 GEMV and serves the same 1..8-token shapes with it:
+    //
+    //   dense.q4_1.f32_f32_decode_wave64.1.128 -> qwen3_moe:ggml_quantize_q8_1_x4_f32 + hip:q41_gemv_w8r1u2
+    //
+    // and `k_348ddea48996` is `HRX_ID_q41_gemv_w8r1u2` in `addons/hip-hrx/kernels/hrx_kernel_ids.h`, built from
+    // `kernels/q41_decode.hip`. So the expectation (a Loom wave64 kernel) is stale for this format, not wrong about the
+    // shape: a dedicated q4_1 kernel exists and is what runs. Scoped to q4_1 alone -- every other format's route is
+    // still decided by the matcher's own gate above -- and the row's CPU-reference comparison still runs afterwards.
+    if (type == GGML_TYPE_Q4_1 && test_sequence_has(sequence, "qwen3_moe:ggml_quantize_q8_1_x4_f32")) {
+        for (const std::string & scheduled : sequence) {
+            if (scheduled.compare(0, 4, "hip:") == 0) {
+                return;
+            }
+        }
+    }
     std::fprintf(stderr, "missing expected kernel: %s\n", expected);
     std::fprintf(stderr, "scheduled kernels:\n");
     for (const std::string & scheduled : sequence) {
