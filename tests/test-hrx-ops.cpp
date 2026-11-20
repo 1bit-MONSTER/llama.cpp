@@ -2506,14 +2506,13 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     const ggml::hrx::CommandPlan & plan = scheduler.plan();
     REQUIRE(plan.valid());
     // engine#679/#429: above the measured crossover the split dispatch is not offered at all, so a row past the
-    // cap keeps one launch and a single-launch arm takes the node. What this pins is that the split kernel is not
-    // selected there; the rows within the cap, padded or not, now reach the split arm because their storage is the
-    // tile the matcher requires (engine#2494).
+    // cap keeps one launch per query row and the general kernel takes the node. The rows within the cap, padded or
+    // not, reach the split arm because their storage is the tile the matcher requires (engine#2494).
     if (key_value_token_count > 2944) {
         REQUIRE(plan.dispatches.size() == static_cast<size_t>(query_token_count));
         for (const auto & dispatch : plan.dispatches) {
-            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) !=
-                    "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                    "loom_libs:ggml_flash_attention_f32_f16_wmma");
         }
         ggml_free(ctx);
         restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
@@ -6759,6 +6758,13 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true, 96, 64, 1.0f / std::sqrt(96.0f)); });
     add(suite, "fa_decode_split.4.513.true.96.64.1/sqrt(96.0f)",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f)); });
+    // engine#2494 blamed kv=65 (capacity 128) for the page faults. It is legal for the split arm now.
+    add(suite, "fa_decode_split.1.65",
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 65); });
+    // Smallest 64-token multiple past the engine#679 cap: the only shape where the general matcher accepts the
+    // padded storage and the split matcher declines on the cap, i.e. the fallback below is actually reached.
+    add(suite, "fa_decode_split.1.3008",
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 3008); });
     add(suite, "fa_decode_next_q8.",
         [=] { run_qwen_decode_attention_output_next_q8_scheduling_case(false); });
     add(suite, "fa_decode_next_q8.true",
