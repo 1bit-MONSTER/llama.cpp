@@ -89,6 +89,34 @@ file(GLOB _ggml_hrx_hip_shared_headers CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels/*.inc" "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels/*.cuh")
 
 set(_ggml_hrx_hip_dir "${CMAKE_CURRENT_BINARY_DIR}/hip-code-objects")
+set(_ggml_hrx_hip_addon_depends)   # engine#2935: the add-on content stamp, filled below when one is configured
+# engine#2935: a `.hsaco` is keyed by kernel file STEM, so its path says nothing about which add-on tree produced it,
+# and the only freshness signal is the mtime of the sources it DEPENDS on. A pin switch that preserves mtimes -- a
+# staged copy, `cp -a`, an unpacked tarball -- therefore leaves every code object stale while the generated registry
+# headers (`kernels/hrx_kernel_ids.h`, from `hrx_kernel_names.txt`) move with the checkout, and the mismatch is only
+# found when a server loads a model ("26 HIP kernel registration(s) do not match their compiled code objects").
+# This stamp carries a CONTENT identity of the add-on's kernels; adding it to DEPENDS makes that switch visible to
+# ninja regardless of mtimes. Written only when the value changes, so an ordinary reconfigure rebuilds nothing.
+if (GGML_HRX_HIP_ADDON_DIR)
+    set(_ggml_hrx_hip_addon_stamp "${_ggml_hrx_hip_dir}/addon-kernels.stamp")
+    set(_ggml_hrx_hip_addon_identity "${GGML_HRX_HIP_ADDON_PATH}")
+    foreach(_kernel ${_ggml_hrx_hip_addon_kernels})
+        get_filename_component(_kernel_name "${_kernel}" NAME)
+        file(SHA256 "${_kernel}" _kernel_hash)
+        string(APPEND _ggml_hrx_hip_addon_identity "\n${_kernel_name} ${_kernel_hash}")
+    endforeach()
+    set(_ggml_hrx_hip_addon_stale TRUE)
+    if (EXISTS "${_ggml_hrx_hip_addon_stamp}")
+        file(READ "${_ggml_hrx_hip_addon_stamp}" _ggml_hrx_hip_addon_have)
+        if (_ggml_hrx_hip_addon_have STREQUAL _ggml_hrx_hip_addon_identity)
+            set(_ggml_hrx_hip_addon_stale FALSE)
+        endif()
+    endif()
+    if (_ggml_hrx_hip_addon_stale)
+        file(WRITE "${_ggml_hrx_hip_addon_stamp}" "${_ggml_hrx_hip_addon_identity}\n")
+    endif()
+    set(_ggml_hrx_hip_addon_depends "${_ggml_hrx_hip_addon_stamp}")
+endif()
 file(MAKE_DIRECTORY "${_ggml_hrx_hip_dir}")
 
 set(_ggml_hrx_hip_objects)
@@ -108,7 +136,7 @@ foreach(_source ${GGML_HRX_HIP_KERNEL_SOURCES})
                     --no-gpu-bundle-output ${_ggml_hrx_hip_flags}
                     -I "${_source_dir}" -I "${CMAKE_CURRENT_SOURCE_DIR}/hip/kernels"
                     -MD -MF "${_object}.d" -o "${_object}" "${_source}"
-            DEPENDS "${_source}" ${_ggml_hrx_hip_kernel_headers}
+            DEPENDS "${_source}" ${_ggml_hrx_hip_kernel_headers} ${_ggml_hrx_hip_addon_depends}
             DEPFILE "${_object}.d"
             COMMENT "HIP code object ${_stem} (${_target})"
             VERBATIM)
