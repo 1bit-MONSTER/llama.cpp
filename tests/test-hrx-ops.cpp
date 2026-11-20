@@ -2067,15 +2067,16 @@ static void run_qwen_flash_attention_case() {
     ggml_context * ctx      = ggml_init(params);
     REQUIRE(ctx != nullptr);
 
-    // engine#2870: this row names the decode-split kernel, whose K/V walk is in whole 64-token blocks; #2494's
-    // storage guard (dispatch-flash-attention.cpp:392) refuses a 4-slot binding (needs 64), so the row asked for a
-    // kernel the dispatcher is required to decline. The fixture allocates the padded capacity instead -- this case
-    // schedules only and uploads no data, so the padded slots need no values.
-    static constexpr int64_t kPaddedKeyValueCapacity = (kKeyValueTokenCount + 63) / 64 * 64;
+    // engine#2870 (measured 2026-11-20 at head 4eb3f08f9): padding this row's K/V to 64 made the split matcher admit a
+    // 4-key shape, the split kernel ran, and the row then failed its own value comparison (`diff <= 5.0e-2f` at
+    // :2135) -- so the padded capacity is not numerically neutral here, and a 4-key query against a 64-slot kernel is
+    // exactly the shape #2494's guard exists to refuse. The row goes back to the binding it had, which the guard
+    // declines, and asserts the general kernel it therefore gets. The padded capacity stays where it is measured good:
+    // in run_common_flash_attention_cpu_reference_case, where nine rows now compare values for the first time.
     ggml_tensor * query = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize, kQueryTokenCount, 1);
-    ggml_tensor * key   = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kQwenFlashHeadSize, kPaddedKeyValueCapacity, 1);
-    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kQwenFlashHeadSize, kPaddedKeyValueCapacity, 1);
-    ggml_tensor * mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, kPaddedKeyValueCapacity, kQueryTokenCount);
+    ggml_tensor * key   = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kQwenFlashHeadSize, kKeyValueTokenCount, 1);
+    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kQwenFlashHeadSize, kKeyValueTokenCount, 1);
+    ggml_tensor * mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, kKeyValueTokenCount, kQueryTokenCount);
     REQUIRE(query != nullptr);
     REQUIRE(key != nullptr);
     REQUIRE(value != nullptr);
@@ -2087,7 +2088,7 @@ static void run_qwen_flash_attention_case() {
     ggml_build_forward_expand(graph, output);
 
     require_kernel_subsequence(scheduled_kernel_sequence(graph),
-                               { "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8" });
+                               { "loom_libs:ggml_flash_attention_f32_f16_wmma" });
     static constexpr const char * kDisableQwenDispatchEnv = "GGML_HRX_DISABLE_QWEN_DISPATCH";
     const char *                  original_env            = std::getenv(kDisableQwenDispatchEnv);
     const bool                    had_original_env        = original_env != nullptr;
@@ -6823,15 +6824,19 @@ static void add_cases(test_runner::Suite & suite) {
                                    "loom_libs:ggml_flash_attention_f32_f16_wmma"); });
     add(suite, "fa_decode_split.1.512",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512); });
+    // engine#2870 (measured 2026-11-20, head 4eb3f08f9): these two rows exist to prove the FALLBACK is reached
+    // when the mask is narrower than the K/V capacity -- `mask_is_capacity` false is the condition under test, so
+    // they must not opt into a capacity-wide mask. With the flag on they select the split kernel and then fail
+    // their own assertion (`kernel_name == ggml_flash_attention_f32_f16_wmma`), i.e. the flag removed the thing
+    // they measure. The flag itself stays available for a row that wants split at a non-multiple capacity.
     add(suite, "fa_decode_split.4.513",
-        [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513, false, kQwenFlashHeadSize,
-                                                                  kQwenFlashHeadSize, 0.0f, true); });
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513); });
     add(suite, "fa_decode_split.1.512.true",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true); });
     add(suite, "fa_decode_split.1.512.true.96.64.1/sqrt(96.0f)",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true, 96, 64, 1.0f / std::sqrt(96.0f)); });
     add(suite, "fa_decode_split.4.513.true.96.64.1/sqrt(96.0f)",
-        [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f), true); });
+        [=] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f)); });
     // engine#2494 blamed kv=65 (capacity 128) for the page faults. It is legal for the split arm now.
     add(suite, "fa_decode_split.1.65",
         [=] { run_qwen_decode_split_flash_attention_scheduling_case(1, 65); });
