@@ -25,6 +25,7 @@
 #include <mutex>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 
 namespace ggml::hrx::onebit {
@@ -68,9 +69,14 @@ size_t pool_reserve_bytes(size_t gtt_total) {
     constexpr size_t kDefaultReserveMiB = 16384;
     constexpr size_t kReservePermille   = 250;
     const char *     env                = std::getenv("GGML_HRX_GTT_RESERVE_MB");
+    // engine#2986 follow-up: only a whole, non-negative number of MiB is an override. std::atoll read an empty or mistyped
+    // value ("", "abc") as 0, so GGML_HRX_GTT_RESERVE_MB= removed the reserve outright -- failing open, the direction
+    // a guardrail must not fail. Anything else is ignored and the default stands; the engine's app/mem_admit.h parses it
+    // the same way.
     if (env != nullptr) {
-        const long long mb = std::atoll(env);
-        if (mb >= 0) {
+        char *          end = nullptr;
+        const long long mb  = std::strtoll(env, &end, 10);
+        if (end != env && *end == '\0' && mb >= 0 && mb <= (static_cast<long long>(SIZE_MAX >> 20))) {
             return static_cast<size_t>(mb) * kMiB;
         }
     }

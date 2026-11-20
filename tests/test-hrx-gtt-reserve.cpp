@@ -40,13 +40,21 @@ int main() {
     check(pool_reserve_bytes(32 * kGiB) == 8 * kGiB, "a 32 GiB pool keeps 8 GiB free");
     check(pool_reserve_bytes(64 * kGiB) == 16 * kGiB, "64 GiB is the crossover: a quarter is exactly the measured cap");
     check(pool_reserve_bytes(120 * kGiB) == 16 * kGiB, "so this box's 120 GiB pool keeps the measured 16 GiB, unchanged");
-    // The cap: 12.5 % of 200 GiB would be 25 GiB, so the measured value wins instead of scaling past it.
+    // The cap: a quarter of 200 GiB would be 50 GiB, so the measured value wins instead of scaling past it.
     check(pool_reserve_bytes(200 * kGiB) == 16 * kGiB, "a 200 GiB pool is capped at the measured 16 GiB");
     check(pool_reserve_bytes(1024 * kGiB) == 16 * kGiB, "and stays capped at any larger total");
     // The escapes, in the order they win.
     check(pool_reserve_bytes(0) == 16 * kGiB, "an unknown total keeps the flat 16 GiB (never a smaller reserve)");
     setenv("GGML_HRX_GTT_RESERVE_MB", "512", 1);
     check(pool_reserve_bytes(8 * kGiB) == (512ull << 20), "GGML_HRX_GTT_RESERVE_MB overrides the scaling");
+    setenv("GGML_HRX_GTT_RESERVE_MB", "0", 1);
+    check(pool_reserve_bytes(8 * kGiB) == 0, "an explicit 0 is an override too");
+    // engine#2986 follow-up: a value that is not a number is ignored, it does not become a zero reserve
+    for (const char * bad : { "", "abc", "16GiB", "-1" }) {
+        setenv("GGML_HRX_GTT_RESERVE_MB", bad, 1);
+        check(pool_reserve_bytes(8 * kGiB) == 2 * kGiB,
+              std::string("GGML_HRX_GTT_RESERVE_MB=\"") + bad + "\" is ignored: the 8 GiB pool keeps its 2 GiB");
+    }
     unsetenv("GGML_HRX_GTT_RESERVE_MB");
 
     // A pool that cannot hold the scaled reserve outright: the ceiling would be zero, and that is the caller's
