@@ -608,6 +608,7 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
     const size_t  partition_table_bytes =
         partition_table_size(router_match.token_count, router_match.route_count, router_match.expert_count);
     const bool use_fused_prefill_expert_table_partition = supports_fused_prefill_expert_table_partition(router_match);
+    const MoeRoutingDescriptorLayout router_layout       = moe_router_descriptor_layout(router_match.expert_count);
     dispatch_match.transients.push_back(
         { expert_table_value, "qwen.router.expert_table", expert_table_bytes, kMoeRouterPlanTransientAlignment });
     dispatch_match.transients.push_back({ partition_table_value, "qwen.router.partition_table", partition_table_bytes,
@@ -656,6 +657,9 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
                 router_match.route_count,
                 router_match.route_stride,
                 router_match.expert_count,
+                router_layout.expert_mask_value,
+                router_layout.partition_shift_value,
+                router_layout.row_count_shift_value,
             },
             metadata_status)) {
         return false;

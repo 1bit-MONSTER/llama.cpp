@@ -119,6 +119,12 @@ struct CommandPlanMoeRoutingBundle {
     int64_t route_count                = 0;
     int64_t route_stride               = 0;
     int64_t expert_count               = 0;
+    // The descriptor layout the tables above were WRITTEN with. A reader decodes the table with hard-coded
+    // constants of its own, so a bundle may only be reused when these match what the reader decodes (engine #2861:
+    // the router writes the Qwen layout for <=128 experts while the common mul_mat_id decodes the common one).
+    int32_t descriptor_expert_mask     = 0;
+    int32_t descriptor_partition_shift = 0;
+    int32_t descriptor_row_count_shift = 0;
 };
 
 class CommandPlanMetadata {

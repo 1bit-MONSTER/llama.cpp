@@ -194,6 +194,12 @@ inline bool common_mul_mat_id_bundle_matches(const CommandPlanMoeRoutingBundle &
                                              int64_t                             token_count,
                                              int64_t                             route_count,
                                              int64_t                             expert_count) {
+    // A bundle written with a different descriptor layout decodes to the wrong expert index through the constants
+    // below (engine #2861: the router writes the Qwen layout for <=128 experts). Reusing it is never correct, and the
+    // caller falls back to building its own table, which is the cheap path.
+    if (!moe_routing_bundle_readable_as_common(bundle)) {
+        return false;
+    }
     return bundle.route_ids == route_ids && bundle.expert_table.value >= 0 && bundle.partition_table.value >= 0 &&
            bundle.expert_table_byte_count == common_mul_mat_id_expert_table_size(token_count, expert_count) &&
            bundle.partition_table_byte_count ==
@@ -330,6 +336,7 @@ inline bool common_mul_mat_id_ensure_moe_routing_bundle(const DispatchMatchConte
     routing_bundle                                     = {
         match.route_ids->id,   ValueId(),         expert_table_value, partition_table_value, expert_table_bytes,
         partition_table_bytes, match.token_count, match.route_count,  route_stride,          match.expert_count,
+        kMoePartitionExpertMask, kMoePartitionShift, kMoePartitionRowCountShift,
     };
 
     Status metadata_status;

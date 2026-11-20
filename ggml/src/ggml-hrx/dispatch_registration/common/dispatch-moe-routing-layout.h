@@ -36,6 +36,7 @@
 // prompt batch in which one expert received two or more tokens. No Qwen-layout
 // consumer matches above 128 experts, so the router emits the common layout there.
 
+#include "dispatch/command-plan-metadata.h"
 #include <cstdint>
 
 namespace ggml::hrx {
@@ -45,15 +46,37 @@ struct MoeRoutingDescriptorLayout {
     const char * partition_shift;
     const char * row_count_shift;
     const char * partition_workgroup_size;
+    // the same three numbers as values, for comparing a written bundle against the layout a reader decodes
+    int32_t expert_mask_value;
+    int32_t partition_shift_value;
+    int32_t row_count_shift_value;
 };
 
 inline constexpr int64_t kMoeRoutingQwenLayoutMaxExpertCount = 128;
 
 inline MoeRoutingDescriptorLayout moe_router_descriptor_layout(int64_t expert_count) {
     if (expert_count <= kMoeRoutingQwenLayoutMaxExpertCount) {
-        return { "127", "7", "13", "128" };
+        return { "127", "7", "13", "128", 127, 7, 13 };
     }
-    return { "511", "9", "15", "512" };
+    return { "511", "9", "15", "512", 511, 9, 15 };
+}
+
+// True when a partition table written with (mask, partition_shift, row_count_shift) can be decoded by a reader that
+// uses the common layout. The sizes matching is not enough: the two layouts place the partition and row-count fields
+// at different bit offsets, so a table written with one and read with the other yields a wrong expert index.
+inline bool moe_routing_descriptor_is_common_layout(int32_t expert_mask,
+                                                   int32_t partition_shift,
+                                                   int32_t row_count_shift) {
+    return expert_mask == kMoePartitionExpertMask && partition_shift == kMoePartitionShift &&
+           row_count_shift == kMoePartitionRowCountShift;
+}
+
+// True when a routing bundle may be reused by a reader that decodes the common layout. A bundle carries the layout it
+// was written with precisely so that this question has an answer; before engine #2861 the only fields compared were the
+// sizes, which agree between the two layouts.
+inline bool moe_routing_bundle_readable_as_common(const CommandPlanMoeRoutingBundle & bundle) {
+    return moe_routing_descriptor_is_common_layout(bundle.descriptor_expert_mask, bundle.descriptor_partition_shift,
+                                                   bundle.descriptor_row_count_shift);
 }
 
 }  // namespace ggml::hrx
