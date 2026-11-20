@@ -49,8 +49,12 @@ int main() {
     check(pool_reserve_bytes(8 * kGiB) == (512ull << 20), "GGML_HRX_GTT_RESERVE_MB overrides the scaling");
     setenv("GGML_HRX_GTT_RESERVE_MB", "0", 1);
     check(pool_reserve_bytes(8 * kGiB) == 0, "an explicit 0 is an override too");
+    for (const char * spaced : { "512\n", " 512 ", "\t512" }) {
+        setenv("GGML_HRX_GTT_RESERVE_MB", spaced, 1);
+        check(pool_reserve_bytes(8 * kGiB) == (512ull << 20), "whitespace around the number is accepted on both ends");
+    }
     // engine#2986 follow-up: a value that is not a number is ignored, it does not become a zero reserve
-    for (const char * bad : { "", "abc", "16GiB", "-1" }) {
+    for (const char * bad : { "", "abc", "16GiB", "-1", "\n", "512 MiB" }) {
         setenv("GGML_HRX_GTT_RESERVE_MB", bad, 1);
         check(pool_reserve_bytes(8 * kGiB) == 2 * kGiB,
               std::string("GGML_HRX_GTT_RESERVE_MB=\"") + bad + "\" is ignored: the 8 GiB pool keeps its 2 GiB");
