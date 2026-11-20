@@ -198,11 +198,23 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    for (int il = 0; il < n_layer; ++il) {
-        ggml_tensor * inpSA = inpL;
+    // FarSkip-Collective (engine: instella-moe) carries TWO residual streams:
+    //   res_main       -- the ordinary residual (h in the paper's notation)
+    //   res_norouted   -- `residual + shared_expert_out`, i.e. the stream with the routed experts left out
+    // `res_norouted == nullptr` means "first farskip layer", which the reference handles by feeding the plain
+    // residual to both attention and MoE. It stays null through layer 1: layer 0 is DENSE and returns a plain
+    // tensor, so the reference's tuple only starts at layer 2 (modeling_instella_moe.py, FarSkipDecoderLayer).
+    ggml_tensor * res_main     = inpL;
+    ggml_tensor * res_norouted = nullptr;
 
-        // norm
-        cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+    for (int il = 0; il < n_layer; ++il) {
+        // MoE input is the PRE-attention residual, attention input is the routed-free stream when there is one.
+        ggml_tensor * inpSA = res_main;
+
+        // norm — of the ATTENTION input, which under FarSkip is the routed-free stream from the previous MoE
+        // layer, not the main residual. On the first farskip layers res_norouted is null and both are the same.
+        static const bool no_farskip = getenv("INSTELLA_NO_FARSKIP") != nullptr;   // ABLATION (temporary)
+        cur = build_norm((no_farskip || !res_norouted) ? res_main : res_norouted, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
         // the gate reads the NORMED layer input (x in sigma(W_g x)), so keep it before the attention overwrites cur
         ggml_tensor * attn_inp = cur;
@@ -377,25 +389,30 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
                             nullptr, NULL, nullptr,
                             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
                 {
-                    ggml_tensor * attn_gate = build_lora_mm(model.layers[il].wqkv_gate, attn_inp);
-                    cb(attn_gate, "attn_gate_proj", il);
-                    attn_gate = ggml_sigmoid(ctx0, attn_gate);
-                    cur = ggml_mul(ctx0, cur, attn_gate);
-                    cb(cur, "attn_gated", il);
+                    static const bool no_gate = getenv("INSTELLA_NO_GATE") != nullptr;   // ABLATION (temporary)
+                    if (!no_gate) {
+                        ggml_tensor * attn_gate = build_lora_mm(model.layers[il].wqkv_gate, attn_inp);
+                        cb(attn_gate, "attn_gate_proj", il);
+                        attn_gate = ggml_sigmoid(ctx0, attn_gate);
+                        cur = ggml_mul(ctx0, cur, attn_gate);
+                        cb(cur, "attn_gated", il);
+                    }
                     cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
                 }
             }
         }
         if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
+            res_main = ggml_get_rows(ctx0, res_main, inp_out_ids);
         }
-        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+        // the MoE reads the PRE-attention residual: `residual` here is bound before the attention add
+        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, res_main);
         cb(ffn_inp, "ffn_inp", il);
 
-        cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+        cur = build_norm(res_main, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
+        ggml_tensor * shexp_out = nullptr;   // set only on a MoE layer: FarSkip adds just this to the routed-free stream
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             cur = build_ffn(cur,
                 model.layers[il].ffn_up, NULL, NULL,
@@ -429,12 +446,22 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
                         model.layers[il].ffn_down_shexp, NULL, NULL,
                         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(ffn_shexp, "ffn_shexp", il);
+                shexp_out = ffn_shexp;
 
                 cur = ggml_add(ctx0, moe_out, ffn_shexp);
                 cb(cur, "ffn_out", il);
             }
         }
-        cur = ggml_add(ctx0, cur, ffn_inp);
+        // FarSkip-Collective: the main residual takes the FULL MoE output (routed + shared); the routed-free
+        // stream takes the shared experts only. Both start from `ffn_inp`, the residual *after* attention — which
+        // is why the next layer's attention reads res_norouted while its MoE reads res_main.
+        res_main = ggml_add(ctx0, ffn_inp, cur);
+        cb(res_main, "farskip_residual", il);
+        if (shexp_out) {
+            res_norouted = ggml_add(ctx0, ffn_inp, shexp_out);
+            cb(res_norouted, "farskip_residual_norouted", il);
+        }
+        cur = res_main;
 
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
