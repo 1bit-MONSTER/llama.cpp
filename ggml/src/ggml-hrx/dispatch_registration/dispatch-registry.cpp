@@ -436,6 +436,18 @@ const DispatchRegistry * find_dispatch_registry(const DispatchTarget & target) {
     if (target.architecture == "gfx1151") {
         return qwen_disabled ? &gfx1151_generic_only_registry : &gfx1151_registry;
     }
+    // engine#679: every registry above is keyed to one ASIC, so an unlisted architecture silently gets nullptr and
+    // nothing says so - the device then runs whichever registry's code objects happen to match, with no diagnostic,
+    // which is how "which kernels does this box actually run?" became unanswerable from the dispatch log. Warn once
+    // and keep the old return: a hard failure would stop every unlisted device from loading a model (engine#2957).
+    static const bool warned_unknown_architecture = [] {
+        std::fprintf(stderr,
+                     "ggml_hrx: no dispatch registry is keyed to this architecture; the registries that exist are "
+                     "built for gfx1100 and gfx1151 only, so this device runs whichever of those its code objects "
+                     "match, or the generic paths\n");
+        return true;
+    }();
+    (void) warned_unknown_architecture;
     return nullptr;
 }
 
