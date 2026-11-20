@@ -461,6 +461,14 @@ if (TARGET ggml-hrx)
     # the program cache's byte budget and LRU order: pure policy, no device and no HRX link
     # Which rotations the fused registrations accept, i.e. what the claim may assert (engine #1467).
     # Header-only: no device, no model, and the vision rotation must be rejected here.
+    # engine#2986: the GTT reserve is a cap, not a constant -- a flat 16 GiB gave a 16 GB machine (about 8 GiB of GTT) a
+    # ceiling of zero, so this refused the device at registration for every model. The arithmetic of one function: no
+    # device, no runtime, no model.
+    add_executable(test-hrx-gtt-reserve test-hrx-gtt-reserve.cpp ../ggml/src/ggml-hrx/hrx-1bit-safety.cpp)
+    target_include_directories(test-hrx-gtt-reserve PRIVATE ../ggml/include ../ggml/src)
+    target_link_libraries(test-hrx-gtt-reserve PRIVATE ggml)
+    add_test(NAME test-hrx-gtt-reserve COMMAND test-hrx-gtt-reserve)
+
     add_executable(test-hrx-rope-claim-params test-hrx-rope-claim-params.cpp)
     target_include_directories(test-hrx-rope-claim-params PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-rope-claim-params COMMAND test-hrx-rope-claim-params)
