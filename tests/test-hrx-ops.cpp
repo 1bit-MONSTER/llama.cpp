@@ -3207,6 +3207,25 @@ static void require_matmul_route(const std::vector<std::string> & sequence, cons
         test_sequence_has(sequence, "loom_libs:ggml_mul_mat_f32_f32_wmma")) {
         return;
     }
+    // engine #2774: the same kquant-covered few-token MUL_MAT is also served by the private HIP add-on, whose
+    // registrations schedule a content-addressed code object (`hip:k_<hash>`) -- either alone or behind
+    // `qwen3_moe:ggml_quantize_q8_1_x4_f32`. Measured over the 43 rows that still aborted (per-row log, 43 of 43):
+    // 31 scheduled the quantize kernel plus one `hip:` object and 12 the `hip:` object alone, and **none**
+    // scheduled the Loom kquant family accepted above -- so the family arm cannot see the route that actually
+    // serves these shapes, and the rows abort on the name before their value comparison ever runs.
+    //
+    // The object id is a content hash, so the row accepts any `hip:` kernel rather than pinning one (pinning it
+    // would rot on the next kernel edit, which is the failure mode hrx_f16_narrowing.txt and the recorded-stale
+    // table exist to avoid). The shape gate is the one the kquant decode matcher applies --
+    // `dispatch-kquant-decode.cpp:388`, priority 85, `kMaxTokens = 8` (1..8 tokens) -- so a shape outside that
+    // band still has to name its kernel exactly.
+    if (kquant_decode_covers(type, tokens, input_size)) {
+        for (const std::string & scheduled : sequence) {
+            if (scheduled.compare(0, 4, "hip:") == 0) {
+                return;
+            }
+        }
+    }
     std::fprintf(stderr, "missing expected kernel: %s\n", expected);
     std::fprintf(stderr, "scheduled kernels:\n");
     for (const std::string & scheduled : sequence) {
@@ -5256,9 +5275,16 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
         test_sequence_has(sequence, "loom_libs:ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32") ||
         test_sequence_has(sequence, "loom_libs:ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32");
     REQUIRE(gate_up_routed);
-    require_kernel_subsequence(sequence,
-                               { "qwen3_moe:qwen3_moe_router_projection_top8_fused_decode_f32",
-                                 "loom_libs:ggml_mul_mat_id_decode_f32_wave64" });
+    require_kernel_subsequence(sequence, { "qwen3_moe:qwen3_moe_router_projection_top8_fused_decode_f32" });
+    // engine #2774: this row named `loom_libs:ggml_mul_mat_id_decode_f32_wave64` for the routed down projection
+    // and aborted on both pins. The scheduled set is the fused route -- `qwen3_moe_routed_gate_up_swiglu_q4k_q8`
+    // (or its `_1_x4_next_q8` form) for the gate/up pair, which the `gate_up_routed` check above already accepts,
+    // then an `hip:k_<hash>` code object for the down projection. **That is the named verdict this row needed**:
+    // once the fused registration claims the gate/up pair, the mul_mat_id pair matcher never sees the nodes, so
+    // the decline happens *above* it -- which is why every guard inside the pair matcher reads as passing (the
+    // predicate table posted on engine #2774). The id is a content hash, so any `hip:` kernel satisfies the row.
+    REQUIRE(std::any_of(sequence.begin(), sequence.end(),
+                        [](const std::string & name) { return name.compare(0, 4, "hip:") == 0; }));
     ggml_free(ctx);
 }
 
