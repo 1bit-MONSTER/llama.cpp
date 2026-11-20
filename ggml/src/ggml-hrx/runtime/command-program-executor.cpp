@@ -1364,6 +1364,171 @@ static Status record_completion_counter_fill(hrx_graph_t                        
     return status;
 }
 
+// engine #674 diagnostic, do not merge. Three knobs, all off by default:
+//   GGML_HRX_674_DUMP=1    print every recorded dispatch of one program, plus the hazards this independent analysis
+//                          computes but the planner did not link.
+//   GGML_HRX_674_LINKALL=1 add those hazards to the recorded dependencies, i.e. make the graph at least as ordered as
+//                          this analysis says it must be. If the corruption goes away, a missing edge is the cause; if it
+//                          does not, the dependency graph was already complete and the defect is downstream (barriers or
+//                          workstreams in libhrx).
+//   GGML_HRX_674_TRACE=1   (in ggml-hrx.cpp) log host-visible-buffer fast-path accesses.
+// Two things this analysis must get right to be worth anything, both of which the first version got wrong: it is reset
+// per recorded program (commands of different programs are ordered by the queue, not by the planner), and it links the
+// LAST writer of each byte plus the readers since that writer, not every earlier writer - otherwise every W-W-W chain
+// over a reused arena range reports as unlinked and the count is noise (the first version reported 91k for a correct run).
+namespace {
+
+struct DumpBinding {
+    hrx_buffer_t buffer = nullptr;
+    size_t       offset = 0;
+    size_t       length = 0;
+    bool         writes = false;
+};
+
+struct DumpCommand {
+    hrx_graph_node_t          node    = nullptr;
+    size_t                    ordinal = 0;
+    std::string               label;
+    std::vector<DumpBinding> bindings;
+};
+
+struct DumpState {
+    bool                     enabled       = false;
+    bool                     link_all      = false;
+    bool                     initialized   = false;
+    size_t                   missing_edges = 0;
+    size_t                   programs      = 0;
+    size_t                   edges_added   = 0;
+    std::vector<DumpCommand> commands;
+
+    ~DumpState() {
+        if (initialized && programs > 0) {
+            std::fprintf(stderr, "hrx674 dump: %zu programs, last program %zu commands, %zu unlinked hazards\n",
+                         programs, commands.size(), missing_edges);
+        }
+        if (initialized && link_all) {
+            std::fprintf(stderr, "hrx674 linkall: added %zu edges over %zu programs\n", edges_added, programs);
+        }
+    }
+};
+
+DumpState & dump_state() {
+    static DumpState state;
+    if (!state.initialized) {
+        const char * dump = std::getenv("GGML_HRX_674_DUMP");
+        const char * link = std::getenv("GGML_HRX_674_LINKALL");
+        state.enabled     = dump != nullptr && dump[0] != '\0' && dump[0] != '0';
+        state.link_all    = link != nullptr && link[0] != '\0' && link[0] != '0';
+        state.initialized = true;
+    }
+    return state;
+}
+
+bool command_graph_dump_enabled() {
+    return dump_state().enabled || dump_state().link_all;
+}
+
+// One recorded program ends: the next program's commands must not be compared against these.
+void command_graph_dump_begin_program() {
+    DumpState & state = dump_state();
+    if (!command_graph_dump_enabled()) {
+        return;
+    }
+    state.commands.clear();
+    state.missing_edges = 0;
+    ++state.programs;
+}
+
+bool covers(const DumpBinding & binding, size_t at) {
+    return binding.buffer != nullptr && binding.length > 0 && at >= binding.offset && at < binding.offset + binding.length;
+}
+
+// The command libhrx must see ordered before |current|: the last writer of every byte it touches, and, when it writes,
+// every reader since that writer. Computed here from the recorded bindings alone.
+std::vector<hrx_graph_node_t> required_dependencies(const std::vector<PreparedCommandBinding> & bindings,
+                                                    std::vector<hrx_graph_node_t> &             unlinked,
+                                                    const std::vector<hrx_graph_node_t> &       planned,
+                                                    size_t &                                    missing) {
+    DumpState &                     state = dump_state();
+    std::vector<hrx_graph_node_t>   result;
+    const auto append = [&result](hrx_graph_node_t node) {
+        if (node != nullptr && std::find(result.begin(), result.end(), node) == result.end()) {
+            result.push_back(node);
+        }
+    };
+    for (const PreparedCommandBinding & raw : bindings) {
+        const DumpBinding current = { raw.ref.buffer, raw.ref.offset, raw.ref.length,
+                                      resource_access_writes(raw.binding.access) };
+        if (current.buffer == nullptr || current.length == 0) {
+            continue;
+        }
+        // last writer of every byte, and every reader since that writer, walking back from the newest command
+        const size_t samples = current.length > 64 ? 5 : 1;  // sample big ranges: first/middle/last byte
+        for (size_t s = 0; s < samples; ++s) {
+            const size_t at = current.offset + (samples == 1 ? 0 : (current.length - 1) * s / (samples - 1));
+            hrx_graph_node_t writer = nullptr;
+            std::vector<hrx_graph_node_t> readers;
+            for (auto it = state.commands.rbegin(); it != state.commands.rend(); ++it) {
+                bool writes_here = false;
+                bool reads_here  = false;
+                for (const DumpBinding & earlier : it->bindings) {
+                    if (!covers(earlier, at)) {
+                        continue;
+                    }
+                    writes_here = writes_here || earlier.writes;
+                    reads_here  = reads_here || !earlier.writes;
+                }
+                if (writer == nullptr) {
+                    if (writes_here) {
+                        writer = it->node;
+                        append(writer);
+                        if (std::find(planned.begin(), planned.end(), writer) == planned.end()) {
+                            unlinked.push_back(writer);
+                            ++missing;
+                        }
+                    } else if (reads_here && current.writes) {
+                        readers.push_back(it->node);
+                    }
+                } else if (current.writes) {
+                    if (writes_here) {
+                        break;  // a later writer already supersedes anything older
+                    }
+                    if (reads_here) {
+                        append(it->node);
+                        if (std::find(planned.begin(), planned.end(), it->node) == planned.end()) {
+                            unlinked.push_back(it->node);
+                            ++missing;
+                        }
+                    }
+                } else {
+                    break;  // a read only needs the last writer, already found
+                }
+            }
+        }
+    }
+    return result;
+}
+
+void command_graph_dump_commit(hrx_graph_node_t node, const std::string & label,
+                               const std::vector<PreparedCommandBinding> & bindings) {
+    DumpState &  state = dump_state();
+    DumpCommand record;
+    record.node    = node;
+    record.ordinal = state.commands.size();
+    record.label   = label;
+    record.bindings.reserve(bindings.size());
+    for (const PreparedCommandBinding & binding : bindings) {
+        record.bindings.push_back({ binding.ref.buffer, binding.ref.offset, binding.ref.length,
+                                    resource_access_writes(binding.binding.access) });
+    }
+    if (state.enabled) {
+        std::fprintf(stderr, "hrx674 dump #%zu %s bindings=%zu\n", record.ordinal, label.c_str(), record.bindings.size());
+    }
+    state.commands.push_back(std::move(record));
+}
+
+}  // namespace
+
 static Status record_prepared_kernel_command(hrx_graph_t                  graph,
                                              GraphDependencyPlanner & dependencies,
                                              const PreparedCommand &      command) {
@@ -1409,7 +1574,27 @@ static Status record_prepared_kernel_command(hrx_graph_t                  graph,
         refs.size(),
         0,
     };
-    const std::vector<hrx_graph_node_t> dependency_nodes = dependencies.dependencies(command.kernel.bindings);
+    std::vector<hrx_graph_node_t> dependency_nodes = dependencies.dependencies(command.kernel.bindings);
+    // engine #674 diagnostic, do not merge: compare the planner's edges against an independent read/write analysis and,
+    // with GGML_HRX_674_LINKALL, add whatever it missed.
+    if (command_graph_dump_enabled()) {
+        std::vector<hrx_graph_node_t> unlinked;
+        size_t                        missing = 0;
+        const std::vector<hrx_graph_node_t> required =
+            required_dependencies(command.kernel.bindings, unlinked, dependency_nodes, missing);
+        if (missing > 0 && dump_state().enabled) {
+            std::fprintf(stderr, "hrx674 MISSING EDGE %s needs %zu earlier command(s) the planner did not link\n",
+                         command_context.c_str(), missing);
+        }
+        if (dump_state().link_all) {
+            for (hrx_graph_node_t extra : required) {
+                if (std::find(dependency_nodes.begin(), dependency_nodes.end(), extra) == dependency_nodes.end()) {
+                    dependency_nodes.push_back(extra);
+                    ++dump_state().edges_added;
+                }
+            }
+        }
+    }
     hrx_graph_node_t node = nullptr;
     if (ErrorResult error = take_status(
             hrx_graph_add_kernel_node(graph, dependency_nodes.data(), dependency_nodes.size(), &attrs, &node))) {
@@ -1417,6 +1602,9 @@ static Status record_prepared_kernel_command(hrx_graph_t                  graph,
         return status;
     }
     dependencies.record(node, command.kernel.bindings);
+    if (command_graph_dump_enabled()) {
+        command_graph_dump_commit(node, command_context, command.kernel.bindings);
+    }
     return status;
 }
 
@@ -1488,6 +1676,7 @@ static RecordedCommandGraph record_prepared_command_graph(const CommandProgramEx
     recorded.graph = graph;
 
     GraphDependencyPlanner dependencies;
+    command_graph_dump_begin_program();  // engine #674 diagnostic, do not merge
     recorded.status.append(record_completion_counter_fill(recorded.graph, dependencies, commands, allocation));
     if (!recorded.status.success()) {
         return recorded;

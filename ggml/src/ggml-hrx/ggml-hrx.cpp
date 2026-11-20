@@ -27,6 +27,7 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -154,6 +155,26 @@ static const char * buffer_type_name(ggml_backend_buffer_type_t buft) {
 
 static bool buffer_type_is_host(ggml_backend_buffer_type_t buft) {
     return static_cast<ggml_backend_hrx_buffer_type_context *>(buft->context)->host_visible;
+}
+
+static void backend_synchronize(ggml_backend_t backend);
+
+// engine #674 diagnostic, do not merge: every host-side access through an HRX host-visible buffer is a plain memcpy
+// with no ordering against the compute stream. GGML_HRX_674_TRACE=1 logs them, GGML_HRX_674_SYNC=1 synchronizes the
+// stream (and publishes staged host writebacks) before the memcpy - the fix hypothesis under test.
+static void host_fastpath_probe(ggml_backend_hrx_device_context * device, const char * op, size_t size) {
+    const bool trace      = environment_flag_enabled("GGML_HRX_674_TRACE");
+    const bool sync       = environment_flag_enabled("GGML_HRX_674_SYNC");
+    const bool writebacks = device != nullptr && device->probe_backend != nullptr &&
+                            static_cast<ggml_backend_hrx_context *>(device->probe_backend->context)
+                                ->graph_replay_state.has_pending_host_writebacks();
+    if (sync && device != nullptr && device->probe_backend != nullptr) {
+        backend_synchronize(device->probe_backend);
+    }
+    if (trace) {
+        std::fprintf(stderr, "hrx674 host fastpath %s size=%zu pending_writebacks=%d synced=%d\n", op, size,
+                     writebacks ? 1 : 0, sync ? 1 : 0);
+    }
 }
 
 static bool buffer_submit_and_wait(ggml_backend_hrx_device_context * device,
@@ -302,6 +323,7 @@ static void buffer_set(ggml_backend_buffer_t buffer,
     const size_t destination_offset = tensor_offset(context, tensor) + offset;
     GGML_ASSERT(destination_offset <= buffer->size && size <= buffer->size - destination_offset);
     if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
+        host_fastpath_probe(context->device, "set", size);
         std::memcpy(context->base + destination_offset, data, size);
         return;
     }
@@ -322,6 +344,7 @@ static void buffer_get(ggml_backend_buffer_t buffer,
     const size_t source_offset = tensor_offset(context, tensor) + offset;
     GGML_ASSERT(source_offset <= buffer->size && size <= buffer->size - source_offset);
     if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
+        host_fastpath_probe(context->device, "get", size);
         std::memcpy(data, context->base + source_offset, size);
         return;
     }
@@ -817,6 +840,7 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
         delete context;
         hrx_stream_release(stream);
     } else {
+        device_ctx->probe_backend = backend;  // engine #674 diagnostic, do not merge
         g_placement_observer_backend.store(backend);
         ggml_backend_sched_set_placement_observer(placement_observer, backend);
     }

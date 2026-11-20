@@ -59,6 +59,12 @@ bool host_weight_requires_cpu(const ggml_tensor * op) {
         if (std::strcmp(only, "none") == 0) {
             return false;
         }
+        // engine #674 bisect, do not merge: "FORCE_<OP>" declines that op even when it has no host-resident
+        // WEIGHTS source (the guard below then does not apply), so an op like ROPE can be pushed off HRX alone
+        // and its effect separated from the decline cascade it otherwise rides in on.
+        if (std::strstr(only, "FORCE_ROPE") != nullptr && op->op == GGML_OP_ROPE) {
+            return true;
+        }
         struct Named {
             const char *  name;
             enum ggml_op op;
