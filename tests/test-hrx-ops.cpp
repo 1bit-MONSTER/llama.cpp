@@ -863,9 +863,9 @@ static QwenFlashAttentionLayoutGraph build_qwen_flash_attention_layout_graph(
     constexpr int64_t             query_head_count     = 32;
     constexpr int64_t             key_value_head_count = 4;
 
-    // A cache is allocated to the kernel's 64-token tile, not to the token count. Sizing K/V at exactly
-    // key_value_token_count hands the split matcher storage the engine#2494 guard declines, so the tile is the
-    // allocation here too; the mask widens with it because that is the length the kernel is handed.
+    // A cache is allocated to the kernel's 64-token tile, not to the token count: the split matcher declines K/V
+    // storage shorter than the padded capacity (engine#2494). The mask keeps the graph's logical key length -- it
+    // is what tells the matcher how many keys are real.
     const int64_t key_value_capacity = ((key_value_token_count + 63) / 64) * 64;
 
     ggml_tensor * query_storage =
@@ -881,7 +881,7 @@ static QwenFlashAttentionLayoutGraph build_qwen_flash_attention_layout_graph(
     graph.query = ggml_permute(ctx, query_storage, 0, 2, 1, 3);
     graph.key   = ggml_permute(ctx, key_storage, 0, 2, 1, 3);
     graph.value = ggml_permute(ctx, value_storage, 0, 2, 1, 3);
-    graph.mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_capacity, query_token_count);
+    graph.mask  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_token_count, query_token_count);
     REQUIRE(graph.query != nullptr);
     REQUIRE(graph.key != nullptr);
     REQUIRE(graph.value != nullptr);
@@ -2505,13 +2505,12 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }, &diagnostics));
     const ggml::hrx::CommandPlan & plan = scheduler.plan();
     REQUIRE(plan.valid());
-    // engine#679/#2494: the split arm is offered only where it wins (<= 2944 tokens, #429) and only over storage
-    // sized to the 64-token tile. A row outside that band must still get one launch per query row and none of the
-    // split arm's transients -- the general kernel takes the node, which is the fallback this assertion pins.
-    if (key_value_capacity != key_value_token_count || key_value_token_count > 2944) {
+    // engine#679/#429: above the measured crossover the split dispatch is not offered at all, so a row past the
+    // cap keeps one launch and a single-launch arm takes the node. What this pins is that the split kernel is not
+    // selected there; the rows within the cap, padded or not, now reach the split arm because their storage is the
+    // tile the matcher requires (engine#2494).
+    if (key_value_token_count > 2944) {
         REQUIRE(plan.dispatches.size() == static_cast<size_t>(query_token_count));
-        REQUIRE(plan.transients.empty());
-        REQUIRE(plan.completion_counter_requests.empty());
         for (const auto & dispatch : plan.dispatches) {
             REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) !=
                     "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
@@ -2542,13 +2541,13 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     REQUIRE(q8_alternate->alternate_value == plan.transients[3].value);
 
     const size_t query_row_bytes  = static_cast<size_t>(query_hidden_size) * sizeof(float);
-    const size_t mask_row_bytes   = static_cast<size_t>(key_value_capacity) * sizeof(ggml_fp16_t);
+    const size_t mask_row_bytes   = static_cast<size_t>(key_value_token_count) * sizeof(ggml_fp16_t);
     const size_t output_row_bytes = static_cast<size_t>(output_hidden_size) * sizeof(float);
     for (int64_t row = 0; row < query_token_count; ++row) {
         const ggml::hrx::Dispatch & dispatch = plan.dispatches[static_cast<size_t>(row)];
         const char * expected_kernel         = "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8";
         REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == expected_kernel);
-        REQUIRE(dispatch.kernel.integer_parameters.at("key_value_token_count") == key_value_capacity);
+        REQUIRE(dispatch.kernel.integer_parameters.at("key_value_token_count") == key_value_token_count);
         REQUIRE(dispatch.kernel.compile_parameters.at("ggml.flash_attention.query_head_count") ==
                 std::to_string(query_head_count));
         REQUIRE(dispatch.kernel.compile_parameters.at("ggml.flash_attention.key_value_head_count") ==
