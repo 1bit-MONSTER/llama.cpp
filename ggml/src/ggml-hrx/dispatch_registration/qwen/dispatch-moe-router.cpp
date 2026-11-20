@@ -376,8 +376,11 @@ static bool route_ids_feed_plain_mul_mat_id(const DispatchMatchContext & context
     if (!context.graph.has_index() || router_match.route_ids == nullptr) {
         return false;
     }
-    return find_single_consumer_with_op_through_layout_aliases(context.graph, router_match.route_ids->id,
-                                                               GGML_OP_MUL_MAT_ID) != nullptr;
+    // "does ANY plain MUL_MAT_ID read these ids", not "does exactly one": the single-consumer helper answers nullptr
+    // for zero AND for two or more, and the second case would send the Qwen layout to consumers that decode the common
+    // one -- engine#2861 again, arriving through a graph shape instead of an expert count.
+    return !consumers_with_op_through_layout_aliases(context.graph, router_match.route_ids->id, GGML_OP_MUL_MAT_ID)
+                .empty();
 }
 
 static void add_moe_routing_compile_parameters(Dispatch &                    dispatch,
