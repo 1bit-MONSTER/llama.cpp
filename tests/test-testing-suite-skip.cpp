@@ -59,6 +59,13 @@ int main() {
           "a device case with a device returns 0");
     check(ran_device == 1, "and that one does run its body");
 
+    // engine#2393's guard, pinned from this side: seven HRX ctest rows set
+    // FAIL_REGULAR_EXPRESSION "test skipped: no device available" so that a device-less run of a hardware suite FAILS
+    // rather than passing. That substring has to survive every edit to the skip line -- the first version of this
+    // change put "(77)" inside it and turned the guard into dead text that still read like a guard.
+    check(std::string(kSkipMessagePrefix) == "test skipped: no device available",
+          "the skip message keeps the substring seven HRX rows match in FAIL_REGULAR_EXPRESSION (engine#2393)");
+
     std::printf("%s\n", failures ? "FAILED" : "all cases ok");
     return failures ? 1 : 0;
 }

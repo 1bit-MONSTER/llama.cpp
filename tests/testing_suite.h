@@ -24,6 +24,10 @@
 
 namespace test_runner {
 
+// The text seven HRX ctest rows match with FAIL_REGULAR_EXPRESSION (tests/CMakeLists.txt, engine#2393): a run of a
+// hardware suite without a device has to be loud. Anything appended to the skip line goes after this, never inside it.
+inline constexpr const char * kSkipMessagePrefix = "test skipped: no device available";
+
 struct Case {
     std::string           name;
     std::function<void()> run;
@@ -254,9 +258,14 @@ inline int run_single_case_in_process(const Config &           config,
     if (test_case->requires_device && !has_device) {
         // 77, not 0 (engine#2912): a caller running one case to test a hypothesis reads the exit code, and a skipped
         // case that answers success is a green tick over nothing -- measured on this box in a held gpu-hold ticket,
-        // where three device cases came back rc 0 in one second because another tenant held the GPU. 77 is the same
-        // "skipped" the engine's ctest rows use (SKIP_RETURN_CODE 77), so one convention covers both.
-        std::fprintf(stderr, "test skipped (77): no device available for %s\n", config.suite_name.c_str());
+        // where three device cases came back rc 0 in one second because another tenant held the GPU.
+        //
+        // The "(77)" goes AFTER kSkipMessagePrefix, never inside it: seven HRX rows set
+        // FAIL_REGULAR_EXPRESSION "test skipped: no device available" on purpose (engine#2393 -- a device-less run of
+        // a hardware suite must FAIL, not pass), so that substring has to survive any edit to this line. Moving it was
+        // the first version of this change and it silently turned that guard into dead text; the arm in
+        // test-testing-suite-skip.cpp now pins the prefix itself, not just the exit code.
+        std::fprintf(stderr, "%s for %s (77)\n", kSkipMessagePrefix, config.suite_name.c_str());
         return 77;
     }
     test_case->run();
