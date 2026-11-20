@@ -605,17 +605,27 @@ static std::vector<ggml_fp16_t> make_pattern_f16(size_t element_count, int seed,
 static std::vector<uint8_t> make_quantized_rows(ggml_type type, int64_t row_length, int64_t row_count, int seed) {
     const ggml_type_traits * traits = ggml_get_type_traits(type);
     REQUIRE(traits != nullptr);
-    REQUIRE(traits->from_float_ref != nullptr);
+    // IQ1_S and the IQ2/IQ3 family have no from_float_ref: those that need one quantize against an
+    // importance matrix through the same entry point (the dummy matrix test-backend-ops uses), and
+    // IQ1_M does not, so it takes the row alone.
+    const bool imatrix_only = traits->from_float_ref == nullptr;
     ggml_quantize_init(type);
     const size_t         row_size = ggml_row_size(type, row_length);
     std::vector<uint8_t> data(static_cast<size_t>(row_count) * row_size);
     std::vector<float>   row(static_cast<size_t>(row_length));
+    std::vector<float>   imatrix(static_cast<size_t>(row_length), 1.0f);
     for (int64_t r = 0; r < row_count; ++r) {
         for (int64_t c = 0; c < row_length; ++c) {
             const int value             = static_cast<int>((r * 13 + c * 7 + seed * 31) % 101) - 50;
             row[static_cast<size_t>(c)] = static_cast<float>(value) * 0.005f;
         }
-        traits->from_float_ref(row.data(), data.data() + static_cast<size_t>(r) * row_size, row_length);
+        uint8_t * dst = data.data() + static_cast<size_t>(r) * row_size;
+        if (imatrix_only) {
+            ggml_quantize_chunk(type, row.data(), dst, 0, 1, row_length,
+                                ggml_quantize_requires_imatrix(type) ? imatrix.data() : nullptr);
+        } else {
+            traits->from_float_ref(row.data(), dst, row_length);
+        }
     }
     return data;
 }
@@ -5711,6 +5721,53 @@ static void add_cases(test_runner::Suite & suite) {
                                                  "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
                                                  512,
                                                  4096); });
+    add(suite, "dense.iq2_xxs.mul_mat_iq2_xxs_f16_wmma_prefill_wave32.256.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ2_XXS,
+                                                 "loom_libs:ggml_mul_mat_iq2_xxs_f16_wmma_prefill_wave32",
+                                                 256,
+                                                 4096); });
+    add(suite, "dense.iq2_xxs.mul_mat_iq2_xxs_f16_wmma_prefill_wave32.512.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ2_XXS,
+                                                 "loom_libs:ggml_mul_mat_iq2_xxs_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096); });
+    add(suite, "dense.iq2_xs.mul_mat_iq2_xs_f16_wmma_prefill_wave32.512.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ2_XS,
+                                                 "loom_libs:ggml_mul_mat_iq2_xs_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096); });
+    add(suite, "dense.iq1_m.mul_mat_iq1_m_f16_wmma_prefill_wave32.512.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_M,
+                                                 "loom_libs:ggml_mul_mat_iq1_m_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096); });
+    // The stage-A gate asks for the depth too: one 256-value block per row, and ten of them.
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.4096.256",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096,
+                                                 256); });
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.4096.2560",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 4096,
+                                                 2560); });
+    // The two shapes Qwen3.8-27B actually asks for: the MLP down (6144 -> 5120) and the MLP up
+    // (17408 -> 5120). Both have a 256-multiple depth and a 64-multiple output, so both take the arm.
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.5120.6144",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 5120,
+                                                 6144); });
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.5120.17408",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 512,
+                                                 5120,
+                                                 17408); });
     add(suite, "dense_unary.f32.mul_mat_f32_f32_wmma.3.47",
         [=] { run_dense_matmul_unary_cpu_reference_case( GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
     add(suite, "get_rows.f32.262144.4.1",
@@ -5918,6 +5975,20 @@ static void add_cases(test_runner::Suite & suite) {
         add(suite, "ffn.q4_k.prefill.large_activation." + std::to_string(tokens),
             [=] { run_ffn_prefill_large_activation_case(tokens, 640.0f); });
     }
+    add(suite, "swiglu.iq1_s.iq1_s.iq1_s_swiglu_f16_wmma_prefill_wave32.256.4096.swiglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_IQ1_S,
+                                   GGML_TYPE_IQ1_S,
+                                   "loom_libs:ggml_mul_mat_iq1_s_swiglu_f16_wmma_prefill_wave32",
+                                   256,
+                                   4096,
+                                   GGML_GLU_OP_SWIGLU); });
+    add(suite, "swiglu.iq1_s.iq1_s.iq1_s_swiglu_f16_wmma_prefill_wave32.512.4096.swiglu",
+        [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_IQ1_S,
+                                   GGML_TYPE_IQ1_S,
+                                   "loom_libs:ggml_mul_mat_iq1_s_swiglu_f16_wmma_prefill_wave32",
+                                   512,
+                                   4096,
+                                   GGML_GLU_OP_SWIGLU); });
     add(suite, "swiglu.q4_k.q4_k.swiglu_q4_k_f16_wmma_prefill_wave32.256.128.swiglu",
         [=] { run_dense_matmul_swiglu_cpu_reference_case( GGML_TYPE_Q4_K,
                                    GGML_TYPE_Q4_K,
