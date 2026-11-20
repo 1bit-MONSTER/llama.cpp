@@ -587,10 +587,16 @@ class Suite {
         }
 
         if (selection.skipped_device != 0) {
-            std::fprintf(stderr, "test skipped: no device available for %s (%zu device case(s))\n",
+            // The message keeps kSkipMessagePrefix's substring: seven HRX rows match it with FAIL_REGULAR_EXPRESSION
+            // (engine#2393), and that guard is the reason a device-less run of a hardware suite is loud at all.
+            std::fprintf(stderr, "%s for %s (%zu device case(s) skipped)\n", kSkipMessagePrefix,
                          config_.suite_name.c_str(), selection.skipped_device);
             if (selection.cases.empty()) {
-                return 0;
+                // 77, not 0 (engine#2912, the whole-run half of the single-case fix): nothing ran because no device
+                // was visible, and "nothing ran" answering success is the green tick over nothing #2393 was written
+                // to prevent. None of these seven rows sets SKIP_RETURN_CODE, so ctest still fails them -- the same
+                // answer as before, now said by the exit code as well as by the regex, for a caller reading only that.
+                return 77;
             }
         }
 
