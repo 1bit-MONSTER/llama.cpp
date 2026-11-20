@@ -358,6 +358,46 @@ bool match_kquant_mul_mat_add_decode(const DispatchMatchContext & context, Dispa
     return match_kquant_mul_mat_decode_impl(context, dispatch_match, true);
 }
 
+// engine#2832: the 2..8-token batch form, i.e. what prefill reads once the batch is chunked small. 1 is
+// excluded so decode keeps its own row; above kMaxTokens is excluded because that is the kernel's width.
+//
+// The 1-bit codebook family plus Q8_0: that is the set measured to gain, and every neighbouring set measured to
+// lose. Q8_0 is in it on a measured basis, not a taxonomic one -- the claim log shows the band's q8_0 hits are the
+// small 48-wide projection (`in=5120 out=48`) and they are the largest single group in the winning model, while the
+// losing model is 52 % `q5_K` claims.
+//   IQ1_S model, UBATCH=8   44.2 -> 19.9 and 45.4 -> 20.0 ms/token     the win, output identical
+//   Q4_K_XL model, same     13.9 -> 21.3, 13.8 -> 19.3, 13.9 -> 21.3    a loss, three times
+// so a wide row is not safe: the loss is this row taking formats whose other reader is faster in this band (Q4_K,
+// Q5_K and Q6_K have packed prefill tails, engine#2137; IQ4_NL and IQ4_XS likewise). With this guard the Q4_K_XL
+// model measures 13.8 -> 13.8, i.e. inert rather than merely acceptable. Widening this list is a measurement, not
+// an edit.
+static bool kquant_reuse_format(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q8_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool match_kquant_mul_mat_few_token_prefill(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    const CommonMulMatMatch probe = match_few_token_mul_mat(context.graph, context.root_node,
+                                                            kKQuantMulMatDecodeKernel);
+    if (!probe.matched() || probe.token_count < 2 || probe.token_count > kMaxTokens ||
+        probe.weight == nullptr || !kquant_reuse_format(probe.weight->type)) {
+        return false;
+    }
+    return match_kquant_mul_mat_decode_impl(context, dispatch_match, false);
+}
+
 }  // namespace
 
 void register_kquant_decode_dispatches(DispatchRegistryBuilder & registry) {
@@ -384,6 +424,18 @@ void register_kquant_decode_dispatches(DispatchRegistryBuilder & registry) {
     });
     // Plain projections above the generic common.mul_mat f32 matchers (80/70/60), below every
     // specialized one.
+    // engine#2832: ABOVE hip.dense_prefill.mm (299) and above common.mul_mat.q6_k_aligned_skinny (300), which would
+    // otherwise win by registration order at equal priority. The add-on matcher claims an IQ1_S prefill and walks it
+    // at decode width (llama-bench on this model: pp512 12.02 tok/s vs tg32 12.57), so the reuse kernel below at 85
+    // never decides a prefill node; at 301 it is selected and the 1-bit model prefills 4.5x faster.
+    registry.add({
+        "kquant.mul_mat.few_token_prefill_f32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        301,
+        DispatchSource::Common,
+        match_kquant_mul_mat_few_token_prefill,
+    });
     registry.add({
         "kquant.mul_mat.decode_f32",
         GGML_OP_MUL_MAT,
