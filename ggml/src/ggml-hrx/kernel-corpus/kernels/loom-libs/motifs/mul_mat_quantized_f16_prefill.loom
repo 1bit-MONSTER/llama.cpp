@@ -9,7 +9,7 @@ config.def @ggml.f16_prefill.activation_scale_log2 = 0 : index
 template.decl @ggml.binary_f32.apply_vector8(%op: index, %lhs: vector<8xf32>, %rhs: vector<8xf32>) -> (vector<8xf32>)
 
 func.decl @ggml_iq1s_f16_pair(%grid: buffer, %weight: buffer, %row_byte_base: offset, %block: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
-func.decl @ggml_kquant_grid_fill_for(%format: index, %grid: buffer, %chunk: index)
+func.decl @ggml_kquant_iq1s_grid_fill(%grid: buffer, %chunk: index)
 func.decl @ggml_q4k_native_row64_f16_pair(%half_packet: i1, %paired: i1, %weight: buffer, %peer: buffer, %is_up: i1, %row_base: offset, %group0: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
 func.decl @ggml_q6k_f16_pair(%half_packet: i1, %weight: buffer, %weight_row_byte_base: offset, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
 func.decl @ggml_q6k_packed_row64_f16_pair(%half_packet: i1, %weight: buffer, %row: index, %input_size: index, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
@@ -643,7 +643,10 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
   %iq1_stored_body = index.cmp eq, %weight_format, %iq1_format_body : index
   %iq1_body = scalar.ori %iq1_stored_body, %iq1_stored_body : i1
   scf.if %iq1_body {
-    func.call @ggml_kquant_grid_fill_for(%weight_format, %grid, %subgroup0) : (index, buffer, index) -> ()
+    // The guard already proves the format is IQ1_S, so call that grid directly: the format-dispatching
+    // @ggml_kquant_grid_fill_for lives in ops/kquant_decode_f32.loom, and linking a 11k-line decode op into
+    // this module for one call is not worth it (and the corpus links one dependency list per source).
+    func.call @ggml_kquant_iq1s_grid_fill(%grid, %subgroup0) : (buffer, index) -> ()
   }
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   %weight_stage_view = buffer.view %weight_stage[%c0_offset] : buffer -> view<[%weight_rows]x[%weight_stride]xf16>
