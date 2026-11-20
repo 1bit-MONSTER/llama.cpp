@@ -113,6 +113,14 @@ if(HRX_SOURCE_DIR)
 else()
     find_package(hrx CONFIG REQUIRED)
     find_package(loomc CONFIG REQUIRED)
+    # find_package imports its targets into THIS directory scope, and tests/ (a sibling) links hrx::hrx and
+    # loomc::loomc directly. Promote them so the installed-package build configures at all; the
+    # HRX_SOURCE_DIR branch above already declares its own copies GLOBAL for the same reason.
+    foreach(_hrx_package_target IN ITEMS hrx::hrx loomc::loomc)
+        if(TARGET ${_hrx_package_target})
+            set_target_properties(${_hrx_package_target} PROPERTIES IMPORTED_GLOBAL TRUE)
+        endif()
+    endforeach()
     find_program(GGML_HRX_LOOM_LINK NAMES loom-link)
     find_program(GGML_HRX_LOOM_FORMAT NAMES loom-format)
     find_program(GGML_HRX_LOOM_BENCHMARK NAMES loom-benchmark)
