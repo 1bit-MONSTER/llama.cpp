@@ -642,6 +642,12 @@ if (TARGET ggml-hrx)
         ENVIRONMENT "GGML_HRX_DISABLE_DISPATCH=hip.")
 
 
+    # engine#2918: multi-stream FLASH_ATTN_EXT (n_seq_max > 1 without a unified KV cache) on HRX0 vs the CPU
+    add_executable(test-hrx-fa-streams test-hrx-fa-streams.cpp)
+    target_link_libraries(test-hrx-fa-streams PRIVATE ggml)
+    add_test(NAME test-hrx-fa-streams COMMAND test-hrx-fa-streams)
+    set_tests_properties(test-hrx-fa-streams PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(test-hrx-hadamard test-hrx-hadamard.cpp)
     target_link_libraries(test-hrx-hadamard PRIVATE ggml)
     add_test(NAME test-hrx-hadamard COMMAND test-hrx-hadamard)
