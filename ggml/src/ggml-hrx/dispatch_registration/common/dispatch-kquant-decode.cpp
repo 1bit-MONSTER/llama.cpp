@@ -358,6 +358,17 @@ bool match_kquant_mul_mat_add_decode(const DispatchMatchContext & context, Dispa
     return match_kquant_mul_mat_decode_impl(context, dispatch_match, true);
 }
 
+// engine#2832: the 2..8-token batch form, i.e. what prefill reads once the batch is chunked small. 1 is
+// excluded so decode keeps its own row; above kMaxTokens is excluded because that is the kernel's width.
+bool match_kquant_mul_mat_few_token_prefill(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    const CommonMulMatMatch probe = match_few_token_mul_mat(context.graph, context.root_node,
+                                                            kKQuantMulMatDecodeKernel);
+    if (!probe.matched() || probe.token_count < 2 || probe.token_count > kMaxTokens) {
+        return false;
+    }
+    return match_kquant_mul_mat_decode_impl(context, dispatch_match, false);
+}
+
 }  // namespace
 
 void register_kquant_decode_dispatches(DispatchRegistryBuilder & registry) {
@@ -381,6 +392,25 @@ void register_kquant_decode_dispatches(DispatchRegistryBuilder & registry) {
         185,
         DispatchSource::Common,
         match_kquant_mul_mat_add_decode,
+    });
+    // engine#2832: ABOVE hip.dense_prefill.mm (299), for 2..8-token batches only. Measured on
+    // Qwen3.8-27B-UD-IQ1_S, 1374-token prompt, IQ1_S weights, one binary, arms separated only by this row:
+    //   UBATCH=8  with the row  19.9 ms/token (50.16 tok/s)  dispatch fired   output identical
+    //   UBATCH=8  without it    44.2 ms/token (22.61 tok/s)                  output identical
+    //   UBATCH=64 default       90.1 ms/token (11.10 tok/s)                  output identical
+    // The add-on matcher claims an IQ1_S prefill and walks it at decode width; this row is the same
+    // 1..8-token reuse kernel as `kquant.mul_mat.decode_f32` below, selected first because the reuse
+    // exists. It is deliberately narrow: `token_count >= 2` keeps single-token decode on its own path,
+    // and the width is the kernel's own (eight accumulators, %m0..%m7), not the config range -- widening
+    // `range(%value, 1, 8)` to 1..64 without changing the loop body produced 4.1 ms/token and WRONG
+    // output, which is what a skipped remainder looks like.
+    registry.add({
+        "kquant.mul_mat.few_token_prefill_f32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        300,
+        DispatchSource::Common,
+        match_kquant_mul_mat_few_token_prefill,
     });
     // Plain projections above the generic common.mul_mat f32 matchers (80/70/60), below every
     // specialized one.
