@@ -97,25 +97,45 @@ set(_ggml_hrx_hip_addon_depends)   # engine#2935: the add-on content stamp, fill
 # found when a server loads a model ("26 HIP kernel registration(s) do not match their compiled code objects").
 # This stamp carries a CONTENT identity of the add-on's kernels; adding it to DEPENDS makes that switch visible to
 # ninja regardless of mtimes. Written only when the value changes, so an ordinary reconfigure rebuilds nothing.
+#
+# Two things that first version (fork #444) left open, both measured on a build tree (engine#2935):
+#   - it hashed kernels/*.hip only, and at CONFIGURE time only. A header the kernels include (kernels/hrx_kernel_ids.h
+#     is one: it decides every kernel symbol) replaced in place with an older mtime changed neither the stamp nor any
+#     mtime ninja compares, and nothing re-ran CMake: `ninja` rebuilt 0 code objects and the library kept a kernel
+#     symbol the header no longer names;
+#   - it compared the stamp it read (which ends in the newline it was written with) against the identity without one,
+#     so the two were never equal, the stamp was rewritten by every configure, and every re-run of CMake recompiled
+#     all 64 code objects.
+# The identity is now computed by hip/hip_addon_identity.py over every file the add-on contributes to the build
+# (kernels/*, the matchers' *.cpp and *.h, addon.cmake): once here so the stamp exists, and again by every build.
+# The rule below hangs off an output that is never created, so ninja always runs it, and because the script leaves
+# the stamp alone when the identity is unchanged (CMake's ninja rules carry restat = 1) nothing downstream moves.
 if (GGML_HRX_HIP_ADDON_DIR)
     set(_ggml_hrx_hip_addon_stamp "${_ggml_hrx_hip_dir}/addon-kernels.stamp")
-    set(_ggml_hrx_hip_addon_identity "${GGML_HRX_HIP_ADDON_PATH}")
-    foreach(_kernel ${_ggml_hrx_hip_addon_kernels})
-        get_filename_component(_kernel_name "${_kernel}" NAME)
-        file(SHA256 "${_kernel}" _kernel_hash)
-        string(APPEND _ggml_hrx_hip_addon_identity "\n${_kernel_name} ${_kernel_hash}")
-    endforeach()
-    set(_ggml_hrx_hip_addon_stale TRUE)
-    if (EXISTS "${_ggml_hrx_hip_addon_stamp}")
-        file(READ "${_ggml_hrx_hip_addon_stamp}" _ggml_hrx_hip_addon_have)
-        if (_ggml_hrx_hip_addon_have STREQUAL _ggml_hrx_hip_addon_identity)
-            set(_ggml_hrx_hip_addon_stale FALSE)
-        endif()
+    set(_ggml_hrx_hip_addon_identity_command ${Python3_EXECUTABLE}
+        "${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_addon_identity.py" "${_ggml_hrx_hip_addon_stamp}" "${GGML_HRX_HIP_ADDON_PATH}")
+    file(MAKE_DIRECTORY "${_ggml_hrx_hip_dir}")
+    execute_process(COMMAND ${_ggml_hrx_hip_addon_identity_command} RESULT_VARIABLE _ggml_hrx_hip_addon_identity_rc)
+    if (NOT _ggml_hrx_hip_addon_identity_rc EQUAL 0)
+        message(FATAL_ERROR "GGML_HRX: hip/hip_addon_identity.py could not stamp ${GGML_HRX_HIP_ADDON_PATH}")
     endif()
-    if (_ggml_hrx_hip_addon_stale)
-        file(WRITE "${_ggml_hrx_hip_addon_stamp}" "${_ggml_hrx_hip_addon_identity}\n")
-    endif()
+    set(_ggml_hrx_hip_addon_always "${_ggml_hrx_hip_dir}/addon-kernels.every-build")
+    add_custom_command(OUTPUT "${_ggml_hrx_hip_addon_always}" COMMAND ${CMAKE_COMMAND} -E true VERBATIM)
+    set_source_files_properties("${_ggml_hrx_hip_addon_always}" PROPERTIES SYMBOLIC TRUE)
+    add_custom_command(
+        OUTPUT "${_ggml_hrx_hip_addon_stamp}"
+        COMMAND ${_ggml_hrx_hip_addon_identity_command}
+        DEPENDS "${_ggml_hrx_hip_addon_always}" "${CMAKE_CURRENT_SOURCE_DIR}/hip/hip_addon_identity.py"
+        COMMENT "HIP add-on identity"
+        VERBATIM)
     set(_ggml_hrx_hip_addon_depends "${_ggml_hrx_hip_addon_stamp}")
+    # The matchers too: a compiler depfile is mtime-based like everything else, and a matcher compiled against the
+    # previous hrx_kernel_ids.h asks the new code objects for ids they no longer carry.
+    foreach(_addon_source ${GGML_HRX_HIP_ADDON_SOURCES})
+        if (_addon_source MATCHES "\\.cpp$")
+            set_property(SOURCE "${_addon_source}" APPEND PROPERTY OBJECT_DEPENDS "${_ggml_hrx_hip_addon_stamp}")
+        endif()
+    endforeach()
 endif()
 file(MAKE_DIRECTORY "${_ggml_hrx_hip_dir}")
 
