@@ -114,7 +114,7 @@ pool_budget_state_t pool_budget_observe(size_t memory_total, size_t free_bytes, 
                                         size_t memory_available = kHostUnknown);
 
 // The reserve the ceiling keeps for the driver and for kernel/transient spikes, in bytes.
-size_t pool_reserve_bytes();
+size_t pool_reserve_bytes(size_t gtt_total);
 
 // GTT total and currently used bytes, from the driver's own counters (/sys/class/drm/card*/device/mem_info_gtt_*).
 // The AMDGPU HAL does not report available memory through hrx_device_memory_info (libhrx returns UNAVAILABLE), and

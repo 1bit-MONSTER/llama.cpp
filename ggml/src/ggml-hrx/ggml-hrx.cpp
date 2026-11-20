@@ -2017,7 +2017,7 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             continue;
         }
         if (device_ctx->memory_budget != 0) {
-            const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes();
+            const size_t reserve = ggml::hrx::onebit::pool_reserve_bytes(device_total);
             GGML_LOG_WARN("ggml_hrx: %s guardrail: GTT total %.1f GiB, in use %.1f GiB, ceiling %.1f GiB "
                           "(reserve %.1f GiB), pool budget %.1f GiB (GTT term %.1f GiB, host MemAvailable %.1f GiB) - a launch that needs more is refused here "
                           "rather than faulting the device (engine #680; bound by %s)\n",
