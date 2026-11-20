@@ -62,7 +62,13 @@ target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(${TARGET} PRIVATE ../mtmd ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
-add_dependencies(${TARGET} llama-ui-assets)
+# Only when the UI is built: the assets target provisions (and, in a fork with a pinned bundle, VERIFIES) the embedded
+# Web UI, and making it an unconditional dependency of the server means `-DLLAMA_BUILD_UI=OFF` still runs it -- measured
+# 2026-11-20: an HRX configure with LLAMA_BUILD_UI=OFF failed in scripts/ui-assets.cmake:137 ("UI: current asset files
+# ...") on a server that has no use for the UI. A disabled optional feature should not be able to fail the build.
+if(LLAMA_BUILD_UI)
+    add_dependencies(${TARGET} llama-ui-assets)
+endif()
 
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} LIBRARY)

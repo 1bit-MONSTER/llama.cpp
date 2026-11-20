@@ -134,6 +134,23 @@ function(ui_validate_assets files in_dir)
         foreach(m ${missing})
             string(APPEND missing_list "    ${m}\n")
         endforeach()
+        # A disabled optional feature must not be able to fail the build. `llama-ui-assets` is in ALL and the server
+        # depends on it unconditionally, so this provisioning step runs even with -DLLAMA_BUILD_UI=OFF -- and then a
+        # source tree whose shipped asset bundle is incomplete fails a build that has no use for the UI at all
+        # (measured 2026-11-20: an HRX configure of the engine could not build llama-server for this reason, and CI never
+        # sees it because CI has no HRX toolchain). With the UI off the embedded table is allowed to be empty, so say
+        # what is missing and carry on.
+        # The value is printed with the decision: a guard that always fires looks exactly like a guard that fires when it
+        # should, and this script is only read when a build breaks. `BUILD_UI` reaches this file from the one caller
+        # (tools/ui/CMakeLists.txt passes -DBUILD_UI=${LLAMA_BUILD_UI}), so printing it also proves which way the caller
+        # asked -- with LLAMA_BUILD_UI=ON the npm build runs above this and the bundle is complete, so this branch is not
+        # reached at all.
+        if(NOT BUILD_UI)
+            message(STATUS
+                "UI: BUILD_UI='${BUILD_UI}', so the missing asset(s) below do not fail this build (the embedded table is "
+                "empty):\n${missing_list}")
+            return()
+        endif()
         message(FATAL_ERROR
             "UI: current asset files:\n${listing}"
             "UI: missing required asset(s):\n${missing_list}"
