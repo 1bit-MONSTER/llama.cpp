@@ -2558,8 +2558,19 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     if (key_value_token_count > 2944) {
         REQUIRE(plan.dispatches.size() == static_cast<size_t>(query_token_count));
         for (const auto & dispatch : plan.dispatches) {
-            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
-                    "loom_libs:ggml_flash_attention_f32_f16_wmma");
+            // engine#3085: say WHICH kernel took the node before failing. The plain equality left a failing run
+            // reporting only that the expectation missed, so the shape that no longer reaches the fallback could not
+            // name its claimer -- and a `hip.fa_prompt_*` route only exists in a tree that builds the add-on, which
+            // is exactly the tree where this row started failing.
+            const std::string scheduled = kernel_name_for_id(dispatch.kernel.kernel_id);
+            if (scheduled != "loom_libs:ggml_flash_attention_f32_f16_wmma") {
+                std::fprintf(stderr,
+                             "fa_decode_split: kv=%lld query_tokens=%lld is past the 2944 cap and the general kernel was "
+                             "NOT scheduled; got '%s'\n",
+                             static_cast<long long>(key_value_token_count),
+                             static_cast<long long>(query_token_count), scheduled.c_str());
+            }
+            REQUIRE(scheduled == "loom_libs:ggml_flash_attention_f32_f16_wmma");
         }
         ggml_free(ctx);
         restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
