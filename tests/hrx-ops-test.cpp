@@ -6453,6 +6453,12 @@ static void run_get_rows_scale_f32_cpu_reference_case(ggml_type weight_type = GG
     REQUIRE(hrx_output != nullptr);
     ggml_set_output(cpu_rows);
     ggml_set_output(hrx_rows);
+    // engine#3122: `ggml_set_output()` marks the value as one the caller reads, but this backend's read-back protocol is
+    // the NAME (engine#1259): a fused match may not swallow an `hrx-readback.` value. Without the name the flag alone is
+    // not enough -- and with it, the only correct route here is the UNFUSED pair, because the fused `get_rows`+`scale`
+    // dispatch keeps this value inside its own program.
+    ggml_set_name(cpu_rows, "hrx-readback.rows");
+    ggml_set_name(hrx_rows, "hrx-readback.rows");
 
     ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
     ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
@@ -6460,7 +6466,9 @@ static void run_get_rows_scale_f32_cpu_reference_case(ggml_type weight_type = GG
     REQUIRE(hrx_graph != nullptr);
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "loom_libs:ggml_get_rows_scale_f32" });
+    // ...and therefore the plan must be the unfused pair: get_rows writes the value the caller asked for, then scale.
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
+                               { "loom_libs:ggml_get_rows_f32", "loom_libs:ggml_scale_f32" });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
