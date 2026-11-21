@@ -48,12 +48,20 @@ namespace {
 static constexpr KernelCatalogRef kFlashAttentionStreamsKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma");
 
-// The same bounds the single-stream prompt matcher applies to one stream (dispatch-flash-attention.cpp):
-// Q/K head size a multiple of 16 in [16, 576], V head size a multiple of 64 in [64, 576], 1..64 heads,
-// at most 2048 query rows per launch (longer streams run as query chunks).
+// The kernel's own bounds (flash_attention_f32_f16_wmma.loom): Q/K head size a multiple of 16 in [16, 576] (the
+// LDS budget), V head size a multiple of 64 in [64, 512] (its `config.decl` of value_head_size), 1..64 heads, at most
+// 2048 query rows per launch (longer streams run as query chunks). A claimed V head size of 576 failed the graph
+// (measured, review of fork #450: "symbol '@ggml.flash_attention.value_head_size' value 576 violates constraint
+// 'range'", then "failed to prepare command"), where a decline is a CPU fallback.
 static constexpr int64_t kQkHeadSizeBlock     = 16;
 static constexpr int64_t kValueHeadSizeBlock  = 64;
 static constexpr int64_t kMaxHeadSize         = 576;
+static constexpr int64_t kMaxValueHeadSize    = 512;
+// The kernel declares every binding 16-byte aligned (`buffer.assume.alignment {minimum_alignment = 16}` on query,
+// key, value, mask and output) and stream s binds at s * nb[3], so every nb[3] keeps that alignment. llama's graphs
+// always do (n_kv is a multiple of 256); a 113-key mask (planes 7458 bytes apart) ran correctly on gfx1151, but it
+// breaks the kernel's stated assumption, so it is declined rather than relied on.
+static constexpr size_t  kBindingAlignment    = 16;
 static constexpr int64_t kMaxHeads            = 64;
 static constexpr int64_t kMaxQueryTokens      = 2048;
 static constexpr int64_t kMaxKeyValueTokens   = 262144;
@@ -127,7 +135,7 @@ static bool match_streams(const Graph & graph, const GraphNode * node, StreamsMa
     const int64_t N   = k->ne[1];
     const int64_t Hkv = k->ne[2];
     if (D < kQkHeadSizeBlock || D > kMaxHeadSize || D % kQkHeadSizeBlock != 0 || Dv < kValueHeadSizeBlock ||
-        Dv > kMaxHeadSize || Dv % kValueHeadSizeBlock != 0 || k->ne[0] != D || o->ne[0] != Dv) {
+        Dv > kMaxValueHeadSize || Dv % kValueHeadSizeBlock != 0 || k->ne[0] != D || o->ne[0] != Dv) {
         return false;
     }
     if (T < 1 || N < T || N > kMaxKeyValueTokens || H < 1 || H > kMaxHeads || Hkv < 1 || Hkv > kMaxHeads ||
@@ -160,6 +168,10 @@ static bool match_streams(const Graph & graph, const GraphNode * node, StreamsMa
     }
     if (o->nb[0] != f32 || o->nb[1] != static_cast<size_t>(Dv) * f32 ||
         o->nb[2] != static_cast<size_t>(H * Dv) * f32 || o->nb[3] < static_cast<size_t>(T) * o->nb[2]) {
+        return false;
+    }
+    if (q->nb[3] % kBindingAlignment != 0 || k->nb[3] % kBindingAlignment != 0 || v->nb[3] % kBindingAlignment != 0 ||
+        m->nb[3] % kBindingAlignment != 0 || o->nb[3] % kBindingAlignment != 0) {
         return false;
     }
     // Every per-stream slice has to lie inside the value's own bytes (the bindings below are offset + length).
