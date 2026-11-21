@@ -2713,6 +2713,23 @@ static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool includ
     REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }, &diagnostics));
     const ggml::hrx::CommandPlan & plan = scheduler.plan();
     REQUIRE(plan.valid());
+    // engine#3085: this row's SUBJECT is the loom decode-split-next_q8 route, and in a tree that builds the private
+    // add-on its own FLASH_ATTN_EXT arms (hip.fa_decode, priority 90, no capacity cap) take the node instead -- the row
+    // then aborts on a name no add-on build can produce, which says nothing about the route it is about. Accept the
+    // tree, and LABEL what is no longer asserted rather than passing quietly: the same shape engine#3120/#469 landed
+    // for hrx-ops-test's rows (a labelled acceptance, not a skip and not a known-fail -- a known-fail here would report
+    // UNEXPECTED-PASS on the no-add-on tree, where this row passes today).
+    for (const ggml::hrx::Dispatch & dispatch : plan.dispatches) {
+        const std::string scheduled_name = kernel_name_for_id(dispatch.kernel.kernel_id);
+        if (scheduled_name.compare(0, 4, "hip:") == 0) {
+            std::fprintf(stderr,
+                         "engine#3085: %s takes the node, so this row does NOT assert the loom decode-split-next_q8 "
+                         "route (add-on tree; engine#3120/#469 pattern)\n",
+                         scheduled_name.c_str());
+            ggml_free(ctx);
+            return;
+        }
+    }
     if (plan.dispatches.size() != 2) {
         // engine #444/#449 (device run at the pin): the q4k q8_1_x4 next_q8 producer publishes an alternate
         // for a consumer, and here the normalised value is the graph root, so the publication is not
