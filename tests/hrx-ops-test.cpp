@@ -5239,9 +5239,12 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     ggml_build_forward_expand(graph, output);
 
     require_kernel_subsequence_route(scheduled_kernel_sequence(graph), { expected_kernel }, addon_route);
-    const ggml::hrx::WorkloadSpecialization expected_specialization =
-        query_token_count == 256 && key_value_token_count == 256 ? ggml::hrx::WorkloadSpecialization::Exact :
-                                                                   ggml::hrx::WorkloadSpecialization::Dynamic;
+    // engine#3123: no flash-attention matcher opts into a dynamic workload -- `git grep 'workload_specialization =
+    // WorkloadSpecialization::Dynamic'` finds get-rows and rope-set-rows and nothing under dispatch-flash-attention --
+    // so an FA kernel keeps the `KernelSpecialization` default, `Exact`, for every shape. This used to answer `Dynamic`
+    // for every shape except 256/256, which no matcher can produce: those 26 rows therefore failed on every pin, and
+    // they are worth keeping green because the padded-capacity binding is what makes the split kernel legitimate here.
+    const ggml::hrx::WorkloadSpecialization expected_specialization = ggml::hrx::WorkloadSpecialization::Exact;
     REQUIRE(scheduled_kernel_specialization(graph, expected_kernel).workload_specialization ==
             expected_specialization);
 
