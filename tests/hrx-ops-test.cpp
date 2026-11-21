@@ -6878,7 +6878,18 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
         require_native_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
     }
     if (import_weights) {
-        require_packed_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
+        // engine#3120: the packed K256/row64 layout is a fact about the LOOM kquant route. When the add-on serves this node
+        // its kernels read the weight *stored* (the same distinction `hrx-backend-test` labels "#2392 add-on reads the weight
+        // stored"), so asserting the packed layout there fails on a route that is behaving as designed -- measured as 8 rows
+        // on 2026-11-21 with `:453 requirement failed: binding.layout == kQ4KPackedK256Row64Layout`, after the acceptance had
+        // already been granted. Pin the layout to the route that ran, and leave the value comparison below to decide whether
+        // the arithmetic is right -- which is the part that should never be relaxed.
+        if (route_outcome(scheduled_kernel_sequence(hrx_graph), { expected_kernel }, addon_route, loom_route).kind ==
+            RouteKind::AddOnServed) {
+            require_native_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
+        } else {
+            require_packed_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
+        }
     }
 
     const std::vector<float>   input(static_cast<size_t>(input_size * token_count), 0.00390625f);
