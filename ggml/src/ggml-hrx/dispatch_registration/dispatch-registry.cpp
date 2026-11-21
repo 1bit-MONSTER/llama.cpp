@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <map>
 #include <set>
 #include <string>
 #include "dispatch-registry.h"
@@ -201,14 +202,40 @@ static void dispatch_log_requested_output(const DispatchRegistration & registrat
 
 static void dispatch_log_match(const DispatchRegistration & registration) {
     static const bool enabled = std::getenv("GGML_HRX_LOG_DISPATCH") != nullptr;
-    if (!enabled) {
-        return;
+    // engine#3035 review: GGML_HRX_REPORT alone must be enough. This used to return here unless GGML_HRX_LOG_DISPATCH
+    // was set, so the counter was reachable only by a caller who already had the switch the counter was written to
+    // replace. And it must parse the variable the way the rest of the tree parses it: status.h's detail_reported() owns
+    // that answer (0/false/no/off are OFF), so asking it rather than re-implementing it is what stops
+    // `GGML_HRX_REPORT=off` from silencing placement detail while switching this histogram on.
+    static const bool reporting = ggml::hrx::Status::detail_reported();
+    if (!enabled && !reporting) {
+        return;                     // neither switch asked for anything: the hot path stays a getenv and a branch
     }
     static std::mutex            mutex;
     static std::set<std::string> seen;
+    // engine#3035: a per-name COUNT, because `seen` below is function-static and prints each name ONCE EVER -- so the
+    // log reports the set of names that matched at least once, which is identical for -ub 8 (47.8 tok/s) and -ub 16
+    // (4.7 tok/s) and therefore cannot attribute a band. Counting is not deciding: this changes no dispatch decision,
+    // so `hrx_log_dispatch_neutral_test.py` (#2143) must pass unchanged; if it does not, the counter is in the wrong
+    // place. Off unless GGML_HRX_REPORT asks for it, and dumped at exit because a per-row print is a hot-path write.
+    static std::map<std::string, uint64_t> counts;
+    static std::once_flag                  report_registered;
+    std::call_once(report_registered, [] {
+        if (!reporting) {
+            return;
+        }
+        std::atexit([] {
+            std::lock_guard<std::mutex> lock(mutex);
+            for (const auto & kv : counts) {
+                std::fprintf(stderr, "ggml_hrx dispatch count: %s x%llu\n", kv.first.c_str(),
+                             (unsigned long long) kv.second);
+            }
+        });
+    });
     const std::string            name = registration.name != nullptr ? registration.name : "";
     std::lock_guard<std::mutex>  lock(mutex);
-    if (seen.insert(name).second) {
+    counts[name] += 1;
+    if (enabled && seen.insert(name).second) {
         std::fprintf(stderr, "ggml_hrx dispatch: %s (%s)\n", name.c_str(),
                      registration.kind == DispatchMatchKind::Fused ? "fused" : "single");
     }
