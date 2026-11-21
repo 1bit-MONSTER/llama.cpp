@@ -816,6 +816,13 @@ static void run_route_outcome_checks() {
         REQUIRE(outcome.kind == RouteKind::FallThrough);
         REQUIRE(!outcome.expectation_also_scheduled);
     }
+    {   // engine#3120: the two layout assertions the swiglu rows CHOOSE BETWEEN must not be the same string, or the choice
+        // is empty. #475 branches on the route to require `kNativeWeightLayout` on the add-on path and
+        // `kQ4KPackedK256Row64Layout` on the Loom path; if those constants ever collapsed into one value, both branches
+        // would assert the same thing and agree no matter which route ran -- the arm would be green and the property it
+        // exists for gone. They are `"ggml-native"` and `"q4k-packed-k256-row64"` (dispatch/dispatch.h:15-16) today.
+        REQUIRE(std::string(ggml::hrx::kNativeWeightLayout) != std::string(ggml::hrx::kQ4KPackedK256Row64Layout));
+    }
 }
 
 static void run_alternate_value_alias_lookup_checks() {
