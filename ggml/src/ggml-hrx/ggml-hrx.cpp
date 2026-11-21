@@ -1732,7 +1732,13 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         facts.src_ne2          = op->src[0]->ne[2];
         facts.src_ne3          = op->src[0]->ne[3];
         if (!ggml::hrx::get_rows_tensor_supported(facts)) {
+#if GGML_HRX_HIP_TENSOR_CLAIM
+            // engine#679: no fork form reads a strided source (the QSA indexer cache's f16 row views), so an add-on
+            // gather that does is asked by its own predicate (hip/hip-capabilities.h) instead of being refused here
+            return ggml::hrx::hip_tensor_claimed(op);
+#else
             return false;
+#endif
         }
     }
     // Qwen3.8-Flash-Next routed experts have no correct/compilable HRX MUL_MAT_ID

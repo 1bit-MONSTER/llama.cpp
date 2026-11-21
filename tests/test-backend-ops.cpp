@@ -10740,6 +10740,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
     test_cases.emplace_back(new test_get_rows(GGML_TYPE_F32, 256, 8, 2, 1, 1, false, true, 3));
+    // engine#679: f16 rows read through a column-offset view, the layout of the QSA indexer cache's pooled half
+    test_cases.emplace_back(new test_get_rows(GGML_TYPE_F16, 128, 300, 64, 1, 1, false, true, 128));
+    test_cases.emplace_back(new test_get_rows(GGML_TYPE_F16, 128, 300, 64, 7, 1, true, true, 128));
+    test_cases.emplace_back(new test_get_rows(GGML_TYPE_F16, 200, 40, 9, 2, 3, false, true, 5));
 
     test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 1, 8, 2, 1, false));
     test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 1, 70000, 4, 1, false)); // row count > CUDA grid-y limit (65535)
