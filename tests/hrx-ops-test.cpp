@@ -6343,6 +6343,16 @@ static void run_get_rows_root_readback_survives_case() {
     // is the graph output with no consumer at all — so it declines by construction, on the unpatched tree as well.
     // Measured, not assumed: with the engine#3122 patch in place this row schedules
     // `loom_libs:ggml_get_rows_f32`, i.e. the requested value did NOT cost the fusion its exemption.
+    //
+    // Mutation-tested, not merely argued: relinking libggml-hrx.so with `root_output_confined_to_match()` forced to
+    // false -- i.e. dropping the exemption -- makes this row fail, and the failure names why nothing can stand in for
+    // the declined registration:
+    //   attempt common.get_rows.f32 matched=0
+    //     covered: 0
+    //   scheduler error: unsupported HRX node 0: GET_ROWS output=... <-GET_ROWS inputs=[...] consumers=[]
+    // Every other registration in the attempt list is `matched=0` too, so no other kernel carries this name. That is
+    // what makes the row a control rather than a decoration: deleting the exemption cannot be the cheap way to make
+    // the engine#3122 rows green.
     require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_get_rows_f32" });
     ggml_free(ctx);
 }
@@ -9274,7 +9284,11 @@ static void register_basic_ops_cases(Suite & suite) {
                                   GGML_TYPE_BF16, GGML_TYPE_F32 }) {
         suite.device_case("get_rows_f32." + type_name(type), [type] { run_get_rows_f32_cpu_reference_case(type); });
     }
-    suite.device_case("get_rows_f32.root_readback_survives", [] { run_get_rows_root_readback_survives_case(); });
+    // A scheduling question that compares no values: a host case, so it also runs where no device is visible
+    // (`support.rmsnorm` above plans the same way). Measured both directions -- with `ROCR_VISIBLE_DEVICES` hiding the
+    // device it still schedules and passes, and as a device case the suite dropped it and returned 77, i.e. a
+    // device-free run never executed the control at all.
+    suite.host_case("get_rows_f32.root_readback_survives", [] { run_get_rows_root_readback_survives_case(); });
     suite.device_case("get_rows_f32.q1_0.rows2048", [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q1_0, 2048); });
     suite.device_case("get_rows_f32.q5_1.rows640", [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q5_1, 640); });
     suite.device_case("get_rows_q8_1.zero_weight", [] { run_get_rows_q8_1_zero_weight_case(); });
