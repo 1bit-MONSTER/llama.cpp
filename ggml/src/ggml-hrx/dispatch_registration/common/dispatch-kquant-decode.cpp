@@ -117,18 +117,56 @@ DispatchBinding kquant_weight_binding(const CommonMulMatMatch & match) {
 constexpr int64_t kMaxInputSize  = 65536;
 constexpr int64_t kMaxOutputSize = 1048576;
 constexpr int64_t kMaxTokens     = 8;
+// engine#3035: how many of the kernel's own widths a chunked prefill node may span, 8 x 16 = 128 tokens -- below the
+// 256-token floor every wide IQ* prefill matcher declares, so a chunked row cannot steal the band those own.
+constexpr int64_t kMaxTokenChunks = 16;
 
 // A MUL_MAT with 1..kMaxTokens tokens: the common matcher's decode form admits exactly one token and
 // its prefill form two or more.
-CommonMulMatMatch match_few_token_mul_mat(const Graph & graph, const GraphNode * node, KernelCatalogRef kernel) {
+CommonMulMatMatch match_few_token_mul_mat(const Graph & graph, const GraphNode * node, KernelCatalogRef kernel,
+                                          int64_t max_tokens = kMaxTokens) {
     CommonMulMatMatch match = common_match_mul_mat_any_format(graph, node, kernel, true);
     if (!match.matched()) {
         match = common_match_mul_mat_any_format(graph, node, kernel, false);
     }
-    if (!match.matched() || match.token_count > kMaxTokens) {
+    if (!match.matched() || match.token_count > max_tokens) {
         return {};
     }
     return match;
+}
+
+// engine#3035: serve a node wider than the kernel from N token-dimension parts of that same kernel. Measured at pin
+// 47c95e15c: -ub 8 runs these rows at 47.3-50.2 tok/s, and -ub 16 collapses to 4.77 because a >8-token node declined
+// here and the FFN and projections fell to the generic f32 path (trace: mul_mat_swiglu_f32_f32_wmma and
+// mul_mat_add_f32_f32_wmma at token_count=10,12,16). Two chained 8-token parts cost ~0.31 s where that generic node
+// costs 3.35 s. The parts are balanced (base + one extra for the first `extra` of them) and each carries its own
+// `ggml.kquant_decode.token_count`; only the token-major bindings are re-sliced, so weights stay whole.
+struct KQuantChunkBinding {
+    size_t binding;
+    size_t row_bytes;
+    size_t last_row_bytes;
+};
+
+static bool append_kquant_token_chunks(const Dispatch & whole, int64_t token_count,
+                                       std::initializer_list<KQuantChunkBinding> bindings,
+                                       DispatchMatch & dispatch_match) {
+    const int64_t chunk_count = (token_count + kMaxTokens - 1) / kMaxTokens;
+    const int64_t base        = token_count / chunk_count;
+    const int64_t extra       = token_count % chunk_count;
+    int64_t       first       = 0;
+    for (int64_t chunk = 0; chunk < chunk_count; ++chunk) {
+        const int64_t count = base + (chunk < extra ? 1 : 0);
+        Dispatch      part  = whole;
+        part.kernel.compile_parameters["ggml.kquant_decode.token_count"] = std::to_string(count);
+        for (const KQuantChunkBinding & b : bindings) {
+            const size_t skip = static_cast<size_t>(first) * b.row_bytes;
+            part.bindings[b.binding].offset = whole.bindings[b.binding].offset + skip;
+            part.bindings[b.binding].length = static_cast<size_t>(count - 1) * b.row_bytes + b.last_row_bytes;
+        }
+        dispatch_match.dispatches.push_back(std::move(part));
+        first += count;
+    }
+    return true;
 }
 
 // A value is ready at this root when its producer (looking through layout aliases) is a graph input
@@ -205,9 +243,10 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
     if (!graph.has_index()) {
         return false;
     }
-    const CommonMulMatMatch root =
-        match_few_token_mul_mat(graph, context.root_node, kKQuantSwiGLUDecodeKernel);
-    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens || !kquant_supported(root) ||
+    const CommonMulMatMatch root = match_few_token_mul_mat(graph, context.root_node, kKQuantSwiGLUDecodeKernel,
+                                                           kMaxTokens * kMaxTokenChunks);
+    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens * kMaxTokenChunks ||
+        !kquant_supported(root) ||
         root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize ||
         !value_ready(context, root.input->id) ||
         has_q8_alternate(context, *root.input, root.input_size, root.token_count) ||
@@ -273,20 +312,33 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
     dispatch.bindings.push_back(kquant_weight_binding(gate));
     dispatch.bindings.push_back(kquant_weight_binding(up));
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    if (root.token_count > kMaxTokens) {
+        // The fused pair takes the same token-dimension parts as the plain row: both weights stay whole (bindings 1
+        // and 2), only the activation and the packed gate/up output are sliced. The GLU node stays covered by the
+        // path, so no separate dispatch appears for it.
+        const size_t input_row   = static_cast<size_t>(root.input->nb[1]);
+        const size_t input_last  = static_cast<size_t>(root.input_size) * sizeof(float);
+        const size_t output_row  = static_cast<size_t>(root.output->nb[1]);
+        const size_t output_last = static_cast<size_t>(root.output_size) * sizeof(float);
+        return append_kquant_token_chunks(dispatch, root.token_count,
+                                          { { 0, input_row, input_last }, { 3, output_row, output_last } },
+                                          dispatch_match);
+    }
     dispatch_match.dispatches.push_back(std::move(dispatch));
     return true;
 }
 
 
 bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, DispatchMatch & dispatch_match,
-                                      bool require_add) {
+                                      bool require_add, bool allow_token_chunk = false) {
     const Graph & graph = context.graph;
     if (!graph.has_index()) {
         return false;
     }
+    const int64_t root_max_tokens = allow_token_chunk ? kMaxTokens * kMaxTokenChunks : kMaxTokens;
     const CommonMulMatMatch root =
-        match_few_token_mul_mat(graph, context.root_node, kKQuantMulMatDecodeKernel);
-    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens || !kquant_supported(root) ||
+        match_few_token_mul_mat(graph, context.root_node, kKQuantMulMatDecodeKernel, root_max_tokens);
+    if (!root.matched() || root.token_count < 1 || root.token_count > root_max_tokens || !kquant_supported(root) ||
         root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize ||
         !value_ready(context, root.input->id) ||
         has_q8_alternate(context, *root.input, root.input_size, root.token_count) ||
@@ -346,6 +398,20 @@ bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, Disp
     const Value * addend_binding = addend != nullptr ? addend : root.input;
     dispatch.bindings.push_back({ addend_binding->id, 0, addend_binding->byte_count });
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    if (allow_token_chunk && root.token_count > kMaxTokens) {
+        const size_t input_row   = static_cast<size_t>(root.input->nb[1]);
+        const size_t input_last  = static_cast<size_t>(root.input_size) * sizeof(float);
+        const size_t output_row  = static_cast<size_t>(root.output->nb[1]);
+        const size_t output_last = static_cast<size_t>(root.output_size) * sizeof(float);
+        // binding 2 is the addend when one is folded in and the input when not, so it carries that binding's strides.
+        const size_t other_row  = addend != nullptr ? output_row : input_row;
+        const size_t other_last = addend != nullptr ? output_last : input_last;
+        return append_kquant_token_chunks(dispatch, root.token_count,
+                                          { { 0, input_row, input_last },
+                                            { 2, other_row, other_last },
+                                            { 3, output_row, output_last } },
+                                          dispatch_match);
+    }
     dispatch_match.dispatches.push_back(std::move(dispatch));
     return true;
 }
@@ -389,13 +455,30 @@ static bool kquant_reuse_format(ggml_type type) {
 }
 
 bool match_kquant_mul_mat_few_token_prefill(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    // The probe's own ceiling is the parameter, not the kernel width: leaving it at the default capped the probe at 8
+    // tokens, so the row never saw a 16-token node at all and the chunked emit below could never run (measured: the
+    // patch was inert, ub16 4.77 -> 4.71, and a diagnostic inside the row printed zero lines because probe.matched()
+    // was already false).
     const CommonMulMatMatch probe = match_few_token_mul_mat(context.graph, context.root_node,
-                                                            kKQuantMulMatDecodeKernel);
-    if (!probe.matched() || probe.token_count < 2 || probe.token_count > kMaxTokens ||
+                                                            kKQuantMulMatDecodeKernel,
+                                                            kMaxTokens * kMaxTokenChunks);
+    if (!probe.matched() || probe.token_count < 2 || probe.token_count > kMaxTokens * kMaxTokenChunks ||
         probe.weight == nullptr || !kquant_reuse_format(probe.weight->type)) {
         return false;
     }
-    return match_kquant_mul_mat_decode_impl(context, dispatch_match, false);
+    // DIAGNOSTIC (local, not for the PR): the chunked path did not claim a 16-token node, so say which guard in
+    // match_kquant_mul_mat_decode_impl rejects it before guessing. GGML_HRX_KQUANT_CHUNK_DIAG=1.
+    if (std::getenv("GGML_HRX_KQUANT_CHUNK_DIAG") != nullptr && probe.token_count > kMaxTokens) {
+        std::fprintf(stderr,
+                     "kquant-chunk-diag: tokens=%lld supported=%d q8_alt=%d packed=%d ready=%d in_mod256=%lld "
+                     "out=%lld\n",
+                     static_cast<long long>(probe.token_count), kquant_supported(probe) ? 1 : 0,
+                     has_q8_alternate(context, *probe.input, probe.input_size, probe.token_count) ? 1 : 0,
+                     few_token_batch_reads_packed(context.graph, probe) ? 1 : 0,
+                     value_ready(context, probe.input->id) ? 1 : 0,
+                     static_cast<long long>(probe.input_size % 256), static_cast<long long>(probe.output_size));
+    }
+    return match_kquant_mul_mat_decode_impl(context, dispatch_match, false, true);
 }
 
 }  // namespace
