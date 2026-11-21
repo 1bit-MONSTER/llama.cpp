@@ -2570,7 +2570,16 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
                              static_cast<long long>(key_value_token_count),
                              static_cast<long long>(query_token_count), scheduled.c_str());
             }
-            REQUIRE(scheduled == "loom_libs:ggml_flash_attention_f32_f16_wmma");
+            // engine#3085: past the cap, what this row actually pins is that the loom SPLIT kernel is not offered --
+            // which fallback takes the node is a property of the TREE, not of the shape. With the private add-on built,
+            // `hip.fa_decode` (FLASH_ATTN_EXT, priority 90) accepts any mask width -- its only K/V condition is
+            // `k->ne[1] >= mask->ne[0]`, there is no cap of any kind below 4M tokens -- so above 2944 it is the only
+            // matcher left and the loom general kernel can never be scheduled there. Asserting the general kernel alone
+            // made this row a tree-shape test that aborts on every add-on tree (measured 2026-11-21: these are the only
+            // rows that differ between the no-add-on bench tree, 286/290, and an add-on tree).
+            REQUIRE(scheduled != "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
+            REQUIRE(scheduled.compare(0, 4, "hip:") == 0 ||
+                    scheduled == "loom_libs:ggml_flash_attention_f32_f16_wmma");
         }
         ggml_free(ctx);
         restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
