@@ -15713,7 +15713,11 @@ static const HipAddonLabel * hip_addon_known_fail(const char * name) {
     // other requirement is a new defect, not the documented one, and the runner reports it as UNEXPECTED-FAIL.
     // A row is removed when its mechanism's fix lands: the case then passes on the add-on path (UNEXPECTED-PASS).
     static const HipAddonLabel kLabels[] = {
-        { "qwen_flash_attention_dispatch", kPlan, "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8" },
+        // engine#3129: `qwen_flash_attention_dispatch` was removed here -- its mechanism's fix has landed, so the case
+        // passes on the add-on path and the row is now an UNEXPECTED-PASS (the runner says so by name: "a row is removed
+        // when its mechanism's fix lands: the case then passes on the add-on path (UNEXPECTED-PASS)"). Measured at the
+        // current pin: the host tier was 76 passed / 0 failed / 22 known-fail / 1 unexpected-pass of 99, and this was the
+        // one. It could only be noticed because the target was built and run by hand -- nothing in CI selects these rows.
         { "qwen_attention_postprocess_dispatch", kPlan, "scheduler.plan().dispatches.size() == 4" },
         { "qwen_matmul_dispatch", kPlan, "projection != scheduler.plan().dispatches.rend()" },
         { "gdn_native_projection_pair_dispatch", kPlan, "(fused != plan.dispatches.end()) == test.fused" },
