@@ -711,27 +711,111 @@ static bool sequence_has_kernel(const std::vector<std::string> & sequence, const
 //
 // `loom_route` covers the one shape here that is NOT an add-on case: with the Loom tree the kquant swiglu family
 // (engine#444, added to test-hrx-ops.cpp's matcher table and never to this file) serves it.
+//
+// engine#3120 (pi-i679): the decision below is a pure function, because three states were being printed as one. An opt-in
+// is not free -- it *drops* the expectation the row names, so a green run must say which expectation is no longer
+// asserted, and it must say so with a word that cannot be mistaken for "served". The outcome is also where a stale opt-in
+// can be caught without a device: if the Loom kernel the row expects is scheduled anyway, the opt-in has stopped being
+// needed and from then on can only hide a real mis-selection. `route_outcome` is the used table AND the asserted one (host
+// case `route_outcome`, no device), which is the shape engine#3116/pi-os3 arrived at for the same reason: a printer nobody
+// asserts on is how "accepted" and "accepted for the wrong reason" became the same word.
+enum class RouteKind {
+    FallThrough,        // not an add-on or Loom-route row: assert the expectation normally
+    AddOnServed,        // opted in, a hip: object took the node -- the expectation is NOT asserted
+    LoomRouteServed,    // opted in, the named alternative Loom kernel ran
+};
+
+struct RouteOutcome {
+    RouteKind   kind                       = RouteKind::FallThrough;
+    std::string served_by;                                    // the scheduled hip: kernel, or the loom route name
+    bool        expectation_also_scheduled = false;            // the stale-opt-in signal, only meaningful for AddOnServed
+};
+
+static RouteOutcome route_outcome(const std::vector<std::string> & sequence,
+                                 const std::vector<std::string> & expected,
+                                 const char *                     addon_route,
+                                 const char *                     loom_route) {
+    RouteOutcome outcome;
+    if (addon_route != nullptr && !expected.empty()) {
+        outcome.expectation_also_scheduled = sequence_has_kernel(sequence, expected.front().c_str());
+        for (const std::string & scheduled : sequence) {
+            if (scheduled.compare(0, 4, "hip:") == 0) {
+                outcome.kind      = RouteKind::AddOnServed;
+                outcome.served_by = scheduled;
+                return outcome;
+            }
+        }
+    }
+    if (loom_route != nullptr && sequence_has_kernel(sequence, loom_route)) {
+        outcome.kind      = RouteKind::LoomRouteServed;
+        outcome.served_by = loom_route;
+    }
+    return outcome;
+}
+
 static void require_kernel_subsequence_route(const std::vector<std::string> & sequence,
                                              const std::vector<std::string> & expected,
                                              const char *                     addon_route,
                                              const char *                     loom_route = nullptr) {
-    if (addon_route != nullptr && !expected.empty()) {
-        for (const std::string & scheduled : sequence) {
-            if (scheduled.compare(0, 4, "hip:") == 0) {
-                std::fprintf(stderr, "engine#3120: %s is served by the HIP add-on (%s, %s) -- comparing the value\n",
-                             expected.front().c_str(), addon_route, scheduled.c_str());
-                return;
-            }
+    const RouteOutcome outcome = route_outcome(sequence, expected, addon_route, loom_route);
+    if (outcome.kind == RouteKind::AddOnServed) {
+        std::fprintf(stderr,
+                     "engine#3120: %s is NOT asserted on this route -- a hip: kernel is scheduled (%s, %s), so the row "
+                     "compares its value against the CPU reference instead\n",
+                     expected.front().c_str(), addon_route, outcome.served_by.c_str());
+        if (outcome.expectation_also_scheduled) {
+            std::fprintf(stderr,
+                         "engine#3120: ... and %s ran anyway, so the addon_route opt-in (%s) is no longer needed -- remove "
+                         "it, or it will hide a future mis-selection\n",
+                         expected.front().c_str(), addon_route);
         }
-        std::fprintf(stderr, "engine#3120: no hip: kernel scheduled for %s (%s) -- reading the named expectation\n",
-                     expected.front().c_str(), addon_route);
+        return;
     }
-    if (loom_route != nullptr && sequence_has_kernel(sequence, loom_route)) {
+    if (outcome.kind == RouteKind::LoomRouteServed) {
         std::fprintf(stderr, "engine#3120: %s is served by %s (engine#444 family) -- comparing the value\n",
                      expected.front().c_str(), loom_route);
         return;
     }
+    if (addon_route != nullptr && !expected.empty()) {
+        std::fprintf(stderr, "engine#3120: no hip: kernel scheduled for %s (%s) -- reading the named expectation\n",
+                     expected.front().c_str(), addon_route);
+    }
     require_kernel_subsequence(sequence, expected);
+}
+
+// engine#3120: the arm for the decision above. Host case (no device): every branch of route_outcome, including the one the
+// green run prints and the one that says an opt-in has gone stale.
+static void run_route_outcome_checks() {
+    const std::vector<std::string> expected = { "loom_libs:ggml_flash_attention_f32_f16_wmma" };
+
+    {   // a hip: object took the node: accepted, and the expectation is explicitly not asserted
+        const RouteOutcome outcome = route_outcome({ "hip:k_c8f927eca76a" }, expected, "fa_prompt_f16", nullptr);
+        REQUIRE(outcome.kind == RouteKind::AddOnServed);
+        REQUIRE(outcome.served_by == "hip:k_c8f927eca76a");
+        REQUIRE(!outcome.expectation_also_scheduled);
+    }
+    {   // ... and when the expected Loom kernel also ran, the opt-in is stale -- the signal must be set
+        const RouteOutcome outcome = route_outcome({ "loom_libs:ggml_flash_attention_f32_f16_wmma", "hip:k_c8f927eca76a" },
+                                                   expected, "fa_prompt_f16", nullptr);
+        REQUIRE(outcome.kind == RouteKind::AddOnServed);
+        REQUIRE(outcome.expectation_also_scheduled);
+    }
+    {   // opted in, but the Loom kernel is the only thing scheduled: NOT an add-on case, so it must fall through and abort
+        const RouteOutcome outcome = route_outcome({ "loom_libs:ggml_attention_rows_f32_f16" }, expected, "fa_prompt_f16", nullptr);
+        REQUIRE(outcome.kind == RouteKind::FallThrough);
+        REQUIRE(!outcome.served_by.empty() == false);
+    }
+    {   // the Loom-route family (engine#444): accepted by name, not by any hip: object
+        const RouteOutcome outcome = route_outcome({ "loom_libs:ggml_kquant_swiglu_q4_k" }, expected, nullptr,
+                                                   "loom_libs:ggml_kquant_swiglu_q4_k");
+        REQUIRE(outcome.kind == RouteKind::LoomRouteServed);
+        REQUIRE(outcome.served_by == "loom_libs:ggml_kquant_swiglu_q4_k");
+    }
+    {   // no opt-in at all: unchanged behaviour
+        const RouteOutcome outcome = route_outcome({ "loom_libs:ggml_flash_attention_f32_f16_wmma" }, expected, nullptr, nullptr);
+        REQUIRE(outcome.kind == RouteKind::FallThrough);
+        REQUIRE(!outcome.expectation_also_scheduled);
+    }
 }
 
 static void run_alternate_value_alias_lookup_checks() {
@@ -9075,6 +9159,7 @@ static std::string type_name(ggml_type type) {
 using test_runner::Suite;
 
 static void register_basic_ops_cases(Suite & suite) {
+    suite.host_case("support.route_outcome", [] { run_route_outcome_checks(); });   // engine#3120: the route decision
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
     suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });
