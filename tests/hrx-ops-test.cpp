@@ -686,6 +686,54 @@ static void require_kernel_subsequence(const std::vector<std::string> & sequence
     }
 }
 
+static bool sequence_has_kernel(const std::vector<std::string> & sequence, const char * name) {
+    return std::find(sequence.begin(), sequence.end(), name) != sequence.end();
+}
+
+// engine#3120: the private HIP add-on is the shipped configuration, and for the shapes below it is what dispatch
+// schedules -- so a row that names the Loom kernel it was written around aborts on the name and never reaches its CPU
+// reference. Every one of the 14 rows resolved to a named registration in the 2026-11-21 add-on build (`bc3051d`):
+//
+//   kquant_tokens_q8     hip:k_61d118a92b4c = HRX_ID_kqt_swiglu_q4k_q4k          q4_k/q4_k swiglu, 2..5 tokens
+//   dense_decode_kquant  hip:k_3eef74efaf0a = HRX_ID_dense_q4k_swiglu_q8_decode   q4_k swiglu, 1 token, input 4096
+//   hrx_dense_prefill    hip:k_a074247a0b6a = HRX_ID_hrx_dp_f32_to_f16            iq4_xs prefill, 256/512 tokens
+//                        hip:k_f7cc5eb2ed87 = HRX_ID_hrx_dp_mm_iq4_xs_m64_w4_f2
+//   gemv_wide_decode     hip:k_d3eccfeebe3f = HRX_ID_gemv_wide_q4k_r2w8u2        q/k/v for the fused postprocess
+//   fa_prompt_f16        hip:k_c8f927eca76a = HRX_ID_fa_prompt_f16_d128           flash-attention prefill
+//
+// The objects are content-addressed, so the row accepts any `hip:` kernel instead of pinning a hash -- a pinned one rots
+// on the next kernel edit, which is engine#456/#2774's rule for the same reason. Two things keep that from being a
+// wildcard: the acceptance is opt-in per ROW (`addon_route` is passed where the row is built), not keyed on the expected
+// name -- these names are shared, `ggml_flash_attention_f32_f16_wmma` is expected by 7 rows here and
+// `..._swiglu_q4_q8_1_x4_lowtoken_dot` by rows the add-on and the Loom kquant family serve differently -- and the row
+// still compares against its CPU reference afterwards, so a wrong add-on kernel fails on the VALUE. The name arm was
+// chaining a correct comparison behind an expectation no add-on build can satisfy.
+//
+// `loom_route` covers the one shape here that is NOT an add-on case: with the Loom tree the kquant swiglu family
+// (engine#444, added to test-hrx-ops.cpp's matcher table and never to this file) serves it.
+static void require_kernel_subsequence_route(const std::vector<std::string> & sequence,
+                                             const std::vector<std::string> & expected,
+                                             const char *                     addon_route,
+                                             const char *                     loom_route = nullptr) {
+    if (addon_route != nullptr && !expected.empty()) {
+        for (const std::string & scheduled : sequence) {
+            if (scheduled.compare(0, 4, "hip:") == 0) {
+                std::fprintf(stderr, "engine#3120: %s is served by the HIP add-on (%s, %s) -- comparing the value\n",
+                             expected.front().c_str(), addon_route, scheduled.c_str());
+                return;
+            }
+        }
+        std::fprintf(stderr, "engine#3120: no hip: kernel scheduled for %s (%s) -- reading the named expectation\n",
+                     expected.front().c_str(), addon_route);
+    }
+    if (loom_route != nullptr && sequence_has_kernel(sequence, loom_route)) {
+        std::fprintf(stderr, "engine#3120: %s is served by %s (engine#444 family) -- comparing the value\n",
+                     expected.front().c_str(), loom_route);
+        return;
+    }
+    require_kernel_subsequence(sequence, expected);
+}
+
 static void run_alternate_value_alias_lookup_checks() {
     constexpr int64_t element_count   = 2048;
     const size_t      full_bytes      = ggml_row_size(GGML_TYPE_F32, element_count);
@@ -5065,7 +5113,8 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
                                                           int64_t      key_value_token_count,
                                                           float        scale,
                                                           const char * expected_kernel,
-                                                          int64_t      value_head_size = -1) {
+                                                          int64_t      value_head_size = -1,
+                                                          const char * addon_route = nullptr) {
     if (value_head_size < 0) {
         value_head_size = head_size;
     }
@@ -5105,7 +5154,7 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     REQUIRE(graph != nullptr);
     ggml_build_forward_expand(graph, output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(graph), { expected_kernel });
+    require_kernel_subsequence_route(scheduled_kernel_sequence(graph), { expected_kernel }, addon_route);
     const ggml::hrx::WorkloadSpecialization expected_specialization =
         query_token_count == 256 && key_value_token_count == 256 ? ggml::hrx::WorkloadSpecialization::Exact :
                                                                    ggml::hrx::WorkloadSpecialization::Dynamic;
@@ -6377,7 +6426,8 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
                                                 bool         normalize_input = false,
                                                 bool         square_output = false,
                                                 ggml_type    cache_type = GGML_TYPE_COUNT,
-                                                bool         verify_uploaded_native = false) {
+                                                bool         verify_uploaded_native = false,
+                                                const char * addon_route = nullptr) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -6430,7 +6480,7 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
     const auto sequence = scheduled_kernel_sequence(hrx_graph);
-    require_kernel_subsequence(sequence, { expected_kernel });
+    require_kernel_subsequence_route(sequence, { expected_kernel }, addon_route);
     const bool packed_q4_input = weight_type == GGML_TYPE_Q4_K;
     const bool iq4_xs_weight = weight_type == GGML_TYPE_IQ4_XS;
     const bool prefill_tokens = token_count >= 256;
@@ -6686,7 +6736,9 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
                                                        ggml_glu_op  glu_op     = GGML_GLU_OP_SWIGLU,
                                                        int64_t      input_size = kQwenHiddenSize,
                                                        bool         verify_uploaded_native = false,
-                                                       bool         import_weights = false) {
+                                                       bool         import_weights = false,
+                                                       const char * addon_route = nullptr,
+                                                       const char * loom_route  = nullptr) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -6728,7 +6780,8 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
+    require_kernel_subsequence_route(scheduled_kernel_sequence(hrx_graph), { expected_kernel },
+                                     addon_route, loom_route);
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -8115,7 +8168,7 @@ static void initialize_attention_postprocess_data(ggml_backend_t cpu_backend,
 }
 
 static std::pair<std::vector<float>, std::vector<float>> run_attention_postprocess_cpu_reference_case(
-    bool check_decode = false, bool implicit_rope = false) {
+    bool check_decode = false, bool implicit_rope = false, const char * addon_route = nullptr) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -8161,9 +8214,10 @@ static std::pair<std::vector<float>, std::vector<float>> run_attention_postproce
     ggml_build_forward_expand(hrx_graph, hrx.key_output);
     ggml_build_forward_expand(hrx_graph, hrx.value_output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
-                               { check_decode ? "qwen3_moe:qwen3_moe_attention_qkv_postprocess_fused_decode" :
-                                                "qwen3_moe:qwen3_moe_attention_postprocess_f32_f16" });
+    require_kernel_subsequence_route(scheduled_kernel_sequence(hrx_graph),
+                                    { check_decode ? "qwen3_moe:qwen3_moe_attention_qkv_postprocess_fused_decode" :
+                                                     "qwen3_moe:qwen3_moe_attention_postprocess_f32_f16" },
+                                    addon_route);
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -8758,9 +8812,10 @@ static void run_decode_attention_qkv_scheduling_case() {
     ggml_build_forward_expand(cgraph, graph.value_output);
     ggml_build_forward_expand(cgraph, flash);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(cgraph),
-                               { "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
-                                 "qwen3_moe:qwen3_moe_attention_qkv_postprocess_fused_decode" });
+    require_kernel_subsequence_route(scheduled_kernel_sequence(cgraph),
+                                     { "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
+                                       "qwen3_moe:qwen3_moe_attention_qkv_postprocess_fused_decode" },
+                                     "gemv_wide_decode");
     auto imported = ggml::hrx::import_ggml_graph(*cgraph);
     REQUIRE(imported.valid());
     ggml::hrx::DispatchScheduler scheduler;
@@ -9205,14 +9260,18 @@ static void register_dense_matmul_cases(Suite & suite) {
                                             "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 64, 128);
     });
     suite.device_case("dense_matmul.iq4_xs.prefill.tokens256.outputs128", [] {
+        // engine#3120: the add-on's prefill matcher serves this shape with the f32->f16 cast and its own iq4_xs
+        // matmul (hrx_dense_prefill: HRX_ID_hrx_dp_f32_to_f16 + HRX_ID_hrx_dp_mm_iq4_xs_m64_w4_f2).
         run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_XS,
                                             "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 256, 128,
-                                            kQwenHiddenSize, true);
+                                            kQwenHiddenSize, true, false, GGML_TYPE_COUNT, false,
+                                            "hrx_dense_prefill");
     });
     // Exercise the production K dimension and a partial output tile.
     suite.device_case("dense_matmul.iq4_xs.prefill.tokens512.outputs64", [] {
         run_dense_matmul_cpu_reference_case(
-            GGML_TYPE_IQ4_XS, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 512, 64, 3072, true);
+            GGML_TYPE_IQ4_XS, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 512, 64, 3072, true, false,
+            GGML_TYPE_COUNT, false, "hrx_dense_prefill");
     });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         for (const ggml_type cache_type : { GGML_TYPE_F16, GGML_TYPE_F32 }) {
@@ -9325,10 +9384,12 @@ static void register_dense_matmul_cases(Suite & suite) {
             suite.device_case(std::string("dense_matmul_swiglu.q4_k.q4_k.lowtoken.") + glu_op_name(op) +
                                   ".tokens4.outputs" + std::to_string(outputs),
                               [op, outputs] {
+                                  // engine#3120: q4_k/q4_k swiglu at 4 tokens is the add-on's kquant_tokens_q8
+                                  // (HRX_ID_kqt_swiglu_q4k_q4k) in an add-on build.
                                   run_dense_matmul_swiglu_cpu_reference_case(
                                       GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
                                       "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", 4, outputs, op,
-                                      kQwenHiddenSize, false, true);
+                                      kQwenHiddenSize, false, true, "kquant_tokens_q8");
                               });
         }
         for (const int64_t tokens : { 256, 512 }) {
@@ -9358,19 +9419,26 @@ static void register_dense_matmul_cases(Suite & suite) {
     for (const int64_t tokens : { 1, 2, 3, 5 }) {
         suite.device_case(
             "dense_matmul_swiglu.q4_k.q4_k.lowtoken.tokens" + std::to_string(tokens) + ".outputs4160", [tokens] {
+                // engine#3120: 2..5 tokens is the add-on's kquant_tokens_q8 (HRX_ID_kqt_swiglu_q4k_q4k); at 1 token
+                // the Loom kquant swiglu family (engine#444) serves it, which test-hrx-ops.cpp accepts and this file
+                // never did.
                 run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
                                                            "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
                                                            tokens, 4160, GGML_GLU_OP_SWIGLU, kQwenHiddenSize, false,
-                                                           true);
+                                                           true, "kquant_tokens_q8",
+                                                           "loom_libs:ggml_kquant_swiglu_decode_f32");
             });
     }
     for (const int64_t tokens : { 1, 2, 5 }) {
         suite.device_case(
             "dense_matmul_swiglu.q4_k.q4_k.swiglu.tokens" + std::to_string(tokens) + ".outputs16384.input4096",
             [tokens] {
+                // engine#3120: 1 token here is dense_decode_kquant (HRX_ID_dense_q4k_swiglu_q8_decode), the rest
+                // kquant_tokens_q8 -- both add-on families, so the row accepts the add-on route.
                 run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
                                                            "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
-                                                           tokens, 16384, GGML_GLU_OP_SWIGLU, 4096, false, true);
+                                                           tokens, 16384, GGML_GLU_OP_SWIGLU, 4096, false, true,
+                                                           "kquant_tokens_q8/dense_decode_kquant");
             });
     }
     suite.device_case("dense_matmul_swiglu.q4_k.q4_k.reglu.tokens3.outputs16384.input4352", [] {
@@ -9588,7 +9656,11 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
         require_close(explicit_unit.first, implicit.first, 1.0e-4f, 1.0e-4f);
         require_close(explicit_unit.second, implicit.second, 1.0e-3f, 1.0e-3f);
     });
-    suite.device_case("attention_postprocess.decode_factors", [] { run_attention_postprocess_cpu_reference_case(true); });
+    // engine#3120: the add-on replaces the fused postprocess with two gemv_wide_decode objects
+    // (HRX_ID_gemv_wide_q4k_r2w8u2) plus the Loom v_matmul.
+    suite.device_case("attention_postprocess.decode_factors", [] {
+        run_attention_postprocess_cpu_reference_case(true, false, "gemv_wide_decode");
+    });
     suite.device_case("attention_postprocess.metadata_reuse",
                       [] { run_attention_postprocess_metadata_reuse_case(); });
     suite.device_case("routed_moe.q4_k.next_rmsnorm", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true); });
@@ -9706,8 +9778,11 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
 
 static void register_flash_attention_cases(Suite & suite) {
     suite.device_case("common_flash_attention.prefill.head128.query256.kv256.exact", [] {
+        // engine#3120: in an add-on build this prefill shape is fa_prompt_f16 (HRX_ID_fa_prompt_f16_d128); the decode
+        // rows below keep naming their kernel exactly, which is why the arm is passed here and not by kernel name.
         run_common_flash_attention_cpu_reference_case(128, 256, 256, 1.0f / std::sqrt(128.0f),
-                                                      "loom_libs:ggml_flash_attention_f32_f16_wmma");
+                                                      "loom_libs:ggml_flash_attention_f32_f16_wmma", -1,
+                                                      "fa_prompt_f16");
     });
     for (int64_t head_size = 64; head_size <= 512; head_size += 64) {
         suite.device_case("common_flash_attention.decode.head" + std::to_string(head_size) + ".query2.kv65",
