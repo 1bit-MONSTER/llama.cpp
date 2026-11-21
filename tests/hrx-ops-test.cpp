@@ -647,6 +647,57 @@ static bool is_recorded_stale_expectation(const std::string & name) {
     return false;
 }
 
+// engine#3120 (engine side: 1bit-MONSTER/engine#3120): the private HIP add-on serves shapes this file expects from a Loom
+// kernel, so the row aborted on the NAME before its CPU-reference comparison ever ran. Measured on the first full 397-case
+// run of this suite with the add-on built in (`298 passed, 99 failed, 29 aborts`): 29 abort blocks, 17 distinct
+// expected/sequence pairs, and **seven** of the expected names were served by a `hip:` code object -- the add-on's
+// registration won the shape. The row names below are exactly those seven, and nothing else.
+//
+// The other families in that run are NOT this table's business and keep aborting: `ggml_rmsnorm_mul_rope_f32` arrived as
+// three unfused kernels, `qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32` likewise, and
+// `ggml_mul_mat_id_{skinny,tiled}_pair_input_f32_swiglu_publish_f32` landed on `ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table`
+// (a name question inside Loom). A table entry here must never make one of those pass, which is why the acceptance below is
+// per-name and additionally requires a `hip:` kernel in the sequence.
+//
+// The id is a content hash, so the row accepts any `hip:` object rather than pinning one -- pinning it would rot on the next
+// kernel edit, the failure mode the recorded-stale table above and `test-hrx-ops.cpp:3290` both avoid. What served each shape,
+// from that run, for the next reader: `q5_k_iq4_xs_q8_1_x4_wmma_token256` -> `hip:k_a074247a0b6a`/`hip:k_f7cc5eb2ed87`;
+// `mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot` -> `hip:k_61d118a92b4c` (7 rows) and `hip:k_3eef74efaf0a`;
+// `mul_mat_swiglu_f32_f32_lowtoken_dot` -> `hip:k_61d118a92b4c`; `attention_qkv_postprocess_fused_decode` ->
+// `hip:k_d3eccfeebe3f` x2 (and once behind `hip:k_043579523ee2`); `router_projection_top8_fused_decode_f32` ->
+// `hip:k_102cc93009af`, `hip:k_8eabfd3fb3bc`; `mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32` -> `hip:k_d15c7ee4525a`;
+// `flash_attention_f32_f16_wmma` -> `hip:k_c8f927eca76a`.
+static const char * const kAddOnServedExpectations[] = {
+    "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256",
+    "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+    "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
+    "loom_libs:ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32",
+    "loom_libs:ggml_flash_attention_f32_f16_wmma",
+    "qwen3_moe:qwen3_moe_attention_qkv_postprocess_fused_decode",
+    "qwen3_moe:qwen3_moe_router_projection_top8_fused_decode_f32",
+};
+
+static bool is_add_on_served_expectation(const std::string & name) {
+    for (const char * recorded : kAddOnServedExpectations) {
+        if (name == recorded) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The add-on's code objects are scheduled under a `hip:` prefix (a content-addressed id, or a named one for a few kernels).
+// A shape in the table above that is served by a Loom kernel alone must still abort: the add-on being *configured* is not the
+// claim, the add-on being *what ran* is.
+static bool sequence_has_add_on_kernel(const std::vector<std::string> & sequence) {
+    for (const std::string & name : sequence) {
+        if (name.compare(0, 4, "hip:") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void require_kernel_subsequence(const std::vector<std::string> & sequence,
                                        const std::vector<std::string> & expected) {
     size_t sequence_index = 0;
@@ -660,6 +711,17 @@ static void require_kernel_subsequence(const std::vector<std::string> & sequence
                 std::fprintf(stderr,
                              "stale recorded expectation (engine#2774, not a failure): %s -- the corpus still exports it "
                              "and no matcher selects it\n",
+                             name.c_str());
+                sequence_index = before;   // this name is not in the sequence; do not consume a match for it
+                continue;
+            }
+            // engine#3120: the add-on served this shape instead of the Loom kernel the row expects. Accepted only for the
+            // seven reviewed names above AND only when a `hip:` object is really in the sequence; the row's value
+            // comparison then runs, so this relaxes the expectation without turning a wrong result green.
+            if (is_add_on_served_expectation(name) && sequence_has_add_on_kernel(sequence)) {
+                std::fprintf(stderr,
+                             "expectation served by the HIP add-on (engine#3120, reviewed): %s -- a hip: code object is "
+                             "scheduled for this shape, so the Loom name is a fallback that did not run\n",
                              name.c_str());
                 sequence_index = before;   // this name is not in the sequence; do not consume a match for it
                 continue;
