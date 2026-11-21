@@ -5841,10 +5841,23 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47); });
     // engine #2832: IQ1_S reads stored 50-byte blocks with a 4 KiB codebook staged once per workgroup, and its
     // prefill kernel takes 256-token tiles only. 9 and 64 stay on the generic wmma matmul, 512 takes the arm.
-    add(suite, "dense.iq1_s.mul_mat_f32_f32_wmma.9.4096",
-        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S, "loom_libs:ggml_mul_mat_f32_f32_wmma", 9, 4096); });
-    add(suite, "dense.iq1_s.mul_mat_f32_f32_wmma.64.4096",
-        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S, "loom_libs:ggml_mul_mat_f32_f32_wmma", 64, 4096); });
+    // engine#3035: 9 tokens used to fall to the generic f32 wmma matmul, which is the 10x penalty the chunked rows
+    // remove -- above the kernel's own width the reuse row now serves the node in parts of itself. The shape stays:
+    // it is still the first width past the kernel's bound.
+    add(suite, "dense.iq1_s.kquant_row.9.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32", 9, 4096); });
+    add(suite, "dense.iq1_s.kquant_row.16.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32", 16, 4096); });
+    // The strip past the chunked ceiling is still the generic matmul: 129..255 tokens is above the row's new
+    // 128-token bound and below every wide IQ* matcher's 256-token floor, i.e. the path #3035 step 2 would fix.
+    add(suite, "dense.iq1_s.mul_mat_f32_f32_wmma.192.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S, "loom_libs:ggml_mul_mat_f32_f32_wmma", 192, 4096); });
+    // The widest shape the chunked row still takes (ceiling 128), so it takes the row and not the generic path.
+    add(suite, "dense.iq1_s.kquant_row.64.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32", 64, 4096); });
     add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.512.4096",
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
                                                  "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
