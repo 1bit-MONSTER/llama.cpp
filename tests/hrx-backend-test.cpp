@@ -1,4 +1,5 @@
 #include "dispatch_registration/common/dispatch-moe-routing-layout.h"   // engine#2381: one layout, not two
+#include "ubatch-token-limits.h"   // engine#3126: the capacity class and its ceiling
 #include "testing_suite.h"
 #include "ggml-cpu.h"
 #include "backend-buffer-binding.h"
@@ -16164,6 +16165,31 @@ static void append_match_to_plan(ggml::hrx::CommandPlan &   plan,
 // scheduled in a host case and the plan is read. The sibling rmsnorm fusion is the exception the plain path must not pull
 // with it: get_rows_rmsnorm_binary_q8_1_x4_f16.loom:24 assumes eq(token_count, token_capacity), so a class there is a JIT
 // refusal at run time.
+// engine#3126 review: `get_rows_f32.loom` declares `range(1, 2048)` for its token dim, so the matcher must DECLINE a
+// shape whose power-of-two class passes `kSetRowsKernelMaxTokens` rather than emit a capacity the kernel cannot compile.
+// The boundary is asserted here because it is device-free: above it, no `loom_libs:ggml_get_rows_f32` dispatch exists.
+static void require_no_get_rows_class_dispatch(int64_t token_count, int64_t row_count = 8) {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, row_count);
+    ggml_tensor * ids    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
+    ggml_tensor * output = ggml_get_rows(ctx, weight, ids);
+    ggml_cgraph * graph  = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) != "loom_libs:ggml_get_rows_f32");
+    }
+    ggml_free(ctx);
+}
+
 static void run_get_rows_token_capacity_class_checks() {
     ggml_init_params params = {};
     params.mem_size         = 4 * 1024 * 1024;
@@ -16209,6 +16235,12 @@ static void run_get_rows_token_capacity_class_checks() {
     REQUIRE(rows_dispatch->kernel.integer_parameters.at("token_count") == token_count);
 
     ggml_free(ctx);
+
+    // The ceiling, both sides. 2048 is the kernel's declared maximum and must still take the class; 2049 must not be
+    // given one, because its class (4096) is outside `range(1, 2048)` and the JIT would refuse it at run time.
+    REQUIRE(ggml::hrx::token_capacity_class(2048) == 2048);
+    REQUIRE(ggml::hrx::token_capacity_class(2049) == 4096);   // the class the matcher must refuse to emit
+    require_no_get_rows_class_dispatch(2049);
 }
 
 int main(int argc, char ** argv) {

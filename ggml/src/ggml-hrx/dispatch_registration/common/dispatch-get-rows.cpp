@@ -191,7 +191,7 @@ struct GetRowsScaleMatch {
         return rows.matched() && scale_node != nullptr && output != nullptr;
     }
 };
-static void add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatch & match, bool capacity_class);
+static bool add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatch & match, bool capacity_class);
 static void add_common_integer_parameters(Dispatch & dispatch, const GetRowsMatch & match);
 
 static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * node);
@@ -427,7 +427,7 @@ static bool match_get_rows_scale_f32_dispatch(const DispatchMatchContext & conte
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kGetRowsScaleF32Kernel);
     add_common_integer_parameters(dispatch, match.rows);
-    add_common_compile_parameters(dispatch, match.rows, /*capacity_class=*/true);
+    if (!add_common_compile_parameters(dispatch, match.rows, /*capacity_class=*/true)) return false;
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_scale_f32.scale", to_config_value(match.scale));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_scale_f32.bias", to_config_value(match.bias));
     dispatch.bindings.push_back({ match.rows.ids->id, 0, match.rows.ids->byte_count });
@@ -509,7 +509,7 @@ static bool match_get_rows_rmsnorm_binary_dispatch(const DispatchMatchContext & 
 }
 
 
-static void add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatch & match, bool capacity_class) {
+static bool add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatch & match, bool capacity_class) {
     // engine#3126: pin the token capacity to a power-of-two class, not to this graph's token count. Every config that
     // reaches here except the rmsnorm fusion assumes `le(token_count, token_capacity)` and guards each write with
     // `token0 < token_count`, so one compiled program serves the whole class -- which is what hrx-ops-test's
@@ -519,6 +519,13 @@ static void add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatc
     // (runtime/kernel-executable-cache.cpp).
     // get_rows_rmsnorm_binary_q8_1_x4_f16.loom:24 assumes `eq(token_count, token_capacity)`, so that fusion must
     // keep the exact count -- a class there would be a JIT refusal at run time.
+    // engine#3126 review: `get_rows_f32.loom` declares `range(1, 2048)` for its token dim, so a class above
+    // `kSetRowsKernelMaxTokens` is a JIT refusal at run time rather than a wider program. Decline the match instead --
+    // the shape then falls to whatever serves it today, where a launch that cannot compile serves nothing. Below the
+    // ceiling nothing changes: this is a boundary, not a new policy.
+    if (capacity_class && token_capacity_class(match.token_count) > kSetRowsKernelMaxTokens) {
+        return false;
+    }
     const int64_t token_capacity = capacity_class ? token_capacity_class(match.token_count) : match.token_count;
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.token_capacity", to_config_value(token_capacity));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.hidden_capacity", to_config_value(match.hidden_size));
@@ -527,6 +534,7 @@ static void add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatc
     if (capacity_class) {
         dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     }
+    return true;
 }
 
 static void add_common_integer_parameters(Dispatch & dispatch, const GetRowsMatch & match) {
@@ -639,6 +647,12 @@ static bool match_get_rows_f32_dispatch(const DispatchMatchContext & context, Di
         return false;
     }
 
+    // engine#3126 review: `get_rows_f32.loom` declares `range(1, 2048)` for its token dim, so a capacity class above
+    // `kSetRowsKernelMaxTokens` is a JIT refusal at run time rather than a wider program. Decline the shape here, where
+    // the matcher can say so, and let whatever serves it today serve it. Below the ceiling nothing changes.
+    if (token_capacity_class(match.token_count) > kSetRowsKernelMaxTokens) {
+        return false;
+    }
     dispatch_match.covered_nodes.push_back(context.root_index);
     dispatch_match.dispatches.push_back(make_get_rows_dispatch(match));
     return true;
@@ -648,6 +662,9 @@ static bool match_get_rows_f32_next_dispatch(const DispatchMatchContext & contex
     const GetRowsMatch match = match_get_rows_f32(context.graph, context.root_node);
     if (!match.matched()) {
         return false;
+    }
+    if (token_capacity_class(match.token_count) > kSetRowsKernelMaxTokens) {
+        return false;   // engine#3126 review: out of the kernel's declared token range, so the class cannot compile
     }
 
     const std::vector<ggml_type> demands = collect_alternate_demands(context.graph, *match.output);
