@@ -65,4 +65,15 @@ inline int64_t token_capacity_class(int64_t token_count) {
     return capacity;
 }
 
+// The class, or the exact count when the class is outside the kernel's declared range. `get_rows_f32.loom`'s token dim
+// is `range(1, 2048)` (`kSetRowsKernelMaxTokens`), and a capacity BELOW the token count is not an option either: the
+// kernel sizes its launch from the capacity (`get_rows_f32.loom:22`) while the body writes rows under
+// `token0 < token_count`, so a short capacity would launch too few workgroups and drop rows. Above the ceiling the
+// exact count is what ran before the class existed, which is the reviewer's point on engine#3126: use the class where
+// it fits, change nothing above it.
+inline int64_t token_capacity_or_exact(int64_t token_count) {
+    const int64_t capacity = token_capacity_class(token_count);
+    return capacity <= kSetRowsKernelMaxTokens ? capacity : token_count;
+}
+
 }  // namespace ggml::hrx

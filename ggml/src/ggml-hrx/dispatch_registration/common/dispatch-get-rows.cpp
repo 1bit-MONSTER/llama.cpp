@@ -520,18 +520,16 @@ static bool add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatc
     // get_rows_rmsnorm_binary_q8_1_x4_f16.loom:24 assumes `eq(token_count, token_capacity)`, so that fusion must
     // keep the exact count -- a class there would be a JIT refusal at run time.
     // engine#3126 review: `get_rows_f32.loom` declares `range(1, 2048)` for its token dim, so a class above
-    // `kSetRowsKernelMaxTokens` is a JIT refusal at run time rather than a wider program. Decline the match instead --
-    // the shape then falls to whatever serves it today, where a launch that cannot compile serves nothing. Below the
-    // ceiling nothing changes: this is a boundary, not a new policy.
-    if (capacity_class && token_capacity_class(match.token_count) > kSetRowsKernelMaxTokens) {
-        return false;
-    }
-    const int64_t token_capacity = capacity_class ? token_capacity_class(match.token_count) : match.token_count;
+    // `kSetRowsKernelMaxTokens` cannot compile -- and declining the shape is worse than the pinned count it replaces,
+    // because it turns a per-length compile into no dispatch at all. Use the class only where it fits; above the
+    // ceiling keep the exact count, which is today's behaviour (token_capacity_or_exact, ubatch-token-limits.h).
+    const int64_t token_capacity = capacity_class ? token_capacity_or_exact(match.token_count) : match.token_count;
+    const bool    capacity_is_class = capacity_class && token_capacity_class(match.token_count) <= kSetRowsKernelMaxTokens;
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.token_capacity", to_config_value(token_capacity));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.hidden_capacity", to_config_value(match.hidden_size));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.weight_format",
                                                to_config_value(match.weight_format_value));
-    if (capacity_class) {
+    if (capacity_is_class) {
         dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     }
     return true;
@@ -647,12 +645,8 @@ static bool match_get_rows_f32_dispatch(const DispatchMatchContext & context, Di
         return false;
     }
 
-    // engine#3126 review: `get_rows_f32.loom` declares `range(1, 2048)` for its token dim, so a capacity class above
-    // `kSetRowsKernelMaxTokens` is a JIT refusal at run time rather than a wider program. Decline the shape here, where
-    // the matcher can say so, and let whatever serves it today serve it. Below the ceiling nothing changes.
-    if (token_capacity_class(match.token_count) > kSetRowsKernelMaxTokens) {
-        return false;
-    }
+    // engine#3126 review: `get_rows_f32.loom`'s token dim is `range(1, 2048)`; above the ceiling the dispatch keeps the
+    // exact count instead of being dropped here (see token_capacity_or_exact), so this matcher no longer refuses by width.
     dispatch_match.covered_nodes.push_back(context.root_index);
     dispatch_match.dispatches.push_back(make_get_rows_dispatch(match));
     return true;
@@ -663,10 +657,6 @@ static bool match_get_rows_f32_next_dispatch(const DispatchMatchContext & contex
     if (!match.matched()) {
         return false;
     }
-    if (token_capacity_class(match.token_count) > kSetRowsKernelMaxTokens) {
-        return false;   // engine#3126 review: out of the kernel's declared token range, so the class cannot compile
-    }
-
     const std::vector<ggml_type> demands = collect_alternate_demands(context.graph, *match.output);
     if (demands.empty()) {
         return false;
