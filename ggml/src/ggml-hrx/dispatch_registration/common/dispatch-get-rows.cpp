@@ -3,6 +3,7 @@
 #include "dispatch-get-rows-support.h"
 
 #include "../qwen/dispatch-llm-profiles.h"
+#include "ubatch-token-limits.h"
 #include "dispatch-activation-publication.h"
 #include "dispatch-mul-mat-common.h"
 #include "dispatch-mul-mat-weight-format.h"
@@ -190,7 +191,7 @@ struct GetRowsScaleMatch {
         return rows.matched() && scale_node != nullptr && output != nullptr;
     }
 };
-static void add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatch & match);
+static bool add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatch & match, bool capacity_class);
 static void add_common_integer_parameters(Dispatch & dispatch, const GetRowsMatch & match);
 
 static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * node);
@@ -426,7 +427,7 @@ static bool match_get_rows_scale_f32_dispatch(const DispatchMatchContext & conte
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kGetRowsScaleF32Kernel);
     add_common_integer_parameters(dispatch, match.rows);
-    add_common_compile_parameters(dispatch, match.rows);
+    if (!add_common_compile_parameters(dispatch, match.rows, /*capacity_class=*/true)) return false;
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_scale_f32.scale", to_config_value(match.scale));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_scale_f32.bias", to_config_value(match.bias));
     dispatch.bindings.push_back({ match.rows.ids->id, 0, match.rows.ids->byte_count });
@@ -490,7 +491,7 @@ static bool match_get_rows_rmsnorm_binary_dispatch(const DispatchMatchContext & 
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kGetRowsRmsNormBinaryQ8_1X4F16Kernel);
     add_common_integer_parameters(dispatch, match.rows);
-    add_common_compile_parameters(dispatch, match.rows);
+    add_common_compile_parameters(dispatch, match.rows, /*capacity_class=*/false);   // this config assumes eq(count, capacity)
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_rmsnorm.rms_epsilon", to_config_value(match.epsilon));
     dispatch.bindings.push_back({ match.rows.ids->id, 0, match.rows.ids->byte_count });
     dispatch.bindings.push_back({ match.rows.weight->id, 0, match.rows.weight->byte_count });
@@ -508,11 +509,30 @@ static bool match_get_rows_rmsnorm_binary_dispatch(const DispatchMatchContext & 
 }
 
 
-static void add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatch & match) {
-    dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.token_capacity", to_config_value(match.token_count));
+static bool add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatch & match, bool capacity_class) {
+    // engine#3126: pin the token capacity to a power-of-two class, not to this graph's token count. Every config that
+    // reaches here except the rmsnorm fusion assumes `le(token_count, token_capacity)` and guards each write with
+    // `token0 < token_count`, so one compiled program serves the whole class -- which is what hrx-ops-test's
+    // get_rows_f32 rows pin (`token_capacity == next power of two at or above token_count`) and what
+    // dispatch-rope-set-rows.cpp already does for rope under `WorkloadSpecialization::Dynamic`. Pinning the exact
+    // count compiled one program per prompt length: the executable key carries the compile parameters
+    // (runtime/kernel-executable-cache.cpp).
+    // get_rows_rmsnorm_binary_q8_1_x4_f16.loom:24 assumes `eq(token_count, token_capacity)`, so that fusion must
+    // keep the exact count -- a class there would be a JIT refusal at run time.
+    // engine#3126 review: `get_rows_f32.loom` declares `range(1, 2048)` for its token dim, so a class above
+    // `kSetRowsKernelMaxTokens` cannot compile -- and declining the shape is worse than the pinned count it replaces,
+    // because it turns a per-length compile into no dispatch at all. Use the class only where it fits; above the
+    // ceiling keep the exact count, which is today's behaviour (token_capacity_or_exact, ubatch-token-limits.h).
+    const int64_t token_capacity = capacity_class ? token_capacity_or_exact(match.token_count) : match.token_count;
+    const bool    capacity_is_class = capacity_class && token_capacity_class(match.token_count) <= kSetRowsKernelMaxTokens;
+    dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.token_capacity", to_config_value(token_capacity));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.hidden_capacity", to_config_value(match.hidden_size));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.weight_format",
                                                to_config_value(match.weight_format_value));
+    if (capacity_is_class) {
+        dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    }
+    return true;
 }
 
 static void add_common_integer_parameters(Dispatch & dispatch, const GetRowsMatch & match) {
@@ -585,7 +605,7 @@ static Dispatch make_get_rows_dispatch(const GetRowsMatch & match) {
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kGetRowsF32Kernel);
     add_common_integer_parameters(dispatch, match);
-    add_common_compile_parameters(dispatch, match);
+    add_common_compile_parameters(dispatch, match, /*capacity_class=*/true);
     add_primary_bindings(dispatch, match);
     return dispatch;
 }
@@ -597,7 +617,7 @@ static Dispatch make_get_rows_next_dispatch(const GetRowsMatch &     match,
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kGetRowsF32NextKernel);
     add_common_integer_parameters(dispatch, match);
-    add_common_compile_parameters(dispatch, match);
+    add_common_compile_parameters(dispatch, match, /*capacity_class=*/true);
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.next_format",
                                                to_config_value(common_mul_mat_format_config_value(next_format)));
     add_primary_bindings(dispatch, match);
@@ -625,6 +645,8 @@ static bool match_get_rows_f32_dispatch(const DispatchMatchContext & context, Di
         return false;
     }
 
+    // engine#3126 review: `get_rows_f32.loom`'s token dim is `range(1, 2048)`; above the ceiling the dispatch keeps the
+    // exact count instead of being dropped here (see token_capacity_or_exact), so this matcher no longer refuses by width.
     dispatch_match.covered_nodes.push_back(context.root_index);
     dispatch_match.dispatches.push_back(make_get_rows_dispatch(match));
     return true;
@@ -635,7 +657,6 @@ static bool match_get_rows_f32_next_dispatch(const DispatchMatchContext & contex
     if (!match.matched()) {
         return false;
     }
-
     const std::vector<ggml_type> demands = collect_alternate_demands(context.graph, *match.output);
     if (demands.empty()) {
         return false;

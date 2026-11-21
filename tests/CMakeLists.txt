@@ -585,6 +585,11 @@ if (TARGET ggml-hrx)
     target_include_directories(hrx-backend-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     # our line's hrx-backend-test takes case names as its only arguments (no test_runner::Suite flags)
     add_test(NAME hrx-backend-test COMMAND hrx-backend-test)
+    # engine#3126 review: the capacity-class contract on ITS OWN row, because the suite's own row is a baselined known
+    # failure (engine's tools/ci/ctest_known_fail.txt) and a case inside it cannot turn CI red however it fails. This
+    # case is device-free -- import_ggml_graph + DispatchScheduler, no backend, no add-on -- so the row costs seconds,
+    # and the name is not in the baseline, which is what makes a regression here a NEW failure.
+    add_test(NAME hrx_backend_get_rows_capacity COMMAND hrx-backend-test get_rows_token_capacity_class)
     if (GGML_HRX_HIP_ADDON_DIR)
         # engine#2392: hrx-backend-test labels the cases the add-on's own matchers take (hip_addon_known_fail)
         target_compile_definitions(hrx-backend-test PRIVATE GGML_HRX_HIP_ADDON)

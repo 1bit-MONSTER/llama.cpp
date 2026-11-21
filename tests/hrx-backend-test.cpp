@@ -1,4 +1,5 @@
 #include "dispatch_registration/common/dispatch-moe-routing-layout.h"   // engine#2381: one layout, not two
+#include "ubatch-token-limits.h"   // engine#3126: the capacity class and its ceiling
 #include "testing_suite.h"
 #include "ggml-cpu.h"
 #include "backend-buffer-binding.h"
@@ -367,7 +368,9 @@ static std::vector<int32_t> make_qwen_partition_table_reference(const std::vecto
             // common layout (9/15) here made every entry of a 128-expert table disagree with a correct device result.
             // engine#2861: the second argument is WHO READS the table, and this reference is the table the qwen
             // routed kernels decode, so it is not the common layout: Qwen 127/7/13 at <= 128 experts, the common
-            // layout above that -- which is the same pick the router makes for these rows.
+            // layout above that -- which is the same pick the router makes for these rows. (This call site kept the
+            // one-argument form after #2861 split the argument out, and the target has therefore not compiled since
+            // #438; engine#3129.)
             const ggml::hrx::MoeRoutingDescriptorLayout layout =
                 ggml::hrx::moe_router_descriptor_layout(expert_count, /*consumer_reads_common_layout=*/false);
             const int32_t descriptor = static_cast<int32_t>(expert) |
@@ -16154,6 +16157,105 @@ static void append_match_to_plan(ggml::hrx::CommandPlan &   plan,
     }
 }
 
+// engine#3126: the plain get_rows dispatch pins its token capacity to a power-of-two CLASS, so one compiled program serves
+// every length in the class -- the loom body assumes le(token_count, token_capacity) and guards every write with
+// token0 < token_count, which is what makes a class expressible. Before this, the exact count was pinned, which compiled one
+// program per prompt length (the executable key carries the compile parameters) and left hrx-ops-test's
+// `token_capacity == next power of two` assertion unreachable. This is a dispatch fact, so it needs no device: the shape is
+// scheduled in a host case and the plan is read. The sibling rmsnorm fusion is the exception the plain path must not pull
+// with it: get_rows_rmsnorm_binary_q8_1_x4_f16.loom:24 assumes eq(token_count, token_capacity), so a class there is a JIT
+// refusal at run time.
+// engine#3126 review: `get_rows_f32.loom` declares `range(1, 2048)` for its token dim, so a shape whose power-of-two class
+// passes `kSetRowsKernelMaxTokens` cannot carry a class. It must NOT be dropped, though: the ceiling falls back to the
+// EXACT count (`token_capacity_or_exact`), which is what ran before the class existed. The boundary is asserted here
+// because it is device-free: at 2049 and 4096 the dispatch exists with the exact capacity, not with a class.
+static void require_get_rows_capacity(int64_t token_count, const char * expected_capacity, int64_t row_count = 8) {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, row_count);
+    ggml_tensor * ids    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
+    ggml_tensor * output = ggml_get_rows(ctx, weight, ids);
+    ggml_cgraph * graph  = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+    const ggml::hrx::Dispatch * rows_dispatch = nullptr;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_get_rows_f32") {
+            rows_dispatch = &dispatch;
+            break;
+        }
+    }
+    REQUIRE(rows_dispatch != nullptr);
+    require_compile_parameter(*rows_dispatch, "ggml.get_rows_f32.token_capacity", expected_capacity);
+    ggml_free(ctx);
+}
+
+static void run_get_rows_token_capacity_class_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    constexpr int64_t hidden_size = 256;
+    constexpr int64_t row_count   = 8;
+    // 6 is deliberately not a power of two: pinning the count is exactly the defect, so a power-of-two token count could
+    // pass the assertion below by coincidence.
+    constexpr int64_t token_count = 6;
+
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, row_count);
+    ggml_tensor * ids    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
+    ggml_tensor * output = ggml_get_rows(ctx, weight, ids);
+    REQUIRE(weight != nullptr);
+    REQUIRE(ids != nullptr);
+    REQUIRE(output != nullptr);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+
+    const ggml::hrx::Dispatch * rows_dispatch = nullptr;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_get_rows_f32") {
+            rows_dispatch = &dispatch;
+            break;
+        }
+    }
+    REQUIRE(rows_dispatch != nullptr);
+    require_compile_parameter(*rows_dispatch, "ggml.get_rows_f32.token_capacity", "8");
+    require_compile_parameter(*rows_dispatch, "ggml.get_rows_f32.hidden_capacity", std::to_string(hidden_size));
+    REQUIRE(rows_dispatch->kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+    // The real shape stays a launch scalar, so the class did not pin it somewhere else instead.
+    REQUIRE(rows_dispatch->kernel.integer_parameters.at("token_count") == token_count);
+
+    ggml_free(ctx);
+
+    // The ceiling, both sides, and the fallback that is NOT a refusal. 2048 is the kernel's declared maximum and takes the
+    // class; 2049's class (4096) is outside `range(1, 2048)`, so the dispatch must carry the EXACT count -- dropping the
+    // shape would turn a per-length compile into no dispatch at all, which is the regression the review named.
+    REQUIRE(ggml::hrx::token_capacity_class(2048) == 2048);
+    REQUIRE(ggml::hrx::token_capacity_class(2049) == 4096);
+    REQUIRE(ggml::hrx::token_capacity_or_exact(6) == 8);
+    REQUIRE(ggml::hrx::token_capacity_or_exact(2048) == 2048);
+    REQUIRE(ggml::hrx::token_capacity_or_exact(2049) == 2049);   // class fits: exact count, not 4096 and not a refusal
+    REQUIRE(ggml::hrx::token_capacity_or_exact(4096) == 4096);
+    require_get_rows_capacity(2049, "2049");
+    require_get_rows_capacity(4096, "4096");
+}
+
 int main(int argc, char ** argv) {
     // Optional case filter: `hrx-backend-test <case> [<case>...]` runs only the named cases. Without it the whole suite
     // runs, which is what CI does; with it a single device case can be run on its own in seconds, which is what a
@@ -16195,6 +16297,7 @@ int main(int argc, char ** argv) {
         { "external_write_retarget_offset", [] { run_external_write_retarget_offset_checks(); } },
         { "graph_index", [] { run_graph_index_checks(); } },
         { "rope_set_rows_dispatch", [] { run_rope_set_rows_dispatch_checks(); } },
+        { "get_rows_token_capacity_class", [] { run_get_rows_token_capacity_class_checks(); } },
         { "graph_traversal", [] { run_graph_traversal_checks(); } },
         { "qwen_token_embedding_dispatch", [] { run_qwen_token_embedding_dispatch_checks(); } },
         { "gather_add_dispatch", [] { run_gather_add_dispatch_checks(); } },
