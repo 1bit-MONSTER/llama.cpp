@@ -6312,6 +6312,41 @@ static void run_scale_add_f32_cpu_reference_case(bool strided_residual) {
     ggml_backend_free(hrx_backend);
 }
 
+// engine#3122, the other direction: a match that does NOT extend past its root keeps the read-back exemption, so a
+// requested root value still gets its route. Without this arm the cheapest way to make the case above pass
+// is to drop the exemption entirely -- which would send every extended match to the unfused path and turn a
+// correctness fix into a silent performance regression nobody attributes to it.
+static void run_get_rows_root_readback_survives_case() {
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 8);
+    ggml_tensor * ids    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 6);
+    ggml_tensor * output = ggml_get_rows(ctx, weight, ids);
+    REQUIRE(weight != nullptr && ids != nullptr && output != nullptr);
+    ggml_set_output(output);
+    ggml_set_name(output, "hrx-readback.rows");   // requested, but nothing inside the match consumes it
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+    // The match is its own root and writes this value, so the read-back exemption still applies and the kernel runs.
+    // That is the positive control: without it, the cheapest way to make the `get_rows_scale` rows pass is to drop the
+    // exemption entirely, which would send every extended match to the unfused path.
+    //
+    // The kernel here is the SingleOp registration (`common.get_rows.f32`), not the Fused one (`…f32_next`, priority
+    // 150): that matcher requires a consumer demanding an alternate of this value
+    // (`collect_alternate_demands(graph, *match.output)` non-empty, dispatch-get-rows.cpp), and this fixture's output
+    // is the graph output with no consumer at all — so it declines by construction, on the unpatched tree as well.
+    // Measured, not assumed: with the engine#3122 patch in place this row schedules
+    // `loom_libs:ggml_get_rows_f32`, i.e. the requested value did NOT cost the fusion its exemption.
+    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_get_rows_f32" });
+    ggml_free(ctx);
+}
+
 static void run_get_rows_f32_cpu_reference_case(ggml_type weight_type,
                                                 int64_t   hidden_size      = kQwenHiddenSize,
                                                 int64_t   vocabulary_count = 64,
@@ -9239,6 +9274,7 @@ static void register_basic_ops_cases(Suite & suite) {
                                   GGML_TYPE_BF16, GGML_TYPE_F32 }) {
         suite.device_case("get_rows_f32." + type_name(type), [type] { run_get_rows_f32_cpu_reference_case(type); });
     }
+    suite.device_case("get_rows_f32.root_readback_survives", [] { run_get_rows_root_readback_survives_case(); });
     suite.device_case("get_rows_f32.q1_0.rows2048", [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q1_0, 2048); });
     suite.device_case("get_rows_f32.q5_1.rows640", [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q5_1, 640); });
     suite.device_case("get_rows_q8_1.zero_weight", [] { run_get_rows_q8_1_zero_weight_case(); });
