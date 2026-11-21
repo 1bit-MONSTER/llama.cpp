@@ -667,28 +667,49 @@ static bool is_recorded_stale_expectation(const std::string & name) {
 // `hip:k_d3eccfeebe3f` x2 (and once behind `hip:k_043579523ee2`); `router_projection_top8_fused_decode_f32` ->
 // `hip:k_102cc93009af`, `hip:k_8eabfd3fb3bc`; `mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32` -> `hip:k_d15c7ee4525a`;
 // `flash_attention_f32_f16_wmma` -> `hip:k_c8f927eca76a`.
-static const char * const kAddOnServedExpectations[] = {
-    "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256",
-    "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
-    "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
-    "loom_libs:ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32",
-    "loom_libs:ggml_flash_attention_f32_f16_wmma",
-    "qwen3_moe:qwen3_moe_attention_qkv_postprocess_fused_decode",
-    "qwen3_moe:qwen3_moe_router_projection_top8_fused_decode_f32",
+// engine#3120: the private HIP add-on is the shipped configuration, and for these shapes it -- not the Loom kernel the row
+// was written around -- is what dispatch schedules, so the row aborted on the name before it ever compared a value. What the
+// acceptance needs is not "some hip: kernel ran" but "the add-on kernel measured to replace THIS expectation ran": the ids
+// below are that measurement, resolved through the add-on's own catalog (`addons/hip-hrx/kernels/hrx_kernel_ids.h`) in the
+// 2026-11-21 build (`bc3051d5e9`), from the full suite run whose 29 name aborts collapse to these pairs.
+//
+// Why the ids and not "any hip:": three of the seven names an earlier draft of this table carried have **no add-on
+// replacement kernel at the pin** -- the hip: objects in those rows were an UNFUSED add-on route, which is a different fact:
+//   mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32  -> hip:k_d15c7ee4525a = moe_decode_mmid_q4_k
+//   qwen3_moe_attention_qkv_postprocess_fused_decode    -> gemv_wide_q4k_r2w8u2 x2 + fa_decode_gqa
+//   qwen3_moe_router_projection_top8_fused_decode_f32   -> moe_decode_swiglu_q4_k + moe_decode_mmid_q6_k
+// Accepting those would let a row whose whole subject is the fused route proceed to its value comparison on the strength of an
+// unrelated kernel, so they are absent
+// here on purpose: those rows keep aborting, and the finding is recorded rather than absorbed.
+//
+// The ids are content-addressed, so a kernel edit rotates them. An expectation listed here whose ids have all disappeared
+// while a hip: object is still scheduled aborts with BOTH lists printed: a one-line table update, never a silent acceptance.
+struct AddOnServedExpectation {
+    const char * expected;
+    const char * replacements[3];   // measured `hip:` ids that replace this expectation; nullptr-terminated
 };
 
-static bool is_add_on_served_expectation(const std::string & name) {
-    for (const char * recorded : kAddOnServedExpectations) {
-        if (name == recorded) {
-            return true;
+static const AddOnServedExpectation kAddOnServedExpectations[] = {
+    { "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256",
+      { "hip:k_a074247a0b6a", "hip:k_f7cc5eb2ed87", nullptr } },
+    { "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+      { "hip:k_61d118a92b4c", "hip:k_3eef74efaf0a", nullptr } },
+    { "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", { "hip:k_61d118a92b4c", nullptr, nullptr } },
+    { "loom_libs:ggml_flash_attention_f32_f16_wmma", { "hip:k_c8f927eca76a", nullptr, nullptr } },
+};
+
+static const AddOnServedExpectation * add_on_served_expectation(const std::string & name) {
+    for (const AddOnServedExpectation & recorded : kAddOnServedExpectations) {
+        if (name == recorded.expected) {
+            return &recorded;
         }
     }
-    return false;
+    return nullptr;
 }
 
 // The add-on's code objects are scheduled under a `hip:` prefix (a content-addressed id, or a named one for a few kernels).
 // A shape in the table above that is served by a Loom kernel alone must still abort: the add-on being *configured* is not the
-// claim, the add-on being *what ran* is.
+// claim, the add-on being *what ran* is -- and, one step further, that it is the add-on kernel measured for THIS shape.
 static bool sequence_has_add_on_kernel(const std::vector<std::string> & sequence) {
     for (const std::string & name : sequence) {
         if (name.compare(0, 4, "hip:") == 0) {
@@ -715,16 +736,45 @@ static void require_kernel_subsequence(const std::vector<std::string> & sequence
                 sequence_index = before;   // this name is not in the sequence; do not consume a match for it
                 continue;
             }
-            // engine#3120: the add-on served this shape instead of the Loom kernel the row expects. Accepted only for the
-            // seven reviewed names above AND only when a `hip:` object is really in the sequence; the row's value
-            // comparison then runs, so this relaxes the expectation without turning a wrong result green.
-            if (is_add_on_served_expectation(name) && sequence_has_add_on_kernel(sequence)) {
-                std::fprintf(stderr,
-                             "expectation served by the HIP add-on (engine#3120, reviewed): %s -- a hip: code object is "
-                             "scheduled for this shape, so the Loom name is a fallback that did not run\n",
-                             name.c_str());
-                sequence_index = before;   // this name is not in the sequence; do not consume a match for it
-                continue;
+            // engine#3120: the add-on served this shape instead of the Loom kernel the row expects -- but only if the add-on
+            // kernel MEASURED for this expectation ran. `sequence_index = before` leaves the name unconsumed, exactly like the
+            // stale-recording path above, and the row's value comparison runs, so this relaxes the expectation without turning
+            // a wrong result green.
+            if (const AddOnServedExpectation * served = add_on_served_expectation(name)) {
+                const char * matched = nullptr;
+                for (const char * const * replacement = served->replacements; *replacement != nullptr; ++replacement) {
+                    if (std::find(sequence.begin(), sequence.end(), *replacement) != sequence.end()) {
+                        matched = *replacement;
+                        break;
+                    }
+                }
+                if (matched != nullptr) {
+                    std::fprintf(stderr, "expectation served by the HIP add-on (engine#3120, measured): %s -> %s\n",
+                                 name.c_str(), matched);
+                    sequence_index = before;   // this name is not in the sequence; do not consume a match for it
+                    continue;
+                }
+                // The ids are content-addressed: a kernel edit rotates them. Say so with both lists instead of accepting on the
+                // strength of some other `hip:` object, which is how a row whose subject is a fused route goes green while the
+                // tree runs the unfused one.
+                if (sequence_has_add_on_kernel(sequence)) {
+                    std::fprintf(stderr,
+                                 "expectation %s is in the add-on-served table, but none of its measured replacements ran.",
+                                 name.c_str());
+                    std::fprintf(stderr, " table:");
+                    for (const char * const * replacement = served->replacements; *replacement != nullptr; ++replacement) {
+                        std::fprintf(stderr, " %s", *replacement);
+                    }
+                    std::fprintf(stderr, "\n  scheduled hip: kernels:");
+                    for (const std::string & scheduled : sequence) {
+                        if (scheduled.compare(0, 4, "hip:") == 0) {
+                            std::fprintf(stderr, " %s", scheduled.c_str());
+                        }
+                    }
+                    std::fprintf(stderr,
+                                 "\n  the add-on's code objects are content-addressed, so a kernel edit rotates these ids: update "
+                                 "kAddOnServedExpectations, or the row is not an add-on case any more.\n");
+                }
             }
             std::fprintf(stderr, "missing expected kernel: %s\nscheduled kernels:\n", name.c_str());
             for (const std::string & scheduled : sequence) {
