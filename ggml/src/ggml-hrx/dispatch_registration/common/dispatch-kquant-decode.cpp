@@ -117,9 +117,12 @@ DispatchBinding kquant_weight_binding(const CommonMulMatMatch & match) {
 constexpr int64_t kMaxInputSize  = 65536;
 constexpr int64_t kMaxOutputSize = 1048576;
 constexpr int64_t kMaxTokens     = 8;
-// engine#3035: how many of the kernel's own widths a chunked prefill node may span, 8 x 16 = 128 tokens -- below the
-// 256-token floor every wide IQ* prefill matcher declares, so a chunked row cannot steal the band those own.
-constexpr int64_t kMaxTokenChunks = 16;
+// engine#3035: the widest node a chunked prefill row may span, in tokens -- one short of the 256-token floor every
+// wide IQ* prefill matcher declares, so a chunked row cannot steal the band those own. The chunker splits it into
+// ceil(255 / 8) = 32 parts, each still within the kernel's own width; at the old 8 x 16 = 128 ceiling a 129..255-token
+// node was too wide to chunk and, needing a multiple of 256, also refused by the wide matchers (measured: -ub 200 at
+// 10.0 tok/s against 59.13 at -ub 8).
+constexpr int64_t kMaxChunkedTokens = 255;
 
 // A MUL_MAT with 1..kMaxTokens tokens: the common matcher's decode form admits exactly one token and
 // its prefill form two or more.
@@ -244,8 +247,8 @@ bool match_kquant_swiglu_decode(const DispatchMatchContext & context, DispatchMa
         return false;
     }
     const CommonMulMatMatch root = match_few_token_mul_mat(graph, context.root_node, kKQuantSwiGLUDecodeKernel,
-                                                           kMaxTokens * kMaxTokenChunks);
-    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxTokens * kMaxTokenChunks ||
+                                                           kMaxChunkedTokens);
+    if (!root.matched() || root.token_count < 1 || root.token_count > kMaxChunkedTokens ||
         !kquant_supported(root) ||
         root.input_size % 256 != 0 || root.input_size > kMaxInputSize || root.output_size > kMaxOutputSize ||
         !value_ready(context, root.input->id) ||
@@ -335,7 +338,7 @@ bool match_kquant_mul_mat_decode_impl(const DispatchMatchContext & context, Disp
     if (!graph.has_index()) {
         return false;
     }
-    const int64_t root_max_tokens = allow_token_chunk ? kMaxTokens * kMaxTokenChunks : kMaxTokens;
+    const int64_t root_max_tokens = allow_token_chunk ? kMaxChunkedTokens : kMaxTokens;
     const CommonMulMatMatch root =
         match_few_token_mul_mat(graph, context.root_node, kKQuantMulMatDecodeKernel, root_max_tokens);
     if (!root.matched() || root.token_count < 1 || root.token_count > root_max_tokens || !kquant_supported(root) ||
@@ -461,8 +464,8 @@ bool match_kquant_mul_mat_few_token_prefill(const DispatchMatchContext & context
     // was already false).
     const CommonMulMatMatch probe = match_few_token_mul_mat(context.graph, context.root_node,
                                                             kKQuantMulMatDecodeKernel,
-                                                            kMaxTokens * kMaxTokenChunks);
-    if (!probe.matched() || probe.token_count < 2 || probe.token_count > kMaxTokens * kMaxTokenChunks ||
+                                                            kMaxChunkedTokens);
+    if (!probe.matched() || probe.token_count < 2 || probe.token_count > kMaxChunkedTokens ||
         probe.weight == nullptr || !kquant_reuse_format(probe.weight->type)) {
         return false;
     }

@@ -5880,11 +5880,23 @@ static void add_cases(test_runner::Suite & suite) {
     add(suite, "dense.iq1_s.kquant_row.16.4096",
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
                                                  "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32", 16, 4096); });
-    // The strip past the chunked ceiling is still the generic matmul: 129..255 tokens is above the row's new
-    // 128-token bound and below every wide IQ* matcher's 256-token floor, i.e. the path #3035 step 2 would fix.
-    add(suite, "dense.iq1_s.mul_mat_f32_f32_wmma.192.4096",
-        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S, "loom_libs:ggml_mul_mat_f32_f32_wmma", 192, 4096); });
-    // The widest shape the chunked row still takes (ceiling 128), so it takes the row and not the generic path.
+    // engine#3035: 192 sits in the band the chunked row now spans (ceiling 255 = one token below the wide IQ*
+    // matchers' 256 floor), so it takes that row in 24 parts of 8 rather than falling to the generic wmma matmul --
+    // which measured 10.0 tok/s at -ub 200 against 59.13 at -ub 8 before the ceiling moved. The CPU-reference
+    // comparison below is also the cheapest check on the widest split this change creates: a wrong slice shows up
+    // as wrong numbers, not as a fast lie.
+    add(suite, "dense.iq1_s.kquant_row.192.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32", 192, 4096); });
+    // ...and 256 is the first width the wide IQ* matchers own, so the boundary is pinned from both sides: a ceiling
+    // edit that swallowed this shape would show up here as the chunked family where the prefill arm is expected.
+    add(suite, "dense.iq1_s.mul_mat_iq1_s_f16_wmma_prefill_wave32.256.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
+                                                 "loom_libs:ggml_mul_mat_iq1_s_f16_wmma_prefill_wave32",
+                                                 256,
+                                                 4096); });
+    // 64 is inside the ceiling, so it takes the chunked row and not the generic path (the widest shape that row
+    // admits is 255, pinned by the 192 row above).
     add(suite, "dense.iq1_s.kquant_row.64.4096",
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ1_S,
                                                  "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32", 64, 4096); });
