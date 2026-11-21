@@ -162,10 +162,39 @@ static bool tensor_is_readback_request(const ggml_tensor * tensor) {
     return false;
 }
 
+// engine#3122: the root is exempt from the read-back check on the grounds that "a match always writes its root's
+// output". That is true only while the match stops at its root. A match that EXTENDS past it -- `get_rows` + `scale`
+// is the measured case, registered on GGML_OP_GET_ROWS so the root is the get_rows node while the dispatch's output is
+// the scale node -- writes the consumer's value and keeps the root's value inside the fused program, so a caller that
+// asked for the root's output reads whatever the buffer held (measured: `get_rows_scale_f32` returning all zeros).
+// The exemption therefore applies only when nothing inside the match consumes the root's output.
+static bool root_output_confined_to_match(const Graph & graph, const DispatchMatch & match, size_t root_index) {
+    const std::vector<GraphNode> & nodes = graph.nodes();
+    if (root_index >= nodes.size()) {
+        return true;                    // nothing to reason about: keep the old behaviour
+    }
+    const ValueId root_output = nodes[root_index].output;
+    for (const size_t node_index : match.covered_nodes) {
+        if (node_index == root_index || node_index >= nodes.size()) {
+            continue;
+        }
+        for (const ValueId input : nodes[node_index].inputs) {
+            if (input == root_output) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static size_t first_covered_requested_output(const DispatchMatchContext & context, const DispatchMatch & match) {
     const std::vector<GraphNode> & nodes = context.graph.nodes();
+    const bool    root_consumed_inside = !root_output_confined_to_match(context.graph, match, context.root_index);
     for (const size_t node_index : match.covered_nodes) {
-        if (node_index == context.root_index || node_index >= nodes.size()) {
+        if (node_index == context.root_index && !root_consumed_inside) {
+            continue;                   // the match writes its root's output (engine#3122: unless it extends past it)
+        }
+        if (node_index >= nodes.size()) {
             continue;
         }
         const Value * value = context.graph.values().find(nodes[node_index].output);
