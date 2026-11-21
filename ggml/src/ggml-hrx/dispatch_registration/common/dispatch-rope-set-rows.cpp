@@ -185,14 +185,6 @@ static bool supported_token_count(int64_t token_count) {
 
 // The kernel is compiled per capacity CLASS, not per exact token count: a 3-token rope and a 4-token rope must share
 // one compiled program, which is what the capacity parameter means (and what hrx-backend-test expects: 3 -> 4).
-static int64_t token_capacity_class(int64_t token_count) {
-    int64_t capacity = 1;
-    while (capacity < token_count) {
-        capacity *= 2;
-    }
-    return capacity;
-}
-
 static bool supported_cache_row_count(int64_t row_count) {
     return row_count >= 1 && row_count <= 1048576;
 }
