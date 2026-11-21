@@ -6340,13 +6340,25 @@ static void run_get_rows_f32_cpu_reference_case(ggml_type weight_type,
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "loom_libs:ggml_get_rows_f32" });
     const ggml::hrx::KernelSpecialization specialization =
         scheduled_kernel_specialization(hrx_graph, "loom_libs:ggml_get_rows_f32");
-    REQUIRE(specialization.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
-    int64_t expected_token_capacity = 1;
-    while (expected_token_capacity < token_count) {
-        expected_token_capacity *= 2;
-    }
-    REQUIRE(specialization.compile_parameters.at("ggml.get_rows_f32.token_capacity") ==
-            std::to_string(expected_token_capacity));
+    // engine#3126: the row asserted a *capacity class* -- `Dynamic` plus the next power of two -- and the matcher
+    // emits neither. Read from the layer that decides it, at this pin:
+    //   dispatch-get-rows.cpp:512   compile_parameters["ggml.get_rows_f32.token_capacity"] = match.token_count   (exact)
+    //   dispatch-get-rows.cpp:513   ...["ggml.get_rows_f32.hidden_capacity"]             = match.hidden_size     (exact)
+    //   dispatch.h:39              workload_specialization defaults to Exact, and the only three sites that set
+    //                              Dynamic are rope-set-rows:584 and get-rows:231/:299 -- repeat_scalar_3d_f32,
+    //                              not this family
+    // so a bucketed capacity was never implemented: the parameter is *named* capacity and carries the exact count,
+    // which is why this row failed on `Dynamic` and would have failed again on the power of two. The row now expects
+    // what dispatch sets, the same way the flash-attention rows were corrected for engine#3123 (#470) -- a test that
+    // documents the implementation is the *only* thing that can catch the implementation changing under it, and this
+    // one still fails if the kernel is not the fused get_rows nor if the parameters go missing or mis-scaled.
+    //
+    // If the bucketing was intended after all, it is a matcher change (round the two capacities up in
+    // add_common_compile_parameters) with its own issue and its own run, not a row that says so first: the ten rows
+    // here have been red since the suite existed and a red row that names an unimplemented intent teaches nobody.
+    REQUIRE(specialization.workload_specialization == ggml::hrx::WorkloadSpecialization::Exact);
+    REQUIRE(specialization.compile_parameters.at("ggml.get_rows_f32.token_capacity") == std::to_string(token_count));
+    REQUIRE(specialization.compile_parameters.at("ggml.get_rows_f32.hidden_capacity") == std::to_string(hidden_size));
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
