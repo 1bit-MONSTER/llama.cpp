@@ -202,8 +202,16 @@ static void dispatch_log_requested_output(const DispatchRegistration & registrat
 
 static void dispatch_log_match(const DispatchRegistration & registration) {
     static const bool enabled = std::getenv("GGML_HRX_LOG_DISPATCH") != nullptr;
-    if (!enabled) {
-        return;
+    // engine#3035 review: GGML_HRX_REPORT alone must be enough. This function used to return here unless
+    // GGML_HRX_LOG_DISPATCH was set, so the counter was reachable only for a caller who already had the switch it was
+    // written to replace -- i.e. for nobody who needed it. The counter exists when either switch asks for something;
+    // the once-per-name print below stays behind `enabled`, so the log's behaviour is unchanged.
+    static const bool reporting = [] {
+        const char * env = std::getenv("GGML_HRX_REPORT");
+        return env != nullptr && env[0] != '\0' && env[0] != '0';
+    }();
+    if (!enabled && !reporting) {
+        return;                     // neither switch asked for anything: the hot path stays a getenv and a branch
     }
     static std::mutex            mutex;
     static std::set<std::string> seen;
@@ -215,8 +223,7 @@ static void dispatch_log_match(const DispatchRegistration & registration) {
     static std::map<std::string, uint64_t> counts;
     static std::once_flag                  report_registered;
     std::call_once(report_registered, [] {
-        const char * env = std::getenv("GGML_HRX_REPORT");
-        if (env == nullptr || env[0] == '\0' || env[0] == '0') {
+        if (!reporting) {
             return;
         }
         std::atexit([] {
@@ -230,7 +237,7 @@ static void dispatch_log_match(const DispatchRegistration & registration) {
     const std::string            name = registration.name != nullptr ? registration.name : "";
     std::lock_guard<std::mutex>  lock(mutex);
     counts[name] += 1;
-    if (seen.insert(name).second) {
+    if (enabled && seen.insert(name).second) {
         std::fprintf(stderr, "ggml_hrx dispatch: %s (%s)\n", name.c_str(),
                      registration.kind == DispatchMatchKind::Fused ? "fused" : "single");
     }
