@@ -437,7 +437,20 @@ static void require_native_weight_bindings(ggml_cgraph * graph, const std::vecto
     }
 }
 
-static void require_packed_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
+// engine#3120: a packed layout is a property of the Loom route, not of the weight. The add-on's matchers bind the weight
+// as stored -- DispatchBinding::layout defaults to kNativeWeightLayout (ggml-hrx/dispatch/dispatch.h:57) and no Q4_K
+// add-on matcher overrides it -- so a row that lets an `hip:` kernel take the node cannot demand packed, and demanding
+// NATIVE back is the stronger assertion: an add-on route that ever asks for a materialized packed copy it does not read
+// fails here instead of reading the wrong bytes. A row that passes no route keeps the old requirement byte-for-byte.
+static const char * expected_weight_binding_layout(const std::string & kernel_name, const char * addon_route) {
+    if (addon_route != nullptr && kernel_name.compare(0, 4, "hip:") == 0) {
+        return ggml::hrx::kNativeWeightLayout;
+    }
+    return ggml::hrx::kQ4KPackedK256Row64Layout;
+}
+
+static void require_packed_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights,
+                                            const char * addon_route = nullptr) {
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
     REQUIRE(imported.valid());
     ggml::hrx::DispatchScheduler scheduler;
@@ -448,9 +461,14 @@ static void require_packed_weight_bindings(ggml_cgraph * graph, const std::vecto
         REQUIRE(value != nullptr);
         size_t binding_count = 0;
         for (const auto & dispatch : scheduler.plan().dispatches) {
+            // The no-route path resolves no kernel name at all, so a row that does not opt in goes through exactly the
+            // code it went through before this change.
+            const char * expected = addon_route != nullptr ?
+                expected_weight_binding_layout(kernel_name_for_id(dispatch.kernel.kernel_id), addon_route) :
+                ggml::hrx::kQ4KPackedK256Row64Layout;
             for (const auto & binding : dispatch.bindings) {
                 if (binding.value == value->id) {
-                    REQUIRE(binding.layout == ggml::hrx::kQ4KPackedK256Row64Layout);
+                    REQUIRE(binding.layout == expected);
                     ++binding_count;
                 }
             }
@@ -816,6 +834,25 @@ static void run_route_outcome_checks() {
         REQUIRE(outcome.kind == RouteKind::FallThrough);
         REQUIRE(!outcome.expectation_also_scheduled);
     }
+}
+
+// engine#3120: the arm for the layout half of the same decision. Host case (no device): which layout a weight binding must
+// carry, by which kernel serves the node and whether the row opted into the add-on route at all.
+static void run_weight_binding_layout_checks() {
+    const std::string loom = "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot";
+    const std::string hip  = "hip:k_61d118a92b4c";   // HRX_ID_kqt_swiglu_q4k_q4k, the add-on kernel those rows accept
+
+    // The arm would be vacuous if the two layouts were the same string, so it says they are not.
+    REQUIRE(std::string(ggml::hrx::kNativeWeightLayout) != std::string(ggml::hrx::kQ4KPackedK256Row64Layout));
+
+    // unchanged: a Loom kernel must still be fed the packed rows, with or without an opt-in
+    REQUIRE(std::string(expected_weight_binding_layout(loom, nullptr)) == ggml::hrx::kQ4KPackedK256Row64Layout);
+    REQUIRE(std::string(expected_weight_binding_layout(loom, "kquant_tokens_q8")) ==
+            ggml::hrx::kQ4KPackedK256Row64Layout);
+    // no opt-in: an add-on kernel is still held to the packed requirement (behaviour before this change)
+    REQUIRE(std::string(expected_weight_binding_layout(hip, nullptr)) == ggml::hrx::kQ4KPackedK256Row64Layout);
+    // the fix: an opted-in add-on route binds the weight as stored, and that is asserted, not skipped
+    REQUIRE(std::string(expected_weight_binding_layout(hip, "kquant_tokens_q8")) == ggml::hrx::kNativeWeightLayout);
 }
 
 static void run_alternate_value_alias_lookup_checks() {
@@ -6878,7 +6915,7 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
         require_native_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
     }
     if (import_weights) {
-        require_packed_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
+        require_packed_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight }, addon_route);
     }
 
     const std::vector<float>   input(static_cast<size_t>(input_size * token_count), 0.00390625f);
@@ -9163,6 +9200,7 @@ using test_runner::Suite;
 
 static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.route_outcome", [] { run_route_outcome_checks(); });   // engine#3120: the route decision
+    suite.host_case("support.weight_binding_layout", [] { run_weight_binding_layout_checks(); });
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
     suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });
