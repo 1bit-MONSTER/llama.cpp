@@ -202,14 +202,12 @@ static void dispatch_log_requested_output(const DispatchRegistration & registrat
 
 static void dispatch_log_match(const DispatchRegistration & registration) {
     static const bool enabled = std::getenv("GGML_HRX_LOG_DISPATCH") != nullptr;
-    // engine#3035 review: GGML_HRX_REPORT alone must be enough. This function used to return here unless
-    // GGML_HRX_LOG_DISPATCH was set, so the counter was reachable only for a caller who already had the switch it was
-    // written to replace -- i.e. for nobody who needed it. The counter exists when either switch asks for something;
-    // the once-per-name print below stays behind `enabled`, so the log's behaviour is unchanged.
-    static const bool reporting = [] {
-        const char * env = std::getenv("GGML_HRX_REPORT");
-        return env != nullptr && env[0] != '\0' && env[0] != '0';
-    }();
+    // engine#3035 review: GGML_HRX_REPORT alone must be enough. This used to return here unless GGML_HRX_LOG_DISPATCH
+    // was set, so the counter was reachable only by a caller who already had the switch the counter was written to
+    // replace. And it must parse the variable the way the rest of the tree parses it: status.h's detail_reported() owns
+    // that answer (0/false/no/off are OFF), so asking it rather than re-implementing it is what stops
+    // `GGML_HRX_REPORT=off` from silencing placement detail while switching this histogram on.
+    static const bool reporting = ggml::hrx::Status::detail_reported();
     if (!enabled && !reporting) {
         return;                     // neither switch asked for anything: the hot path stays a getenv and a branch
     }
