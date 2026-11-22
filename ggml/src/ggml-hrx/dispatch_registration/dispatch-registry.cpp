@@ -87,6 +87,40 @@ static bool dispatch_disabled(const DispatchRegistration & registration) {
     return false;
 }
 
+// DIAGNOSTIC (this lane, not part of any PR): one line per *node* naming the matcher that won and the weight it
+// binds, so a per-layer asymmetry is visible. GGML_HRX_LOG_DISPATCH cannot answer that: it dedups by matcher name and
+// its `seen` set collapses the 18 identical-shaped ffn_down nodes into one line. The weight's ggml tensor name is the
+// only per-layer identity the graph carries (Value::tensor), and the command-program dump cannot show it either: dumps
+// are deduped by shape hash, so layers with the same shape collapse there too.
+static void dispatch_trace_node(const DispatchMatchContext & context, const DispatchRegistration & registration) {
+    static const bool enabled = std::getenv("GGML_HRX_DISPATCH_TRACE") != nullptr;
+    if (!enabled) {
+        return;
+    }
+    const GraphNode * node = context.root_node;
+    std::fprintf(stderr, "hrx dispatch trace: op=%s winner=%s", ggml_op_name(node->op),
+                 registration.name != nullptr ? registration.name : "");
+    for (size_t k = 0; k < node->inputs.size(); ++k) {
+        const Value * value = context.graph.values().find(node->inputs[k]);
+        std::fprintf(stderr, " in%zu=%s:%s[%lld,%lld]", k,
+                     value != nullptr && value->tensor != nullptr ? value->tensor->name : "?",
+                     value != nullptr ? ggml_type_name(value->type) : "?",
+                     value != nullptr ? (long long) value->ne[0] : -1,
+                     value != nullptr ? (long long) value->ne[1] : -1);
+    }
+    const Value * out = context.graph.values().find(node->output);
+    // cons= is the condition the token1_final_projection_q8 matcher tests (an output nothing consumes), so print it:
+    // with it the trace says *why* a node with siblings of the same shape took a different path.
+    const size_t consumers = context.graph.has_index() ? context.graph.index().consumers(node->output).size() : 0;
+    std::fprintf(stderr, " out=%s:%s[%lld,%lld] tok=%lld cons=%zu weight_value=%d\n",
+                 out != nullptr && out->tensor != nullptr ? out->tensor->name : "?",
+                 out != nullptr ? ggml_type_name(out->type) : "?",
+                 out != nullptr ? (long long) out->ne[0] : -1, out != nullptr ? (long long) out->ne[1] : -1,
+                 node->inputs.size() > 1 ? (long long) (context.graph.values().find(node->inputs[1]) != nullptr ?
+                     context.graph.values().find(node->inputs[1])->ne[1] : -1) : -1,
+                 consumers, node->inputs.empty() ? -1 : node->inputs[0].value);
+}
+
 static void dispatch_log_match(const DispatchRegistration & registration) {
     static const bool enabled = std::getenv("GGML_HRX_LOG_DISPATCH") != nullptr;
     if (!enabled) {
@@ -126,6 +160,7 @@ bool DispatchRegistry::match(const DispatchMatchContext & context,
         if (registration.matcher != nullptr && registration.matcher(context, candidate) &&
             fusion_order_accepts(context, candidate, registration.name)) {
             dispatch_log_match(registration);
+            dispatch_trace_node(context, registration);
             if (diagnostics != nullptr) {
                 diagnostics->attempts.push_back({
                     registration.name != nullptr ? registration.name : "",

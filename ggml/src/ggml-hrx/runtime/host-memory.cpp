@@ -4,6 +4,7 @@
 #include "ggml-quants.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
+#include "runtime/alloc-trace.h"  // DIAGNOSTIC only, see the header
 #include "runtime/host-memory-ternary.h"
 
 #include <algorithm>
@@ -1230,6 +1231,7 @@ static Status allocate_device_buffer(hrx_device_t device, size_t size, hrx_buffe
 }  // namespace
 
 Status allocate_mapped_host_staging_buffer(hrx_device_t device, size_t size, hrx_buffer_t & buffer, void *& host_data) {
+    alloc_trace("mapped-host-staging", size);  // DIAGNOSTIC
     Status status;
     buffer    = nullptr;
     host_data = nullptr;
@@ -1738,6 +1740,7 @@ bool HostWeightCache::arena_reserve(hrx_device_t device,
         }
     }
     hrx_buffer_t grown = nullptr;
+    alloc_trace("arena-grow", target);  // DIAGNOSTIC
     const Status status = allocate_device_buffer(device, target, grown);
     if (!status.success()) {
         GGML_LOG_ERROR("%s: growing the host weight arena to %.1f MiB failed (limit %.1f MiB, budget %.1f MiB, "
@@ -1979,6 +1982,9 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
             return result;
         }
     } else {
+        alloc_trace_detail("weight-materialised", materialized_length, source.layout.c_str(),
+                           static_cast<int>(source.source_type), static_cast<long long>(source.input_size),
+                           static_cast<long long>(source.output_size), source.length);  // DIAGNOSTIC
         result.status = allocate_device_buffer(device, materialized_length, entry->buffer);
         if (!result.status.success()) {
             return result;
@@ -2082,6 +2088,7 @@ void HostStagingBuffer::clear() {
 }
 
 Status allocate_host_staging_buffer(hrx_device_t device, size_t size, HostStagingBuffer & staging) {
+    alloc_trace("device-staging", size);  // DIAGNOSTIC
     staging.clear();
     Status status = allocate_device_buffer(device, size, staging.buffer);
     if (status.success()) {

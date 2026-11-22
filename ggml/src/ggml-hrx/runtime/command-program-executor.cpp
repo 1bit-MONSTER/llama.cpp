@@ -1,4 +1,5 @@
 #include "command-program-executor.h"
+#include "runtime/alloc-trace.h"  // DIAGNOSTIC only
 
 #include "dispatch/command-program-diagnostics.h"
 #include "dispatch/command-program-resolver.h"
@@ -863,6 +864,7 @@ static Status prepare_program_constant_buffers(const CommandProgramExecutionCont
             continue;
         }
         hrx_buffer_t buffer = nullptr;
+        alloc_trace(image.name.c_str(), image.data.size());  // DIAGNOSTIC
         if (ErrorResult error = take_status(hrx_allocator_allocate_buffer(hrx_device_allocator(context.device), params,
                                                                           image.data.size(), &buffer))) {
             status.log("allocate prepared constant %s: %s", image.name.c_str(), error->c_str());

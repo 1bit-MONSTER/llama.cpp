@@ -1,5 +1,6 @@
 #include "dispatch_registration/common/moe-placement-guard.h"
 #include "ggml-hrx.h"
+#include "runtime/alloc-trace.h"  // DIAGNOSTIC only
 #include "hrx-1bit-safety.h"
 #include "ggml-hrx-dmabuf.h"
 
@@ -404,6 +405,7 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         return nullptr;
     }
     hrx_buffer_t allocation = nullptr;
+    ggml::hrx::alloc_trace(host_visible ? "ggml-host-buffer" : "ggml-device-buffer", size);  // DIAGNOSTIC
     if (size > 0 && !HRX_CHECK(hrx_allocator_allocate_buffer(hrx_device_allocator(type_context->device->device), params,
                                                              size, &allocation))) {
         ggml::hrx::onebit::pool_release(size);

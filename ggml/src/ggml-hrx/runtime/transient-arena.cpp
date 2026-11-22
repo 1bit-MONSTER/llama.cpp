@@ -1,6 +1,7 @@
 #include "transient-arena.h"
 
 #include "hrx-interop-utils.h"
+#include "runtime/alloc-trace.h"  // DIAGNOSTIC only
 #include "hrx_runtime.h"
 
 #include <cstdlib>
@@ -101,6 +102,7 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         0,
     };
     hrx_buffer_t allocation = nullptr;
+    alloc_trace("transient-arena", required_size);  // DIAGNOSTIC
     if (ErrorResult error = take_status(
             hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, required_size, &allocation))) {
         status.log("allocate transient arena: %s", error->c_str());

@@ -180,6 +180,17 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
         plan_.status.log("HRX graph is missing graph index");
         return false;
     }
+    // DIAGNOSTIC (this lane, not in any PR): a plan boundary marker, because the per-node dispatch trace has no other
+    // way to say which graph a line belongs to and a matcher trace without the boundary cannot be grouped.
+    if (std::getenv("GGML_HRX_DISPATCH_TRACE") != nullptr) {
+        const GraphNode * last = nodes.empty() ? nullptr : &nodes.back();
+        std::fprintf(stderr, "hrx dispatch trace: --- plan nodes=%zu last_node=%s out=%s\n", nodes.size(),
+                     last != nullptr ? ggml_op_name(last->op) : "?", 
+                     last != nullptr ? ([&]() -> const char * {
+                         const Value * v = graph.values().find(last->output);
+                         return v != nullptr && v->tensor != nullptr ? v->tensor->name : "?";
+                     })() : "?");
+    }
     std::vector<bool>         covered_nodes(nodes.size(), false);
     Status                    pending_diagnostics;
     const GraphTraversalOrder traversal = GraphTraversalOrder::build(graph);
