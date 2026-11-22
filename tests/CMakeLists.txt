@@ -449,14 +449,16 @@ add_executable(test-testing-suite-skip test-testing-suite-skip.cpp)
 add_test(NAME test-testing-suite-skip COMMAND test-testing-suite-skip)
 
 if (TARGET ggml-hrx)
-    # engine#2774: the recorded-stale expectation table in hrx-ops-test.cpp must stay honest, and its own rot detector
-    # can only fire on a device run that reaches the case. This answers it from the source: every recorded kernel is
-    # absent from every GGML_HRX_KERNEL_REF and present in a corpus manifest. No GPU, no build, ~1 s.
+    # engine#2774: every "<corpus>:<kernel>" literal hrx-ops-test.cpp expects must be one a GGML_HRX_KERNEL_REF
+    # registers, and the old suppression table must not come back. From the source: no GPU, no build, ~1 s.
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if (Python3_Interpreter_FOUND)
         add_test(NAME test-hrx-stale-expectations
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-hrx/tools/check_stale_expectations.py
                          --check --root ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(NAME test-hrx-stale-expectations-self
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-hrx/tools/check_stale_expectations.py
+                         --self-test)
     endif()
     # the program cache's byte budget and LRU order: pure policy, no device and no HRX link
     # Which rotations the fused registrations accept, i.e. what the claim may assert (engine #1467).
