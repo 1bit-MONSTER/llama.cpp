@@ -415,20 +415,21 @@ static std::vector<std::string> scheduled_kernel_sequence(ggml_cgraph * graph) {
     return names;
 }
 
-static void require_native_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
+// Each weight is bound at least once, and every binding uses `layout`.
+static void require_weight_binding_layout(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights,
+                                          const char * layout) {
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
     REQUIRE(imported.valid());
     ggml::hrx::DispatchScheduler scheduler;
     REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
     for (ggml_tensor * weight : weights) {
-        REQUIRE(!ggml_backend_hrx_weight_has_repackable_source(weight));
         const ggml::hrx::Value * value = imported.graph.values().find_tensor(weight);
         REQUIRE(value != nullptr);
         size_t binding_count = 0;
         for (const auto & dispatch : scheduler.plan().dispatches) {
             for (const auto & binding : dispatch.bindings) {
                 if (binding.value == value->id) {
-                    REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
+                    REQUIRE(binding.layout == layout);
                     ++binding_count;
                 }
             }
@@ -437,26 +438,26 @@ static void require_native_weight_bindings(ggml_cgraph * graph, const std::vecto
     }
 }
 
+static void require_native_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
+    for (ggml_tensor * weight : weights) {
+        REQUIRE(!ggml_backend_hrx_weight_has_repackable_source(weight));
+    }
+    require_weight_binding_layout(graph, weights, ggml::hrx::kNativeWeightLayout);
+}
+
 static void require_packed_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
-    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
-    REQUIRE(imported.valid());
-    ggml::hrx::DispatchScheduler scheduler;
-    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
     for (ggml_tensor * weight : weights) {
         REQUIRE(ggml_backend_hrx_weight_has_repackable_source(weight));
-        const ggml::hrx::Value * value = imported.graph.values().find_tensor(weight);
-        REQUIRE(value != nullptr);
-        size_t binding_count = 0;
-        for (const auto & dispatch : scheduler.plan().dispatches) {
-            for (const auto & binding : dispatch.bindings) {
-                if (binding.value == value->id) {
-                    REQUIRE(binding.layout == ggml::hrx::kQ4KPackedK256Row64Layout);
-                    ++binding_count;
-                }
-            }
-        }
-        REQUIRE(binding_count > 0);
     }
+    require_weight_binding_layout(graph, weights, ggml::hrx::kQ4KPackedK256Row64Layout);
+}
+
+// engine#3120: imported weight on a route that reads it as stored (HIP add-on, engine#444 kquant family).
+static void require_stored_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
+    for (ggml_tensor * weight : weights) {
+        REQUIRE(ggml_backend_hrx_weight_has_repackable_source(weight));
+    }
+    require_weight_binding_layout(graph, weights, ggml::hrx::kNativeWeightLayout);
 }
 
 static ggml::hrx::KernelSpecialization scheduled_kernel_specialization(ggml_cgraph * graph,
@@ -6634,11 +6635,17 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     const bool packed_iq4_xs_input = iq4_xs_weight && prefill_tokens;
     const bool packed_input = packed_q4_input || packed_iq4_xs_input || square_output;
     const bool normalized_packed_input = normalize_input && packed_input;
+    // engine#3120: after an add-on acceptance the q8 producer must be followed by the kernel that served the node, not
+    // by the Loom kernel the row names. `..._q8_1_x4_publish` is a corpus export no matcher selects (engine#2774); the
+    // q8-publishing rmsnorm is `ggml_rmsnorm_binary_q8_1_x4`.
+    static constexpr const char * kQ8RmsNormKernel = "loom_libs:ggml_rmsnorm_binary_q8_1_x4";
     if (normalized_packed_input) {
-        require_kernel_subsequence(sequence, { "loom_libs:ggml_rmsnorm_binary_q8_1_x4_publish", expected_kernel });
+        const RouteOutcome outcome = route_outcome(sequence, { expected_kernel }, addon_route, nullptr);
+        const std::string  served  = outcome.kind == RouteKind::FallThrough ? std::string(expected_kernel) : outcome.served_by;
+        require_kernel_subsequence(sequence, { kQ8RmsNormKernel, served });
         REQUIRE(std::find(sequence.begin(), sequence.end(), "qwen3_moe:ggml_quantize_q8_1_x4_f32") == sequence.end());
     } else if (normalize_input) {
-        REQUIRE(std::find(sequence.begin(), sequence.end(), "loom_libs:ggml_rmsnorm_binary_q8_1_x4_publish") == sequence.end());
+        REQUIRE(std::find(sequence.begin(), sequence.end(), kQ8RmsNormKernel) == sequence.end());
     }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
@@ -6944,9 +6951,10 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
         // on 2026-11-21 with `:453 requirement failed: binding.layout == kQ4KPackedK256Row64Layout`, after the acceptance had
         // already been granted. Pin the layout to the route that ran, and leave the value comparison below to decide whether
         // the arithmetic is right -- which is the part that should never be relaxed.
-        if (route_outcome(scheduled_kernel_sequence(hrx_graph), { expected_kernel }, addon_route, loom_route).kind ==
-            RouteKind::AddOnServed) {
-            require_native_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
+        // The add-on and the engine#444 kquant route both read an imported weight as stored.
+        if (route_outcome(scheduled_kernel_sequence(hrx_graph), { expected_kernel }, addon_route, loom_route).kind !=
+            RouteKind::FallThrough) {
+            require_stored_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
         } else {
             require_packed_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
         }
@@ -9881,9 +9889,10 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
                                             2048, false, false, GGML_TYPE_COUNT, true);
     });
     suite.device_case("uploaded_native_gated_q4", [] {
+        // engine#3120: served by the add-on's fused q4_k/q4_k swiglu (kquant_tokens_q8), as the lowtoken rows are.
         run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
                                                    "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128,
-                                                   GGML_GLU_OP_SWIGLU, 2048, true);
+                                                   GGML_GLU_OP_SWIGLU, 2048, true, false, "kquant_tokens_q8");
     });
     suite.device_case("mixed_symmetric_source_eligibility", [] { run_mixed_symmetric_source_eligibility_case(); });
     for (int64_t tokens : { 1, 2, 8 }) {
