@@ -356,6 +356,25 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_exps     = nullptr;
     struct ggml_tensor * ffn_up_exps       = nullptr;
     struct ggml_tensor * ffn_gate_up_exps  = nullptr;
+
+    // inkling2
+    struct ggml_tensor * attn_rel         = nullptr;
+    struct ggml_tensor * attn_rel_bias    = nullptr;
+    struct ggml_tensor * attn_q_clip      = nullptr;
+    struct ggml_tensor * attn_rel_clip    = nullptr;
+    struct ggml_tensor * attn_sink_proj   = nullptr;
+    struct ggml_tensor * attn_q_inp_norm  = nullptr;
+    struct ggml_tensor * attn_k_inp_norm  = nullptr;
+    struct ggml_tensor * attn_v_inp_norm  = nullptr;
+    struct ggml_tensor * attn_k_conv      = nullptr;
+    struct ggml_tensor * attn_v_conv      = nullptr;
+    struct ggml_tensor * attn_k_conv_proj = nullptr;
+    struct ggml_tensor * attn_v_conv_proj = nullptr;
+    struct ggml_tensor * attn_post_conv   = nullptr;
+    struct ggml_tensor * attn_res_query   = nullptr;
+    struct ggml_tensor * ffn_post_conv    = nullptr;
+    struct ggml_tensor * ffn_res_query    = nullptr;
+
     struct ggml_tensor * ffn_gate_inp_b    = nullptr;
     struct ggml_tensor * ffn_gate_exps_b   = nullptr;
     struct ggml_tensor * ffn_down_exps_b   = nullptr;
@@ -755,6 +774,7 @@ struct llama_model {
     struct ggml_tensor * tok_norm_b = nullptr;
 
     struct ggml_tensor * output_norm     = nullptr;
+    struct ggml_tensor * output_res_query = nullptr; // inkling2: query of the final attention-residual mix
     struct ggml_tensor * output_res_score = nullptr; // kimi-k3: final cross-layer residual mix
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
@@ -940,6 +960,8 @@ struct llama_model {
     // model must define these
     virtual void load_arch_hparams(llama_model_loader & ml) = 0;
     virtual void load_arch_tensors(llama_model_loader & ml) = 0;
+    // after the generic per-tensor scale pass, e.g. to alias layers that share weights
+    virtual void post_arch_tensors(llama_model_loader &) {}
     virtual std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const = 0;
 
 protected:
