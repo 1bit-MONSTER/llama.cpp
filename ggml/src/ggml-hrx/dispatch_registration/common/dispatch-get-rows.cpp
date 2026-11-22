@@ -581,11 +581,36 @@ static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * no
     return match;
 }
 
+// engine#3126: `token_capacity` is a WORKGROUP dimension, not just a bound -- kernel-corpus
+// `kernels/loom-libs/ops/rows/get_rows_f32.loom:22` launches `workgroups(%packet_tiles, %token_capacity, %c1)` while the
+// real count arrives at runtime (`launch(%token_count ...)`, `range(%token_count, 1, 2048)` at :24). So pinning it to the
+// exact token count compiles one program per token count and hands the launch an exact grid, which is the defect the rope
+// matcher's own comment names ("pinning the exact span compiles one program per token count"). A capacity CLASS is
+// correct because the body can never read past the runtime count; what it costs is empty workgroups, and that is a
+// measurement, not this comment's claim.
+//
+// The ceiling is the config decl's own range (`get_rows_f32.loom:8`: `range(1, 2048)`), so above it the exact count is
+// kept -- a class larger than the decl would be refused at compile time, and no shape needs one.
+static int64_t get_rows_token_capacity_class(int64_t token_count) {
+    int64_t capacity = 1;
+    while (capacity < token_count) {
+        capacity *= 2;
+    }
+    return capacity <= 2048 ? capacity : token_count;
+}
+
 static Dispatch make_get_rows_dispatch(const GetRowsMatch & match) {
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kGetRowsF32Kernel);
     add_common_integer_parameters(dispatch, match);
     add_common_compile_parameters(dispatch, match);
+    // engine#3126: the class above replaces the exact token count the shared helper records, and the dispatch is Dynamic
+    // for the same reason -- the program serves a workload class rather than one shape. Both halves are what
+    // `hrx-ops-test.cpp`'s get_rows_f32 rows assert (`:6265` specialization, `:6266-6271` next power of two), and what the
+    // sibling get_rows_scalar_3d (`:231`, `:299`) and rope (`dispatch-rope-set-rows.cpp:584`) paths already do.
+    dispatch.kernel.compile_parameters["ggml.get_rows_f32.token_capacity"] =
+        to_config_value(get_rows_token_capacity_class(match.token_count));
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     add_primary_bindings(dispatch, match);
     return dispatch;
 }
