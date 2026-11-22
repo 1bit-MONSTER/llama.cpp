@@ -415,9 +415,7 @@ static std::vector<std::string> scheduled_kernel_sequence(ggml_cgraph * graph) {
     return names;
 }
 
-// Every binding of each weight in the scheduled plan carries `layout`, and each weight is bound at least once. No
-// precondition on the weight's source: which layout is right is a property of the kernel that serves the node, and the
-// two helpers below add the source precondition that belongs to their own route.
+// Each weight is bound at least once, and every binding uses `layout`.
 static void require_weight_binding_layout(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights,
                                           const char * layout) {
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
@@ -440,7 +438,6 @@ static void require_weight_binding_layout(ggml_cgraph * graph, const std::vector
     }
 }
 
-// An uploaded weight with no repackable source: nothing can be materialized, so every binding reads it as stored.
 static void require_native_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
     for (ggml_tensor * weight : weights) {
         REQUIRE(!ggml_backend_hrx_weight_has_repackable_source(weight));
@@ -448,7 +445,6 @@ static void require_native_weight_bindings(ggml_cgraph * graph, const std::vecto
     require_weight_binding_layout(graph, weights, ggml::hrx::kNativeWeightLayout);
 }
 
-// An imported weight (repackable source present) on the Loom kquant route: the kernel reads the packed K256/row64 copy.
 static void require_packed_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
     for (ggml_tensor * weight : weights) {
         REQUIRE(ggml_backend_hrx_weight_has_repackable_source(weight));
@@ -456,10 +452,7 @@ static void require_packed_weight_bindings(ggml_cgraph * graph, const std::vecto
     require_weight_binding_layout(graph, weights, ggml::hrx::kQ4KPackedK256Row64Layout);
 }
 
-// engine#3120: an imported weight (repackable source present) on a route whose kernel reads the weight as stored -- the
-// HIP add-on (`#2392 add-on reads the weight stored`) and the engine#444 Loom kquant family (`kquant_weight_binding`
-// binds Q4_K/Q6_K native). The source is still repackable; the route simply does not ask for the packed copy, and an
-// add-on or kquant route that DID ask for one it cannot read must fail here.
+// engine#3120: imported weight on a route that reads it as stored (HIP add-on, engine#444 kquant family).
 static void require_stored_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
     for (ggml_tensor * weight : weights) {
         REQUIRE(ggml_backend_hrx_weight_has_repackable_source(weight));
@@ -6642,11 +6635,17 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     const bool packed_iq4_xs_input = iq4_xs_weight && prefill_tokens;
     const bool packed_input = packed_q4_input || packed_iq4_xs_input || square_output;
     const bool normalized_packed_input = normalize_input && packed_input;
+    // engine#3120: after an add-on acceptance the q8 producer must be followed by the kernel that served the node, not
+    // by the Loom kernel the row names. `..._q8_1_x4_publish` is a corpus export no matcher selects (engine#2774); the
+    // q8-publishing rmsnorm is `ggml_rmsnorm_binary_q8_1_x4`.
+    static constexpr const char * kQ8RmsNormKernel = "loom_libs:ggml_rmsnorm_binary_q8_1_x4";
     if (normalized_packed_input) {
-        require_kernel_subsequence(sequence, { "loom_libs:ggml_rmsnorm_binary_q8_1_x4_publish", expected_kernel });
+        const RouteOutcome outcome = route_outcome(sequence, { expected_kernel }, addon_route, nullptr);
+        const std::string  served  = outcome.kind == RouteKind::FallThrough ? std::string(expected_kernel) : outcome.served_by;
+        require_kernel_subsequence(sequence, { kQ8RmsNormKernel, served });
         REQUIRE(std::find(sequence.begin(), sequence.end(), "qwen3_moe:ggml_quantize_q8_1_x4_f32") == sequence.end());
     } else if (normalize_input) {
-        REQUIRE(std::find(sequence.begin(), sequence.end(), "loom_libs:ggml_rmsnorm_binary_q8_1_x4_publish") == sequence.end());
+        REQUIRE(std::find(sequence.begin(), sequence.end(), kQ8RmsNormKernel) == sequence.end());
     }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
@@ -6952,12 +6951,7 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
         // on 2026-11-21 with `:453 requirement failed: binding.layout == kQ4KPackedK256Row64Layout`, after the acceptance had
         // already been granted. Pin the layout to the route that ran, and leave the value comparison below to decide whether
         // the arithmetic is right -- which is the part that should never be relaxed.
-        //
-        // engine#3120 (cl-hrxtest): #475 sent the add-on route to `require_native_weight_bindings`, whose precondition is
-        // "no repackable source" -- false by construction for an IMPORTED weight, so the 2026-11-21 device run moved five
-        // rows from `:453` to `:424` instead of to their value check. The sixth was the engine#444 Loom kquant route
-        // (`loom_route`), which also binds the weight as stored and still got the packed assertion. Both non-packed
-        // routes now get the assertion that is true for them: repackable source present, binding native.
+        // The add-on and the engine#444 kquant route both read an imported weight as stored.
         if (route_outcome(scheduled_kernel_sequence(hrx_graph), { expected_kernel }, addon_route, loom_route).kind !=
             RouteKind::FallThrough) {
             require_stored_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
@@ -9895,9 +9889,10 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
                                             2048, false, false, GGML_TYPE_COUNT, true);
     });
     suite.device_case("uploaded_native_gated_q4", [] {
+        // engine#3120: served by the add-on's fused q4_k/q4_k swiglu (kquant_tokens_q8), as the lowtoken rows are.
         run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
                                                    "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128,
-                                                   GGML_GLU_OP_SWIGLU, 2048, true);
+                                                   GGML_GLU_OP_SWIGLU, 2048, true, false, "kquant_tokens_q8");
     });
     suite.device_case("mixed_symmetric_source_eligibility", [] { run_mixed_symmetric_source_eligibility_case(); });
     for (int64_t tokens : { 1, 2, 8 }) {
