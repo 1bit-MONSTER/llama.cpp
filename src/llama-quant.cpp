@@ -411,6 +411,15 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find("a.rvq.codebook")  == std::string::npos;
     quantize &= name.find("mm.a.code_embd")  == std::string::npos;
 
+    // inkling2: short conv kernels, clip scales, residual mix queries, the relative bias projection and the loop tensors
+    if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP) {
+        quantize &= name.find(".loop_")               == std::string::npos;
+        quantize &= name.find("_conv.weight")         == std::string::npos;
+        quantize &= name.find("_clip.weight")         == std::string::npos;
+        quantize &= name.find("_res_query.weight")    == std::string::npos;
+        quantize &= name.find("attn_rel_bias.weight") == std::string::npos;
+    }
+
     return quantize;
 }
 
