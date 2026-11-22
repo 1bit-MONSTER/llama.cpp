@@ -415,20 +415,23 @@ static std::vector<std::string> scheduled_kernel_sequence(ggml_cgraph * graph) {
     return names;
 }
 
-static void require_native_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
+// Every binding of each weight in the scheduled plan carries `layout`, and each weight is bound at least once. No
+// precondition on the weight's source: which layout is right is a property of the kernel that serves the node, and the
+// two helpers below add the source precondition that belongs to their own route.
+static void require_weight_binding_layout(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights,
+                                          const char * layout) {
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
     REQUIRE(imported.valid());
     ggml::hrx::DispatchScheduler scheduler;
     REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
     for (ggml_tensor * weight : weights) {
-        REQUIRE(!ggml_backend_hrx_weight_has_repackable_source(weight));
         const ggml::hrx::Value * value = imported.graph.values().find_tensor(weight);
         REQUIRE(value != nullptr);
         size_t binding_count = 0;
         for (const auto & dispatch : scheduler.plan().dispatches) {
             for (const auto & binding : dispatch.bindings) {
                 if (binding.value == value->id) {
-                    REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
+                    REQUIRE(binding.layout == layout);
                     ++binding_count;
                 }
             }
@@ -437,26 +440,31 @@ static void require_native_weight_bindings(ggml_cgraph * graph, const std::vecto
     }
 }
 
+// An uploaded weight with no repackable source: nothing can be materialized, so every binding reads it as stored.
+static void require_native_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
+    for (ggml_tensor * weight : weights) {
+        REQUIRE(!ggml_backend_hrx_weight_has_repackable_source(weight));
+    }
+    require_weight_binding_layout(graph, weights, ggml::hrx::kNativeWeightLayout);
+}
+
+// An imported weight (repackable source present) on the Loom kquant route: the kernel reads the packed K256/row64 copy.
 static void require_packed_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
-    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
-    REQUIRE(imported.valid());
-    ggml::hrx::DispatchScheduler scheduler;
-    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
     for (ggml_tensor * weight : weights) {
         REQUIRE(ggml_backend_hrx_weight_has_repackable_source(weight));
-        const ggml::hrx::Value * value = imported.graph.values().find_tensor(weight);
-        REQUIRE(value != nullptr);
-        size_t binding_count = 0;
-        for (const auto & dispatch : scheduler.plan().dispatches) {
-            for (const auto & binding : dispatch.bindings) {
-                if (binding.value == value->id) {
-                    REQUIRE(binding.layout == ggml::hrx::kQ4KPackedK256Row64Layout);
-                    ++binding_count;
-                }
-            }
-        }
-        REQUIRE(binding_count > 0);
     }
+    require_weight_binding_layout(graph, weights, ggml::hrx::kQ4KPackedK256Row64Layout);
+}
+
+// engine#3120: an imported weight (repackable source present) on a route whose kernel reads the weight as stored -- the
+// HIP add-on (`#2392 add-on reads the weight stored`) and the engine#444 Loom kquant family (`kquant_weight_binding`
+// binds Q4_K/Q6_K native). The source is still repackable; the route simply does not ask for the packed copy, and an
+// add-on or kquant route that DID ask for one it cannot read must fail here.
+static void require_stored_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
+    for (ggml_tensor * weight : weights) {
+        REQUIRE(ggml_backend_hrx_weight_has_repackable_source(weight));
+    }
+    require_weight_binding_layout(graph, weights, ggml::hrx::kNativeWeightLayout);
 }
 
 static ggml::hrx::KernelSpecialization scheduled_kernel_specialization(ggml_cgraph * graph,
@@ -6944,9 +6952,15 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
         // on 2026-11-21 with `:453 requirement failed: binding.layout == kQ4KPackedK256Row64Layout`, after the acceptance had
         // already been granted. Pin the layout to the route that ran, and leave the value comparison below to decide whether
         // the arithmetic is right -- which is the part that should never be relaxed.
-        if (route_outcome(scheduled_kernel_sequence(hrx_graph), { expected_kernel }, addon_route, loom_route).kind ==
-            RouteKind::AddOnServed) {
-            require_native_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
+        //
+        // engine#3120 (cl-hrxtest): #475 sent the add-on route to `require_native_weight_bindings`, whose precondition is
+        // "no repackable source" -- false by construction for an IMPORTED weight, so the 2026-11-21 device run moved five
+        // rows from `:453` to `:424` instead of to their value check. The sixth was the engine#444 Loom kquant route
+        // (`loom_route`), which also binds the weight as stored and still got the packed assertion. Both non-packed
+        // routes now get the assertion that is true for them: repackable source present, binding native.
+        if (route_outcome(scheduled_kernel_sequence(hrx_graph), { expected_kernel }, addon_route, loom_route).kind !=
+            RouteKind::FallThrough) {
+            require_stored_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
         } else {
             require_packed_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
         }
