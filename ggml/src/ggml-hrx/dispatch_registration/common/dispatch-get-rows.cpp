@@ -508,8 +508,21 @@ static bool match_get_rows_rmsnorm_binary_dispatch(const DispatchMatchContext & 
 }
 
 
+// engine#3126: token_capacity is a CAPACITY CLASS, not the exact count. The kernel's launch grid is
+// `workgroups(packet_tiles, %token_capacity, 1)` and every write is guarded by `%v < token_count`, so a class at or above
+// the count is safe - and an exact count means a fresh compile per prompt length, since the executable key includes the
+// compile parameters (runtime/kernel-executable-cache.cpp). hidden_capacity stays exact: it is constant per tensor.
+static int64_t token_capacity_class(int64_t token_count) {
+    int64_t capacity = 1;
+    while (capacity < token_count) {
+        capacity *= 2;
+    }
+    return capacity;
+}
+
 static void add_common_compile_parameters(Dispatch & dispatch, const GetRowsMatch & match) {
-    dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.token_capacity", to_config_value(match.token_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.token_capacity",
+                                               to_config_value(token_capacity_class(match.token_count)));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.hidden_capacity", to_config_value(match.hidden_size));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_f32.weight_format",
                                                to_config_value(match.weight_format_value));
@@ -584,6 +597,10 @@ static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * no
 static Dispatch make_get_rows_dispatch(const GetRowsMatch & match) {
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kGetRowsF32Kernel);
+    // engine#3126: the shape is dynamic within the capacity class. This field is reporting metadata (dispatch.h:39,
+    // read only by compile-trace.cpp for the trace string), so it changes no decision - but the rows assert it and the
+    // siblings (get-rows:231, :299) already set it, so the plain gather was the odd one out.
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     add_common_integer_parameters(dispatch, match);
     add_common_compile_parameters(dispatch, match);
     add_primary_bindings(dispatch, match);
