@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cstring>
 
 // bad metadata must be catchable: GGML_ASSERT aborts the whole process
 static void qwen4exp_require_nonzero(const llama_model_loader & ml, llm_kv kid, uint32_t value) {
@@ -748,6 +749,10 @@ public:
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
         mctx->set_input_kpool(pool_cells, pool_idxs, pool_mask, tail_idxs, nullptr, new_pool_idxs, new_pool_rep,
                               ubatch, new_pool_pos);
+        if (keep) {
+            GGML_ASSERT(ggml_backend_buffer_is_host(keep->buffer));
+            memset(keep->data, 0, ggml_nbytes(keep));
+        }
     }
 
     bool can_reuse(const llm_graph_params & params) override {
@@ -780,6 +785,7 @@ public:
     ggml_tensor * new_pool_flat = nullptr; // I32 [kpool*n_new]    view of new_pool_idxs, shared by the QSA layers
     ggml_tensor * new_pool_rep  = nullptr; // I64 [n_new]          cell to write each new pooled key into
     ggml_tensor * new_pool_pos  = nullptr; // I32 [4*n_new]        M-RoPE position of each new block's first member
+    ggml_tensor * keep          = nullptr; // F16/F32 [n_kv]       zeros, the fused TOP_K_MASK base, shared by the QSA layers
 
     const llama_memory_hybrid_idx_context * mctx;
     const uint32_t kpool;
@@ -827,6 +833,15 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
     ggml_set_input(inp->new_pool_rep);
     inp->new_pool_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4*inp->n_new);
     ggml_set_input(inp->new_pool_pos);
+
+    // the fused selection mask's all-zero base row, one host input for every QSA layer: a per-layer ggml_fill of it
+    // is a node, and a backend without an f16 FILL runs that node on the CPU and splits the graph at every QSA layer
+    // (engine#679: 12 CPU splits per Flash-Next decode step, ~0.8 ms of host round trip each)
+    if (cparams.fused_top_k_mask) {
+        inp->keep = ggml_new_tensor_1d(ctx0, cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, inp->n_kv);
+        ggml_set_input(inp->keep);
+        ggml_build_forward_expand(gf, inp->keep);
+    }
 
     return (llm_graph_input_kpool *) res->add_input(std::move(inp));
 }
@@ -915,7 +930,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
     if (cparams.fused_top_k_mask) {
         GGML_ASSERT(kpool*n_top_pool + inp_kpool->tail_idxs->ne[0] == inp_kpool->n_sel);
 
-        ggml_tensor * keep = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, type_mask, inp_kpool->n_kv), 0.0f);
+        ggml_tensor * keep = inp_kpool->keep; // zeros [n_kv], set on the host (build_inp_kpool)
+        GGML_ASSERT(keep != nullptr && keep->type == type_mask && keep->ne[0] == inp_kpool->n_kv);
         ggml_tensor * sel  = ggml_top_k_mask(ctx0, keep, top_k, score, inp_kpool->pool_idxs, inp_kpool->tail_idxs); // [n_kv, n_tokens]
         res->add_fused_node({LLM_FUSED_OP_TOP_K_MASK, sel, il});
         cb(sel, "indexer_sel", il);
