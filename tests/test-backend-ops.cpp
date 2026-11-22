@@ -9513,6 +9513,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048, 22, 512, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048,  1, 512, 9.1e4f));
     test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_Q5_K, 256, 6, 2048, 22, 512, 3.2e-2f));
+    // engine#2167: a routED MUL_MAT_ID on bf16 weights, with the shape that issue reports. A matmul accumulator sums
+    // products and is NOT normalised per block (unlike attention's P*V, whose bound is max|V| -- measured and retracted
+    // on engine#1536), so its ceiling really is k times the product: with k=256 and activations of 10,000 the sum
+    // reaches 2.56e6 times the weight magnitude before any single input is out of range. If this row fails where a
+    // small-magnitude one passes, the accumulator is the mechanism; if it passes, the accumulator is excluded and the
+    // issue's own scale parameter must be explained another way.
+    test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_BF16, 4, 2, 512, 32, 256, 10000.0f));
+    test_cases.emplace_back(new test_mul_mat_id_large_activation(GGML_TYPE_BF16, 4, 2, 512, 32, 256, 1.0f));
     // engine #1962: the dense form. Weights [k, 2048], k = 4096 and 512, at decode, small-batch and prefill token counts.
     // Only the cases this backend answers correctly today are listed, so the suite stays a gate: f16 weights are absent
     // because the CPU reference itself returns NaN there, and q4_K/q5_K at 512 tokens and q6_K at 1, 8 (k = 4096) and 512
