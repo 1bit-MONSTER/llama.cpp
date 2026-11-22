@@ -232,9 +232,9 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
     Dispatch dispatch;
     // IQ3S table decode is ours (engine #572 item 4); the tiled/skinny choice is AMD's selector, which replaced the
     // single f32_f32 kernel when the corpus was factored into composable kernels (#118).
-    dispatch.kernel = make_kernel_specialization(iq3s_table_decode_selected(match.gate_format, match.up_format)
-                                                     ? kMulMatIdSwiGLUF32F32WmmaIq3sTableKernel
-                                                     : mul_mat_id_swiglu_f32_kernel(match));
+    const bool iq3s_table = iq3s_table_decode_selected(match.gate_format, match.up_format);
+    dispatch.kernel = make_kernel_specialization(iq3s_table ? kMulMatIdSwiGLUF32F32WmmaIq3sTableKernel
+                                                            : mul_mat_id_swiglu_f32_kernel(match));
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
                                                common_mul_mat_id_to_config_value(match.token_count));
@@ -263,7 +263,11 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
     const bool gate_uses_iq3_xxs = match.gate_format == CommonMulMatWeightFormat::IQ3_XXS;
     const bool up_uses_iq3_xxs   = match.up_format == CommonMulMatWeightFormat::IQ3_XXS;
     const bool requires_iq3_xxs_grid = gate_uses_iq3_xxs || up_uses_iq3_xxs;
-    if (requires_iq3_xxs_grid) {
+    if (iq3s_table) {
+        // The table kernel builds its IQ3_XXS grid in workgroup memory and launches with six buffers
+        // (mul_mat_id_swiglu_f32_f32_wmma.loom); a seventh codebook binding fails its ABI check at the first graph
+        // ("has 7 bindings but its ABI requires 6"), which took Flash-Next UD-IQ3_XXS off HRX (engine#679).
+    } else if (requires_iq3_xxs_grid) {
         const IQCodebookResourceSpec & codebook = iq_codebook_resource_spec(IQCodebookResource::IQ3XXS);
         const ValueId grid = require_immutable_program_resource(
             context, dispatch_match, { codebook.key, codebook.data, codebook.alignment });
