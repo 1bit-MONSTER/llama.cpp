@@ -1845,7 +1845,14 @@ static RoutedMoeGraph build_routed_moe_graph(ggml_context * ctx,
         REQUIRE(reduced != nullptr);
     }
 
-    ggml_tensor * residual = ggml_add(ctx, graph.hidden_state, reduced);
+    // engine#2774: the in-place reduce+next-RMSNorm needs a transient residual (#95), as in a model.
+    // An identity scale makes it one.
+    ggml_tensor * residual_input = graph.hidden_state;
+    if (include_next_rmsnorm) {
+        residual_input = ggml_scale(ctx, graph.hidden_state, 1.0f);
+        REQUIRE(residual_input != nullptr);
+    }
+    ggml_tensor * residual = ggml_add(ctx, residual_input, reduced);
     REQUIRE(residual != nullptr);
     graph.output = residual;
 
@@ -4788,19 +4795,13 @@ static void run_mul_mat_id_expert_scale_case(ggml_type weight_type, int64_t toke
     ggml_build_forward_expand(graph, output);
 
     const std::vector<std::string> kernels = scheduled_kernel_sequence(graph);
-    const char * expected_kernel = expose_matmul ?
-        "loom_libs:ggml_mul_mat_id_skinny_input_f32_publish_f32" :
-        token_count <= 5 ? "loom_libs:ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32" :
-                           "loom_libs:ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32";
-    require_kernel_subsequence(kernels, { expected_kernel });
-    if (!expose_matmul) {
-        REQUIRE(std::find(kernels.begin(), kernels.end(), "loom_libs:ggml_get_rows_scalar_3d_f32") == kernels.end());
-        REQUIRE(std::find(kernels.begin(), kernels.end(), "loom_libs:ggml_binary_bc_f32") == kernels.end());
-    } else {
-        require_kernel_subsequence(kernels, {
-            "loom_libs:ggml_repeat_scalar_3d_f32", "loom_libs:ggml_get_rows_scalar_3d_f32"
-        });
-    }
+    // engine#2774: no matcher selects the expert-scale fusion (`..._scaled_publish_f32`), so the scale runs as its own
+    // repeat / get_rows / mul chain after the expert matmul. In the add-on build the matmul is a hip: object.
+    REQUIRE(!kernels.empty());
+    REQUIRE(kernels.front().compare(0, 4, "hip:") == 0 || kernels.front().find("mul_mat_id") != std::string::npos);
+    require_kernel_subsequence(kernels, {
+        "loom_libs:ggml_repeat_scalar_3d_f32", "loom_libs:ggml_get_rows_scalar_3d_f32", "loom_libs:ggml_binary_bc_f32"
+    });
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(buffer != nullptr);
@@ -5107,8 +5108,9 @@ static void run_router_common_matmul_case(int64_t expert_count, int64_t token_co
 }
 
 static void run_qwen_flash_attention_case() {
+    // engine#2774: decode-split declines a K/V shorter than one 64-token block (engine#2494), so use a full block.
     static constexpr int64_t kQueryTokenCount    = 2;
-    static constexpr int64_t kKeyValueTokenCount = 4;
+    static constexpr int64_t kKeyValueTokenCount = 64;
 
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -5328,9 +5330,9 @@ static void run_asymmetric_flash_attention_cpu_reference_case() {
     REQUIRE(graph != nullptr);
     ggml_build_forward_expand(graph, output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_flash_attention_f32_f16_wmma" });
-    REQUIRE(scheduled_kernel_specialization(graph, "loom_libs:ggml_flash_attention_f32_f16_wmma")
-                .workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+    // engine#2774: since #95 the WMMA FA matchers want V with the QK head-size stride (MLA), so a dense
+    // asymmetric V runs the attention-rows kernel.
+    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_attention_rows_f32_f16" });
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(buffer != nullptr);
@@ -7271,41 +7273,14 @@ static void run_vector_q8_publish_cpu_reference_case() {
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
-        { "loom_libs:ggml_mul_mat_vector_f32_f32", "qwen3_moe:ggml_quantize_q8_1_x4_f32",
-          "loom_libs:ggml_mul_mat_vector_f32_f32" });
-
-    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*hrx_graph);
-    REQUIRE(imported.valid());
-    ggml::hrx::DispatchScheduler           scheduler;
-    ggml::hrx::DispatchScheduleDiagnostics diagnostics;
-    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }, &diagnostics));
-    const ggml::hrx::CommandPlan & plan = scheduler.plan();
-    REQUIRE(plan.valid());
-
-    const ggml::hrx::Value * hidden_value = imported.graph.values().find_tensor(hrx_hidden);
-    REQUIRE(hidden_value != nullptr);
-    const size_t q8_byte_count = static_cast<size_t>(token_count) * ggml_row_size(GGML_TYPE_Q8_1, intermediate_size);
-    const ggml::hrx::CommandPlanAlternateValue * q8_alternate =
-        plan.metadata.find_alternate_value(hidden_value->id, GGML_TYPE_Q8_1, q8_byte_count);
-    REQUIRE(q8_alternate != nullptr);
-
-    const ggml::hrx::Dispatch * second_vector = nullptr;
-    int                         vector_count  = 0;
-    for (const ggml::hrx::Dispatch & dispatch : plan.dispatches) {
-        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_vector_f32_f32") {
-            ++vector_count;
-            if (vector_count == 2) {
-                second_vector = &dispatch;
-                break;
-            }
-        }
+    // engine#2774: the f32-vector q8-publish route is gone. The f32 decode kernel feeds the engine#444 kquant
+    // decode, which reads Q4_K as stored: no quantize pass, no q8 alternate.
+    {
+        const std::vector<std::string> sequence = scheduled_kernel_sequence(hrx_graph);
+        require_kernel_subsequence(sequence, { "loom_libs:ggml_mul_mat_f32_f32_decode_wave64",
+                                               "loom_libs:ggml_kquant_mul_mat_decode_f32" });
+        REQUIRE(std::find(sequence.begin(), sequence.end(), "qwen3_moe:ggml_quantize_q8_1_x4_f32") == sequence.end());
     }
-    REQUIRE(second_vector != nullptr);
-    REQUIRE(second_vector->bindings.size() == 4);
-    REQUIRE(second_vector->bindings[0].value == q8_alternate->alternate_value);
-    REQUIRE(second_vector->kernel.compile_parameters.at("ggml.matmul.vector.activation_format") ==
-            std::to_string(GGML_TYPE_Q8_1));
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -7622,11 +7597,14 @@ static void run_lfm_head_rope_cpu_reference_case(int64_t head_count, int64_t tok
     ggml_build_forward_expand(cpu_graph, cpu.output);
     ggml_build_forward_expand(hrx_graph, hrx.output);
     const std::vector<std::string> kernels = scheduled_kernel_sequence(hrx_graph);
+    // engine#2774: since f2099e9b7 the rmsnorm*weight->rope fusion serves only sectioned ropes (MROPE/IMROPE),
+    // so a NEOX head runs the plain kernels.
+    REQUIRE(std::find(kernels.begin(), kernels.end(), "loom_libs:ggml_rmsnorm_mul_rope_f32") == kernels.end());
     if (cache_output) {
-        REQUIRE(std::find(kernels.begin(), kernels.end(), "loom_libs:ggml_rmsnorm_mul_rope_f32") == kernels.end());
         require_kernel_subsequence(kernels, { "loom_libs:ggml_rope_f32", "loom_libs:ggml_set_rows" });
     } else {
-        require_kernel_subsequence(kernels, { "loom_libs:ggml_rmsnorm_mul_rope_f32" });
+        require_kernel_subsequence(kernels,
+                                   { "loom_libs:ggml_rmsnorm_f32", "loom_libs:ggml_binary_bc_f32", "loom_libs:ggml_rope_f32" });
     }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
@@ -7672,34 +7650,38 @@ static void run_lfm_head_rope_cpu_reference_case(int64_t head_count, int64_t tok
 }
 
 static void run_lfm_head_rope_availability_checks() {
-    ggml_init_params params = {};
-    params.mem_size         = 1024 * 1024;
-    params.no_alloc         = true;
-    ggml_context * ctx      = ggml_init(params);
-    REQUIRE(ctx != nullptr);
+    // engine#2774: the fused matcher serves only sectioned ropes since f2099e9b7, so this uses an IMROPE head
+    // (4 positions per row, sections sum to n_dims / 2).
+    // The fusion must decline while its positions are not written by the plan (fusion-order guard), and take the
+    // node when they are a graph input.
+    for (const bool cast_positions : { true, false }) {
+        ggml_init_params params = {};
+        params.mem_size         = 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
 
-    ggml_tensor * input    = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 64, 8, 1);
-    ggml_tensor * weight   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 64);
-    ggml_tensor * pos_f32  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-    ggml_tensor * positions = ggml_cast(ctx, pos_f32, GGML_TYPE_I32);
-    ggml_tensor * rms      = ggml_rms_norm(ctx, input, 1.0e-5f);
-    ggml_tensor * scaled   = ggml_mul(ctx, rms, weight);
-    ggml_tensor * output    = ggml_rope_ext(ctx, scaled, positions, nullptr, 64, GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f,
-                                            0.0f, 1.0f, 0.0f, 0.0f);
-    REQUIRE(output != nullptr);
-    ggml_cgraph * graph = ggml_new_graph(ctx);
-    REQUIRE(graph != nullptr);
-    ggml_build_forward_expand(graph, output);
+        ggml_tensor * input     = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 64, 8, 1);
+        ggml_tensor * weight    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 64);
+        ggml_tensor * positions = cast_positions ? ggml_cast(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4), GGML_TYPE_I32) :
+                                                   ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 4);
+        ggml_tensor * rms       = ggml_rms_norm(ctx, input, 1.0e-5f);
+        ggml_tensor * scaled    = ggml_mul(ctx, rms, weight);
+        int           sections[GGML_MROPE_SECTIONS] = { 16, 8, 8, 0 };
+        ggml_tensor * output    = ggml_rope_multi(ctx, scaled, positions, nullptr, 64, sections, GGML_ROPE_TYPE_IMROPE, 0,
+                                                  10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        REQUIRE(output != nullptr);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, output);
 
-    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
-    REQUIRE(imported.valid());
-    const ggml::hrx::DispatchRegistry * registry = ggml::hrx::find_dispatch_registry({ "gfx1151" });
-    REQUIRE(registry != nullptr);
-    const size_t rms_index = producer_index_for_tensor(imported.graph, rms);
-    const size_t pos_index = producer_index_for_tensor(imported.graph, positions);
-    ggml::hrx::CommandPlan plan;
-    std::vector<bool> covered(imported.graph.nodes().size(), false);
-    auto matched_kernel = [&]() {
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        const ggml::hrx::DispatchRegistry * registry = ggml::hrx::find_dispatch_registry({ "gfx1151" });
+        REQUIRE(registry != nullptr);
+        const size_t           rms_index = producer_index_for_tensor(imported.graph, rms);
+        ggml::hrx::CommandPlan plan;
+        std::vector<bool>      covered(imported.graph.nodes().size(), false);
         ggml::hrx::DispatchMatch match;
         const ggml::hrx::DispatchMatchContext context = {
             imported.graph, &imported.graph.nodes()[rms_index],    rms_index, covered,
@@ -7707,13 +7689,10 @@ static void run_lfm_head_rope_availability_checks() {
         };
         REQUIRE(registry->match(context, match));
         REQUIRE(match.dispatches.size() == 1);
-        return kernel_name_for_id(match.dispatches[0].kernel.kernel_id);
-    };
-    REQUIRE(matched_kernel() == "loom_libs:ggml_rmsnorm_f32");
-    covered[pos_index] = true;
-    REQUIRE(matched_kernel() == "loom_libs:ggml_rmsnorm_mul_rope_f32");
-
-    ggml_free(ctx);
+        REQUIRE(kernel_name_for_id(match.dispatches[0].kernel.kernel_id) ==
+                (cast_positions ? "loom_libs:ggml_rmsnorm_f32" : "loom_libs:ggml_rmsnorm_mul_rope_f32"));
+        ggml_free(ctx);
+    }
 }
 
 static void run_rope_set_rows_cpu_reference_case() {
@@ -8812,7 +8791,13 @@ static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up
     REQUIRE(hrx_graph != nullptr);
     ggml_build_forward_expand(cpu_graph, cpu.output);
     ggml_build_forward_expand(hrx_graph, hrx.output);
-    const char * expected_kernel = token_count <= 5 ?
+    // engine#2774: engine#572 made the workgroup-table decode the default for an IQ3_XXS gate or up weight.
+    // GGML_HRX_IQ3S_TABLE_DECODE=0 puts the skinny/tiled selector back.
+    const char * iq3s_env      = std::getenv("GGML_HRX_IQ3S_TABLE_DECODE");
+    const bool   iq3s_disabled = iq3s_env != nullptr && std::strcmp(iq3s_env, "0") == 0;
+    const bool   iq3s_pair     = !iq3s_disabled && (gate_type == GGML_TYPE_IQ3_XXS || up_type == GGML_TYPE_IQ3_XXS);
+    const char * expected_kernel = iq3s_pair ? "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table" :
+                                   token_count <= 5 ?
                                        "loom_libs:ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32" :
                                        "loom_libs:ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32";
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
