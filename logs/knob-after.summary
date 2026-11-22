@@ -1,0 +1,19 @@
+=== ARM cachemb  env=[GGML_HRX_GRAPH_PROGRAM_CACHE_MB=256]  srv=/home/bcloud/wt/i674-repro/stage-i841
+    GTT at start 32993 MiB (box-wide)
+    after load: +6033 MiB
+    shape 64    -> +6123   MiB | trims 1  | 424.4 tok/s
+    shape 128   -> +6146   MiB | trims 2  | 841.8 tok/s
+    shape 256   -> +6138   MiB | trims 5  | 515.8 tok/s
+    shape 384   -> +6138   MiB | trims 10 | 550.1 tok/s
+    shape 512   -> +6221   MiB | trims 17 | 565.4 tok/s
+    shape 768   -> +6301   MiB | trims 29 | 584.3 tok/s
+    shape 1024  -> +6384   MiB | trims 45 | 573.9 tok/s
+    --- trim lines:
+      0.22.043.085 W trim_graph_programs: HRX graph program cache trimmed (2 of 3 programs, 474 -> 6 MiB retained, budget 256 MiB, 64 max): kept the current one, trim 43
+      0.22.942.921 W trim_graph_programs: HRX graph program cache trimmed (4 of 6 programs, 524 -> 139 MiB retained, budget 256 MiB, 64 max): kept the current one, trim 44
+      0.23.001.337 W trim_graph_programs: HRX graph program cache trimmed (2 of 3 programs, 470 -> 0 MiB retained, budget 256 MiB, 64 max): kept the current one, trim 45
+    --- budget/accounting lines:
+      0.22.942.921 W trim_graph_programs: HRX graph program cache trimmed (4 of 6 programs, 524 -> 139 MiB retained, budget 256 MiB, 64 max): kept the current one, trim 44
+      0.23.001.337 W trim_graph_programs: HRX graph program cache trimmed (2 of 3 programs, 470 -> 0 MiB retained, budget 256 MiB, 64 max): kept the current one, trim 45
+    after exit: +0 MiB
+    peak peak_gtt=32993 MiB

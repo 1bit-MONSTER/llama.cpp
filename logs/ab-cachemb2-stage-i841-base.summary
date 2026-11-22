@@ -1,0 +1,20 @@
+=== ARM cachemb2  env=[GGML_HRX_GRAPH_PROGRAM_CACHE_MB=2048]  srv=/home/bcloud/wt/i674-repro/stage-i841-base
+    loaded lib: /home/bcloud/wt/i674-repro/stage-i841-base/libggml-hrx.so.0.18.0 (accounting strings: retained=0 arenas=1)
+    GTT at start 32993 MiB (box-wide)
+    after load: +6033 MiB
+    shape 64    -> +6569   MiB | trims 0  | 521.9 tok/s
+    shape 128   -> +7190   MiB | trims 0  | 1001.0 tok/s
+    shape 256   -> +8434   MiB | trims 0  | 1263.7 tok/s
+    shape 384   -> +10622  MiB | trims 0  | 923.5 tok/s
+    shape 512   -> +12991  MiB | trims 0  | 848.0 tok/s
+    shape 768   -> +10493  MiB | trims 11 | 908.8 tok/s
+    shape 1024  -> +11480  MiB | trims 28 | 703.4 tok/s
+    --- trim lines:
+      0.16.545.623 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1032 MiB of arenas, budget 2048 MiB, 64 max): kept the current one, trim 26
+      0.16.560.609 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1030 MiB of arenas, budget 2048 MiB, 64 max): kept the current one, trim 27
+      0.16.670.834 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1014 MiB of arenas, budget 2048 MiB, 64 max): kept the current one, trim 28
+    --- budget/accounting lines:
+      0.16.560.609 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1030 MiB of arenas, budget 2048 MiB, 64 max): kept the current one, trim 27
+      0.16.670.834 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1014 MiB of arenas, budget 2048 MiB, 64 max): kept the current one, trim 28
+    after exit: +0 MiB
+    peak peak_gtt=32993 MiB

@@ -1,0 +1,57 @@
+=== ARM default  env=[defaults]  srv=/home/bcloud/wt/i674-repro/stage-pin788-srv
+    GTT at start 33065 MiB (box-wide)
+    after load: +6017 MiB
+    shape 64    -> +6553   MiB | trims 0
+    shape 128   -> +7174   MiB | trims 0
+    shape 256   -> +8418   MiB | trims 0
+    shape 384   -> +10606  MiB | trims 0
+    shape 512   -> +12975  MiB | trims 0
+    shape 768   -> +10477  MiB | trims 11
+    shape 1024  -> +11464  MiB | trims 28
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+  File "/usr/lib/python3.14/urllib/request.py", line 187, in urlopen
+    return opener.open(url, data, timeout)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/urllib/request.py", line 493, in open
+    response = meth(req, response)
+  File "/usr/lib/python3.14/urllib/request.py", line 602, in http_response
+    response = self.parent.error(
+        'http', request, response, code, msg, hdrs)
+  File "/usr/lib/python3.14/urllib/request.py", line 531, in error
+    return self._call_chain(*args)
+           ~~~~~~~~~~~~~~~~^^^^^^^
+  File "/usr/lib/python3.14/urllib/request.py", line 464, in _call_chain
+    result = func(*args)
+  File "/usr/lib/python3.14/urllib/request.py", line 611, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 400: Bad Request
+    shape 1536  -> +11464  MiB | trims 28
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+  File "/usr/lib/python3.14/urllib/request.py", line 187, in urlopen
+    return opener.open(url, data, timeout)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/urllib/request.py", line 493, in open
+    response = meth(req, response)
+  File "/usr/lib/python3.14/urllib/request.py", line 602, in http_response
+    response = self.parent.error(
+        'http', request, response, code, msg, hdrs)
+  File "/usr/lib/python3.14/urllib/request.py", line 531, in error
+    return self._call_chain(*args)
+           ~~~~~~~~~~~~~~~~^^^^^^^
+  File "/usr/lib/python3.14/urllib/request.py", line 464, in _call_chain
+    result = func(*args)
+  File "/usr/lib/python3.14/urllib/request.py", line 611, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 400: Bad Request
+    shape 2048  -> +11464  MiB | trims 28
+    --- trim lines:
+      0.37.597.516 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1032 MiB of arenas, budget 8192 MiB, 64 max): kept the current one, trim 26
+      0.37.613.606 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1030 MiB of arenas, budget 8192 MiB, 64 max): kept the current one, trim 27
+      0.37.737.273 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1014 MiB of arenas, budget 8192 MiB, 64 max): kept the current one, trim 28
+    --- budget/accounting lines:
+      0.37.613.606 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1030 MiB of arenas, budget 8192 MiB, 64 max): kept the current one, trim 27
+      0.37.737.273 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1014 MiB of arenas, budget 8192 MiB, 64 max): kept the current one, trim 28
+    after exit: +-16 MiB
+    peak peak_gtt=33049 MiB

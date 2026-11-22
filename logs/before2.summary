@@ -1,0 +1,19 @@
+=== ARM default  env=[defaults]  srv=/home/bcloud/wt/i674-repro/stage-pin788-srv
+    GTT at start 33049 MiB (box-wide)
+    after load: +6033 MiB
+    shape 64    -> +6569   MiB | trims 0  | 144.4 tok/s
+    shape 128   -> +7190   MiB | trims 0  | 221.9 tok/s
+    shape 256   -> +8434   MiB | trims 0  | 248.7 tok/s
+    shape 384   -> +10632  MiB | trims 0  | 256.3 tok/s
+    shape 512   -> +13049  MiB | trims 0  | 298.0 tok/s
+    shape 768   -> +10476  MiB | trims 11 | 320.2 tok/s
+    shape 1024  -> +11423  MiB | trims 28 | 394.3 tok/s
+    --- trim lines:
+      0.40.216.044 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1032 MiB of arenas, budget 8192 MiB, 64 max): kept the current one, trim 26
+      0.40.272.713 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1030 MiB of arenas, budget 8192 MiB, 64 max): kept the current one, trim 27
+      0.40.890.058 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1014 MiB of arenas, budget 8192 MiB, 64 max): kept the current one, trim 28
+    --- budget/accounting lines:
+      0.40.272.713 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1030 MiB of arenas, budget 8192 MiB, 64 max): kept the current one, trim 27
+      0.40.890.058 W trim_graph_programs: HRX graph program cache trimmed (1 of 66 programs, 1032 -> 1014 MiB of arenas, budget 8192 MiB, 64 max): kept the current one, trim 28
+    after exit: +-56 MiB
+    peak peak_gtt=32993 MiB
