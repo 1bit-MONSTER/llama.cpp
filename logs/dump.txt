@@ -1,0 +1,128 @@
+=== cpu (decline=none, dev=none) gtt 32501M -> 31715M
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(embd{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -31.810501
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 2, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 2, 1, 1}
+    sum = -18.212156
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(Qcur-0{128, 16, 2, 1}, }) = {128, 16, 2, 1}
+    sum = -115.549965
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(Kcur-0{128, 8, 2, 1}, }) = {128, 8, 2, 1}
+    sum = 29.627144
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(ffn_inp-0{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -23.769827
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(embd{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -98.677353
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 7, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 7, 1, 1}
+    sum = -43.584541
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(Qcur-0{128, 16, 7, 1}, }) = {128, 16, 7, 1}
+    sum = -250.399872
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(Kcur-0{128, 8, 7, 1}, }) = {128, 8, 7, 1}
+    sum = 82.117096
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(ffn_inp-0{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -74.818542
+=== mm (decline=MUL_MAT, dev=HRX0) gtt 31715M -> 31898M
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#embd#0{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -31.810501
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 2, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 2, 1, 1}
+    sum = -18.212156
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Qcur-0#0{128, 16, 2, 1}, }) = {128, 16, 2, 1}
+    sum = -116.704964
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Kcur-0#0{128, 8, 2, 1}, }) = {128, 8, 2, 1}
+    sum = 29.695576
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#ffn_inp-0#0{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -27.275383
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#embd#0{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -98.677353
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 7, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 7, 1, 1}
+    sum = -43.584541
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Qcur-0#0{128, 16, 7, 1}, }) = {128, 16, 7, 1}
+    sum = -251.287292
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Kcur-0#0{128, 8, 7, 1}, }) = {128, 8, 7, 1}
+    sum = 81.031448
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#ffn_inp-0#0{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -76.643318
+=== pair (decline=MUL_MAT,MUL, dev=HRX0) gtt 32299M -> 32299M
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#embd#0{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -31.810501
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 2, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 2, 1, 1}
+    sum = -18.212156
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Qcur-0#0{128, 16, 2, 1}, }) = {128, 16, 2, 1}
+    sum = -116.704964
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Kcur-0#0{128, 8, 2, 1}, }) = {128, 8, 2, 1}
+    sum = 29.695576
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#ffn_inp-0#0{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -27.275383
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#embd#0{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -98.677353
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 7, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 7, 1, 1}
+    sum = -43.584541
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Qcur-0#0{128, 16, 7, 1}, }) = {128, 16, 7, 1}
+    sum = -251.287292
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Kcur-0#0{128, 8, 7, 1}, }) = {128, 8, 7, 1}
+    sum = 81.031448
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#ffn_inp-0#0{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -76.643318
+I674 DUMP DONE
+=== cpu (decline=none, dev=none, budget=unset) gtt 32363M -> 32014M
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(embd{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -31.810501
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 2, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 2, 1, 1}
+    sum = -18.212156
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(Qcur-0{128, 16, 2, 1}, }) = {128, 16, 2, 1}
+    sum = -115.549965
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(Kcur-0{128, 8, 2, 1}, }) = {128, 8, 2, 1}
+    sum = 29.627144
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(ffn_inp-0{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -23.769827
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(embd{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -98.677353
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 7, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 7, 1, 1}
+    sum = -43.584541
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(Qcur-0{128, 16, 7, 1}, }) = {128, 16, 7, 1}
+    sum = -250.399872
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(Kcur-0{128, 8, 7, 1}, }) = {128, 8, 7, 1}
+    sum = 82.117096
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(ffn_inp-0{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -74.818542
+=== plain (decline=none, dev=HRX0, budget=unset) gtt 32014M -> 32014M
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#embd#0{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -31.810501
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 2, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 2, 1, 1}
+    sum = -18.212156
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Qcur-0#0{128, 16, 2, 1}, }) = {128, 16, 2, 1}
+    sum = -116.704964
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Kcur-0#0{128, 8, 2, 1}, }) = {128, 8, 2, 1}
+    sum = 29.695576
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#ffn_inp-0#0{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -27.275383
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#embd#0{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -98.677353
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 7, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 7, 1, 1}
+    sum = -43.584541
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Qcur-0#0{128, 16, 7, 1}, }) = {128, 16, 7, 1}
+    sum = -251.287292
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Kcur-0#0{128, 8, 7, 1}, }) = {128, 8, 7, 1}
+    sum = 81.031448
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#ffn_inp-0#0{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -76.643318
+=== bud (decline=none, dev=HRX0, budget=4096) gtt 32014M -> 32014M
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#embd#0{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -31.810501
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 2, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 2, 1, 1}
+    sum = -18.212156
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Qcur-0#0{128, 16, 2, 1}, }) = {128, 16, 2, 1}
+    sum = -116.704964
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Kcur-0#0{128, 8, 2, 1}, }) = {128, 8, 2, 1}
+    sum = 29.695576
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#ffn_inp-0#0{1024, 2, 1, 1}, }) = {1024, 2, 1, 1}
+    sum = -27.275383
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#embd#0{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -98.677353
+common_debug_cb_eval:              attn_norm-0 = (f32)        MUL(norm-0{1024, 7, 1, 1}, blk.0.attn_norm.weight{1024, 1, 1, 1}}) = {1024, 7, 1, 1}
+    sum = -43.584541
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Qcur-0#0{128, 16, 7, 1}, }) = {128, 16, 7, 1}
+    sum = -251.287292
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#Kcur-0#0{128, 8, 7, 1}, }) = {128, 8, 7, 1}
+    sum = 81.031448
+common_debug_cb_eval:                   norm-0 = (f32)   RMS_NORM(CPU#ffn_inp-0#0{1024, 7, 1, 1}, }) = {1024, 7, 1, 1}
+    sum = -76.643318
+I674 DUMP DONE

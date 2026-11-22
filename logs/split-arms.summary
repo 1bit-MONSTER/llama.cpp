@@ -1,0 +1,60 @@
+# gtt_before_hold=37752M  avail_before=52175M
+# split-arms 2026-11-02 15:09:21 AST bindir=/home/bcloud/wt/i674-repro/stage-pin788 arms=default
+=== cpu      dev=none  budget=unset  rc=0
+    gtt 31291M -> peak 31588M -> end 31588M   peak_delta=+297M  end_delta=+297M
+    MemAvailable floor=77537M  residency_lines=0  resident=none MiB  refusals=0  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=75 GiB 
+=== none     dev=HRX0  budget=unset  rc=0
+    gtt 31291M -> peak 35246M -> end 35246M   peak_delta=+3955M  end_delta=+3955M
+    MemAvailable floor=75770M  residency_lines=1810  resident=3160.5 MiB  refusals=0  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=74 GiB 
+=== bud128   dev=HRX0  budget=128    rc=0
+    gtt 31291M -> peak 31291M -> end 31291M   peak_delta=+0M  end_delta=+0M
+    MemAvailable floor=79824M  residency_lines=182  resident=80.4 MiB  refusals=1  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=77 GiB 
+=== bud32    dev=HRX0  budget=32     rc=0
+    gtt 31291M -> peak 31291M -> end 31291M   peak_delta=+0M  end_delta=+0M
+    MemAvailable floor=79697M  residency_lines=8  resident=0.0 MiB  refusals=1  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=77 GiB 
+SPLIT ARMS DONE
+# gtt_before_hold=31590M  avail_before=72881M
+# split-arms 2026-11-02 15:18:16 AST bindir=/home/bcloud/wt/i674-repro/stage-pin788 arms=bud300 bud304 bud305
+=== bud300   dev=HRX0  budget=300    rc=0
+    gtt 32007M -> peak 32728M -> end 32007M   peak_delta=+721M  end_delta=+0M
+    MemAvailable floor=46083M  residency_lines=186  resident=238.1 MiB  refusals=1  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=45 GiB 
+=== bud304   dev=HRX0  budget=304    rc=0
+    gtt 32007M -> peak 32758M -> end 32758M   peak_delta=+751M  end_delta=+751M
+    MemAvailable floor=48662M  residency_lines=182  resident=243.7 MiB  refusals=1  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=47 GiB 
+=== bud305   dev=HRX0  budget=305    rc=0
+    gtt 32007M -> peak 32766M -> end 32766M   peak_delta=+759M  end_delta=+759M
+    MemAvailable floor=48172M  residency_lines=184  resident=0.0 MiB  refusals=1  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=47 GiB 
+SPLIT ARMS DONE
+# gtt_before_hold=31978M  avail_before=56077M
+# split-arms 2026-11-02 15:22:54 AST bindir=/home/bcloud/wt/i674-repro/stage-guard arms=none bud128
+=== none     dev=HRX0  budget=unset  rc=0
+    gtt 31951M -> peak 36006M -> end 36006M   peak_delta=+4055M  end_delta=+4055M
+    MemAvailable floor=74314M  residency_lines=1810  resident=3160.5 MiB  refusals=0  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=72 GiB 
+=== bud128   dev=HRX0  budget=128    rc=0
+    gtt 31951M -> peak 31951M -> end 31951M   peak_delta=+0M  end_delta=+0M
+    MemAvailable floor=78222M  residency_lines=182  resident=80.4 MiB  refusals=1  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=76 GiB 
+SPLIT ARMS DONE
+# gtt_before_hold=31869M  avail_before=50057M
+# split-arms 2026-11-02 15:26:27 AST bindir=/home/bcloud/wt/i674-repro/stage-guard arms=none bud128 bud8
+=== none     dev=HRX0  budget=unset  rc=0
+    gtt 31869M -> peak 35930M -> end 35930M   peak_delta=+4061M  end_delta=+4061M
+    MemAvailable floor=53256M  residency_lines=1810  resident=3160.5 MiB  refusals=0  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=51 GiB 
+=== bud128   dev=HRX0  budget=128    rc=0
+    gtt 31869M -> peak 31869M -> end 31869M   peak_delta=+0M  end_delta=+0M
+    MemAvailable floor=57607M  residency_lines=182  resident=80.4 MiB  refusals=1  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=56 GiB 
+=== bud8     dev=HRX0  budget=8      rc=0
+    gtt 31869M -> peak 31869M -> end 31869M   peak_delta=+0M  end_delta=+0M
+    MemAvailable floor=57578M  residency_lines=183  resident=0.0 MiB  refusals=1  decline_lines=1
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=56 GiB 
+SPLIT ARMS DONE

@@ -1,0 +1,15 @@
+# gtt_before_hold=31262M
+# budget-arms 2026-11-02 16:32:32 AST bindir=/home/bcloud/wt/i674-repro/stage-pin788
+=== cpu      dev=none  budget=unset                               rc=0
+    gtt 31281M -> peak 31578M -> end 31578M   peak_delta=+297M  end_delta=+297M
+    MemAvailable floor=80781M   residency_lines=0   last resident=none MiB
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=78 GiB 
+=== none     dev=HRX0  budget=unset                               rc=0
+    gtt 31281M -> peak 35387M -> end 35387M   peak_delta=+4106M  end_delta=+4106M
+    MemAvailable floor=78289M   residency_lines=1810   last resident=3160.5 MiB
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=76 GiB 
+=== uni      dev=HRX0  budget=unset  GGML_HRX_USE_UNIFIED_MEMORY=1 rc=0
+    gtt 31281M -> peak 34875M -> end 34875M   peak_delta=+3594M  end_delta=+3594M
+    MemAvailable floor=78836M   residency_lines=1810   last resident=3160.5 MiB
+    answer: Exiting... mem-watchdog: exit=0 peak_rss=7 MiB min_MemAvailable=77 GiB 
+BUDGET ARMS DONE

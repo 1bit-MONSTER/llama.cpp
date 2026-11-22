@@ -1,0 +1,16 @@
+=== declsched rc=0 gtt 32742M -> 32742M
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+=== decl_dl rc=0 gtt 32742M -> 32742M
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+SET3 DONE
+--- split inputs by size (from the schedule dump) ---

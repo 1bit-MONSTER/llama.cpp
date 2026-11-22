@@ -1,0 +1,39 @@
+=== t1 rc=0 gtt 32327M -> 32327M ctx=256
+OUT| 
+OUT| [Start thinking]
+OUT| 
+OUT| Okay, the user is asking
+OUT| 
+=== t2 rc=0 gtt 32327M -> 32327M ctx=256
+OUT| 
+OUT| [Start thinking]
+OUT| 
+OUT| Okay, the user is asking
+OUT| 
+=== t3 rc=0 gtt 32327M -> 32327M ctx=256
+OUT| 
+OUT| [Start thinking]
+OUT| 
+OUT| Okay, the user is asking
+OUT| 
+=== t4 rc=0 gtt 32327M -> 32327M ctx=256
+OUT| 
+OUT| [Start thinking]
+OUT| 
+OUT| Okay, the user is asking
+OUT| 
+=== t5 rc=0 gtt 32327M -> 32327M ctx=256
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+=== call rc=0 gtt 32327M -> 32327M ctx=256
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+TIPCHECK SET 4 DONE

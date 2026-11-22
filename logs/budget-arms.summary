@@ -1,0 +1,19 @@
+# budget-arms 2026-11-02 12:07:48-12:07:5x AST  bindir=~/wt/i674-repro/stage-pin788 (pin d8bd0ff6052)
+# build asserted before measuring: `refusing to run` x1, GGML_HRX_169_DECLINE x0, `hrx host weights: refilled=` x1
+# Qwen3-4B-Q4_K_M -fit off -ngl 0 -c 256 --temp 0 -n 8 -v, #715 trio, POOL_LIMIT 97280, mem-watchdog 4,
+# GGML_HRX_HOST_WEIGHT_TRACE=1 on every arm, pools-sample 1 Hz, all three arms in ONE gpu-hold ticket.
+# ambient GTT at the hold 31518M (another lane's serve) -> deltas only.
+#
+# NOTE: this file first held "+0M" for every arm because the awk parsed `gtt=  31518M` as field 2 (pools-sample
+# pads the number with %6d, so the value is a separate field). Values below are re-derived from the .pools traces
+# with sed; no second GPU run was made. Peaks are LOWER BOUNDS: 1 Hz sampling over 2-3 s runs = 2-3 samples/arm.
+#
+# arm       budget  gtt start->peak      peak_delta  residency_lines  last resident        evict  answer
+# cpu       unset   31518M -> 31815M     +297M       0                -                    -      Okay, the user is asking
+# none      UNSET   31518M -> 35640M     +4122M      1810             3160.5 MiB (limit 0.0)  0    Okay, the user is asking
+# bud4096   4096    31518M -> 36920M     +5402M      1810             3160.5 MiB (limit 4096) 0    Okay, the user is asking
+#
+# => unbudgeted `-ngl 0` at the pin DOES still materialise (the +4121M row stands; #669's placement item is real).
+#    The earlier "0 MiB delta / zero host-weight lines" was a start-vs-end sample plus INFO dropped without -v.
+#    Verbatim, none arm: `I hrx host weights: refilled=0 of 6 | hit=757 miss=434 evict=0 resident=3160.5 MiB allocs=434 limit=0.0 MiB`
+# posted: engine #674 comment 6581949154

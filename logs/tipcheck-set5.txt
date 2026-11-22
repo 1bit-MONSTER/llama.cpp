@@ -1,0 +1,27 @@
+=== p_mulmat_mul rc=0 gtt 32625M -> 32625M ctx=256
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+=== p_mulmat_add rc=0 gtt 32625M -> 32625M ctx=256
+OUT| 
+OUT| [Start thinking]
+OUT| 
+OUT| Okay, the user is asking
+OUT| 
+=== p_mul_add rc=0 gtt 32625M -> 32625M ctx=256
+OUT| 
+OUT| [Start thinking]
+OUT| 
+OUT| Okay, the user is asking
+OUT| 
+=== p_all rc=0 gtt 32625M -> 32625M ctx=256
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+TIPCHECK SET 5 DONE

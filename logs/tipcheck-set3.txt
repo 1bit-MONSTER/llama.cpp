@@ -1,0 +1,22 @@
+=== declfa0 rc=0 gtt 32950M -> 32950M ctx=256
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+=== declqwen rc=0 gtt 32950M -> 32950M ctx=256
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+=== declrep rc=0 gtt 32950M -> 32950M ctx=256
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+TIPCHECK SET 3 DONE

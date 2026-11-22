@@ -1,0 +1,436 @@
+=== decltr rc=0 gtt 32741M -> 32741M ctx=256
+Loading model... |-hrx host staging: value 0 8192 B upload=1 download=0 mapped=1
+hrx host staging: value 1 8 B upload=1 download=0 mapped=1
+hrx host staging: value 4 16 B upload=1 download=0 mapped=1
+hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+hrx host staging: value 7 8192 B upload=1 download=0 mapped=1
+hrx host staging: value 8 8192 B upload=0 download=0 mapped=0
+hrx host staging: value 9 16 B upload=1 download=0 mapped=1
+hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+hrx host staging: 13 buffers, 2113576 B staged, 1065000 B uploaded, 1048576 B downloaded
+hrx host staging: value 0 16384 B upload=1 download=0 mapped=1
+hrx host staging: 1 buffers, 16384 B staged, 16384 B uploaded, 0 B downloaded
+OUT| inaryhrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 8192 B upload=1 download=0 mapped=1
+OUT| hrx host staging: 1 buffers, 8192 B staged, 8192 B uploaded, 0 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 8192 B upload=1 download=0 mapped=1
+OUT| hrx host staging: 1 buffers, 8192 B staged, 8192 B uploaded, 0 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 8192 B upload=1 download=0 mapped=1
+OUT| hrx host staging: 1 buffers, 8192 B staged, 8192 B uploaded, 0 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| hrx host staging: value 0 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 1 4 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 4 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 5 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 6 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 7 4096 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 8 4096 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 9 8 B upload=1 download=0 mapped=1
+OUT| hrx host staging: value 10 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 11 524288 B upload=1 download=1 mapped=0
+OUT| hrx host staging: value 12 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 13 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: value 14 524288 B upload=0 download=0 mapped=0
+OUT| hrx host staging: 13 buffers, 2105364 B staged, 1056788 B uploaded, 1048576 B downloaded
+OUT| иона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+=== declnc rc=0 gtt 32741M -> 32741M ctx=256
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+=== declc64 rc=0 gtt 32741M -> 32741M ctx=64
+OUT| inaryиона this this is.
+OUT| 
+OUT| .
+OUT| 
+OUT| So
+OUT| 
+TIPCHECK SET 2 DONE
