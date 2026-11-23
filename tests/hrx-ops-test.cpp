@@ -113,11 +113,21 @@ static std::vector<float> make_weight(int64_t hidden_size) {
     return data;
 }
 
-static const char * expected_plain_rmsnorm_binary_kernel(int64_t hidden_size, int64_t token_count) {
-    return token_count < 6 && hidden_size >= 2048 && hidden_size <= 5120 ?
-               "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" :
-               "loom_libs:ggml_rmsnorm_binary_f32";
+// engine#2774: the low-token striped variant has no registration, so every shape runs the plain kernel.
+static const char * expected_plain_rmsnorm_binary_kernel(int64_t /*hidden_size*/, int64_t /*token_count*/) {
+    return "loom_libs:ggml_rmsnorm_binary_f32";
 }
+
+// engine#2774: the format-generic matmul kernels the Loom tree selects today, measured without the add-on. The kquant
+// family (engine#444) reads the block formats as stored; the rest run the generic f32 kernels.
+static constexpr const char * kKquantDecode = "loom_libs:ggml_kquant_mul_mat_decode_f32";         // 1 token
+static constexpr const char * kKquantTokens = "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32";  // a few tokens
+static constexpr const char * kF32Decode    = "loom_libs:ggml_mul_mat_f32_f32_decode_wave64";     // 1 token
+static constexpr const char * kF32Wmma      = "loom_libs:ggml_mul_mat_f32_f32_wmma";
+static constexpr const char * kSwigluWmma   = "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma";
+// engine#3120 opt-in for the dense rows the add-on serves in the shipped build: the row accepts a hip: kernel for the
+// node and still compares its value against the CPU reference.
+static constexpr const char * kAddonDense   = "addon_dense";
 
 static std::vector<float> make_router_input(int64_t hidden_size, int64_t token_count) {
     std::vector<float> data(hidden_size * token_count);
@@ -568,120 +578,21 @@ static void match_dispatch_at_index(const ggml::hrx::Graph &            graph,
     REQUIRE(plan.valid());
 }
 
-// engine#2774: of the 33 expected kernel names that the suite demands and the dispatcher does not choose, **25 are
-// referenced by nothing at all** -- grep the bare name (the family lives in a separate string literal, so grepping
-// "loom_libs:<name>" finds nothing, which is how the first version of this table got the split wrong) across
-// ggml-hrx and only the corpus manifest and this file mention them. Those 25 can never be selected, so recording them
-// is safe, and naming them turns "the suite is 63 % red" into "these are known-stale, anything else is real".
-//
-// The other 8 are DELIBERATELY NOT here. They *are* registered and *are* selectable:
-//
-//   ggml_flash_attention_f32_f16_wmma                          dispatch-flash-attention.cpp
-//   ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32   dispatch-gated-mul-mat-id.cpp
-//   ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32    dispatch-gated-mul-mat-id.cpp
-//   ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256             dispatch-mul-mat.cpp
-//   ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot                dispatch-gated-mul-mat.cpp
-//   ggml_rmsnorm_mul_rope_f32                                  dispatch-rmsnorm.cpp
-//   qwen3_moe_attention_qkv_postprocess_fused_decode           dispatch-qwen-attention-postprocess.cpp
-//   qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32      dispatch-routed-ffn.cpp
-//
-// For those, a case not selecting the kernel is either a matcher guard that is wrong for that shape or an expectation
-// that is over-specific -- a question, not a suppression. They keep aborting, so the suite still fails loudly there.
-//
-// Six more were added after a full 395-case run reached cases the earlier 520 s budget never got to (an unbudgeted run
-// passes more cases, therefore reaches further); all six were verified unreferenced by the bare-name grep above, and the
-// eleven registered names that the full run still aborts on stay out, as the rule says.
-//
-// This is a ratchet of the same shape as tools/ci/hrx_f16_narrowing.txt: the list may shrink, never grow silently. It is
-// a table rather than a file on purpose -- reviewed in the diff, with no load path that can silently not run.
-static const char * const kRecordedStaleExpectations[] = {
-    "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
-    "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
-    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
-    "loom_libs:ggml_mul_mat_tiled_input_f32_iq1_m_publish_f32",
-    "loom_libs:ggml_mul_mat_tiled_input_f32_iq1_s_publish_f32",
-    "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32",
-    "loom_libs:ggml_mul_mat_tiled_input_f32_iq3_s_publish_f32",
-    "loom_libs:ggml_mul_mat_tiled_input_f32_iq3_xxs_publish_f32",
-    "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32",
-    "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned",
-    "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
-    "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_aligned",
-    "loom_libs:ggml_mul_mat_vector_f32_f32",
-    "loom_libs:ggml_mul_mat_vector_iq1_m_f32_f32",
-    "loom_libs:ggml_mul_mat_vector_iq1_s_f32_f32",
-    "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32",
-    "loom_libs:ggml_mul_mat_vector_iq3_s_f32_f32",
-    "loom_libs:ggml_mul_mat_vector_iq3_xxs_f32_f32",
-    "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped",
-    "loom_libs:ggml_rmsnorm_binary_strided_f32",
-    "loom_libs:ggml_rmsnorm_gate_f32_publish",
-    "loom_libs:ggml_rmsnorm_mul_add_f32",
-    "loom_libs:ggml_scale_add_f32",
-    "loom_libs:llm_attention_v_matmul_set_rows_tiled_f32_f32",
-    "loom_libs:llm_attention_v_matmul_set_rows_vector_f32_f32",    "loom_libs:ggml_rmsnorm_binary_q8_1_x4_publish",
-    "loom_libs:ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32",
-    "loom_libs:ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32",
-    "loom_libs:ggml_mul_mat_id_skinny_input_f32_publish_f32",
-    "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_f32",
-    "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_q8",
-    // engine#2774: four names the cases below still demand and no matcher can select. They are EXPORTED by a corpus
-    // manifest and absent from every GGML_HRX_KERNEL_REF (checked over loom_libs, qwen3_moe and hrx), which is this
-    // table's own criterion, and `ggml/src/ggml-hrx/tools/check_stale_expectations.py` enforces both halves at every
-    // pin. Sites: :8726/:8727 (`routed_pair` wave32/wave64 weighted q8), :8968-:8980 (`vector` bias+residual),
-    // :1875 (`vector` q6 after an rmsnorm). Dispatch answers these shapes with the format-generic
-    // `ggml_mul_mat_f32_f32_wmma`, which is registered with an any-format matcher -- so the per-format expectation is
-    // the stale half, not the registration.
-    "loom_libs:ggml_mul_mat_id_vector_weighted_wave32_publish_q8",
-    "loom_libs:ggml_mul_mat_id_vector_weighted_wave64_publish_q8",
-    "loom_libs:ggml_mul_mat_vector_bias_residual_f32_f32",
-    "loom_libs:ggml_mul_mat_vector_q6_f32_f32",
-
-};
-
-static bool is_recorded_stale_expectation(const std::string & name) {
-    for (const char * recorded : kRecordedStaleExpectations) {
-        if (name == recorded) {
-            return true;
-        }
-    }
-    return false;
-}
-
+// engine#2774: every expectation below names a kernel some GGML_HRX_KERNEL_REF registers, which
+// ggml/src/ggml-hrx/tools/check_stale_expectations.py checks from the source. A miss aborts and prints what ran.
 static void require_kernel_subsequence(const std::vector<std::string> & sequence,
                                        const std::vector<std::string> & expected) {
     size_t sequence_index = 0;
     for (const std::string & name : expected) {
-        const size_t before = sequence_index;
         while (sequence_index < sequence.size() && sequence[sequence_index] != name) {
             ++sequence_index;
         }
         if (sequence_index >= sequence.size()) {
-            if (is_recorded_stale_expectation(name)) {
-                std::fprintf(stderr,
-                             "stale recorded expectation (engine#2774, not a failure): %s -- the corpus still exports it "
-                             "and no matcher selects it\n",
-                             name.c_str());
-                sequence_index = before;   // this name is not in the sequence; do not consume a match for it
-                continue;
-            }
             std::fprintf(stderr, "missing expected kernel: %s\nscheduled kernels:\n", name.c_str());
             for (const std::string & scheduled : sequence) {
                 std::fprintf(stderr, "  %s\n", scheduled.c_str());
             }
             std::abort();
-        }
-        if (sequence[sequence_index] != name) {
-            continue;
-        }
-        // The other direction, or the table rots: an entry that is now SATISFIED means the wiring came back (or the
-        // matcher moved to that kernel again) and the line should be pruned. A warning rather than a failure, because
-        // fixing dispatch must not turn a green case red -- but it must not be silent either, which is what a table
-        // nobody prunes becomes.
-        if (is_recorded_stale_expectation(name)) {
-            std::fprintf(stderr,
-                         "recorded-stale expectation is now SATISFIED (engine#2774, prune this line): %s\n",
-                         name.c_str());
         }
         ++sequence_index;
     }
@@ -807,10 +718,10 @@ static void run_route_outcome_checks() {
         REQUIRE(!outcome.served_by.empty() == false);
     }
     {   // the Loom-route family (engine#444): accepted by name, not by any hip: object
-        const RouteOutcome outcome = route_outcome({ "loom_libs:ggml_kquant_swiglu_q4_k" }, expected, nullptr,
-                                                   "loom_libs:ggml_kquant_swiglu_q4_k");
+        const RouteOutcome outcome = route_outcome({ "loom_libs:ggml_kquant_swiglu_decode_f32" }, expected, nullptr,
+                                                   "loom_libs:ggml_kquant_swiglu_decode_f32");
         REQUIRE(outcome.kind == RouteKind::LoomRouteServed);
-        REQUIRE(outcome.served_by == "loom_libs:ggml_kquant_swiglu_q4_k");
+        REQUIRE(outcome.served_by == "loom_libs:ggml_kquant_swiglu_decode_f32");
     }
     {   // no opt-in at all: unchanged behaviour
         const RouteOutcome outcome = route_outcome({ "loom_libs:ggml_flash_attention_f32_f16_wmma" }, expected, nullptr, nullptr);
@@ -1875,24 +1786,55 @@ static void run_routed_codebook_admission_checks() {
     ggml::hrx::DispatchRegistryBuilder plain_builder;
     ggml::hrx::register_mul_mat_id_dispatches(plain_builder);
     const ggml::hrx::DispatchRegistry plain_registry = plain_builder.build();
-    auto match_root = [](const ggml::hrx::Graph & graph, const ggml_tensor * root,
-                         const ggml::hrx::DispatchRegistry & registry, ggml::hrx::DispatchMatch & match) {
+    // engine#2774: the fusion-order guard refuses a match that reads a value the plan has not written (here the
+    // router's ARGSORT ids), so an empty plan made every arm below fail -- the negative arms vacuously. Plan what
+    // precedes the root with the full registry, in index order as the scheduler does, then ask the restricted one.
+    const ggml::hrx::DispatchRegistry * full_registry = ggml::hrx::find_dispatch_registry({ "gfx1151" });
+    REQUIRE(full_registry != nullptr);
+    auto match_root = [full_registry](const ggml::hrx::Graph & graph, const ggml_tensor * root,
+                                      const ggml::hrx::DispatchRegistry & registry, ggml::hrx::DispatchMatch & match) {
         const size_t root_index = producer_index_for_tensor(graph, root);
         std::vector<bool> covered(graph.nodes().size(), false);
+        for (size_t i = 0; i < graph.nodes().size(); ++i) {
+            covered[i] = !graph.nodes()[i].compute;
+        }
         ggml::hrx::CommandPlan plan;
+        for (size_t i = 0; i < root_index; ++i) {
+            const ggml_op op = graph.nodes()[i].op;
+            if (op == GGML_OP_VIEW || op == GGML_OP_RESHAPE || op == GGML_OP_PERMUTE || op == GGML_OP_TRANSPOSE) {
+                covered[i] = true;  // a layout alias the scheduler elides, not a dispatch
+                continue;
+            }
+            if (!covered[i]) {
+                ggml::hrx::DispatchMatch before;
+                match_dispatch_at_index(graph, *full_registry, plan, covered, i, before);
+            }
+        }
+        REQUIRE(!covered[root_index]);
         const ggml::hrx::DispatchMatchContext context = {
             graph, &graph.nodes()[root_index], root_index, covered, plan, next_plan_value(graph, plan), &registry,
         };
         return registry.match(context, match);
     };
-    auto find_pair = [](const ggml::hrx::DispatchMatch & match) -> const ggml::hrx::Dispatch * {
+    // engine#572: an IQ3_XXS pair runs the workgroup-table decode (six bindings, fork #487) unless
+    // GGML_HRX_IQ3S_TABLE_DECODE=0 puts the skinny/tiled selector (seven, with the grid) back.
+    const char * iq3s_env   = std::getenv("GGML_HRX_IQ3S_TABLE_DECODE");
+    const bool   iq3s_table = iq3s_env == nullptr || std::strcmp(iq3s_env, "0") != 0;
+    const char * pair_kernel = iq3s_table ? "iq3s_table" : "pair_input";
+    const size_t pair_bindings = iq3s_table ? 6 : 7;
+    auto find_pair = [pair_kernel](const ggml::hrx::DispatchMatch & match) -> const ggml::hrx::Dispatch * {
         for (const ggml::hrx::Dispatch & dispatch : match.dispatches) {
             const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
-            if (name.find("pair_input") != std::string::npos) {
+            if (name.find(pair_kernel) != std::string::npos) {
                 return &dispatch;
             }
         }
         return nullptr;
+    };
+    // engine#2774: the plain registry's format-generic expert matmul now reads the codebook formats as stored, so
+    // it serves the gate and the down projection that the pair registry declines.
+    auto plain_kernel = [](const ggml::hrx::DispatchMatch & match) {
+        return match.dispatches.empty() ? std::string() : kernel_name_for_id(match.dispatches.back().kernel.kernel_id);
     };
 
     const std::array<ggml_type, 3> unsupported = { GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS };
@@ -1917,14 +1859,16 @@ static void run_routed_codebook_admission_checks() {
             REQUIRE(match_root(imported.graph, routed.gate_output, pair_registry, match));
             const ggml::hrx::Dispatch * pair = find_pair(match);
             REQUIRE(pair != nullptr);
-            REQUIRE(pair->bindings.size() == 7);
+            REQUIRE(pair->bindings.size() == pair_bindings);
         } else {
             REQUIRE(!match_root(imported.graph, routed.gate_output, pair_registry, match));
         }
         ggml::hrx::DispatchMatch plain_match;
-        REQUIRE(!match_root(imported.graph, routed.gate_output, plain_registry, plain_match));
+        REQUIRE(match_root(imported.graph, routed.gate_output, plain_registry, plain_match));
+        REQUIRE(plain_kernel(plain_match) == "loom_libs:ggml_mul_mat_id_f32_f32_wmma");
         ggml::hrx::DispatchMatch postops_match;
-        REQUIRE(!match_root(imported.graph, routed.down_output, plain_registry, postops_match));
+        REQUIRE(match_root(imported.graph, routed.down_output, plain_registry, postops_match));
+        REQUIRE(plain_kernel(postops_match) == "loom_libs:ggml_mul_mat_id_postops_f32_f32_wmma");
         ggml_free(ctx);
     }
 
@@ -1946,7 +1890,7 @@ static void run_routed_codebook_admission_checks() {
         REQUIRE(match_root(imported.graph, routed.gate_output, pair_registry, pair_match));
         const ggml::hrx::Dispatch * pair = find_pair(pair_match);
         REQUIRE(pair != nullptr);
-        REQUIRE(pair->bindings.size() == 7);
+        REQUIRE(pair->bindings.size() == pair_bindings);
         ggml_free(ctx);
     }
 
@@ -2034,7 +1978,8 @@ static void run_rmsnorm_support_checks() {
     REQUIRE(q8_graph != nullptr);
     ggml_build_forward_expand(q8_graph, q8_output);
     require_kernel_subsequence(scheduled_kernel_sequence(q8_graph),
-                               { "loom_libs:ggml_rmsnorm_binary_f32", "loom_libs:ggml_mul_mat_vector_q6_f32_f32" });
+                               { "loom_libs:ggml_rmsnorm_binary_f32",
+                                 "loom_libs:ggml_mul_mat_q6_k_packed_token1_f16_wmma" });
 
     ggml_tensor * wrong_type_input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 256, 1);
     ggml_tensor * wrong_type_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, 256);
@@ -2222,7 +2167,9 @@ static void run_gemma_post_proj_cpu_reference_case(int64_t token_count, bool nor
     ggml_build_forward_expand(cpu_graph, cpu.raw_side);
     ggml_build_forward_expand(hrx_graph, hrx.output);
     ggml_build_forward_expand(hrx_graph, hrx.raw_side);
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "loom_libs:ggml_rmsnorm_mul_add_f32" });
+    // engine#2774: the fused rmsnorm-mul-add has no registration; the norm-scale and the residual add run apart.
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
+                               { "loom_libs:ggml_rmsnorm_binary_f32", "loom_libs:ggml_binary_f32" });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -2293,24 +2240,13 @@ static void run_gemma_post_proj_matcher_negatives() {
             REQUIRE(registry->match(context, match));
             REQUIRE(match.dispatches.size() == 1);
             const auto & specialization = match.dispatches[0].kernel;
-            const std::string name = kernel_name_for_id(specialization.kernel_id);
-            if (name == "loom_libs:ggml_rmsnorm_mul_add_f32") {
-                const auto normalized_op = variant == 4 ? ggml::hrx::BinaryKind::Add : ggml::hrx::BinaryKind::Mul;
-                REQUIRE(specialization.compile_parameters.at("ggml.rmsnorm_mul_add_f32.normalized_op") ==
-                        std::to_string(ggml::hrx::binary_kind_config_value(normalized_op)));
-                REQUIRE(specialization.compile_parameters.at("ggml.rmsnorm_mul_add_f32.output_op") ==
-                        std::to_string(ggml::hrx::binary_kind_config_value(ggml::hrx::BinaryKind::Add)));
-                REQUIRE(specialization.compile_parameters.at("ggml.rmsnorm_mul_add_f32.binary_lhs") == "1");
-                const std::vector<size_t> expected_covered = {
-                    rms_index, producer_index_for_tensor(imported.graph, scaled),
-                    producer_index_for_tensor(imported.graph, output),
-                };
-                REQUIRE(match.covered_nodes == expected_covered);
-            }
-            return name;
+            return kernel_name_for_id(specialization.kernel_id);
         };
+        // engine#2774: the fusion-order guard refuses a norm that reads a value the plan has not written yet, so the
+        // add that produces `raw` is planned first, as the scheduler would.
+        ggml::hrx::DispatchMatch raw_match;
+        match_dispatch_at_index(imported.graph, *registry, plan, covered, raw_index, raw_match);
         REQUIRE(kernel() == "loom_libs:ggml_rmsnorm_binary_f32");
-        covered[raw_index] = true;
         if (variant == 3) {
             REQUIRE(kernel() == "loom_libs:ggml_rmsnorm_binary_f32");
             covered[producer_index_for_tensor(imported.graph, residual)] = true;
@@ -2324,11 +2260,9 @@ static void run_gemma_post_proj_matcher_negatives() {
             REQUIRE(residual_value != nullptr);
             REQUIRE(raw_value->storage_root == residual_value->storage_root);
         }
-        const bool shared_scaled = variant == 1;
-        const bool aliases_input = variant == 2;
-        const bool blocks_fusion = shared_scaled || aliases_input;
-        REQUIRE(kernel() == (blocks_fusion ? "loom_libs:ggml_rmsnorm_binary_f32" :
-                                            "loom_libs:ggml_rmsnorm_mul_add_f32"));
+        // engine#2774: no registration selects the fused rmsnorm-mul-add, so no variant fuses. If a fusion is
+        // registered again, variants 1 (shared scale) and 2 (aliased residual) must still decline it.
+        REQUIRE(kernel() == "loom_libs:ggml_rmsnorm_binary_f32");
         ggml_free(ctx);
     }
 }
@@ -2370,7 +2304,7 @@ static void run_rmsnorm_gate_cpu_reference_case(int64_t hidden_size,
     };
     Graph a = build(cpu_ctx);
     Graph b = build(hrx_ctx);
-    require_kernel_subsequence(scheduled_kernel_sequence(b.graph), { "loom_libs:ggml_rmsnorm_gate_f32_publish" });
+    require_kernel_subsequence(scheduled_kernel_sequence(b.graph), { "loom_libs:ggml_rmsnorm_gate_f32_f16" });
     ggml_backend_buffer_t a_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu);
     ggml_backend_buffer_t b_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx);
     REQUIRE(a_buffer != nullptr && b_buffer != nullptr);
@@ -2577,7 +2511,9 @@ static void run_strided_rmsnorm_binary_cpu_reference_case() {
     REQUIRE(hrx_graph != nullptr);
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "loom_libs:ggml_rmsnorm_binary_strided_f32" });
+    // engine#2774: the strided rmsnorm-binary has no registration; the norm and the broadcast binary run apart.
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
+                               { "loom_libs:ggml_rmsnorm_f32", "loom_libs:ggml_binary_bc_f32" });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -4796,10 +4732,14 @@ static void run_mul_mat_id_expert_scale_case(ggml_type weight_type, int64_t toke
 
     const std::vector<std::string> kernels = scheduled_kernel_sequence(graph);
     // engine#2774: no matcher selects the expert-scale fusion (`..._scaled_publish_f32`), so the scale runs as its own
-    // repeat / get_rows / mul chain after the expert matmul. In the add-on build the matmul is a hip: object.
-    REQUIRE(!kernels.empty());
-    REQUIRE(kernels.front().compare(0, 4, "hip:") == 0 || kernels.front().find("mul_mat_id") != std::string::npos);
+    // repeat / get_rows / mul chain after the expert matmul. Measured without the add-on: the decode expert matmul at 2
+    // tokens, the WMMA one at 8; in the add-on build a hip: object serves it. Either way it runs before the chain.
+    const char * expert_kernel = token_count <= 2 ? "loom_libs:ggml_mul_mat_id_decode_f32_wave64" :
+                                                    "loom_libs:ggml_mul_mat_id_f32_f32_wmma";
+    require_kernel_subsequence_route(kernels, { expert_kernel }, "addon_routed_expert");
+    const RouteOutcome expert = route_outcome(kernels, { expert_kernel }, "addon_routed_expert", nullptr);
     require_kernel_subsequence(kernels, {
+        expert.kind == RouteKind::AddOnServed ? expert.served_by : std::string(expert_kernel),
         "loom_libs:ggml_repeat_scalar_3d_f32", "loom_libs:ggml_get_rows_scalar_3d_f32", "loom_libs:ggml_binary_bc_f32"
     });
 
@@ -6287,7 +6227,9 @@ static void run_scale_add_f32_cpu_reference_case(bool strided_residual) {
     REQUIRE(hrx_graph != nullptr);
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "loom_libs:ggml_scale_add_f32" });
+    // engine#2774: the fused scale-add has no registration; scale and add run apart.
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
+                               { "loom_libs:ggml_scale_f32", "loom_libs:ggml_binary_f32" });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -6772,14 +6714,18 @@ static void run_prefill_value_cache_repeated_indices_case() {
     REQUIRE(split_graph != nullptr);
     ggml_build_forward_expand(fused_graph, fused[6]);
     ggml_build_forward_expand(split_graph, split[6]);
-    require_kernel_subsequence(scheduled_kernel_sequence(fused_graph),
-        { "loom_libs:ggml_get_rows_rmsnorm_binary_q8_1_x4_f16",
-          "loom_libs:llm_attention_v_matmul_set_rows_tiled_f32_f32" });
+    // engine#2774: the prefill V-matmul + set_rows fusion has no registration (and nothing reads disable_env any more),
+    // so both graphs schedule the q8 embedding rmsnorm, the matmul (a hip: object in the add-on build) and set_rows.
+    // The case still compares the two graphs' caches, which is what the repeated indices exercise.
+    auto require_split = [](ggml_cgraph * graph) {
+        const std::vector<std::string> sequence = scheduled_kernel_sequence(graph);
+        require_kernel_subsequence(sequence, { "loom_libs:ggml_get_rows_rmsnorm_binary_q8_1_x4_f16",
+                                               "loom_libs:ggml_set_rows" });
+        require_kernel_subsequence_route(sequence, { kF32Wmma }, kAddonDense);
+    };
+    require_split(fused_graph);
     REQUIRE(setenv(disable_env, "1", 1) == 0);
-    require_kernel_subsequence(scheduled_kernel_sequence(split_graph),
-                               { "loom_libs:ggml_get_rows_rmsnorm_binary_q8_1_x4_f16",
-                                 "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned",
-                                 "loom_libs:ggml_set_rows" });
+    require_split(split_graph);
 
     ggml_backend_buffer_t fused_buffer = ggml_backend_alloc_ctx_tensors(fused_ctx, fused_backend);
     ggml_backend_buffer_t split_buffer = ggml_backend_alloc_ctx_tensors(split_ctx, split_backend);
@@ -7223,7 +7169,7 @@ static void run_dense_matmul_binary_cpu_reference_case(ggml_type    lhs_weight_t
     ggml_backend_free(hrx_backend);
 }
 
-static void run_vector_q8_publish_cpu_reference_case() {
+static void run_vector_f32_into_kquant_cpu_reference_case() {
     constexpr int64_t input_size        = 256;
     constexpr int64_t intermediate_size = 256;
     constexpr int64_t output_size       = 128;
@@ -7315,7 +7261,8 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
                                                         bool         include_bias,
                                                         bool         include_residual,
                                                         bool         include_next_rmsnorm,
-                                                        int64_t      input_size = kQwenHiddenSize) {
+                                                        int64_t      input_size  = kQwenHiddenSize,
+                                                        const char * addon_route = nullptr) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -7381,13 +7328,13 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
-    if (include_next_rmsnorm) {
-        require_kernel_subsequence(
-            scheduled_kernel_sequence(hrx_graph),
-            { expected_kernel, expected_plain_rmsnorm_binary_kernel(output_size, token_count),
-              "loom_libs:ggml_binary_f32" });
-    } else {
-        require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
+    {
+        const auto sequence = scheduled_kernel_sequence(hrx_graph);
+        require_kernel_subsequence_route(sequence, { expected_kernel }, addon_route);
+        if (include_next_rmsnorm) {  // the norm and its residual add run on Loom whichever route served the matmul
+            require_kernel_subsequence(sequence, { expected_plain_rmsnorm_binary_kernel(output_size, token_count),
+                                                   "loom_libs:ggml_binary_f32" });
+        }
     }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
@@ -8935,15 +8882,16 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
     REQUIRE(graph != nullptr);
     ggml_build_forward_expand(graph, next_output);
 
-    std::vector<std::string> expected = {
+    // engine#2774: the gate/up pair publishes q8 for a Q4_K down projection, and the down projection is the generic
+    // decode expert matmul (a hip: object in the add-on build); the route weighting and reduce run as binaries.
+    const std::vector<std::string> sequence = scheduled_kernel_sequence(graph);
+    require_kernel_subsequence(sequence, {
         "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
         "qwen3_moe:qwen3_moe_router_projection_top8_fused_decode_f32",
-        down_weight_type == GGML_TYPE_Q4_K ? "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_q8" :
-                                             "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_f32",
-        down_weight_type == GGML_TYPE_Q4_K ? "loom_libs:ggml_mul_mat_id_vector_weighted_wave32_publish_q8" :
-                                             "loom_libs:ggml_mul_mat_id_vector_weighted_wave64_publish_q8",
-    };
-    require_kernel_subsequence(scheduled_kernel_sequence(graph), expected);
+        down_weight_type == GGML_TYPE_Q4_K ? "qwen3_moe:qwen3_moe_routed_gate_up_swiglu_q4k_q8_1_x4_next_q8" :
+                                             "qwen3_moe:qwen3_moe_routed_gate_up_swiglu_q4k_q8",
+    });
+    require_kernel_subsequence_route(sequence, { "loom_libs:ggml_mul_mat_id_decode_f32_wave64" }, "addon_routed_down");
     ggml_free(ctx);
 }
 
@@ -9179,13 +9127,13 @@ static void run_vector_output_capacity_experiment() {
     constexpr int64_t kAboveOldOutputSize   = 262208;
     constexpr int64_t kLiftedOutputSize     = 524288;
 
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, kAboveOldOutputSize,
+    run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, kF32Decode, 1, kAboveOldOutputSize,
                                         kSmallVectorInputSize);
-    run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_vector_f32_f32", 1,
+    run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, kF32Decode, 1,
                                               kAboveOldOutputSize, kSmallVectorInputSize);
-    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_vector_bias_residual_f32_f32", 1,
+    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_add_f32_f32_decode_wave64", 1,
                                                 kAboveOldOutputSize, true, false, false, kSmallVectorInputSize);
-    run_dense_matmul_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, kLiftedOutputSize,
+    run_dense_matmul_cpu_reference_case(GGML_TYPE_F16, kF32Decode, 1, kLiftedOutputSize,
                                         kSmallVectorInputSize);
 }
 
@@ -9193,9 +9141,9 @@ static void run_vector_postops_cpu_reference_case() {
     constexpr int64_t kVectorInputSize  = 256;
     constexpr int64_t kVectorOutputSize = 256;
 
-    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_vector_bias_residual_f32_f32", 1,
+    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_add_f32_f32_decode_wave64", 1,
                                                 kVectorOutputSize, true, false, false, kVectorInputSize);
-    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_vector_bias_residual_f32_f32", 1,
+    run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_add_f32_f32_decode_wave64", 1,
                                                 kVectorOutputSize, true, true, false, kVectorInputSize);
 }
 
@@ -9296,7 +9244,8 @@ static void register_dense_matmul_cases(Suite & suite) {
         for (const ggml_type up : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
             for (const int64_t input_size : { 256, 768 }) {
                 suite.device_case("dense_matmul.metadata_pair." + type_name(gate) + "." + type_name(up) + ".k" + std::to_string(input_size), [gate, up, input_size] {
-                    run_dense_matmul_swiglu_cpu_reference_case(gate, up, "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32", 33, 65, GGML_GLU_OP_SWIGLU, input_size);
+                    run_dense_matmul_swiglu_cpu_reference_case(gate, up, kSwigluWmma, 33, 65, GGML_GLU_OP_SWIGLU,
+                                                               input_size, false, false, kAddonDense);
                 });
             }
         }
@@ -9306,9 +9255,8 @@ static void register_dense_matmul_cases(Suite & suite) {
     for (const ggml_type type : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
         for (const int64_t input_size : { 256, 768 }) {
             suite.device_case("dense_metadata_reuse." + type_name(type) + ".input" + std::to_string(input_size), [type, input_size] {
-                run_dense_matmul_postops_cpu_reference_case(
-                    type, "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
-                    33, 65, true, true, false, input_size);
+                run_dense_matmul_postops_cpu_reference_case(type, "loom_libs:ggml_mul_mat_bias_add_f32_f32_wmma", 33,
+                                                            65, true, true, false, input_size, kAddonDense);
             });
         }
     }
@@ -9316,19 +9264,20 @@ static void register_dense_matmul_cases(Suite & suite) {
     // K=384 exercises a partial 256-weight tile; N=65 exercises an unpaired output row.
     for (const int64_t input_size : { 256, 384, 768 }) {
         suite.device_case("dense_matmul.q1_0.vector_tail.k" + std::to_string(input_size), [input_size] {
+            // engine#2774: the kquant decode (engine#444) takes whole 256-weight K blocks; K=384 runs the generic one.
             run_dense_matmul_cpu_reference_case(
-                GGML_TYPE_Q1_0, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 65, input_size);
+                GGML_TYPE_Q1_0,
+                input_size % 256 == 0 ? "loom_libs:ggml_kquant_mul_mat_decode_f32" :
+                                        "loom_libs:ggml_mul_mat_f32_f32_decode_wave64",
+                1, 65, input_size);
         });
     }
 
     for (const ggml_type type : { GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M }) {
         const char * type_suffix   = type == GGML_TYPE_IQ1_S ? "iq1_s" : "iq1_m";
-        const char * vector_kernel = type == GGML_TYPE_IQ1_S ?
-                                         "loom_libs:ggml_mul_mat_vector_iq1_s_f32_f32" :
-                                         "loom_libs:ggml_mul_mat_vector_iq1_m_f32_f32";
-        const char * tiled_kernel  = type == GGML_TYPE_IQ1_S ?
-                                         "loom_libs:ggml_mul_mat_tiled_input_f32_iq1_s_publish_f32" :
-                                         "loom_libs:ggml_mul_mat_tiled_input_f32_iq1_m_publish_f32";
+        // engine#2774: the per-format IQ1 kernels have no registration; the kquant family serves both formats.
+        const char * vector_kernel = "loom_libs:ggml_kquant_mul_mat_decode_f32";
+        const char * tiled_kernel  = "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32";
         suite.device_case(std::string("dense_matmul.") + type_suffix + ".vector.tokens1.outputs128", [=] {
             run_dense_matmul_cpu_reference_case(type, vector_kernel, 1, 128, 2048);
         });
@@ -9341,65 +9290,58 @@ static void register_dense_matmul_cases(Suite & suite) {
             suite.device_case(
                 "dense_matmul.q4_k.tokens" + std::to_string(tokens) + ".outputs" + std::to_string(outputs),
                 [tokens, outputs] {
-                    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K,
-                                                        tokens == 1 ?
-                                                            "loom_libs:ggml_mul_mat_vector_f32_f32" :
-                                      "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
-                        tokens, outputs);
+                    run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, tokens == 1 ? kKquantDecode : kKquantTokens,
+                                                        tokens, outputs, kQwenHiddenSize, false, false,
+                                                        GGML_TYPE_COUNT, false, kAddonDense);
                 });
         }
     }
     for (const ggml_type type :
          { GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32 }) {
         suite.device_case("dense_matmul." + type_name(type) + ".tokens3.outputs47", [type] {
-            run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 3, 47);
+            const bool kquant = type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K || type == GGML_TYPE_Q8_0;
+            run_dense_matmul_cpu_reference_case(type, kquant ? kKquantTokens : kF32Wmma, 3, 47, kQwenHiddenSize,
+                                                false, false, GGML_TYPE_COUNT, false, kAddonDense);
         });
     }
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         suite.device_case("dense_matmul." + type_name(type) + ".tiled.tokens33.outputs65.input512", [type] {
-            run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32", 33, 65,
-                                                512);
+            run_dense_matmul_cpu_reference_case(type, kF32Wmma, 33, 65, 512, false, false, GGML_TYPE_COUNT, false,
+                                                kAddonDense);
         });
     }
     suite.device_case("dense_matmul_unary.f32.tokens3.outputs47", [] {
-        run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
-                                                  3, 47);
+        run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 3, 47);
     });
     suite.device_case("get_rows_f32.f32.rows262144.tokens4.outputs1",
                       [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_F32, 262144, 4, 1); });
     suite.device_case("dense_matmul.q4_k.skinny.tokens2.outputs128", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 2,
-                                            128);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, kKquantTokens, 2, 128, kQwenHiddenSize, false, false,
+                                            GGML_TYPE_COUNT, false, kAddonDense);
     });
     suite.device_case("dense_matmul.q4_k.vector.tokens1.outputs128", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 128);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_kquant_mul_mat_decode_f32", 1, 128);
     });
     for (const ggml_type type : { GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS }) {
         suite.device_case("dense_matmul." + type_name(type) + ".codebook.vector.tokens1.outputs128", [type] {
-            run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32", 1, 128,
-                                                2048);
+            run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_kquant_mul_mat_decode_f32", 1, 128, 2048);
         });
         suite.device_case("dense_matmul." + type_name(type) + ".codebook.tiled.tokens64.outputs128", [type] {
-            run_dense_matmul_cpu_reference_case(
-                type, "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32", 64, 128, 2048);
+            run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32", 64, 128, 2048);
         });
     }
     suite.device_case("dense_matmul.iq3_xxs.codebook.vector.tokens1.outputs128", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ3_XXS,
-                                            "loom_libs:ggml_mul_mat_vector_iq3_xxs_f32_f32", 1, 128, 2048);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ3_XXS, "loom_libs:ggml_kquant_mul_mat_decode_f32", 1, 128,
+                                            2048);
     });
     suite.device_case("dense_matmul.iq3_xxs.codebook.tiled.tokens64.outputs128", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ3_XXS,
-                                            "loom_libs:ggml_mul_mat_tiled_input_f32_iq3_xxs_publish_f32", 64,
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ3_XXS, "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32", 64,
                                             128, 2048);
     });
     for (const ggml_type type : { GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_S }) {
-        const char * vector_kernel = type == GGML_TYPE_IQ2_S ?
-                                         "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32" :
-                                         "loom_libs:ggml_mul_mat_vector_iq3_s_f32_f32";
-        const char * tiled_kernel = type == GGML_TYPE_IQ2_S ?
-                                        "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32" :
-                                        "loom_libs:ggml_mul_mat_tiled_input_f32_iq3_s_publish_f32";
+        // engine#2774: the codebook formats run the kquant family (engine#444), not a per-format kernel.
+        const char * vector_kernel = "loom_libs:ggml_kquant_mul_mat_decode_f32";
+        const char * tiled_kernel  = "loom_libs:ggml_kquant_mul_mat_decode_tokens_f32";
         suite.device_case("dense_matmul." + type_name(type) + ".codebook_control.vector.tokens1.outputs128",
                           [type, vector_kernel] {
                               run_dense_matmul_cpu_reference_case(type, vector_kernel, 1, 128, 2048);
@@ -9410,11 +9352,11 @@ static void register_dense_matmul_cases(Suite & suite) {
                           });
     }
     suite.device_case("dense_matmul.iq4_xs.vector.tokens1.outputs128", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_XS, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 128);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_XS, "loom_libs:ggml_kquant_mul_mat_decode_f32", 1, 128);
     });
     suite.device_case("dense_matmul.iq4_xs.tiled.tokens64.outputs128", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_XS,
-                                            "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 64, 128);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_XS, kF32Wmma, 64, 128, kQwenHiddenSize, false, false,
+                                            GGML_TYPE_COUNT, false, kAddonDense);
     });
     suite.device_case("dense_matmul.iq4_xs.prefill.tokens256.outputs128", [] {
         // engine#3120: the add-on's prefill matcher serves this shape with the f32->f16 cast and its own iq4_xs
@@ -9435,7 +9377,7 @@ static void register_dense_matmul_cases(Suite & suite) {
             suite.device_case(
                 "attention_v_matmul." + type_name(type) + ".cache_" + type_name(cache_type), [type, cache_type] {
                     run_dense_matmul_cpu_reference_case(type,
-                                                        "loom_libs:llm_attention_v_matmul_set_rows_vector_f32_f32", 1,
+                                                        "loom_libs:llm_attention_v_matmul_set_rows_decode_f32_f32", 1,
                                                         1024, 2048, false, false, cache_type);
                 });
         }
@@ -9445,55 +9387,55 @@ static void register_dense_matmul_cases(Suite & suite) {
     for (const ggml_type type :
          { GGML_TYPE_Q1_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_IQ2_S,
            GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
-        const char * vector_kernel = type == GGML_TYPE_IQ2_S ? "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32" :
-                                                              "loom_libs:ggml_mul_mat_vector_f32_f32";
+        // engine#2774: Q1_0, Q8_0 and IQ2_S run the kquant family; Q6_K quantizes its input and runs the generic WMMA
+        // kernel even for one token; the rest run the generic f32 kernels.
+        const bool    kquant        = type == GGML_TYPE_Q1_0 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_IQ2_S;
+        const char *  vector_kernel = kquant ? kKquantDecode : type == GGML_TYPE_Q6_K ? kF32Wmma : kF32Decode;
         const int64_t outputs       = type == GGML_TYPE_IQ2_S ? 640 : (type == GGML_TYPE_IQ4_NL ? 1024 : 128);
         const int64_t input         = type == GGML_TYPE_IQ4_NL ? 640 : kQwenHiddenSize;
         const bool    tiled_route   = type == GGML_TYPE_IQ2_S || type == GGML_TYPE_IQ4_NL;
         const char *  route         = tiled_route ? "tiled" : "skinny";
-        const char * kernel = type == GGML_TYPE_IQ2_S ? "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32" :
-                              type == GGML_TYPE_IQ4_NL ? "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32" :
-                                                          "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32";
+        const char *  kernel        = kquant ? kKquantTokens : kF32Wmma;
         suite.device_case(
             "dense_matmul." + type_name(type) + "." + route + ".tokens2.outputs" + std::to_string(outputs),
-            [type, outputs, input, kernel] { run_dense_matmul_cpu_reference_case(type, kernel, 2, outputs, input); });
+            [type, outputs, input, kernel] {
+                run_dense_matmul_cpu_reference_case(type, kernel, 2, outputs, input, false, false, GGML_TYPE_COUNT,
+                                                    false, kAddonDense);
+            });
         suite.device_case("dense_matmul." + type_name(type) + ".vector.tokens1.outputs" + std::to_string(outputs),
                           [type, vector_kernel, outputs, input] {
-                              run_dense_matmul_cpu_reference_case(type, vector_kernel, 1, outputs, input);
+                              run_dense_matmul_cpu_reference_case(type, vector_kernel, 1, outputs, input, false, false,
+                                                                  GGML_TYPE_COUNT, false, kAddonDense);
                           });
     }
     suite.device_case("dense_matmul.iq4_nl.tiled.tokens64.outputs1024", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_NL,
-                                            "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 64, 1024,
-                                            640);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ4_NL, kF32Wmma, 64, 1024, 640, false, false,
+                                            GGML_TYPE_COUNT, false, kAddonDense);
     });
     suite.device_case("dense_matmul.q5_0.tiled.tokens2.outputs256.input640", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32", 2,
-                                            256, 640);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 256, 640);
     });
     suite.device_case("dense_matmul.q5_0.tiled.tokens2.outputs128.input544", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32", 2,
-                                            128, 544);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128, 544);
     });
     suite.device_case("dense_matmul.q5_0.vector.tokens1.outputs256.input640", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 256, 640);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q5_0, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 256,
+                                            640);
     });
     suite.device_case("dense_matmul.q8_1.zero_weight.skinny", [] {
-        run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32");
+        run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_f32_f32_wmma");
     });
     suite.device_case("dense_matmul.q8_1.zero_weight.vector", [] {
-        run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_vector_f32_f32", 1);
+        run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1);
     });
     suite.device_case("dense_matmul.f32.skinny.tokens2.outputs256", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 2,
-                                            256);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 256);
     });
     suite.device_case("dense_matmul.f32.vector.tokens1.outputs256", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 256);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 256);
     });
     suite.device_case("dense_matmul_unary.f32.tokens2.outputs128", [] {
-        run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
-                                                  2, 128);
+        run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
     });
     suite.device_case("dense_matmul_swiglu.q4_k.f16.swiglu.tokens2.outputs128", [] {
         run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_F16,
@@ -9506,14 +9448,13 @@ static void register_dense_matmul_cases(Suite & suite) {
     });
     suite.device_case("dense_matmul_swiglu.iq4_nl.iq4_nl.geglu.tokens2.outputs2048.input640", [] {
         run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL,
-                                                   "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32", 2,
-                                                   2048, GGML_GLU_OP_GEGLU, 640);
+                                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma", 2, 2048,
+                                                   GGML_GLU_OP_GEGLU, 640);
     });
     suite.device_case("dense_matmul_swiglu.iq4_nl.iq4_nl.geglu.tokens64.outputs128.input640", [] {
         run_dense_matmul_swiglu_cpu_reference_case(
-            GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL,
-            "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_aligned",
-            64, 128, GGML_GLU_OP_GEGLU, 640);
+            GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL, kSwigluWmma, 64, 128, GGML_GLU_OP_GEGLU, 640, false, false,
+            kAddonDense);
     });
     for (const ggml_glu_op op : { GGML_GLU_OP_REGLU, GGML_GLU_OP_GEGLU_ERF, GGML_GLU_OP_GEGLU_QUICK }) {
         suite.device_case(std::string("dense_matmul_swiglu.q4_k.f16.") + glu_op_name(op) + ".tokens2.outputs128", [op] {
@@ -9523,18 +9464,17 @@ static void register_dense_matmul_cases(Suite & suite) {
     }
     suite.device_case("dense_matmul_packed_glu.q4_k.tokens2.outputs128", [] {
         run_dense_matmul_packed_glu_cpu_reference_case(
-            GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32", 2, 128);
+            GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma", 2, 128);
     });
     suite.device_case("dense_matmul_packed_glu.q4_k.swiglu.tokens2.outputs128.gated", [] {
-        run_dense_matmul_packed_glu_cpu_reference_case(GGML_TYPE_Q4_K,
-                                                       "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
-                                                       2, 128, GGML_GLU_OP_SWIGLU, true);
+        run_dense_matmul_packed_glu_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_f32_f32_wmma", 2,
+                                                       128, GGML_GLU_OP_SWIGLU, true);
     });
     suite.device_case("dense_matmul_binary.q4_k.f16.tokens2.outputs128", [] {
         run_dense_matmul_binary_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_F16,
                                                    "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128);
     });
-    suite.device_case("vector_q8_publish.cpu_reference", [] { run_vector_q8_publish_cpu_reference_case(); });
+    suite.device_case("vector_f32_into_kquant.cpu_reference", [] { run_vector_f32_into_kquant_cpu_reference_case(); });
     for (const ggml_glu_op op :
          { GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_REGLU, GGML_GLU_OP_GEGLU_ERF, GGML_GLU_OP_GEGLU_QUICK }) {
         for (const int64_t outputs : { 128, 4096 }) {
@@ -9625,27 +9565,27 @@ static void register_dense_matmul_cases(Suite & suite) {
     });
     suite.device_case("dense_matmul_postops.f16.bias.tokens33.outputs256", [] {
         run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
-                                                    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                                                    "loom_libs:ggml_mul_mat_bias_f32_f32_wmma",
                                                     33, 256, true, false, false);
     });
     suite.device_case("dense_matmul_postops.f16.residual.tokens33.outputs256", [] {
         run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
-                                                    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                                                    "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
                                                     33, 256, false, true, false);
     });
     suite.device_case("dense_matmul_postops.f16.bias_residual.tokens33.outputs256", [] {
         run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
-                                                    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                                                    "loom_libs:ggml_mul_mat_bias_add_f32_f32_wmma",
                                                     33, 256, true, true, false);
     });
     suite.device_case("dense_matmul_postops.f16.residual.alias.tokens33.outputs256", [] {
         run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
-                                                    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                                                    "loom_libs:ggml_mul_mat_add_f32_f32_wmma",
                                                     33, 256, false, true, true);
     });
     suite.device_case("dense_matmul_postops.f16.bias_residual.alias.tokens33.outputs256", [] {
         run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
-                                                    "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                                                    "loom_libs:ggml_mul_mat_bias_add_f32_f32_wmma",
                                                     33, 256, true, true, true);
     });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
@@ -9653,91 +9593,77 @@ static void register_dense_matmul_cases(Suite & suite) {
         suite.device_case(
             "dense_matmul." + type_name(type) + ".skinny.tokens5.outputs4096.input" + std::to_string(input_size),
             [type, input_size] {
-                run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 5,
-                                                    4096, input_size);
+                run_dense_matmul_cpu_reference_case(type, type == GGML_TYPE_Q4_K ? kKquantTokens : kF32Wmma, 5, 4096,
+                                                    input_size, false, false, GGML_TYPE_COUNT, false, kAddonDense);
             });
         suite.device_case("dense_matmul_postops." + type_name(type) + ".add.tokens5.outputs4160", [type, input_size] {
-            run_dense_matmul_postops_cpu_reference_case(
-                type, "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32", 5, 4160, false, true, false,
-                input_size + 256);
+            run_dense_matmul_postops_cpu_reference_case(type, kKquantTokens, 5, 4160, false, true, false,
+                                                        input_size + 256, kAddonDense);
         });
         suite.device_case("dense_matmul_postops." + type_name(type) + ".add.alias.tokens5.outputs4224",
                           [type, input_size] {
-                run_dense_matmul_postops_cpu_reference_case(
-                                  type, "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32", 5, 4224,
-                                  false, true, true, input_size + 256);
+                run_dense_matmul_postops_cpu_reference_case(type, kKquantTokens, 5, 4224, false, true, true,
+                                                            input_size + 256, kAddonDense);
             });
     }
     suite.device_case("dense_matmul.q4_k.skinny.tokens5.outputs4096.input8192", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 5,
-                                            4096, 8192);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, kKquantTokens, 5, 4096, 8192, false, false,
+                                            GGML_TYPE_COUNT, false, kAddonDense);
     });
     for (const int64_t input_size : { 6144, 6400, 6656 }) {
         suite.device_case(
             "dense_matmul.q4_k.skinny.tokens5.outputs5120.input" + std::to_string(input_size), [input_size] {
-                              run_dense_matmul_cpu_reference_case(
-                    GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 5, 5120, input_size);
+                run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, kKquantTokens, 5, 5120, input_size, false, false,
+                                                    GGML_TYPE_COUNT, false, kAddonDense);
                           });
         suite.device_case("dense_matmul_postops.q4_k.add.alias.tokens5.outputs5120.input" + std::to_string(input_size),
                           [input_size] {
-                run_dense_matmul_postops_cpu_reference_case(
-                                  GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
-                                  5, 5120, false, true, true, input_size);
+                run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q4_K, kKquantTokens, 5, 5120, false, true, true,
+                                                            input_size, kAddonDense);
             });
     }
     suite.device_case("dense_matmul.q4_k.skinny.tokens4.outputs4096.input4096", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 4,
-                                            4096, 4096);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, kKquantTokens, 4, 4096, 4096, false, false,
+                                            GGML_TYPE_COUNT, false, kAddonDense);
     });
     suite.device_case("dense_matmul_postops.q4_k.add.tokens4.outputs4160.input6400", [] {
-        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q4_K,
-                                                    "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
-                                                    4, 4160, false, true, false, 6400);
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q4_K, kKquantTokens, 4, 4160, false, true, false, 6400,
+                                                    kAddonDense);
     });
     suite.device_case("dense_matmul_postops.q4_k.add.alias.tokens4.outputs4224.input6656", [] {
-        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q4_K,
-                                                    "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
-                                                    4, 4224, false, true, true, 6656);
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q4_K, kKquantTokens, 4, 4224, false, true, true, 6656,
+                                                    kAddonDense);
     });
     suite.device_case("endpoint_rmsnorm_q6k_q8.cpu_reference",
                       [] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(); });
     suite.device_case("dense_matmul.q6_k.skinny.tokens5.outputs4096.input16384", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 5,
-                                            4096, 16384);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, kF32Wmma, 5, 4096, 16384, false, false, GGML_TYPE_COUNT,
+                                            false, kAddonDense);
     });
     suite.device_case("dense_matmul_postops.q6_k.add.tokens5.outputs4160.input16640", [] {
-        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q6_K,
-                                                    "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
-                                                    5, 4160, false, true, false, 16640);
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q6_K, kKquantTokens, 5, 4160, false, true, false, 16640,
+                                                    kAddonDense);
     });
     suite.device_case("dense_matmul_postops.q6_k.add.alias.tokens5.outputs4224.input16640", [] {
-        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q6_K,
-                                                    "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
-                                                    5, 4224, false, true, true, 16640);
+        run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q6_K, kKquantTokens, 5, 4224, false, true, true, 16640,
+                                                    kAddonDense);
     });
     for (const int64_t tokens : { 1, 3, 5 }) {
         suite.device_case(
             "dense_matmul.q4_k.contiguous.tokens" + std::to_string(tokens) + ".outputs256.input5120", [tokens] {
-                run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K,
-                    tokens == 1 ? "loom_libs:ggml_mul_mat_vector_f32_f32" :
-                                  "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
-                    tokens, 256, 5120, true);
+                run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, kF32Wmma, tokens, 256, 5120, true, false,
+                                                    GGML_TYPE_COUNT, false, kAddonDense);
             });
         suite.device_case(
             "dense_matmul.q6_k.contiguous.tokens" + std::to_string(tokens) + ".outputs256.input5120", [tokens] {
-                run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K,
-                    tokens == 1 ? "loom_libs:ggml_mul_mat_vector_f32_f32" :
-                                  "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
-                    tokens, 256, 5120, true, true);
+                run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, kF32Wmma, tokens, 256, 5120, true, true);
             });
     }
     suite.device_case("dense_matmul.q6_k.vector_q6.tokens1.outputs256.input5120", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 256, 5120,
-                                            true);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, kF32Wmma, 1, 256, 5120, true);
     });
     suite.device_case("dense_matmul.q6_k.vector_q6.tokens1.outputs320.input512", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 320, 512,
-                                            true);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, kF32Wmma, 1, 320, 512, true);
     });
 }
 
@@ -9870,8 +9796,8 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     });
     suite.device_case("q4_prefill_source_eligibility", [] { run_q4_prefill_source_eligibility_case(); });
     suite.device_case("uploaded_native_q6_vector", [] {
-        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 128,
-                                            2048, false, false, GGML_TYPE_COUNT, true);
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, kF32Wmma, 1, 128, 2048, false, false, GGML_TYPE_COUNT,
+                                            true);
     });
     suite.device_case("uploaded_native_gated_q4", [] {
         // engine#3120: served by the add-on's fused q4_k/q4_k swiglu (kquant_tokens_q8), as the lowtoken rows are.
@@ -10019,7 +9945,7 @@ int main(int argc, char ** argv) {
         return 0;
     }
     if (!options.runner_control && run_vector_publish_test) {
-        run_vector_q8_publish_cpu_reference_case();
+        run_vector_f32_into_kquant_cpu_reference_case();
         return 0;
     }
     if (!options.runner_control && run_vector_postops_test) {

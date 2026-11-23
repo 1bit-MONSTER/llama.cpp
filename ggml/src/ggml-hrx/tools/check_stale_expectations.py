@@ -13,24 +13,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""check_stale_expectations.py -- keep `kRecordedStaleExpectations` honest, without running a kernel.
+"""check_stale_expectations.py -- every kernel name the HRX op suite expects must be one dispatch can select.
 
-`tests/hrx-ops-test.cpp` records the kernel names that the suite demands and no matcher selects (engine#2774), so that
-"the suite is 63 % red" reads as "these are known-stale, anything else is real". The table carries its own rot detector,
-but it can only fire when a case RUNS and its name comes back -- a device run, minutes, and only for the cases a binary
-reaches. The table's correctness is a property of the SOURCE: a recorded name must be absent from every
-`GGML_HRX_KERNEL_REF` and present in a corpus manifest. This answers that statically, for every entry, in a second.
+engine#2774: `tests/hrx-ops-test.cpp` asserts which kernels a graph schedules by name (`"loom_libs:<kernel>"`). A name
+that no `GGML_HRX_KERNEL_REF` registers can never be scheduled, so a positive expectation on it aborts every run and a
+negative one (`== end()`) is true by construction. The suite used to carry a `kRecordedStaleExpectations` table that
+silently skipped such names; at 7737fa364 it hid 186 checks in 170 cases. That table is gone, and this check keeps the
+state it left: it answers from the source, without a device, in about a second.
 
-Exit codes: 0 every recorded name is unselectable and still exported, 1 an entry is wrong (see the message), 2 cannot
-tell (a file this check needs is missing).
+  UNSELECTABLE  a `<corpus>:<kernel>` literal in the suite that no registration names. Rewrite the expectation to the
+                kernel the case schedules (the device run prints the sequence on a miss), or delete the check.
+  TABLE         the suite defines `kRecordedStaleExpectations` again. Fix the expectation instead.
 
-The two faults it reports are different mistakes:
+Comments are not read, and `hip:` names are content-addressed add-on objects, not registrations, so they are not
+checked here.
 
-  ROTTED      the name IS registered, so a matcher can select it -- the exception now suppresses a real mis-selection,
-              which is the one thing the table must never do. (The runtime detector says "prune this line"; this says
-              it at every pin, including the pins nobody runs the suite on.)
-  NOT EXPORTED no corpus manifest defines the name any more, so the entry no longer describes "exported but
-              unselected"; it describes a kernel that moved or was renamed, and the case it covers is unexplained.
+Exit codes: 0 every literal is selectable, 1 a fault (see the messages), 2 cannot tell (a file is missing, or the suite
+yields no literal at all, which means this parser no longer matches it).
 """
 import argparse
 import json
@@ -38,94 +37,83 @@ import re
 import sys
 from pathlib import Path
 
-TABLE_RE = re.compile(r"kRecordedStaleExpectations\[\]\s*=\s*\{(.*?)\n\};", re.S)
-ENTRY_RE = re.compile(r'"([a-z0-9_]+):([^"]+)"')
+SUITES = ("tests/hrx-ops-test.cpp",)
+CORPORA = ("loom_libs", "qwen3_moe", "hrx")
+LITERAL_RE = re.compile(r'"((?:' + "|".join(CORPORA) + r'):[A-Za-z0-9_]+)"')
 REF_RE = re.compile(r'GGML_HRX_KERNEL_REF\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)')
+TABLE_RE = re.compile(r"\bkRecordedStaleExpectations\s*\[\s*\]\s*=")
 
 
-def read_records(root: Path):
-    """(corpus, kernel) pairs from the harness table, or None when the table or the file is missing."""
-    path = root / "tests" / "hrx-ops-test.cpp"
-    if not path.is_file():
-        return None, f"no {path}"
-    match = TABLE_RE.search(path.read_text(encoding="utf-8", errors="replace"))
-    if not match:
-        return None, f"no kRecordedStaleExpectations table in {path}"
-    return ENTRY_RE.findall(match.group(1)), None
+def strip_comments(text: str) -> str:
+    """Blank out // and /* */ comments, keeping string literals and line numbers."""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("\n" * text.count("\n", i, j))
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def read_registrations(root: Path):
-    """Every kernel name a dispatch registration can select, from any corpus. Any corpus matters: the table is written
-    `loom_libs:<name>` throughout, but two of the names the harness deliberately excludes live under `qwen3_moe`, so a
-    check that only reads the `loom_libs` prefix reports registrations as missing (I made that mistake by hand first)."""
+    """Every `<corpus>:<kernel>` a dispatch registration can select. Headers count: the q8 quantize pass is
+    registered from dispatch-mul-mat-common.h, and a .cpp-only scan reports it as missing."""
     hx = root / "ggml" / "src" / "ggml-hrx"
     if not hx.is_dir():
         return None, f"no {hx}"
     names = set()
-    for cpp in hx.rglob("*.cpp"):
-        for _corpus, kernel in REF_RE.findall(cpp.read_text(encoding="utf-8", errors="replace")):
-            names.add(kernel)
-    return names, None
-
-
-def read_exported(root: Path):
-    """Every kernel name some corpus manifest defines."""
-    corpus = root / "ggml" / "src" / "ggml-hrx" / "kernel-corpus" / "kernels"
-    if not corpus.is_dir():
-        return None, f"no {corpus}"
-    names = set()
-
-    def walk(node):
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key in ("name", "symbol") and isinstance(value, str):
-                    names.add(value)
-                walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    for manifest in corpus.rglob("manifest.json"):
-        try:
-            walk(json.loads(manifest.read_text(encoding="utf-8", errors="replace")))
-        except json.JSONDecodeError:
-            return None, f"{manifest} is not JSON"
+    for pattern in ("*.cpp", "*.h"):
+        for path in hx.rglob(pattern):
+            if "kernel-corpus" in path.parts:
+                continue
+            for corpus, kernel in REF_RE.findall(path.read_text(encoding="utf-8", errors="replace")):
+                names.add(f"{corpus}:{kernel}")
     return names, None
 
 
 def check(root: Path):
-    """-> (failures, cannot_tell). Each failure is (kind, corpus, kernel)."""
-    records, why = read_records(root)
-    if why:
-        return [], why
+    """-> (faults, literal_count, cannot_tell). A fault is (kind, file, line, name)."""
     registered, why = read_registrations(root)
     if why:
-        return [], why
-    exported, why = read_exported(root)
-    if why:
-        return [], why
-    failures = []
-    for corpus, kernel in records:
-        if kernel in registered:
-            failures.append(("ROTTED", corpus, kernel))
-        elif kernel not in exported:
-            failures.append(("NOT EXPORTED", corpus, kernel))
-    return failures, None
-
-
-FIXTURE_TABLE = '''
-static const char * const kRecordedStaleExpectations[] = {
-    "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32",
-    "loom_libs:ggml_some_kernel_that_vanished",
-};
-'''
+        return [], 0, why
+    faults = []
+    count = 0
+    for rel in SUITES:
+        path = root / rel
+        if not path.is_file():
+            return [], 0, f"no {path}"
+        code = strip_comments(path.read_text(encoding="utf-8", errors="replace"))
+        for match in TABLE_RE.finditer(code):
+            faults.append(("TABLE", rel, code.count("\n", 0, match.start()) + 1, "kRecordedStaleExpectations"))
+        for match in LITERAL_RE.finditer(code):
+            count += 1
+            if match.group(1) not in registered:
+                faults.append(("UNSELECTABLE", rel, code.count("\n", 0, match.start()) + 1, match.group(1)))
+    if count == 0:
+        return [], 0, "no <corpus>:<kernel> literal found in the suite: the parser no longer matches it"
+    return faults, count, None
 
 
 def self_test(tmp: Path) -> int:
-    """Hermetic: builds the three trees by hand, so no checkout is needed."""
+    """Hermetic: builds each tree by hand, so no checkout is needed."""
     fails = 0
 
-    def check_arm(name, ok, detail=""):
+    def arm(name, ok, detail=""):
         nonlocal fails
         print(f"{'ok  ' if ok else 'FAIL'} {name}" + (f"  [{detail}]" if detail and not ok else ""))
         if not ok:
@@ -133,54 +121,51 @@ def self_test(tmp: Path) -> int:
 
     made = []
 
-    def build(registered, exported, table=FIXTURE_TABLE):
-        # A fresh tree per arm: a leftover dispatch-y.cpp from an earlier arm would answer for this one.
+    def build(suite, refs, header_refs=()):
         root = tmp / f"repo{len(made)}"
         made.append(root)
         (root / "tests").mkdir(parents=True, exist_ok=True)
-        (root / "tests" / "hrx-ops-test.cpp").write_text(table, encoding="utf-8")
+        (root / "tests" / "hrx-ops-test.cpp").write_text(suite, encoding="utf-8")
         disp = root / "ggml" / "src" / "ggml-hrx" / "dispatch_registration"
         disp.mkdir(parents=True, exist_ok=True)
-        body = "".join(f'GGML_HRX_KERNEL_REF("loom_libs", "{n}");\n' for n in registered)
+        body = "".join(f'GGML_HRX_KERNEL_REF("{c}", "{k}");\n' for c, k in refs)
         (disp / "dispatch-x.cpp").write_text(body, encoding="utf-8")
-        corpus = root / "ggml" / "src" / "ggml-hrx" / "kernel-corpus" / "kernels" / "loom-libs"
-        corpus.mkdir(parents=True, exist_ok=True)
-        (corpus / "manifest.json").write_text(
-            json.dumps({"kernels": [{"name": n, "symbol": n} for n in exported]}), encoding="utf-8")
+        hbody = "".join(f'constexpr auto k = GGML_HRX_KERNEL_REF("{c}", "{k}");\n' for c, k in header_refs)
+        (disp / "dispatch-x.h").write_text(hbody, encoding="utf-8")
         return root
 
-    both = ["ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32", "ggml_some_kernel_that_vanished"]
+    good = 'require({ "loom_libs:ggml_binary_f32", "hip:k_0123" });\n'
+    refs = [("loom_libs", "ggml_binary_f32")]
 
-    # The good state: recorded, exported, unregistered.
-    root = build([], both)
-    got, why = check(root)
-    check_arm("a recorded kernel that is exported and unregistered is clean", got == [] and why is None, str(why or got))
+    faults, count, why = check(build(good, refs))
+    arm("a registered literal is clean, and a hip: name is not checked", faults == [] and count == 1 and why is None,
+        str((faults, count, why)))
 
-    # ROTTED: the dispatcher can now select it, so the exception hides a real mis-selection.
-    root = build(["ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32"], both)
-    got, why = check(root)
-    check_arm("a recorded kernel that IS registered is ROTTED",
-              [k for k, _c, _n in got] == ["ROTTED"], str(got))
+    faults, _, why = check(build(good + 'require({ "loom_libs:ggml_gone_f32" });\n', refs))
+    arm("an unregistered literal is UNSELECTABLE, on its line",
+        [(k, l, n) for k, _f, l, n in faults] == [("UNSELECTABLE", 2, "loom_libs:ggml_gone_f32")], str(faults))
 
-    # NOT EXPORTED: the entry no longer means "exported but unselected".
-    root = build([], ["ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32"])
-    got, why = check(root)
-    check_arm("a recorded kernel no manifest defines is NOT EXPORTED",
-              [k for k, _c, _n in got] == ["NOT EXPORTED"], str(got))
+    faults, _, why = check(build(good + '// was "loom_libs:ggml_gone_f32"\n/* "loom_libs:ggml_gone_f32" */\n', refs))
+    arm("a literal inside a comment is not read", faults == [] and why is None, str((faults, why)))
 
-    # The corpus-blindness that caught me: a name registered under another corpus still counts as registered.
-    root = build([], both)
-    (root / "ggml" / "src" / "ggml-hrx" / "dispatch_registration" / "dispatch-y.cpp").write_text(
-        'GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32");\n', encoding="utf-8")
-    got, why = check(root)
-    check_arm("a registration under another corpus still counts as registered",
-              [k for k, _c, _n in got] == ["ROTTED"], str(got))
+    faults, _, why = check(build('x({ "qwen3_moe:ggml_quantize_q8_1_x4_f32" });\n', [],
+                                 [("qwen3_moe", "ggml_quantize_q8_1_x4_f32")]))
+    arm("a registration in a header counts", faults == [] and why is None, str((faults, why)))
 
-    # Cannot tell is its own answer and outranks a pass.
-    root = build([], both)
+    faults, _, why = check(build('x({ "qwen3_moe:ggml_binary_f32" });\n', refs))
+    arm("the corpus is part of the name: loom_libs:x does not register qwen3_moe:x",
+        [k for k, *_ in faults] == ["UNSELECTABLE"], str(faults))
+
+    faults, _, why = check(build(good + 'static const char * const kRecordedStaleExpectations[] = { };\n', refs))
+    arm("a suppression table coming back is TABLE", [k for k, *_ in faults] == ["TABLE"], str(faults))
+
+    faults, _, why = check(build("int main() { return 0; }\n", refs))
+    arm("a suite with no literal at all cannot tell rather than passing", faults == [] and why is not None, str(why))
+
+    root = build(good, refs)
     (root / "tests" / "hrx-ops-test.cpp").unlink()
-    got, why = check(root)
-    check_arm("a missing harness file cannot tell rather than passing", got == [] and why is not None, str(why))
+    faults, _, why = check(root)
+    arm("a missing suite cannot tell rather than passing", faults == [] and why is not None, str(why))
 
     print("self-test ok" if not fails else f"self-test FAILED ({fails})")
     return 0 if not fails else 1
@@ -199,23 +184,20 @@ def main() -> int:
     if not args.check:
         ap.print_usage()
         return 2
-    failures, why = check(Path(args.root))
+    faults, count, why = check(Path(args.root))
     if why:
         print(f"stale-expectations: cannot tell: {why}", file=sys.stderr)
         return 2
-    for kind, corpus, kernel in failures:
-        if kind == "ROTTED":
-            print(f"  ROTTED {corpus}:{kernel}\n"
-                  f"     a dispatch registration names it, so a matcher can select it: the exception is now hiding a "
-                  f"real mis-selection (engine#2774). Prune the line, or the case should pass on its own.")
+    for kind, rel, line, name in faults:
+        if kind == "TABLE":
+            print(f"  TABLE {rel}:{line}\n     the suite defines kRecordedStaleExpectations again: rewrite the "
+                  f"expectation to the kernel the case schedules instead of suppressing it (engine#2774).")
         else:
-            print(f"  NOT EXPORTED {corpus}:{kernel}\n"
-                  f"     no corpus manifest defines it, so 'the corpus still exports it and no matcher selects it' is "
-                  f"no longer what this entry means: the kernel moved or was renamed (engine#2774).")
-    if failures:
+            print(f"  UNSELECTABLE {rel}:{line} {name}\n     no GGML_HRX_KERNEL_REF registers it, so no graph can "
+                  f"schedule it: name the kernel the case schedules, or drop the check (engine#2774).")
+    if faults:
         return 1
-    records, _ = read_records(Path(args.root))
-    print(f"stale-expectations: {len(records)} recorded, every one exported by a corpus and selected by no matcher")
+    print(f"stale-expectations: {count} expectation literal(s), every one selectable by a registration")
     return 0
 
 
