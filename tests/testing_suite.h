@@ -549,6 +549,12 @@ class Suite {
         cases_.back().known_fail = reason;
     }
 
+    // The host-tier twin: a plan- or helper-level defect that needs no device to show.
+    template <typename F> void known_fail_host_case(std::string name, const char * reason, F && run) {
+        add_case(cases_, std::move(name), std::function<void()>(std::forward<F>(run)), false);
+        cases_.back().known_fail = reason;
+    }
+
     bool parse_options(int argc, char ** argv, Options & options) const {
         return test_runner::parse_options(argc, argv, config_, options);
     }
