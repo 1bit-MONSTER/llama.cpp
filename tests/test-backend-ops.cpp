@@ -8342,16 +8342,23 @@ struct test_moe_fused_gate_up : public test_case {
     const ggml_type type;
     const int64_t   m, n, k;
     const int       n_mats, n_used;
+    const bool      up_first;        // SwiGLU(up view, gate view): the matcher must decline (silu of the other half)
+    const bool      extra_consumer;  // a third consumer of the fused output: the matcher must decline
 
-    std::string vars() override { return VARS_TO_STR6(type, m, n, k, n_mats, n_used); }
+    std::string vars() override {
+        return VARS_TO_STR6(type, m, n, k, n_mats, n_used) + ",up_first=" + var_to_str(up_first) +
+               ",extra_consumer=" + var_to_str(extra_consumer);
+    }
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
         return "MUL_MAT_VEC_FUSION";
     }
     bool run_whole_graph() override { return true; }
 
-    test_moe_fused_gate_up(ggml_type type, int64_t m, int64_t n, int64_t k, int n_mats, int n_used)
-        : type(type), m(m), n(n), k(k), n_mats(n_mats), n_used(n_used) {}
+    test_moe_fused_gate_up(ggml_type type, int64_t m, int64_t n, int64_t k, int n_mats, int n_used,
+                           bool up_first = false, bool extra_consumer = false)
+        : type(type), m(m), n(n), k(k), n_mats(n_mats), n_used(n_used), up_first(up_first),
+          extra_consumer(extra_consumer) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * gate_up = ggml_new_tensor_3d(ctx, type, k, 2 * n, n_mats);
@@ -8364,7 +8371,13 @@ struct test_moe_fused_gate_up : public test_case {
         ggml_tensor * gu   = ggml_mul_mat_id(ctx, gate_up, cur, ids);  // [2n, n_used, m]
         ggml_tensor * gate = ggml_view_3d(ctx, gu, n, gu->ne[1], gu->ne[2], gu->nb[1], gu->nb[2], 0);
         ggml_tensor * up   = ggml_view_3d(ctx, gu, n, gu->ne[1], gu->ne[2], gu->nb[1], gu->nb[2], n * gu->nb[0]);
-        ggml_tensor * out  = ggml_glu_split(ctx, gate, up, GGML_GLU_OP_SWIGLU);
+        ggml_tensor * out  = up_first ? ggml_glu_split(ctx, up, gate, GGML_GLU_OP_SWIGLU) :
+                                        ggml_glu_split(ctx, gate, up, GGML_GLU_OP_SWIGLU);
+        if (extra_consumer) {
+            // a second reader of the whole fused output, folded into the result so it stays in the graph
+            ggml_tensor * whole = ggml_sum_rows(ctx, ggml_cont(ctx, gu));      // [1, n_used, m]
+            out = ggml_add(ctx, out, ggml_repeat(ctx, whole, out));
+        }
         ggml_set_name(out, "out");
         return out;
     }
@@ -13243,7 +13256,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_moe_fused_gate_up(t, 1, 640, 2560, 512, 10));
         test_cases.emplace_back(new test_moe_fused_gate_up(t, 1, 32, 256, 16, 8));
     }
-    test_cases.emplace_back(new test_moe_fused_gate_up(GGML_TYPE_IQ3_XXS, 4, 32, 256, 16, 8));  // not one token: not taken
+    for (ggml_type t : {GGML_TYPE_Q8_0, GGML_TYPE_Q1_0, GGML_TYPE_Q2_0}) {  // the rest of the =all list
+        test_cases.emplace_back(new test_moe_fused_gate_up(t, 1, 32, 256, 16, 8));
+    }
+    // shapes the matcher must leave to the plain path, each still compared with the CPU
+    test_cases.emplace_back(new test_moe_fused_gate_up(GGML_TYPE_IQ3_XXS, 4, 32, 256, 16, 8));               // 4 tokens
+    test_cases.emplace_back(new test_moe_fused_gate_up(GGML_TYPE_IQ3_XXS, 1, 32, 256, 16, 8, true));         // up first
+    test_cases.emplace_back(new test_moe_fused_gate_up(GGML_TYPE_IQ3_XXS, 1, 32, 256, 16, 8, false, true));  // 3rd reader
 
     // The same routed shapes with the file's real 512 experts (engine #572 tile fit): 10 routes over 512 experts give
     // ~1.6 / 10 / 40 routed rows per expert at 80 / 512 / 2048 tokens, so these reach the small-row tiles that the
