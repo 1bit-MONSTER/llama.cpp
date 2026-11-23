@@ -13,11 +13,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""check_stale_expectations.py -- every kernel name the HRX op suite expects must be one dispatch can select.
+"""check_stale_expectations.py -- every kernel name the HRX op suites expect must be one dispatch can select.
 
 engine#2774: `tests/hrx-ops-test.cpp` asserts which kernels a graph schedules by name (`"loom_libs:<kernel>"`). A name
 that no `GGML_HRX_KERNEL_REF` registers can never be scheduled, so a positive expectation on it aborts every run and a
-negative one (`== end()`) is true by construction. The suite used to carry a `kRecordedStaleExpectations` table that
+negative one (`== end()`) is true by construction. engine#3408 added `tests/test-hrx-ops.cpp`, the second suite, which
+had two such names. The suite used to carry a `kRecordedStaleExpectations` table that
 silently skipped such names; at 7737fa364 it hid 186 checks in 170 cases. That table is gone, and this check keeps the
 state it left: it answers from the source, without a device, in about a second.
 
@@ -37,7 +38,7 @@ import re
 import sys
 from pathlib import Path
 
-SUITES = ("tests/hrx-ops-test.cpp",)
+SUITES = ("tests/hrx-ops-test.cpp", "tests/test-hrx-ops.cpp")  # engine#3408: both HRX op suites
 CORPORA = ("loom_libs", "qwen3_moe", "hrx")
 LITERAL_RE = re.compile(r'"((?:' + "|".join(CORPORA) + r'):[A-Za-z0-9_]+)"')
 REF_RE = re.compile(r'GGML_HRX_KERNEL_REF\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)')
@@ -86,14 +87,14 @@ def read_registrations(root: Path):
     return names, None
 
 
-def check(root: Path):
+def check(root: Path, suites=SUITES):
     """-> (faults, literal_count, cannot_tell). A fault is (kind, file, line, name)."""
     registered, why = read_registrations(root)
     if why:
         return [], 0, why
     faults = []
     count = 0
-    for rel in SUITES:
+    for rel in suites:
         path = root / rel
         if not path.is_file():
             return [], 0, f"no {path}"
@@ -120,6 +121,10 @@ def self_test(tmp: Path) -> int:
             fails += 1
 
     made = []
+    one = ("tests/hrx-ops-test.cpp",)
+
+    def check1(root):
+        return check(root, one)
 
     def build(suite, refs, header_refs=()):
         root = tmp / f"repo{len(made)}"
@@ -137,35 +142,43 @@ def self_test(tmp: Path) -> int:
     good = 'require({ "loom_libs:ggml_binary_f32", "hip:k_0123" });\n'
     refs = [("loom_libs", "ggml_binary_f32")]
 
-    faults, count, why = check(build(good, refs))
+    faults, count, why = check1(build(good, refs))
     arm("a registered literal is clean, and a hip: name is not checked", faults == [] and count == 1 and why is None,
         str((faults, count, why)))
 
-    faults, _, why = check(build(good + 'require({ "loom_libs:ggml_gone_f32" });\n', refs))
+    faults, _, why = check1(build(good + 'require({ "loom_libs:ggml_gone_f32" });\n', refs))
     arm("an unregistered literal is UNSELECTABLE, on its line",
         [(k, l, n) for k, _f, l, n in faults] == [("UNSELECTABLE", 2, "loom_libs:ggml_gone_f32")], str(faults))
 
-    faults, _, why = check(build(good + '// was "loom_libs:ggml_gone_f32"\n/* "loom_libs:ggml_gone_f32" */\n', refs))
+    faults, _, why = check1(build(good + '// was "loom_libs:ggml_gone_f32"\n/* "loom_libs:ggml_gone_f32" */\n', refs))
     arm("a literal inside a comment is not read", faults == [] and why is None, str((faults, why)))
 
-    faults, _, why = check(build('x({ "qwen3_moe:ggml_quantize_q8_1_x4_f32" });\n', [],
+    faults, _, why = check1(build('x({ "qwen3_moe:ggml_quantize_q8_1_x4_f32" });\n', [],
                                  [("qwen3_moe", "ggml_quantize_q8_1_x4_f32")]))
     arm("a registration in a header counts", faults == [] and why is None, str((faults, why)))
 
-    faults, _, why = check(build('x({ "qwen3_moe:ggml_binary_f32" });\n', refs))
+    faults, _, why = check1(build('x({ "qwen3_moe:ggml_binary_f32" });\n', refs))
     arm("the corpus is part of the name: loom_libs:x does not register qwen3_moe:x",
         [k for k, *_ in faults] == ["UNSELECTABLE"], str(faults))
 
-    faults, _, why = check(build(good + 'static const char * const kRecordedStaleExpectations[] = { };\n', refs))
+    faults, _, why = check1(build(good + 'static const char * const kRecordedStaleExpectations[] = { };\n', refs))
     arm("a suppression table coming back is TABLE", [k for k, *_ in faults] == ["TABLE"], str(faults))
 
-    faults, _, why = check(build("int main() { return 0; }\n", refs))
+    faults, _, why = check1(build("int main() { return 0; }\n", refs))
     arm("a suite with no literal at all cannot tell rather than passing", faults == [] and why is not None, str(why))
 
     root = build(good, refs)
     (root / "tests" / "hrx-ops-test.cpp").unlink()
-    faults, _, why = check(root)
+    faults, _, why = check1(root)
     arm("a missing suite cannot tell rather than passing", faults == [] and why is not None, str(why))
+
+    root = build(good, refs)
+    (root / "tests" / "test-hrx-ops.cpp").write_text('x({ "loom_libs:ggml_gone_f32" });\n', encoding="utf-8")
+    faults, _, why = check(root)
+    arm("the second suite (tests/test-hrx-ops.cpp) is read too (engine#3408)",
+        [(k, f, n) for k, f, _l, n in faults]
+        == [("UNSELECTABLE", "tests/test-hrx-ops.cpp", "loom_libs:ggml_gone_f32")],
+        str((faults, why)))
 
     print("self-test ok" if not fails else f"self-test FAILED ({fails})")
     return 0 if not fails else 1
