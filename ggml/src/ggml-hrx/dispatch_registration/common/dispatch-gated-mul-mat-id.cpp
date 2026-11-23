@@ -322,8 +322,9 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
         return false;
     }
 
-    if (kquant_moe_decode_selected(match)) {
-        return append_kquant_moe_decode(context, match, dispatch_match);
+    // A refused append (it clears what it added) falls through to the WMMA kernel instead of dropping the pair.
+    if (kquant_moe_decode_selected(match) && append_kquant_moe_decode(context, match, dispatch_match)) {
+        return true;
     }
 
     const CommonMulMatIdMatch   routed = routing_match_for_swiglu(match);
