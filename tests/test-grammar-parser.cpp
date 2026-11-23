@@ -157,6 +157,11 @@ int main()
         root ::= "a"{5000}
     )""");
 
+    // upstream #32551: a repetition whose max is below its min ("{5,3}") must be refused, not overflow max - min
+    verify_failure(R"""(
+        root ::= "a"{5,3}
+    )""");
+
     verify_failure(R"""(
         root ::= "a"{5000,}
     )""");
