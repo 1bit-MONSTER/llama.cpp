@@ -3275,7 +3275,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         }
 
         // Inkling: thinking off must render the template's "none" effort, an explicit effort still wins
-        for (const char * path : { "models/templates/thinkingmachines-Inkling.jinja", "models/templates/thinkingmachines-Inkling-2-Small.jinja" }) {
+        for (const char * path : { "models/templates/thinkingmachines-Inkling.jinja", "models/templates/thinkingmachines-Inkling-2-Small.jinja", "models/templates/thinkingmachines-Inkling-2-Mini.jinja" }) {
             auto tmpls = read_templates(path);
             auto render = [&](bool enable_thinking, const std::string & effort) {
                 common_chat_templates_inputs inputs;
@@ -5357,6 +5357,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Thinking block, then content block
         tst.test(P + "<|content_thinking|>I'm thinking" + E + H + "<|content_text|>Hello, world!\nWhat's up?" + E)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", "I'm thinking"))
+            .run();
+
+        // Thinking off with an explicit effort: the model may still think, and it is still extracted
+        tst.test(P + "<|content_thinking|>I'm thinking" + E + H + "<|content_text|>Hello, world!\nWhat's up?" + E)
+            .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(simple_assist_msg("Hello, world!\nWhat's up?", "I'm thinking"))
             .run();

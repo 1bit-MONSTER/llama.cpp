@@ -53,15 +53,18 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
                                                    const autoparser::generation_params & inputs_in) {
     common_chat_params data;
 
-    // the template reads only reasoning_effort (default 0.9), not enable_thinking: map thinking off to its "none"
-    autoparser::generation_params inputs = inputs_in;
-    const bool has_effort = inputs.extra_context.is_object() && inputs.extra_context.contains("reasoning_effort");
-    if (!inputs.enable_thinking && !has_effort) {
-        if (!inputs.extra_context.is_object()) {
-            inputs.extra_context = json::object();
+    // fork: the template reads only reasoning_effort (default 0.9), not enable_thinking: map thinking off to its "none"
+    const bool has_effort = inputs_in.extra_context.is_object() && inputs_in.extra_context.contains("reasoning_effort");
+    const bool map_off    = !inputs_in.enable_thinking && !has_effort;
+    autoparser::generation_params off_inputs;
+    if (map_off) {
+        off_inputs = inputs_in;
+        if (!off_inputs.extra_context.is_object()) {
+            off_inputs.extra_context = json::object();
         }
-        inputs.extra_context["reasoning_effort"] = "none";
+        off_inputs.extra_context["reasoning_effort"] = "none";
     }
+    const autoparser::generation_params & inputs = map_off ? off_inputs : inputs_in;
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
