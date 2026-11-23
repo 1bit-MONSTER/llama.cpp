@@ -3265,8 +3265,12 @@ static void run_mutable_host_input_after_writeback_case(bool hrx_host) {
     ggml_context * ctx = ggml_init(params);
     REQUIRE(ctx != nullptr);
     constexpr int64_t count = 128;
+    // engine#3402: the writer's result lives in host memory and is NOT a graph input of the writer. A graph input is
+    // never written back to the caller's tensor (fork b4e751594), so an in-place write on the input no longer defers
+    // a writeback; a host-bound output does. The reader reads the same host bytes through its own leaf.
+    ggml_tensor * source = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, count);
+    ggml_tensor * written = ggml_scale(ctx, source, 1.0f);
     ggml_tensor * input = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, count);
-    ggml_tensor * written = ggml_scale_inplace(ctx, input, 1.0f);
     ggml_tensor * output = ggml_scale(ctx, input, 2.0f);
     ggml_cgraph * writer = ggml_new_graph(ctx);
     ggml_cgraph * reader = ggml_new_graph(ctx);
@@ -3283,6 +3287,7 @@ static void run_mutable_host_input_after_writeback_case(bool hrx_host) {
         ggml_backend_dev_host_buffer_type(ggml_backend_get_device(backend)) : ggml_backend_cpu_buffer_type();
     ggml_backend_buffer_t host = ggml_backend_buft_alloc_buffer(host_type, ggml_nbytes(input));
     REQUIRE(host != nullptr);
+    REQUIRE(ggml_backend_tensor_alloc(host, written, ggml_backend_buffer_get_base(host)) == GGML_STATUS_SUCCESS);
     REQUIRE(ggml_backend_tensor_alloc(host, input, ggml_backend_buffer_get_base(host)) == GGML_STATUS_SUCCESS);
     ggml_backend_buffer_t device = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(device != nullptr);
@@ -3295,11 +3300,20 @@ static void run_mutable_host_input_after_writeback_case(bool hrx_host) {
     }
     ggml_backend_hrx_cache_stats cold = {};
     for (int run = 0; run < 2; ++run) {
-        ggml_backend_tensor_set(input, previous.data(), 0, ggml_nbytes(input));
+        ggml_backend_tensor_set(source, previous.data(), 0, ggml_nbytes(source));
         hrx_timeline_point_t before_writer = {};
         REQUIRE(!ggml::hrx::take_status(hrx_stream_get_timeline_position(backend_state->stream, &before_writer)));
         REQUIRE(ggml_backend_graph_compute_async(backend, writer) == GGML_STATUS_SUCCESS);
-        REQUIRE(backend_state->graph_replay_state.has_pending_host_writebacks());
+        // engine#3402: the writer stages a host download (it writes a host-bound output that is not one of its
+        // inputs), and since fork 1c1153316 (engine#1251) that writeback is published BEFORE the compute returns, so
+        // a CPU split reading the same host tensor next sees it. Nothing is left pending, and the host bytes already
+        // hold the writer's result.
+        REQUIRE(!backend_state->graph_replay_state.has_pending_host_writebacks());
+        {
+            std::vector<float> published(count);
+            std::memcpy(published.data(), written->data, ggml_nbytes(written));
+            require_close(published, previous, 0.0f);
+        }
         hrx_timeline_point_t after_writer = {};
         REQUIRE(!ggml::hrx::take_status(hrx_stream_get_timeline_position(backend_state->stream, &after_writer)));
         const char * replay_setting = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
@@ -3308,10 +3322,8 @@ static void run_mutable_host_input_after_writeback_case(bool hrx_host) {
             // The recorded launch advances once; the queued host-download tail must advance again.
             REQUIRE(after_writer.value >= before_writer.value + 2);
         }
-        REQUIRE(backend_state->graph_replay_state.has_pending_host_writebacks());
-        // Finish reading registered host memory without draining the backend's deferred writebacks.
         REQUIRE(!ggml::hrx::take_status(hrx_stream_synchronize(backend_state->stream)));
-        REQUIRE(backend_state->graph_replay_state.has_pending_host_writebacks());
+        REQUIRE(!backend_state->graph_replay_state.has_pending_host_writebacks());
         // Qwen's metadata initialization writes staged inputs; the next microbatch supplies new host values.
         ggml_backend_tensor_set(input, current.data(), 0, ggml_nbytes(input));
         REQUIRE(ggml_backend_graph_compute_async(backend, reader) == GGML_STATUS_SUCCESS);
@@ -10047,14 +10059,10 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("rmsnorm_mul.hidden2048.tokens1", [] { run_rmsnorm_mul_case(2048, 1); });
     suite.device_case("router_projection.tokens4", [] { run_router_projection_case(4); });
     suite.device_case("imported_native_weight", [] { run_imported_native_weight_case(); });
-    // engine#3402: the writer no longer stages a host download, so no writeback is deferred and the case cannot reach
-    // the state it tests; its asserts stay as written until the graph is rebuilt.
-    static constexpr const char * kNoDeferredWriteback =
-        "engine#3402: the writer graph no longer defers a host writeback (has_pending_host_writebacks() is false)";
-    suite.known_fail_device_case("mutable_host_input_after_writeback.cpu", kNoDeferredWriteback,
-                                 [] { run_mutable_host_input_after_writeback_case(false); });
-    suite.known_fail_device_case("mutable_host_input_after_writeback.hrx", kNoDeferredWriteback,
-                                 [] { run_mutable_host_input_after_writeback_case(true); });
+    suite.device_case("mutable_host_input_after_writeback.cpu",
+                      [] { run_mutable_host_input_after_writeback_case(false); });
+    suite.device_case("mutable_host_input_after_writeback.hrx",
+                      [] { run_mutable_host_input_after_writeback_case(true); });
     suite.known_fail_device_case("weight_persistence_sequence", kNoPackedCopyGraph,
                                  [] { run_weight_persistence_sequence_case(); });
     suite.device_case("failed_submission_weight_lifetime", [] { run_failed_submission_weight_lifetime_case(); });
