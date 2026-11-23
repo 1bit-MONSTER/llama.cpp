@@ -14104,6 +14104,41 @@
    ]
   },
   {
+   "name": "ggml_kquant_moe_swiglu_decode_f32",
+   "family": "loom_libs",
+   "symbol": "ggml_kquant_moe_swiglu_decode_f32",
+   "source": "ops/kquant_decode_f32.loom",
+   "workload_parameters": [],
+   "launch_parameters": [],
+   "bindings": [
+    "input",
+    "ids",
+    "gate",
+    "up",
+    "output"
+   ],
+   "binding_access": [
+    "read",
+    "read",
+    "read",
+    "read",
+    "read_write"
+   ],
+   "target_selector": "",
+   "compile_recipe": {
+    "mode": "direct",
+    "primary_sources": [
+     "ops/kquant_decode_f32.loom"
+    ],
+    "library_sources": [
+     "motifs/kquant_iq1_s.loom"
+    ]
+   },
+   "compile_dependencies": [
+    "motifs/kquant_iq1_s.loom"
+   ]
+  },
+  {
    "name": "ggml_kquant_mul_mat_decode_f32",
    "family": "loom_libs",
    "symbol": "ggml_kquant_mul_mat_decode_f32",

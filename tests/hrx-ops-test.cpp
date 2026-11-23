@@ -1820,8 +1820,12 @@ static void run_routed_codebook_admission_checks() {
     // GGML_HRX_IQ3S_TABLE_DECODE=0 puts the skinny/tiled selector (seven, with the grid) back.
     const char * iq3s_env   = std::getenv("GGML_HRX_IQ3S_TABLE_DECODE");
     const bool   iq3s_table = iq3s_env == nullptr || std::strcmp(iq3s_env, "0") != 0;
-    const char * pair_kernel = iq3s_table ? "iq3s_table" : "pair_input";
-    const size_t pair_bindings = iq3s_table ? 6 : 7;
+    // engine#679: these graphs are one token, so by default the IQ3_XXS pair runs the routed kquant decode (five
+    // bindings: input, ids, gate, up, output) instead; GGML_HRX_KQUANT_MOE_DECODE=0 puts the WMMA pair back.
+    const char * moe_env     = std::getenv("GGML_HRX_KQUANT_MOE_DECODE");
+    const bool   moe_decode  = moe_env == nullptr || std::strcmp(moe_env, "0") != 0;
+    const char * pair_kernel = moe_decode ? "kquant_moe_swiglu_decode" : iq3s_table ? "iq3s_table" : "pair_input";
+    const size_t pair_bindings = moe_decode ? 5 : iq3s_table ? 6 : 7;
     auto find_pair = [pair_kernel](const ggml::hrx::DispatchMatch & match) -> const ggml::hrx::Dispatch * {
         for (const ggml::hrx::Dispatch & dispatch : match.dispatches) {
             const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
@@ -8743,7 +8747,13 @@ static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up
     const char * iq3s_env      = std::getenv("GGML_HRX_IQ3S_TABLE_DECODE");
     const bool   iq3s_disabled = iq3s_env != nullptr && std::strcmp(iq3s_env, "0") == 0;
     const bool   iq3s_pair     = !iq3s_disabled && (gate_type == GGML_TYPE_IQ3_XXS || up_type == GGML_TYPE_IQ3_XXS);
-    const char * expected_kernel = iq3s_pair ? "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table" :
+    // engine#679: one token through a pair with an IQ3_XXS weight runs the routed kquant decode, unless
+    // GGML_HRX_KQUANT_MOE_DECODE=0 (=all also takes it; every pair here has an IQ3_XXS weight).
+    const char * moe_env    = std::getenv("GGML_HRX_KQUANT_MOE_DECODE");
+    const bool   moe_decode = token_count == 1 && (moe_env == nullptr || std::strcmp(moe_env, "0") != 0) &&
+                            (gate_type == GGML_TYPE_IQ3_XXS || up_type == GGML_TYPE_IQ3_XXS);
+    const char * expected_kernel = moe_decode ? "loom_libs:ggml_kquant_moe_swiglu_decode_f32" :
+                                   iq3s_pair ? "loom_libs:ggml_mul_mat_id_swiglu_f32_f32_wmma_iq3s_table" :
                                    token_count <= 5 ?
                                        "loom_libs:ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32" :
                                        "loom_libs:ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32";
