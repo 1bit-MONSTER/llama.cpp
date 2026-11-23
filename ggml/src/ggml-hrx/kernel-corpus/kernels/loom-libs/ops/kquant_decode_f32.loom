@@ -65,6 +65,24 @@ config.decl @ggml.kquant_swiglu_decode.gate_weight_format : %value: index where 
 
 config.decl @ggml.kquant_swiglu_decode.up_weight_format : %value: index where [range(%value, 4, 90)]
 
+config.decl @ggml.kquant_moe_swiglu_decode.input_size : %value: index where [range(%value, 256, 65536), multiple_of(%value, 256)]
+
+config.decl @ggml.kquant_moe_swiglu_decode.output_size : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.kquant_moe_swiglu_decode.gate_weight_format : %value: index where [range(%value, 4, 90)]
+
+config.decl @ggml.kquant_moe_swiglu_decode.up_weight_format : %value: index where [range(%value, 4, 90)]
+
+config.decl @ggml.kquant_moe_swiglu_decode.route_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.kquant_moe_swiglu_decode.route_stride : %value: index where [range(%value, 1, 4096)]
+
+config.decl @ggml.kquant_moe_swiglu_decode.expert_count : %value: index where [range(%value, 1, 4096)]
+
+config.decl @ggml.kquant_moe_swiglu_decode.expert_rows : %value: index where [range(%value, 1, 131072)]
+
+config.decl @ggml.kquant_moe_swiglu_decode.up_row_offset : %value: index where [range(%value, 0, 65536)]
+
 // get_scale_min_k4(sub, scales) from the three scale words of a Q4_K / Q5_K block.
 func.def inline @ggml_kquant_scale_min(%s0: i32, %s1: i32, %s2: i32, %sub: index) -> (i32, i32) {
   %c4 = index.constant 4 : index
@@ -6939,6 +6957,171 @@ kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_swiglu_d
       %r, %r_bound = index.assume %row, %output_size [lt(%row, %output_size)] : index, index
       %ov = buffer.view %output[%zero_offset] : buffer -> view<[%r_bound]xf32>
       view.store %value, %ov[%r] : f32, view<[%r_bound]xf32>
+    }
+  }
+  kernel.return
+}
+
+// Routed (MoE) twin of ggml_kquant_swiglu_decode_f32 for one token (engine#679): workgroup y is the
+// route slot, its expert comes from the router ids, and the gate/up rows read are that expert's
+// (expert * expert_rows + row; the up rows up_row_offset further, for a fused gate_up tensor).
+// Everything else - the lane split, the per-workgroup grid in workgroup memory, the summation
+// order and SiLU - is the dense kernel's, so a slot's output equals the dense kernel run on that
+// expert's weight matrices. The weight format comes from the same lane functions, so any format
+// the dense kernel reads (NVFP4 and MXFP4 included) works here.
+kernel.def target(@ggml_kquant_decode_gfx11_wave64) export("ggml_kquant_moe_swiglu_decode_f32") @ggml_kquant_moe_swiglu_decode_f32() {
+  %output_size = config.get @ggml.kquant_moe_swiglu_decode.output_size : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %last = index.add %output_size, %c3 : index
+  %groups = index.div %last, %c4 : index
+  %route_count = config.get @ggml.kquant_moe_swiglu_decode.route_count : index
+  kernel.launch.config workgroups(%groups, %route_count, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%input: buffer, %ids: buffer, %gate: buffer, %up: buffer, %output: buffer) {
+  %input_size = config.get @ggml.kquant_moe_swiglu_decode.input_size : index
+  %output_size = config.get @ggml.kquant_moe_swiglu_decode.output_size : index
+  %gate_format = config.get @ggml.kquant_moe_swiglu_decode.gate_weight_format : index
+  %up_format = config.get @ggml.kquant_moe_swiglu_decode.up_weight_format : index
+  %c0 = index.constant 0 : index
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %c256 = index.constant 256 : index
+  %zero_offset = index.constant 0 : offset
+  %zero = scalar.constant 0.0 : f32
+  %table = func.call @ggml_kquant_iq4nl_table() : () -> (vector<16xi8>)
+  %blocks = index.div %input_size, %c256 : index
+  %wg = kernel.workgroup.id<x> : index
+  %subgroup = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %wg_row = index.mul %wg, %c4 : index
+  %row = index.add %wg_row, %subgroup : index
+  // The slot's expert is ids[0][slot] (one token; the ids are a [token][route_stride] i32 view of the
+  // argsort). A bad router id (negative or past the expert count) reads expert 0 instead of past the weights.
+  %route_count_l = config.get @ggml.kquant_moe_swiglu_decode.route_count : index
+  %route_stride = config.get @ggml.kquant_moe_swiglu_decode.route_stride : index
+  %expert_count = config.get @ggml.kquant_moe_swiglu_decode.expert_count : index
+  %slot0 = kernel.workgroup.id<y> : index
+  %slot, %slot_bound = index.assume %slot0, %route_stride [lt(%slot0, %route_stride)] : index, index
+  %ids_view = buffer.view %ids[%zero_offset] : buffer -> view<[%slot_bound]xi32>
+  %expert_i32 = view.load %ids_view[%slot] : view<[%slot_bound]xi32> -> i32
+  %expert_raw = index.cast %expert_i32 : i32 to index
+  %expert_ok = index.cmp ult, %expert_raw, %expert_count : index
+  %expert = scf.select %expert_ok, %expert_raw, %c0 : index
+  // An expert's rows start at expert * expert_rows; the up rows sit up_row_offset rows into them. Separate gate and up
+  // tensors: expert_rows = output_size, offset 0. One fused [2 * n_ff] gate_up tensor bound as both: expert_rows =
+  // 2 * n_ff, offset n_ff (gate first, as llama.cpp's ffn_moe_gate / ffn_moe_up views split it).
+  %expert_rows = config.get @ggml.kquant_moe_swiglu_decode.expert_rows : index
+  %up_row_offset = config.get @ggml.kquant_moe_swiglu_decode.up_row_offset : index
+  %expert_row_base = index.mul %expert, %expert_rows : index
+  %wrow = index.add %expert_row_base, %row : index
+  %wrow_up = index.add %wrow, %up_row_offset : index
+  %first_block = index.div %lane, %c16 : index
+  %lane16 = index.rem %lane, %c16 : index
+  // Lane l of every 16-lane group holds kvalues_iq4nl[l]; IQ4_XS codes read it across lanes.
+  %lane16_i32 = index.cast %lane16 : index to i32
+  %lane16_i8 = scalar.trunci %lane16_i32 : i32 to i8
+  %lane16_v = vector.splat %lane16_i8 : vector<4xi8>
+  %kv_v = vector.table.lookup %table[%lane16_v] : vector<16xi8>, vector<4xi8> -> vector<4xi8>
+  %kv_i8 = vector.extract %kv_v[0] : vector<4xi8> -> i8
+  %kv_i32 = scalar.extsi %kv_i8 : i8 to i32
+  %kv_lane = scalar.sitofp %kv_i32 : i32 to f32
+  %g_grid_f21 = index.constant 21 : index
+  %g_grid_f24 = index.constant 24 : index
+  %g_grid_f25 = index.constant 25 : index
+  %g_grid_is21 = index.cmp eq, %gate_format, %g_grid_f21 : index
+  %g_grid_is24 = index.cmp eq, %gate_format, %g_grid_f24 : index
+  %g_grid_is25 = index.cmp eq, %gate_format, %g_grid_f25 : index
+  %g_grid_a = scalar.ori %g_grid_is21, %g_grid_is24 : i1
+  %g_grid_f28 = index.constant 28 : index
+  %g_grid_is28 = index.cmp eq, %gate_format, %g_grid_f28 : index
+  %g_grid_b = scalar.ori %g_grid_a, %g_grid_is25 : i1
+  %g_grid_f22 = index.constant 22 : index
+  %g_grid_is22 = index.cmp eq, %gate_format, %g_grid_f22 : index
+  %g_grid_c = scalar.ori %g_grid_b, %g_grid_is28 : i1
+  %g_grid_d = scalar.ori %g_grid_c, %g_grid_is22 : i1
+  %g_grid_f26 = index.constant 26 : index
+  %g_grid_f27 = index.constant 27 : index
+  %g_grid_is26 = index.cmp eq, %gate_format, %g_grid_f26 : index
+  %g_grid_is27 = index.cmp eq, %gate_format, %g_grid_f27 : index
+  %g_grid_e = scalar.ori %g_grid_d, %g_grid_is26 : i1
+  %g_grid = scalar.ori %g_grid_e, %g_grid_is27 : i1
+  %u_grid_f21 = index.constant 21 : index
+  %u_grid_f24 = index.constant 24 : index
+  %u_grid_f25 = index.constant 25 : index
+  %u_grid_is21 = index.cmp eq, %up_format, %u_grid_f21 : index
+  %u_grid_is24 = index.cmp eq, %up_format, %u_grid_f24 : index
+  %u_grid_is25 = index.cmp eq, %up_format, %u_grid_f25 : index
+  %u_grid_a = scalar.ori %u_grid_is21, %u_grid_is24 : i1
+  %u_grid_f28 = index.constant 28 : index
+  %u_grid_is28 = index.cmp eq, %up_format, %u_grid_f28 : index
+  %u_grid_b = scalar.ori %u_grid_a, %u_grid_is25 : i1
+  %u_grid_f22 = index.constant 22 : index
+  %u_grid_is22 = index.cmp eq, %up_format, %u_grid_f22 : index
+  %u_grid_c = scalar.ori %u_grid_b, %u_grid_is28 : i1
+  %u_grid_d = scalar.ori %u_grid_c, %u_grid_is22 : i1
+  %u_grid_f26 = index.constant 26 : index
+  %u_grid_f27 = index.constant 27 : index
+  %u_grid_is26 = index.cmp eq, %up_format, %u_grid_f26 : index
+  %u_grid_is27 = index.cmp eq, %up_format, %u_grid_f27 : index
+  %u_grid_e = scalar.ori %u_grid_d, %u_grid_is26 : i1
+  %u_grid = scalar.ori %u_grid_e, %u_grid_is27 : i1
+  %needs_grid = scalar.ori %g_grid, %u_grid : i1
+  // Gate and up each get their own codebook buffer, so a pair whose two formats need different grids runs here.
+  // A pair sharing one codebook (same format, or IQ1_S with IQ1_M) fills it once: the up lanes read the gate grid.
+  %same_format = index.cmp eq, %gate_format, %up_format : index
+  %iq1_g26 = index.constant 26 : index
+  %iq1_g27 = index.constant 27 : index
+  %gate_iq1_s = index.cmp eq, %gate_format, %iq1_g26 : index
+  %gate_iq1_m = index.cmp eq, %gate_format, %iq1_g27 : index
+  %up_iq1_s = index.cmp eq, %up_format, %iq1_g26 : index
+  %up_iq1_m = index.cmp eq, %up_format, %iq1_g27 : index
+  %gate_iq1 = scalar.ori %gate_iq1_s, %gate_iq1_m : i1
+  %up_iq1 = scalar.ori %up_iq1_s, %up_iq1_m : i1
+  %both_iq1 = scalar.andi %gate_iq1, %up_iq1 : i1
+  %same_grid0 = scalar.ori %same_format, %both_iq1 : i1
+  %same_grid = scalar.andi %same_grid0, %g_grid : i1
+  %true_u = scalar.constant true : i1
+  %not_same_grid = scalar.xori %same_grid, %true_u : i1
+  %u_own_grid = scalar.andi %u_grid, %not_same_grid : i1
+  %grid_bytes = index.constant 4096 : offset
+  %grid = buffer.alloca<workgroup> align(16) %grid_bytes : buffer
+  %grid_u = buffer.alloca<workgroup> align(16) %grid_bytes : buffer
+  scf.if %needs_grid {
+    scf.if %g_grid {
+      func.call @ggml_kquant_grid_fill_for(%gate_format, %grid, %subgroup) : (index, buffer, index) -> ()
+    }
+    scf.if %u_own_grid {
+      func.call @ggml_kquant_grid_fill_for(%up_format, %grid_u, %subgroup) : (index, buffer, index) -> ()
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  }
+  %valid = index.cmp ult, %row, %output_size : index
+  scf.if %valid {
+    %g_part, %u_part = scf.for %block = [%first_block to %blocks step %c4](%g_acc = %zero : f32, %u_acc = %zero : f32) -> (f32, f32) {
+      %g = func.call @ggml_kquant_lane_dot(%gate_format, %kv_lane, %grid, %gate, %input, %wrow, %blocks, %block, %lane16) : (index, f32, buffer, buffer, buffer, index, index, index, index) -> (f32)
+      %u = scf.if %same_grid -> (f32) {
+        %u_s = func.call @ggml_kquant_lane_dot(%up_format, %kv_lane, %grid, %up, %input, %wrow_up, %blocks, %block, %lane16) : (index, f32, buffer, buffer, buffer, index, index, index, index) -> (f32)
+        scf.yield %u_s : f32
+      } else {
+        %u_o = func.call @ggml_kquant_lane_dot(%up_format, %kv_lane, %grid_u, %up, %input, %wrow_up, %blocks, %block, %lane16) : (index, f32, buffer, buffer, buffer, index, index, index, index) -> (f32)
+        scf.yield %u_o : f32
+      }
+      %g_next = scalar.addf %g_acc, %g : f32
+      %u_next = scalar.addf %u_acc, %u : f32
+      scf.yield %g_next, %u_next : f32, f32
+    }
+    %g_sum = kernel.subgroup.reduce<addf> %g_part : f32
+    %u_sum = kernel.subgroup.reduce<addf> %u_part : f32
+    %leader = index.cmp eq, %lane, %c0 : index
+    scf.if %leader {
+      %value = func.call @ggml_kquant_silu_mul(%g_sum, %u_sum) : (f32, f32) -> (f32)
+      // Output [slot][output_size] (the GLU of two [output_size, route_count, 1] MUL_MAT_IDs).
+      %r, %r_bound = index.assume %row, %output_size [lt(%row, %output_size)] : index, index
+      %s, %s_bound = index.assume %slot0, %route_count_l [lt(%slot0, %route_count_l)] : index, index
+      %ov = buffer.view %output[%zero_offset] : buffer -> view<[%s_bound]x[%r_bound]xf32>
+      view.store %value, %ov[%s, %r] : f32, view<[%s_bound]x[%r_bound]xf32>
     }
   }
   kernel.return

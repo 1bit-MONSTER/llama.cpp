@@ -61,6 +61,56 @@ static bool iq3s_table_decode_selected(CommonMulMatWeightFormat gate_format, Com
     return selected;
 }
 
+// engine#679: one token through an IQ3_XXS routed gate/up pair. The WMMA kernels above tile 32 routes per expert and
+// launch one partition per expert (512 on Qwen3.8-Flash-Next, 10 of them non-empty at decode), so the decode spends
+// ~9.6 of 54 ms per token there. ggml_kquant_moe_swiglu_decode_f32 is the dense kquant SwiGLU decode kernel with the
+// expert taken from the router ids: one wave64 per (row, slot), grid in workgroup memory, no routing tables.
+//
+// The kernel itself is format-generic: it reads every weight through the dense decode's per-format lane functions
+// (ops/kquant_decode_f32.loom), so the same routed gate/up + SwiGLU shape serves any MoE whose experts use one of
+// them (NVFP4 and MXFP4 included). By default only the measured case takes it - a pair with an IQ3_XXS gate or up
+// (engine#679) - so every other MoE keeps the kernel it ran before.
+//   GGML_HRX_KQUANT_MOE_DECODE=0    the WMMA kernel for every pair (the A/B arm)
+//   GGML_HRX_KQUANT_MOE_DECODE=all  every pair whose two formats are in kquant_moe_decode_format (opt-in until a
+//                                   format's own A/B lands; test-backend-ops runs the one-token routed cases with it)
+static constexpr KernelCatalogRef kKQuantMoeSwiGLUDecodeKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_kquant_moe_swiglu_decode_f32");
+
+enum class KQuantMoeDecodeMode { Off, IQ3XXS, All };
+
+static KQuantMoeDecodeMode kquant_moe_decode_mode() {
+    static const KQuantMoeDecodeMode mode = []() {
+        const char * env = std::getenv("GGML_HRX_KQUANT_MOE_DECODE");
+        if (env != nullptr && std::strcmp(env, "0") == 0) {
+            return KQuantMoeDecodeMode::Off;
+        }
+        if (env != nullptr && std::strcmp(env, "all") == 0) {
+            return KQuantMoeDecodeMode::All;
+        }
+        return KQuantMoeDecodeMode::IQ3XXS;
+    }();
+    return mode;
+}
+
+// Formats the routed decode is compared against the CPU on (test-backend-ops MUL_MAT_VEC_FUSION, one token, routed).
+static bool kquant_moe_decode_format(CommonMulMatWeightFormat format) {
+    switch (format) {
+        case CommonMulMatWeightFormat::IQ3_XXS:
+        case CommonMulMatWeightFormat::IQ4_XS:
+        case CommonMulMatWeightFormat::Q4K:
+        case CommonMulMatWeightFormat::Q5K:
+        case CommonMulMatWeightFormat::Q6K:
+        case CommonMulMatWeightFormat::Q8_0:
+        case CommonMulMatWeightFormat::Q1_0:
+        case CommonMulMatWeightFormat::Q2_0:
+        case CommonMulMatWeightFormat::MXFP4:
+        case CommonMulMatWeightFormat::NVFP4:
+            return true;
+        default:
+            return false;
+    }
+}
+
 struct MulMatIdSwiGLUMatch {
     const Value *               input       = nullptr;
     const Value *               route_ids   = nullptr;
@@ -211,6 +261,55 @@ static bool requires_unsupported_routed_codebook(CommonMulMatWeightFormat format
     }
 }
 
+static bool kquant_moe_decode_selected(const MulMatIdSwiGLUMatch & match) {
+    const KQuantMoeDecodeMode mode    = kquant_moe_decode_mode();
+    const bool                iq3_xxs = match.gate_format == CommonMulMatWeightFormat::IQ3_XXS ||
+                         match.up_format == CommonMulMatWeightFormat::IQ3_XXS;
+    const bool wanted = mode == KQuantMoeDecodeMode::All || (mode == KQuantMoeDecodeMode::IQ3XXS && iq3_xxs);
+    return wanted && match.token_count == 1 && match.input_route_count == 1 &&
+           match.route_count >= 1 && match.route_count <= 64 && match.route_stride >= match.route_count &&
+           match.route_stride <= 4096 && match.expert_count >= 1 && match.expert_count <= 4096 &&
+           match.input_size % 256 == 0 && match.input_size >= 256 && match.input_size <= 65536 &&
+           match.output_size >= 1 && match.output_size <= 65536 && kquant_moe_decode_format(match.gate_format) &&
+           kquant_moe_decode_format(match.up_format) && match.gate_weight->contiguous && match.up_weight->contiguous;
+}
+
+static bool append_kquant_moe_decode(const DispatchMatchContext & context, const MulMatIdSwiGLUMatch & match,
+                                     DispatchMatch & dispatch_match) {
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kKQuantMoeSwiGLUDecodeKernel);
+    const std::pair<const char *, int64_t> configs[] = {
+        { "ggml.kquant_moe_swiglu_decode.input_size", match.input_size },
+        { "ggml.kquant_moe_swiglu_decode.output_size", match.output_size },
+        { "ggml.kquant_moe_swiglu_decode.gate_weight_format", common_mul_mat_format_config_value(match.gate_format) },
+        { "ggml.kquant_moe_swiglu_decode.up_weight_format", common_mul_mat_format_config_value(match.up_format) },
+        { "ggml.kquant_moe_swiglu_decode.route_count", match.route_count },
+        { "ggml.kquant_moe_swiglu_decode.route_stride", match.route_stride },
+        { "ggml.kquant_moe_swiglu_decode.expert_count", match.expert_count },
+        // Separate gate and up tensors: each expert's rows are output_size apart and up starts at its own row 0.
+        { "ggml.kquant_moe_swiglu_decode.expert_rows", match.output_size },
+        { "ggml.kquant_moe_swiglu_decode.up_row_offset", 0 },
+    };
+    for (const auto & [name, value] : configs) {
+        dispatch.kernel.compile_parameters.emplace(name, common_mul_mat_id_to_config_value(value));
+    }
+    dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
+    dispatch.bindings.push_back({ match.route_ids->id, 0, match.route_ids->byte_count });
+    dispatch.bindings.push_back({ match.gate_weight->id, 0, match.gate_weight->byte_count });
+    dispatch.bindings.push_back({ match.up_weight->id, 0, match.up_weight->byte_count });
+    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    for (const GraphNode * node : { match.gate_node, match.up_node, match.glu_node }) {
+        if (!append_covered_node_index_once(context.graph, context.covered_nodes, node, dispatch_match.covered_nodes)) {
+            dispatch_match.covered_nodes.clear();
+            return false;
+        }
+    }
+    static std::once_flag logged;
+    std::call_once(logged, []() { GGML_LOG_INFO("ggml_hrx: routed gate/up one-token decode: kquant routed decode\n"); });
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const MulMatIdSwiGLUMatch match = match_mul_mat_id_swiglu(context);
     if (!match.matched()) {
@@ -221,6 +320,11 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
     const bool unsupported_format      = gate_format_unsupported || up_format_unsupported;
     if (unsupported_format) {
         return false;
+    }
+
+    // A refused append (it clears what it added) falls through to the WMMA kernel instead of dropping the pair.
+    if (kquant_moe_decode_selected(match) && append_kquant_moe_decode(context, match, dispatch_match)) {
+        return true;
     }
 
     const CommonMulMatIdMatch   routed = routing_match_for_swiglu(match);

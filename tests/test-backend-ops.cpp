@@ -13180,6 +13180,24 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // One token through the same routed IQ3_XXS gate/up + SwiGLU (engine#679): HRX runs it on the routed kquant decode
+    // (ggml_kquant_moe_swiglu_decode_f32), and with GGML_HRX_KQUANT_MOE_DECODE=0 on the WMMA kernel. 512 experts is the
+    // file's real count (the expert offset reaches the far end of the weights); 16 experts with 8 routes covers a
+    // second route count, and the 32 x 256 case the smallest block shape.
+    for (int64_t n_mats : {16, 512}) {
+        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_IQ3_XXS, GGML_GLU_OP_SWIGLU, 1, 640, 2560,
+            true, n_mats, n_mats == 16 ? 8 : 10, true, false, true, false));
+    }
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_IQ3_XXS, GGML_GLU_OP_SWIGLU, 1, 32, 256,
+        true, 16, 8, true, false, true, false));
+    // The other formats the routed decode reads (GGML_HRX_KQUANT_MOE_DECODE=all; the small 32 x 256 routed cases above
+    // already cover Q8_0, Q1_0, Q2_0, Q4_K, MXFP4 and NVFP4 at one token): the same file-sized shape, so the expert
+    // offset reaches the far end of the weights for each block size.
+    for (ggml_type t : {GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_MXFP4, GGML_TYPE_NVFP4}) {
+        test_cases.emplace_back(new test_mul_mat_vec_fusion(t, GGML_GLU_OP_SWIGLU, 1, 640, 2560,
+            true, 512, 10, true, false, true, false));
+    }
+
     // The same routed shapes with the file's real 512 experts (engine #572 tile fit): 10 routes over 512 experts give
     // ~1.6 / 10 / 40 routed rows per expert at 80 / 512 / 2048 tokens, so these reach the small-row tiles that the
     // 16-expert cases above (50-320 rows per expert) never select. Gate/up: IQ4_XS (UD-IQ4_XS) and IQ2_S
