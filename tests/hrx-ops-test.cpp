@@ -6491,6 +6491,165 @@ static void run_get_rows_scale_f32_cpu_reference_case(ggml_type weight_type = GG
     ggml_backend_free(hrx_backend);
 }
 
+// engine#3340: the FUSED get_rows + scale route on CPU's reference. The case above has to name its rows `hrx-readback.`
+// (engine#3122), which forces the unfused pair, so before this nothing compared the fused kernel's VALUE against the
+// CPU: MiniCPM4-8B's last layer (Granite graph: get_rows(attn_out, out_ids) -> scale(residual_scale) -> add with
+// get_rows(residual, out_ids)) came back with the scaled term missing. `computed_table` makes the table an f32
+// intermediate (as attn_out is) instead of a graph input; `residual_add` adds the second get_rows, as the model does.
+static void run_get_rows_scale_fused_case(int64_t hidden_size, int64_t row_count, int64_t token_count,
+                                          bool computed_table, bool residual_add) {
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = 8 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * cpu_ctx  = ggml_init(params);
+    ggml_context * hrx_ctx  = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+
+    constexpr float kScale = 0.247487372f;  // MiniCPM4-8B's residual_scale, 1.4 / sqrt(32)
+    struct G {
+        ggml_tensor * a = nullptr;
+        ggml_tensor * b = nullptr;
+        ggml_tensor * residual = nullptr;
+        ggml_tensor * ids = nullptr;
+        ggml_tensor * output = nullptr;
+    };
+    auto build = [&](ggml_context * ctx) {
+        G g;
+        g.a        = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, row_count);
+        g.b        = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, row_count);
+        g.residual = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, row_count);
+        g.ids      = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
+        ggml_tensor * table = computed_table ? ggml_add(ctx, g.a, g.b) : g.a;
+        ggml_tensor * rows  = ggml_get_rows(ctx, table, g.ids);
+        g.output            = ggml_scale(ctx, rows, kScale);
+        if (residual_add) {
+            g.output = ggml_add(ctx, g.output, ggml_get_rows(ctx, g.residual, g.ids));
+        }
+        return g;
+    };
+    G cpu = build(cpu_ctx);
+    G hrx = build(hrx_ctx);
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    REQUIRE(cpu_graph != nullptr);
+    REQUIRE(hrx_graph != nullptr);
+    ggml_build_forward_expand(cpu_graph, cpu.output);
+    ggml_build_forward_expand(hrx_graph, hrx.output);
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "loom_libs:ggml_get_rows_scale_f32" });
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+    const std::vector<float> a        = make_pattern_f32(hidden_size * row_count, 7, 0.5f);
+    const std::vector<float> b        = make_pattern_f32(hidden_size * row_count, 11, 0.25f);
+    const std::vector<float> residual = make_pattern_f32(hidden_size * row_count, 13, 1.0f);
+    std::vector<int32_t>     ids(static_cast<size_t>(token_count));
+    for (int64_t i = 0; i < token_count; ++i) {
+        ids[static_cast<size_t>(i)] = static_cast<int32_t>((row_count - 1 - 3 * i) % row_count + row_count) % row_count;
+    }
+    set_tensor_pair_bytes(cpu_backend, cpu.a, hrx_backend, hrx.a, a.data(), a.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.b, hrx_backend, hrx.b, b.data(), b.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.residual, hrx_backend, hrx.residual, residual.data(),
+                          residual.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.ids, hrx_backend, hrx.ids, ids.data(), ids.size() * sizeof(int32_t));
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    require_close(get_f32_tensor(hrx_backend, hrx.output), get_f32_tensor(cpu_backend, cpu.output), 1.0e-6f);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
+// engine#3340: the same truncation took get_rows_rmsnorm's epsilon to 0. An all-zero embedding row is where that
+// shows: the CPU's rmsnorm gives 0 (0 * rsqrt(0 + eps)), an epsilon of 0 gives 0 * rsqrt(0) = NaN, and the q8 publish
+// carries it into the projection. The row is all zeros because every Q4_K block of it is (its scales included).
+static void run_get_rows_rmsnorm_zero_row_case() {
+    constexpr int64_t input_size = 2048, vocabulary_count = 8, output_size = 256, token_count = 3;
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+    ggml_init_params params = {};
+    params.mem_size         = 8 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * cpu_ctx  = ggml_init(params);
+    ggml_context * hrx_ctx  = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+    auto build = [&](ggml_context * ctx) {
+        ggml_tensor * embedding = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, input_size, vocabulary_count);
+        ggml_tensor * tokens    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
+        ggml_tensor * norm      = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, input_size);
+        ggml_tensor * weight    = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, input_size, output_size);
+        ggml_tensor * rows      = ggml_get_rows(ctx, embedding, tokens);
+        ggml_tensor * output    = ggml_mul_mat(ctx, weight, build_rmsnorm_mul_graph(ctx, rows, norm));
+        return std::array<ggml_tensor *, 5>{ embedding, tokens, norm, weight, output };
+    };
+    const auto cpu = build(cpu_ctx);
+    const auto hrx = build(hrx_ctx);
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    REQUIRE(cpu_graph != nullptr);
+    REQUIRE(hrx_graph != nullptr);
+    ggml_build_forward_expand(cpu_graph, cpu[4]);
+    ggml_build_forward_expand(hrx_graph, hrx[4]);
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
+                               { "loom_libs:ggml_get_rows_rmsnorm_binary_q8_1_x4_f16" });
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+    std::vector<uint8_t> embedding = make_matmul_weight_bytes(GGML_TYPE_Q4_K, input_size, vocabulary_count, 5);
+    const size_t         row_bytes = ggml_row_size(GGML_TYPE_Q4_K, input_size);
+    std::fill(embedding.begin() + 2 * row_bytes, embedding.begin() + 3 * row_bytes, uint8_t{ 0 });  // row 2: all zero
+    const std::vector<int32_t> tokens = { 1, 2, 4 };
+    const std::vector<float>   norm   = make_pattern_f32(input_size, 3, 0.5f);
+    const std::vector<uint8_t> weight = make_matmul_weight_bytes(GGML_TYPE_Q6_K, input_size, output_size, 7);
+    set_tensor_pair_bytes(cpu_backend, cpu[0], hrx_backend, hrx[0], embedding.data(), embedding.size());
+    set_tensor_pair_bytes(cpu_backend, cpu[1], hrx_backend, hrx[1], tokens.data(), tokens.size() * sizeof(int32_t));
+    set_tensor_pair_bytes(cpu_backend, cpu[2], hrx_backend, hrx[2], norm.data(), norm.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu[3], hrx_backend, hrx[3], weight.data(), weight.size());
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    const std::vector<float> actual = get_f32_tensor(hrx_backend, hrx[4]);
+    for (int64_t i = 0; i < output_size; ++i) {   // token 1 is the zero row: its projection is exactly 0, never NaN
+        REQUIRE(actual[static_cast<size_t>(output_size + i)] == 0.0f);
+    }
+    // the other tokens go through q8 activations, so compare the whole result by relative L2, not element-wise
+    const std::vector<float> expected = get_f32_tensor(cpu_backend, cpu[4]);
+    double diff2 = 0.0, ref2 = 0.0;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        REQUIRE(std::isfinite(actual[i]));
+        diff2 += (static_cast<double>(actual[i]) - expected[i]) * (static_cast<double>(actual[i]) - expected[i]);
+        ref2 += static_cast<double>(expected[i]) * expected[i];
+    }
+    const double rel_l2 = std::sqrt(diff2 / ref2);
+    std::fprintf(stderr, "get_rows_rmsnorm.zero_row: relative L2 vs CPU %.4g (q8 activations)\n", rel_l2);
+    REQUIRE(rel_l2 < 0.05);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static auto allocate_test_weight(ggml_backend_t backend, ggml_tensor * weight) {
     const auto buft = ggml_backend_get_default_buffer_type(backend);
     const size_t alignment = ggml_backend_buft_get_alignment(buft);
@@ -9246,6 +9405,18 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.device_case("get_rows_scale_f32.cpu_reference", [] { run_get_rows_scale_f32_cpu_reference_case(); });
     suite.device_case("get_rows_scale_f32.q5_1.cpu_reference",
                       [] { run_get_rows_scale_f32_cpu_reference_case(GGML_TYPE_Q5_1, 640); });
+    suite.device_case("get_rows_rmsnorm.zero_row.cpu_reference", [] { run_get_rows_rmsnorm_zero_row_case(); });
+    // engine#3340: the fused route's value, in the shapes MiniCPM4-8B's last layer takes and around them
+    for (const int64_t tokens : { 1, 6 }) {
+        for (const bool computed : { false, true }) {
+            for (const bool residual : { false, true }) {
+                suite.device_case(std::string("get_rows_scale_f32.fused.tokens") + std::to_string(tokens) +
+                                      (computed ? ".computed_table" : ".input_table") +
+                                      (residual ? ".residual_add" : ""),
+                                  [=] { run_get_rows_scale_fused_case(4096, 26, tokens, computed, residual); });
+            }
+        }
+    }
 }
 
 static void register_dense_matmul_cases(Suite & suite) {

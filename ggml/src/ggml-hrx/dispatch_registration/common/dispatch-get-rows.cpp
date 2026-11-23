@@ -74,6 +74,13 @@ static std::string to_config_value(int64_t value) {
     return std::to_string(value);
 }
 
+// engine#3340: the float configs (get_rows_scale's scale and bias, get_rows_rmsnorm's epsilon) used to reach the
+// int64_t overload above and were truncated: residual_scale 0.2475 compiled as 0, so the fused get_rows + scale wrote
+// zeros and MiniCPM4-8B's last layer lost its attention term. Nine significant digits round-trip an f32.
+static std::string to_config_value(float value) {
+    return common_to_config_value(value);
+}
+
 static size_t row_byte_count(ggml_type type, int64_t token_count, int64_t hidden_size) {
     if (token_count <= 0 || hidden_size <= 0) {
         return 0;
