@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -274,8 +275,11 @@ static bool kquant_moe_decode_selected(const MulMatIdSwiGLUMatch & match) {
            kquant_moe_decode_format(match.up_format) && match.gate_weight->contiguous && match.up_weight->contiguous;
 }
 
+// expert_rows / up_row_offset: separate gate and up tensors are output_size / 0; one fused [2 * n_ff] gate_up tensor
+// bound as both is 2 * n_ff / n_ff. extra_nodes: graph nodes the dispatch also stands for (the fused form's two views).
 static bool append_kquant_moe_decode(const DispatchMatchContext & context, const MulMatIdSwiGLUMatch & match,
-                                     DispatchMatch & dispatch_match) {
+                                     DispatchMatch & dispatch_match, int64_t expert_rows, int64_t up_row_offset,
+                                     std::initializer_list<const GraphNode *> extra_nodes = {}) {
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kKQuantMoeSwiGLUDecodeKernel);
     const std::pair<const char *, int64_t> configs[] = {
@@ -286,9 +290,8 @@ static bool append_kquant_moe_decode(const DispatchMatchContext & context, const
         { "ggml.kquant_moe_swiglu_decode.route_count", match.route_count },
         { "ggml.kquant_moe_swiglu_decode.route_stride", match.route_stride },
         { "ggml.kquant_moe_swiglu_decode.expert_count", match.expert_count },
-        // Separate gate and up tensors: each expert's rows are output_size apart and up starts at its own row 0.
-        { "ggml.kquant_moe_swiglu_decode.expert_rows", match.output_size },
-        { "ggml.kquant_moe_swiglu_decode.up_row_offset", 0 },
+        { "ggml.kquant_moe_swiglu_decode.expert_rows", expert_rows },
+        { "ggml.kquant_moe_swiglu_decode.up_row_offset", up_row_offset },
     };
     for (const auto & [name, value] : configs) {
         dispatch.kernel.compile_parameters.emplace(name, common_mul_mat_id_to_config_value(value));
@@ -298,7 +301,9 @@ static bool append_kquant_moe_decode(const DispatchMatchContext & context, const
     dispatch.bindings.push_back({ match.gate_weight->id, 0, match.gate_weight->byte_count });
     dispatch.bindings.push_back({ match.up_weight->id, 0, match.up_weight->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
-    for (const GraphNode * node : { match.gate_node, match.up_node, match.glu_node }) {
+    std::vector<const GraphNode *> nodes = { match.gate_node, match.up_node, match.glu_node };
+    nodes.insert(nodes.end(), extra_nodes.begin(), extra_nodes.end());
+    for (const GraphNode * node : nodes) {
         if (!append_covered_node_index_once(context.graph, context.covered_nodes, node, dispatch_match.covered_nodes)) {
             dispatch_match.covered_nodes.clear();
             return false;
@@ -323,7 +328,7 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
     }
 
     // A refused append (it clears what it added) falls through to the WMMA kernel instead of dropping the pair.
-    if (kquant_moe_decode_selected(match) && append_kquant_moe_decode(context, match, dispatch_match)) {
+    if (kquant_moe_decode_selected(match) && append_kquant_moe_decode(context, match, dispatch_match, match.output_size, 0)) {
         return true;
     }
 
@@ -396,6 +401,90 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
     return true;
 }
 
+static bool uncovered_node(const DispatchMatchContext & context, const GraphNode * node) {
+    size_t index = 0;
+    return context.graph.index().node_index(node, index) && index < context.covered_nodes.size() &&
+           !context.covered_nodes[index];
+}
+
+// One fused gate_up expert tensor (llama.cpp build_moe_ffn's gate_up_exps path; Inkling 2, Qwen3.5 / Qwen3-Next and
+// Flash-Next files that pack it, gemma4, deepseek2, ...): ONE MUL_MAT_ID over [n_embd, 2 * n_ff, n_expert], two views
+// of its output (gate = rows [0, n_ff), up = rows [n_ff, 2 * n_ff), the parent's strides) and SwiGLU(gate, up). For
+// one token the routed kquant decode runs it with the one weight bound as both gate and up: expert rows 2 * n_ff
+// apart, the up rows n_ff further. Same selection rule as the separate-tensor form (kquant_moe_decode_selected).
+static bool match_fused_gate_up_swiglu_decode(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    if (!context.graph.has_index()) {
+        return false;
+    }
+    const CommonMulMatIdMatch root = common_match_mul_mat_id_any_format(context.graph, context.root_node, context.plan);
+    if (!root.matched() || root.output_size % 2 != 0 || root.token_count != 1) {
+        return false;
+    }
+    const int64_t n_ff = root.output_size / 2;
+    const std::vector<const GraphNode *> & views = context.graph.index().consumers(context.root_node->output);
+    if (views.size() != 2) {
+        return false;
+    }
+    const GraphNode * gate_view = nullptr;
+    const GraphNode * up_view   = nullptr;
+    for (const GraphNode * view : views) {
+        const Value * v = view != nullptr ? common_mul_mat_id_graph_value(context.graph, view->output) : nullptr;
+        if (view == nullptr || view->op != GGML_OP_VIEW || view->inputs.size() != 1 ||
+            view->inputs[0] != context.root_node->output || v == nullptr || v->type != GGML_TYPE_F32 ||
+            v->storage_root != root.output->storage_root || v->ne[0] != n_ff || v->ne[1] != root.output->ne[1] ||
+            v->ne[2] != root.output->ne[2] || v->ne[3] != root.output->ne[3] || v->nb[0] != sizeof(float) ||
+            v->nb[1] != root.output->nb[1] || v->nb[2] != root.output->nb[2] || !uncovered_node(context, view)) {
+            return false;
+        }
+        if (v->storage_offset == root.output->storage_offset) {
+            gate_view = view;
+        } else if (v->storage_offset == root.output->storage_offset + static_cast<size_t>(n_ff) * sizeof(float)) {
+            up_view = view;
+        }
+    }
+    if (gate_view == nullptr || up_view == nullptr) {
+        return false;
+    }
+    const std::vector<const GraphNode *> & gate_consumers = context.graph.index().consumers(gate_view->output);
+    const std::vector<const GraphNode *> & up_consumers   = context.graph.index().consumers(up_view->output);
+    const GraphNode * glu = gate_consumers.size() == 1 ? gate_consumers.front() : nullptr;
+    if (glu == nullptr || up_consumers.size() != 1 || up_consumers.front() != glu || glu->op != GGML_OP_GLU ||
+        glu->inputs.size() != 2 || glu->inputs[0] != gate_view->output || glu->inputs[1] != up_view->output ||
+        !common_mul_mat_id_is_swiglu_params(glu->params) || !uncovered_node(context, glu)) {
+        return false;
+    }
+    const Value * output = common_mul_mat_id_graph_value(context.graph, glu->output);
+    if (output == nullptr || output->type != GGML_TYPE_F32 || !output->contiguous || output->ne[0] != n_ff ||
+        output->ne[1] != root.output->ne[1] || output->ne[2] != root.output->ne[2]) {
+        return false;
+    }
+
+    MulMatIdSwiGLUMatch match;
+    match.input             = root.input;
+    match.route_ids         = root.route_ids;
+    match.gate_weight       = root.weight;
+    match.up_weight         = root.weight;
+    match.gate_output       = root.output;
+    match.up_output         = root.output;
+    match.output            = output;
+    match.gate_node         = context.root_node;
+    match.up_node           = context.root_node;
+    match.glu_node          = glu;
+    match.input_size        = root.input_size;
+    match.output_size       = n_ff;
+    match.token_count       = root.token_count;
+    match.route_count       = root.route_count;
+    match.route_stride      = root.route_stride;
+    match.input_route_count = root.input_route_count;
+    match.expert_count      = root.expert_count;
+    match.gate_format       = root.weight_format;
+    match.up_format         = root.weight_format;
+    if (requires_unsupported_routed_codebook(match.gate_format) || !kquant_moe_decode_selected(match)) {
+        return false;
+    }
+    return append_kquant_moe_decode(context, match, dispatch_match, root.output_size, n_ff, { gate_view, up_view });
+}
+
 }  // namespace
 
 void register_gated_mul_mat_id_dispatches(DispatchRegistryBuilder & registry) {
@@ -406,6 +495,15 @@ void register_gated_mul_mat_id_dispatches(DispatchRegistryBuilder & registry) {
         200,
         DispatchSource::Common,
         match_mul_mat_id_swiglu_dispatch,
+    });
+    // Above the plain MUL_MAT_ID matchers, which would otherwise take the fused tensor alone and leave the views + GLU.
+    registry.add({
+        "common.mul_mat_id_swiglu.fused_gate_up_kquant_decode",
+        GGML_OP_MUL_MAT_ID,
+        DispatchMatchKind::Fused,
+        201,
+        DispatchSource::Common,
+        match_fused_gate_up_swiglu_decode,
     });
 }
 

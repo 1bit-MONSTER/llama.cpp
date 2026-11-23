@@ -8335,6 +8335,45 @@ struct test_mul_mat_vec_fusion : public test_case {
     }
 };
 
+// Routed gate/up + SwiGLU through ONE fused gate_up expert tensor, the way llama.cpp's build_moe_ffn builds it when a
+// file packs ffn_gate_up_exps (Inkling 2, Qwen3.5 / Qwen3-Next, gemma4, deepseek2, ...): one MUL_MAT_ID over
+// [k, 2n, n_mats], a view of its gate half and of its up half, then SwiGLU. One shared input row per token (b).
+struct test_moe_fused_gate_up : public test_case {
+    const ggml_type type;
+    const int64_t   m, n, k;
+    const int       n_mats, n_used;
+
+    std::string vars() override { return VARS_TO_STR6(type, m, n, k, n_mats, n_used); }
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_VEC_FUSION";
+    }
+    bool run_whole_graph() override { return true; }
+
+    test_moe_fused_gate_up(ggml_type type, int64_t m, int64_t n, int64_t k, int n_mats, int n_used)
+        : type(type), m(m), n(n), k(k), n_mats(n_mats), n_used(n_used) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * gate_up = ggml_new_tensor_3d(ctx, type, k, 2 * n, n_mats);
+        ggml_tensor * ids     = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, m);
+        if (n_used != n_mats) {
+            ids = ggml_view_2d(ctx, ids, n_used, m, ids->nb[1], 0);
+        }
+        ggml_tensor * cur = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, 1, m);
+        ggml_set_name(cur, "cur");
+        ggml_tensor * gu   = ggml_mul_mat_id(ctx, gate_up, cur, ids);  // [2n, n_used, m]
+        ggml_tensor * gate = ggml_view_3d(ctx, gu, n, gu->ne[1], gu->ne[2], gu->nb[1], gu->nb[2], 0);
+        ggml_tensor * up   = ggml_view_3d(ctx, gu, n, gu->ne[1], gu->ne[2], gu->nb[1], gu->nb[2], n * gu->nb[0]);
+        ggml_tensor * out  = ggml_glu_split(ctx, gate, up, GGML_GLU_OP_SWIGLU);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override { init_mul_mat_id_tensors(ctx, n_mats, false); }
+
+    double max_nmse_err() override { return 5e-3; }
+};
+
 // Dense gate/up + SwiGLU (MUL_MAT_VEC_FUSION) whose activations exceed the f16 range (engine #2293): the same fill as
 // test_mul_mat_large_activation on the shared input, so a fused gate/up kernel that narrows the activations (or a
 // per-block sum of them) to f16 is checked against the CPU. The input is the one F32 tensor of shape [k, m].
@@ -13197,6 +13236,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_vec_fusion(t, GGML_GLU_OP_SWIGLU, 1, 640, 2560,
             true, 512, 10, true, false, true, false));
     }
+
+    // The fused gate_up form of the same routed pair (one ffn_gate_up_exps tensor, two views, SwiGLU). HRX runs one
+    // token of it on the routed kquant decode: by default for IQ3_XXS, with GGML_HRX_KQUANT_MOE_DECODE=all for the rest.
+    for (ggml_type t : {GGML_TYPE_IQ3_XXS, GGML_TYPE_Q4_K, GGML_TYPE_MXFP4, GGML_TYPE_NVFP4}) {
+        test_cases.emplace_back(new test_moe_fused_gate_up(t, 1, 640, 2560, 512, 10));
+        test_cases.emplace_back(new test_moe_fused_gate_up(t, 1, 32, 256, 16, 8));
+    }
+    test_cases.emplace_back(new test_moe_fused_gate_up(GGML_TYPE_IQ3_XXS, 4, 32, 256, 16, 8));  // not one token: not taken
 
     // The same routed shapes with the file's real 512 experts (engine #572 tile fit): 10 routes over 512 experts give
     // ~1.6 / 10 / 40 routed rows per expert at 80 / 512 / 2048 tokens, so these reach the small-row tiles that the
