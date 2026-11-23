@@ -5178,6 +5178,123 @@ static void run_routed_moe_large_input_case(ggml_type gate_up_weight_type, float
 // leave the f16 range (65504) while the result stays far inside single precision.
 // The reference is the CPU on the same weights held as f32 (the quantised rows, dequantised): with K-quant weights the
 // CPU quantises the activation to 8 bits per block, which costs it more precision than the device's f16 does.
+// engine#3411: a one-token top-1 MoE (ZAYA1's routed FFN shape: one expert, a stacked gate_up MUL_MAT_ID, two views,
+// SWIGLU, the down MUL_MAT_ID) whose SwiGLU outputs sum past the f16 range within a 32-value block. Any reader that
+// takes the block_q8_1 scaled sum as stored (an f16) returns inf there; the CPU reference is the same graph on the
+// dequantised weights. `scale` multiplies the input; the large arm asserts that it really leaves the f16 range.
+static void run_moe_top1_large_activation_case(float scale, bool require_f16_overflow) {
+    constexpr int64_t hidden = 2048;
+    constexpr int64_t ff     = 1024;  // per expert; the stacked gate_up has 2 * ff rows
+    constexpr int64_t experts = 4;
+    constexpr int32_t chosen  = 2;
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+    ggml_init_params params = {};
+    params.mem_size         = 16 * 1024 * 1024;
+    params.no_alloc         = true;
+    struct Top1Graph {
+        ggml_context * ctx = nullptr;
+        ggml_tensor *  input = nullptr, * ids = nullptr, * gate_up = nullptr, * down = nullptr;
+        ggml_tensor *  glu = nullptr, * output = nullptr;
+    };
+    const auto build = [&](ggml_type weight_type) {
+        Top1Graph g;
+        g.ctx = ggml_init(params);
+        REQUIRE(g.ctx != nullptr);
+        g.input   = ggml_new_tensor_3d(g.ctx, GGML_TYPE_F32, hidden, 1, 1);
+        g.ids     = ggml_new_tensor_2d(g.ctx, GGML_TYPE_I32, 1, 1);
+        g.gate_up = ggml_new_tensor_3d(g.ctx, weight_type, hidden, 2 * ff, experts);
+        g.down    = ggml_new_tensor_3d(g.ctx, weight_type, ff, hidden, experts);
+        ggml_tensor * gu   = ggml_mul_mat_id(g.ctx, g.gate_up, g.input, g.ids);  // [2 ff, 1, 1]
+        ggml_tensor * gate = ggml_view_2d(g.ctx, gu, ff, 1, gu->nb[1], 0);
+        ggml_tensor * up   = ggml_view_2d(g.ctx, gu, ff, 1, gu->nb[1], static_cast<size_t>(ff) * sizeof(float));
+        g.glu    = ggml_swiglu_split(g.ctx, gate, up);
+        g.output = ggml_mul_mat_id(g.ctx, g.down, ggml_reshape_3d(g.ctx, g.glu, ff, 1, 1), g.ids);
+        return g;
+    };
+    Top1Graph cpu = build(GGML_TYPE_F32);
+    Top1Graph hrx = build(GGML_TYPE_Q4_K);
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu.ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx.ctx);
+    ggml_build_forward_expand(cpu_graph, cpu.output);
+    ggml_build_forward_expand(hrx_graph, hrx.output);
+    for (const std::string & name : scheduled_kernel_sequence(hrx_graph)) {
+        std::fprintf(stderr, "moe top1 kernel %s\n", name.c_str());
+    }
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu.ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx.ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+
+    std::vector<float> input = make_pattern_f32(static_cast<size_t>(hidden), 21, 0.01f);
+    for (float & value : input) {
+        value *= scale;
+    }
+    const int32_t id = chosen;
+    set_tensor_pair_bytes(cpu_backend, cpu.input, hrx_backend, hrx.input, input.data(), input.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.ids, hrx_backend, hrx.ids, &id, sizeof(id));
+    const auto set_weight_pair = [&](ggml_tensor * cpu_weight, ggml_tensor * hrx_weight, int64_t row_length,
+                                     int64_t row_count, int seed) {
+        const std::vector<uint8_t> rows   = make_quantized_rows(GGML_TYPE_Q4_K, row_length, row_count, seed);
+        const ggml_type_traits *   traits = ggml_get_type_traits(GGML_TYPE_Q4_K);
+        std::vector<float>         wide(static_cast<size_t>(row_length * row_count));
+        const size_t               row_size = ggml_row_size(GGML_TYPE_Q4_K, row_length);
+        for (int64_t r = 0; r < row_count; ++r) {
+            traits->to_float(rows.data() + static_cast<size_t>(r) * row_size,
+                             wide.data() + static_cast<size_t>(r * row_length), row_length);
+        }
+        ggml_backend_tensor_set(hrx_weight, rows.data(), 0, rows.size());
+        ggml_backend_tensor_set(cpu_weight, wide.data(), 0, wide.size() * sizeof(float));
+    };
+    set_weight_pair(cpu.gate_up, hrx.gate_up, hidden, 2 * ff * experts, 31);
+    set_weight_pair(cpu.down, hrx.down, ff, hidden * experts, 32);
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    const std::vector<float> glu      = get_f32_tensor(cpu_backend, cpu.glu);
+    const std::vector<float> expected = get_f32_tensor(cpu_backend, cpu.output);
+    const std::vector<float> actual   = get_f32_tensor(hrx_backend, hrx.output);
+    // the largest |sum| of a 32-value block of SwiGLU outputs: what a block_q8_1 stores as s (up to rounding)
+    double block_sum_max = 0.0;
+    for (size_t b = 0; b + 32 <= glu.size(); b += 32) {
+        double sum = 0.0;
+        for (size_t i = b; i < b + 32; ++i) {
+            sum += glu[i];
+        }
+        block_sum_max = std::max(block_sum_max, std::fabs(sum));
+    }
+    double error = 0.0, norm = 0.0;
+    size_t non_finite = 0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        REQUIRE(std::isfinite(expected[i]));
+        if (!std::isfinite(actual[i])) {
+            ++non_finite;
+            continue;
+        }
+        const double diff = static_cast<double>(actual[i]) - static_cast<double>(expected[i]);
+        error += diff * diff;
+        norm  += static_cast<double>(expected[i]) * static_cast<double>(expected[i]);
+    }
+    std::fprintf(stderr, "moe top1: scale=%g max|block sum of swiglu|=%g non-finite=%zu of %zu nmse=%g\n",
+                 static_cast<double>(scale), block_sum_max, non_finite, expected.size(),
+                 norm > 0 ? error / norm : -1.0);
+    if (require_f16_overflow) {
+        REQUIRE(block_sum_max > 2.0 * 65504.0);
+    }
+    REQUIRE(non_finite == 0);
+    REQUIRE(error / norm < 1.0e-3);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu.ctx);
+    ggml_free(hrx.ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_routed_moe_large_product_case(ggml_type gate_up_weight_type, float scale) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
@@ -6688,6 +6805,9 @@ static void add_cases(test_runner::Suite & suite) {
     }
     add(suite, "decode_attention_qkv_scheduling",
         [=] { run_decode_attention_qkv_scheduling_case(); });
+    // engine#3411: a one-token top-1 MoE (ZAYA1's shape) at the ordinary scale and with SwiGLU block sums past f16
+    add(suite, "moe_top1.q4_k.decode.ordinary", [=] { run_moe_top1_large_activation_case(1.0f, false); });
+    add(suite, "moe_top1.q4_k.decode.large_activation", [=] { run_moe_top1_large_activation_case(600.0f, true); });
     // engine #2186: the gate/up product, at the ordinary scale and at scales that take it past the f16 range
     for (float scale : { 1.0f, 30.0f, 100.0f, 300.0f, 1000.0f }) {
         add(suite, std::string("routed_moe.q4_K.large_product.") + std::to_string(static_cast<int>(scale)),
