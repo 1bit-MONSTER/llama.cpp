@@ -3299,9 +3299,7 @@ static void run_mutable_host_input_after_writeback_case(bool hrx_host) {
         hrx_timeline_point_t before_writer = {};
         REQUIRE(!ggml::hrx::take_status(hrx_stream_get_timeline_position(backend_state->stream, &before_writer)));
         REQUIRE(ggml_backend_graph_compute_async(backend, writer) == GGML_STATUS_SUCCESS);
-        // engine#2774: the writer's host writeback is no longer left pending after the async compute (the three
-        // has_pending_host_writebacks() asserts here failed on the fork tip). What this case protects is the value: the
-        // reader below must see the host's new input, and it does (the CPU-side comparison passes on strixhalo).
+        REQUIRE(backend_state->graph_replay_state.has_pending_host_writebacks());
         hrx_timeline_point_t after_writer = {};
         REQUIRE(!ggml::hrx::take_status(hrx_stream_get_timeline_position(backend_state->stream, &after_writer)));
         const char * replay_setting = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
@@ -3310,8 +3308,10 @@ static void run_mutable_host_input_after_writeback_case(bool hrx_host) {
             // The recorded launch advances once; the queued host-download tail must advance again.
             REQUIRE(after_writer.value >= before_writer.value + 2);
         }
+        REQUIRE(backend_state->graph_replay_state.has_pending_host_writebacks());
         // Finish reading registered host memory without draining the backend's deferred writebacks.
         REQUIRE(!ggml::hrx::take_status(hrx_stream_synchronize(backend_state->stream)));
+        REQUIRE(backend_state->graph_replay_state.has_pending_host_writebacks());
         // Qwen's metadata initialization writes staged inputs; the next microbatch supplies new host values.
         ggml_backend_tensor_set(input, current.data(), 0, ggml_nbytes(input));
         REQUIRE(ggml_backend_graph_compute_async(backend, reader) == GGML_STATUS_SUCCESS);
@@ -7078,7 +7078,7 @@ static void run_mixed_symmetric_source_eligibility_case() {
         }
     }
     REQUIRE(found_kernel);
-    REQUIRE(stored_bindings >= 2);
+    REQUIRE_EQ(stored_bindings, 2u);  // one fused dispatch binds the gate and the up weight once each (both builds)
     ggml_backend_buffer_free(other_buffer);
     ggml_backend_buffer_free(up_buffer);
     ggml_backend_buffer_free(gate_buffer);
@@ -9876,8 +9876,14 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("rmsnorm_mul.hidden2048.tokens1", [] { run_rmsnorm_mul_case(2048, 1); });
     suite.device_case("router_projection.tokens4", [] { run_router_projection_case(4); });
     suite.device_case("imported_native_weight", [] { run_imported_native_weight_case(); });
-    suite.device_case("mutable_host_input_after_writeback.cpu", [] { run_mutable_host_input_after_writeback_case(false); });
-    suite.device_case("mutable_host_input_after_writeback.hrx", [] { run_mutable_host_input_after_writeback_case(true); });
+    // engine#3402: the writer no longer stages a host download, so no writeback is deferred and the case cannot reach
+    // the state it tests; its asserts stay as written until the graph is rebuilt.
+    static constexpr const char * kNoDeferredWriteback =
+        "engine#3402: the writer graph no longer defers a host writeback (has_pending_host_writebacks() is false)";
+    suite.known_fail_device_case("mutable_host_input_after_writeback.cpu", kNoDeferredWriteback,
+                                 [] { run_mutable_host_input_after_writeback_case(false); });
+    suite.known_fail_device_case("mutable_host_input_after_writeback.hrx", kNoDeferredWriteback,
+                                 [] { run_mutable_host_input_after_writeback_case(true); });
     suite.known_fail_device_case("weight_persistence_sequence", kNoPackedCopyGraph,
                                  [] { run_weight_persistence_sequence_case(); });
     suite.device_case("failed_submission_weight_lifetime", [] { run_failed_submission_weight_lifetime_case(); });
