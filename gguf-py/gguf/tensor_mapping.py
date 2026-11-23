@@ -56,6 +56,8 @@ class TensorNameMap:
 
         # Normalization of token embeddings
         MODEL_TENSOR.TOKEN_EMBD_NORM: (
+            "model.embed_tokens.embed_norm",                             # inkling2
+            "model.embed_norm",                                          # inkling2
             "word_embeddings_layernorm",  # bloom
             "embeddings.LayerNorm",       # bert
             "embeddings.norm",            # modern-bert
@@ -80,6 +82,7 @@ class TensorNameMap:
 
         # Output
         MODEL_TENSOR.OUTPUT: (
+            "model.unembed",                                             # inkling2
             "de_embedding_proj",    # pico_decoder
             "embed_out",                 # gptneox
             "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe plamo2 llama4
@@ -225,11 +228,17 @@ class TensorNameMap:
         MODEL_TENSOR.LILICORR_ANCHOR_OUT_HEAD: (
             "model.lilicorr.anchor_out_head",
         ),
+        MODEL_TENSOR.OUTPUT_RES_QUERY: (
+            "model.final_input.query",                                   # inkling2
+            "model.attn_res.output_query",                               # inkling2
+        ),
+
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
+            "model.layers.{bid}.attn_norm",                              # inkling2
             "layers.{bid}.attention_norm",    # pico_decoder
             "model.decoder.layers.{bid}.self_attn_layer_norm",    # opt
             "model.lilicorr.layers.{bid}.attn_norm",                # lilicorr
@@ -307,6 +316,7 @@ class TensorNameMap:
 
         # Attention query
         MODEL_TENSOR.ATTN_Q: (
+            "model.layers.{bid}.attn.wq_du",                             # inkling2
             "layers.{bid}.attention.q_proj",    # pico_decoder
             "transformer.h.{bid}.attn.attention.q_proj",    # gpt-neo
             "model.decoder.layers.{bid}.self_attn.q_proj",    # opt
@@ -331,6 +341,7 @@ class TensorNameMap:
 
         # Attention key
         MODEL_TENSOR.ATTN_K: (
+            "model.layers.{bid}.attn.wk_dv",                             # inkling2
             "layers.{bid}.attention.k_proj",    # pico_decoder
             "transformer.h.{bid}.attn.attention.k_proj",    # gpt-neo
             "model.decoder.layers.{bid}.self_attn.k_proj",    # opt
@@ -356,6 +367,7 @@ class TensorNameMap:
 
         # Attention value
         MODEL_TENSOR.ATTN_V: (
+            "model.layers.{bid}.attn.wv_dv",                             # inkling2
             "layers.{bid}.attention.v_proj",    # pico_decoder
             "transformer.h.{bid}.attn.attention.v_proj",    # gpt-neo
             "model.decoder.layers.{bid}.self_attn.v_proj",    # opt
@@ -380,6 +392,7 @@ class TensorNameMap:
 
         # Attention output
         MODEL_TENSOR.ATTN_OUT: (
+            "model.layers.{bid}.attn.wo_ud",                             # inkling2
             "layers.{bid}.attention.o_proj",    # pico_decoder
             "transformer.h.{bid}.attn.attention.out_proj",    # gpt-neo
             "model.decoder.layers.{bid}.self_attn.out_proj",    # opt
@@ -459,6 +472,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_GATE: (
+            "model.layers.{bid}.attn.gate_attn",                         # inkling2
             "model.layers.{bid}.self_attn.gate_proj", # afmoe muse-glimmer
             "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5
             "layers.{bid}.linear_attn.in_proj_z",        # qwen3.5 text
@@ -470,6 +484,7 @@ class TensorNameMap:
 
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
+            "model.layers.{bid}.mlp_norm",                               # inkling2
             "layers.{bid}.swiglu_norm",    # pico_decoder
             "transformer.h.{bid}.ln_2",    # gpt-neo
             "model.decoder.layers.{bid}.final_layer_norm",    # opt
@@ -3065,6 +3080,145 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_V_EXP: (
             "model.layers.{bid}.self_attn.v_experts",  # k2-horizon
         ),
+        MODEL_TENSOR.ATTN_REL: (
+            "model.layers.{bid}.self_attn.r_proj",                       # inkling2
+            "model.layers.{bid}.attn.wr_du",                             # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_REL_BIAS: (
+            "model.layers.{bid}.self_attn.rel_logits_proj.proj",         # inkling2
+            "model.layers.{bid}.attn.rel_logits_proj.proj",              # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_Q_CLIP: (
+            "model.layers.{bid}.self_attn.q_l2_clip.scale",              # inkling2
+            "model.layers.{bid}.attn.q_l2_clip.scale",                   # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_REL_CLIP: (
+            "model.layers.{bid}.self_attn.rel_l2_clip.scale",            # inkling2
+            "model.layers.{bid}.attn.rel_l2_clip.scale",                 # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_SINK_PROJ: (
+            "model.layers.{bid}.self_attn.sink_proj",                    # inkling2
+            "model.layers.{bid}.attn.attn_sink_proj",                    # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_Q_INP_NORM: (
+            "model.layers.{bid}.q_input_layernorm",                      # inkling2
+            "model.layers.{bid}.q_input_norm",                           # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_K_INP_NORM: (
+            "model.layers.{bid}.k_input_layernorm",                      # inkling2
+            "model.layers.{bid}.k_input_norm",                           # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_V_INP_NORM: (
+            "model.layers.{bid}.v_input_layernorm",                      # inkling2
+            "model.layers.{bid}.v_input_norm",                           # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_K_CONV: (
+            "model.layers.{bid}.self_attn.k_sconv.conv1d",               # inkling2
+            "model.layers.{bid}.attn.k_sconv",                           # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_V_CONV: (
+            "model.layers.{bid}.self_attn.v_sconv.conv1d",               # inkling2
+            "model.layers.{bid}.attn.v_sconv",                           # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_K_CONV_PROJ: (
+            "model.layers.{bid}.self_attn.k_sconv.weight_proj",          # inkling2
+            "model.layers.{bid}.attn.k_sconv.weight_proj",               # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_V_CONV_PROJ: (
+            "model.layers.{bid}.self_attn.v_sconv.weight_proj",          # inkling2
+            "model.layers.{bid}.attn.v_sconv.weight_proj",               # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_POST_CONV: (
+            "model.layers.{bid}.post_attention_convolution.conv1d",      # inkling2
+            "model.layers.{bid}.attn_sconv",                             # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_RES_QUERY: (
+            "model.layers.{bid}.attention_input.query",                  # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_Q_CTRL_DOWN: (
+            "model.layers.{bid}.q_controller.down_proj",                 # inkling2
+            "model.layers.{bid}.controllers.attn.down_weight",           # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_Q_CTRL_GAIN: (
+            "model.layers.{bid}.q_controller.gain_proj",                 # inkling2
+            "model.layers.{bid}.controllers.attn.gain_weight",           # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_Q_CTRL_FORGET: (
+            "model.layers.{bid}.q_controller.forget_proj",               # inkling2
+            "model.layers.{bid}.controllers.attn.forget_weight",         # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_DOWN: (
+            "model.layers.{bid}.k_controller.down_proj",                 # inkling2
+            "model.layers.{bid}.controllers.k.down_weight",              # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_GAIN: (
+            "model.layers.{bid}.k_controller.gain_proj",                 # inkling2
+            "model.layers.{bid}.controllers.k.gain_weight",              # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_FORGET: (
+            "model.layers.{bid}.k_controller.forget_proj",               # inkling2
+            "model.layers.{bid}.controllers.k.forget_weight",            # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_DOWN: (
+            "model.layers.{bid}.v_controller.down_proj",                 # inkling2
+            "model.layers.{bid}.controllers.v.down_weight",              # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_GAIN: (
+            "model.layers.{bid}.v_controller.gain_proj",                 # inkling2
+            "model.layers.{bid}.controllers.v.gain_weight",              # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_FORGET: (
+            "model.layers.{bid}.v_controller.forget_proj",               # inkling2
+            "model.layers.{bid}.controllers.v.forget_weight",            # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_DOWN: (
+            "model.layers.{bid}.mlp_controller.down_proj",               # inkling2
+            "model.layers.{bid}.controllers.mlp.down_weight",            # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_GAIN: (
+            "model.layers.{bid}.mlp_controller.gain_proj",               # inkling2
+            "model.layers.{bid}.controllers.mlp.gain_weight",            # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_FORGET: (
+            "model.layers.{bid}.mlp_controller.forget_proj",             # inkling2
+            "model.layers.{bid}.controllers.mlp.forget_weight",          # inkling2
+        ),
+
+        MODEL_TENSOR.FFN_POST_CONV: (
+            "model.layers.{bid}.post_mlp_convolution.conv1d",            # inkling2
+            "model.layers.{bid}.mlp_sconv",                              # inkling2
+        ),
+
+        MODEL_TENSOR.FFN_RES_QUERY: (
+            "model.layers.{bid}.mlp_input.query",                        # inkling2
+            "model.attn_res.mlp_queries.{bid}",                          # inkling2
+        ),
+
     }
 
     # architecture-specific block mappings
