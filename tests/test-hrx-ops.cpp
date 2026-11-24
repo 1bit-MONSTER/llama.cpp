@@ -2619,10 +2619,10 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     REQUIRE(query_value != nullptr);
     REQUIRE(mask_value != nullptr);
     REQUIRE(output_value != nullptr);
-    const ggml::hrx::CommandPlanAlternateValue * q8_alternate =
-        plan.metadata.find_alternate_value(output_value->id, GGML_TYPE_Q8_1, q8_output_bytes);
-    REQUIRE(q8_alternate != nullptr);
-    REQUIRE(q8_alternate->alternate_value == plan.transients[3].value);
+    // engine#3380: the split dispatch publishes its Q8_1 x4 alternate only when a projection in the graph reads it
+    // (the next q8 matmul). This graph ends at the attention output, so the plan must register no alternate; the
+    // kernel still owns the q8 transient, which is bindings[9] below.
+    REQUIRE(plan.metadata.find_alternate_value(output_value->id, GGML_TYPE_Q8_1, q8_output_bytes) == nullptr);
 
     const size_t query_row_bytes  = static_cast<size_t>(query_hidden_size) * sizeof(float);
     const size_t mask_row_bytes   =
@@ -2655,7 +2655,7 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
         REQUIRE(dispatch.bindings[8].value == output_value->id);
         REQUIRE(dispatch.bindings[8].offset == static_cast<size_t>(row) * output_value->nb[2]);
         REQUIRE(dispatch.bindings[8].length == output_row_bytes);
-        REQUIRE(dispatch.bindings[9].value == q8_alternate->alternate_value);
+        REQUIRE(dispatch.bindings[9].value == plan.transients[3].value);
         REQUIRE(dispatch.bindings[9].offset == static_cast<size_t>(row) * q8_row_bytes);
         REQUIRE(dispatch.bindings[9].length == q8_row_bytes);
     }
