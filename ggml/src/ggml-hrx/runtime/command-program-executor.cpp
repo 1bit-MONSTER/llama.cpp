@@ -1421,11 +1421,11 @@ static bool execute_prepared_kernel_command(const CommandProgramExecutionContext
 
     const KernelExecutable & executable = *command.kernel.executable;
     hrx_dispatch_config_t    config     = {
-        { executable.launch.workgroup_count[0], executable.launch.workgroup_count[1],
-         executable.launch.workgroup_count[2] },
-        { executable.launch.workgroup_size[0],  executable.launch.workgroup_size[1],
-         executable.launch.workgroup_size[2]  },
-        executable.launch.subgroup_size,
+        { command.kernel.launch.workgroup_count[0], command.kernel.launch.workgroup_count[1],
+         command.kernel.launch.workgroup_count[2] },
+        { command.kernel.launch.workgroup_size[0],  command.kernel.launch.workgroup_size[1],
+         command.kernel.launch.workgroup_size[2]  },
+        command.kernel.launch.subgroup_size,
     };
     if (ErrorResult error = take_status(hrx_stream_dispatch(
             context.stream, executable.executable, executable.export_ordinal, &config, command.kernel.constants.data(),
@@ -1456,6 +1456,32 @@ static void prepare_command_list(const CommandProgramExecutionContext & context,
     }
 }
 
+static bool prepare_kernel_launch(const PreparedCommand &             command,
+                                  ggml_hrx_loom_jit_launch_config &   launch,
+                                  Status &                            status) {
+    const KernelExecutable & executable = *command.kernel.executable;
+    if (executable.launch_program == nullptr) {
+        launch = executable.launch;
+        return true;
+    }
+    std::vector<int64_t> workload;
+    workload.reserve(executable.workload_parameter_names.size());
+    for (const std::string & name : executable.workload_parameter_names) {
+        const auto item = command.kernel.specialization.integer_parameters.find(name);
+        if (item == command.kernel.specialization.integer_parameters.end()) {
+            status.log("dynamic workload scalar %s is missing", name.c_str());
+            return false;
+        }
+        workload.push_back(item->second);
+    }
+    if (ErrorResult error = take_status(ggml_hrx_loom_jit_launch_program_evaluate(
+            executable.launch_program, workload.empty() ? nullptr : workload.data(), workload.size(), &launch))) {
+        status.log("evaluate launch: %s", error->c_str());
+        return false;
+    }
+    return true;
+}
+
 static void materialize_command_list_executables(const CommandProgramExecutionContext &   context,
                                                  std::vector<PreparedCommand> &           prepared_commands,
                                                  const std::vector<KernelExecutableRef> & executable_refs,
@@ -1465,6 +1491,10 @@ static void materialize_command_list_executables(const CommandProgramExecutionCo
         command.kernel.executable = context.kernel_executables->materialize(
             { context.device, context.target, context.compile_trace }, executable_refs[i], command.kernel.constants);
         if (command.kernel.executable == nullptr) {
+            status.log("failed to prepare %s", format_prepared_command_context(command).c_str());
+            continue;
+        }
+        if (!prepare_kernel_launch(command, command.kernel.launch, status)) {
             status.log("failed to prepare %s", format_prepared_command_context(command).c_str());
         }
     }
@@ -1741,11 +1771,11 @@ static Status record_prepared_kernel_command(hrx_graph_t                  graph,
         executable.executable,
         executable.export_ordinal,
         {
-            { executable.launch.workgroup_count[0], executable.launch.workgroup_count[1],
-              executable.launch.workgroup_count[2] },
-            { executable.launch.workgroup_size[0], executable.launch.workgroup_size[1],
-              executable.launch.workgroup_size[2] },
-            executable.launch.subgroup_size,
+            { command.kernel.launch.workgroup_count[0], command.kernel.launch.workgroup_count[1],
+              command.kernel.launch.workgroup_count[2] },
+            { command.kernel.launch.workgroup_size[0], command.kernel.launch.workgroup_size[1],
+              command.kernel.launch.workgroup_size[2] },
+            command.kernel.launch.subgroup_size,
         },
         command.kernel.constants.data(),
         command.kernel.constants.size(),

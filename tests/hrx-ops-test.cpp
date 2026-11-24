@@ -2472,9 +2472,9 @@ static void run_rmsnorm_cpu_reference_case(int64_t hidden_size = 256,
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "loom_libs:ggml_rmsnorm_f32" });
-    // engine#3382: fork f2099e9b7 dropped this op's Dynamic (any-token-count) specialization; it compiles Exact today.
+    // engine#3382: the kernel takes token_count as a workload argument, so one program serves any token count.
     REQUIRE(scheduled_kernel_specialization(hrx_graph, "loom_libs:ggml_rmsnorm_f32").workload_specialization ==
-            ggml::hrx::WorkloadSpecialization::Exact);
+            ggml::hrx::WorkloadSpecialization::Dynamic);
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -2932,8 +2932,8 @@ static void run_scheduled_hrx_scale_rmsnorm_case() {
 
     const ggml::hrx::KernelSpecialization scale_specialization =
         scheduled_kernel_specialization(graph, "loom_libs:ggml_scale_f32");
-    // engine#3382: fork f2099e9b7 dropped this op's Dynamic (any-token-count) specialization; it compiles Exact today.
-    REQUIRE(scale_specialization.workload_specialization == ggml::hrx::WorkloadSpecialization::Exact);
+    // engine#3382: the kernel takes element_count as a workload argument, so one program serves any count.
+    REQUIRE(scale_specialization.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
 
     REQUIRE(ggml_backend_sched_alloc_graph(sched, graph));
     REQUIRE(ggml_backend_sched_get_tensor_backend(sched, scaled) == hrx_backend);
@@ -5243,9 +5243,9 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     // specialization of it to read; the row then rests on its CPU reference, as require_kernel_subsequence_route says.
     const bool fa_addon_served =
         route_outcome(fa_sequence, { expected_kernel }, addon_route, nullptr).kind == RouteKind::AddOnServed;
-    // engine#3123: no flash-attention matcher opts into a dynamic workload -- `git grep 'workload_specialization =
-    // WorkloadSpecialization::Dynamic'` finds get-rows and rope-set-rows and nothing under dispatch-flash-attention --
-    // so an FA kernel keeps the `KernelSpecialization` default, `Exact`, for every shape. This used to answer `Dynamic`
+    // engine#3123: no flash-attention matcher opts into a dynamic workload -- no dispatch-flash-attention source sets
+    // WorkloadSpecialization::Dynamic -- so an FA kernel keeps the `KernelSpecialization` default, `Exact`, for every
+    // shape. This used to answer `Dynamic`
     // for every shape except 256/256, which no matcher can produce: those 26 rows therefore failed on every pin, and
     // they are worth keeping green because the padded-capacity binding is what makes the split kernel legitimate here.
     const ggml::hrx::WorkloadSpecialization expected_specialization = ggml::hrx::WorkloadSpecialization::Exact;
@@ -5991,13 +5991,15 @@ static void run_dynamic_generic_ops_cpu_reference_case() {
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
                                { "loom_libs:ggml_unary_f32", "loom_libs:ggml_copy_f32", "loom_libs:ggml_copy_f32",
                                  "loom_libs:ggml_concat_dim0_f32" });
-    for (const char * kernel_name :
-         { "loom_libs:ggml_unary_f32", "loom_libs:ggml_copy_f32", "loom_libs:ggml_concat_dim0_f32" }) {
+    // engine#3382: unary and copy take element_count as a workload argument, so one program serves any count.
+    // concat_dim0's compiled kernel reads row_count as a compile-time config, so its dispatch stays Exact.
+    for (const auto & row : { std::pair<const char *, ggml::hrx::WorkloadSpecialization>{
+                                  "loom_libs:ggml_unary_f32", ggml::hrx::WorkloadSpecialization::Dynamic },
+                              { "loom_libs:ggml_copy_f32", ggml::hrx::WorkloadSpecialization::Dynamic },
+                              { "loom_libs:ggml_concat_dim0_f32", ggml::hrx::WorkloadSpecialization::Exact } }) {
         const ggml::hrx::KernelSpecialization specialization =
-            scheduled_kernel_specialization(hrx_graph, kernel_name);
-        // engine#3382: fork f2099e9b7 dropped this op's Dynamic (any-token-count) specialization; it compiles
-        // Exact today.
-        REQUIRE(specialization.workload_specialization == ggml::hrx::WorkloadSpecialization::Exact);
+            scheduled_kernel_specialization(hrx_graph, row.first);
+        REQUIRE(specialization.workload_specialization == row.second);
     }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);

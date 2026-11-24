@@ -66,15 +66,18 @@ static std::string kernel_executable_key(const KernelDefinition & definition,
                                          const char *             target) {
     std::ostringstream out;
     out << (target != nullptr ? target : "") << '|' << definition.source_digest << '|' << definition.symbol
-        << "|recipe=" << definition.compile_recipe.mode;
-    for (const KernelScalarDefinition & parameter : definition.workload_parameters) {
-        const char * name = parameter.name != nullptr ? parameter.name : "";
-        const auto   item = dispatch.kernel.integer_parameters.find(name);
-        out << '|' << name << '=';
-        if (item == dispatch.kernel.integer_parameters.end()) {
-            out << "<missing>";
-        } else {
-            out << item->second;
+        << "|recipe=" << definition.compile_recipe.mode << "|workload="
+        << (dispatch.kernel.workload_specialization == WorkloadSpecialization::Dynamic ? "dynamic" : "exact");
+    if (dispatch.kernel.workload_specialization == WorkloadSpecialization::Exact) {
+        for (const KernelScalarDefinition & parameter : definition.workload_parameters) {
+            const char * name = parameter.name != nullptr ? parameter.name : "";
+            const auto   item = dispatch.kernel.integer_parameters.find(name);
+            out << '|' << name << '=';
+            if (item == dispatch.kernel.integer_parameters.end()) {
+                out << "<missing>";
+            } else {
+                out << item->second;
+            }
         }
     }
     for (const KernelCompileConfig & config : definition.compile_config) {
@@ -146,6 +149,7 @@ static bool build_compile_request(const KernelDefinition &   definition,
         }
         request.workload.push_back(item->second);
     }
+    request.specialize_workload = dispatch.kernel.workload_specialization == WorkloadSpecialization::Exact;
     return true;
 }
 
@@ -169,6 +173,13 @@ static std::shared_ptr<KernelExecutable> load_kernel_executable(const KernelExec
 
     auto executable    = std::make_shared<KernelExecutable>();
     executable->launch = compiled.launch_config;
+    if (dispatch.kernel.workload_specialization == WorkloadSpecialization::Dynamic) {
+        executable->launch_program = std::exchange(compiled.launch_program, nullptr);
+        executable->workload_parameter_names.reserve(definition.workload_parameters.size());
+        for (const KernelScalarDefinition & parameter : definition.workload_parameters) {
+            executable->workload_parameter_names.emplace_back(parameter.name != nullptr ? parameter.name : "");
+        }
+    }
     if (ErrorResult error =
             take_status(hrx_executable_load_data(context.device, compiled.hsaco_data, compiled.hsaco_size, "amdgpu",
                                                  context.target, &executable->executable))) {
@@ -195,7 +206,8 @@ static std::shared_ptr<KernelExecutable> load_kernel_executable(const KernelExec
         GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(error_message));
         return nullptr;
     }
-    if (executable->launch.workgroup_count[0] == 0 || executable->launch.workgroup_size[0] == 0) {
+    if (executable->launch_program == nullptr &&
+        (executable->launch.workgroup_count[0] == 0 || executable->launch.workgroup_size[0] == 0)) {
         error_message = "compiled launch geometry is empty for " + key;
         GGML_LOG_ERROR("%s: %s\n", __func__, disclosed(error_message));
         return nullptr;
@@ -236,6 +248,7 @@ class KernelExecutableCacheEntry {
 };
 
 KernelExecutable::~KernelExecutable() {
+    ggml_hrx_loom_jit_launch_program_release(launch_program);
     if (executable != nullptr) {
         hrx_executable_release(executable);
     }

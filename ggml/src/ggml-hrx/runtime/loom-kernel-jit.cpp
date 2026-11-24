@@ -64,7 +64,9 @@ static bool compile_kernel(ggml_hrx_loom_jit_amdgpu *         jit,
                            const std::string &                key,
                            ggml_hrx_loom_jit_compile_result & compiled,
                            std::string &                      error_message) {
-    if (loom_jit_disk_cache_load(request, compiled)) {  // 1bit: compiled in an earlier process
+    // the disk cache holds an evaluated launch config; a dynamic kernel keeps its launch program instead
+    if (request.specialize_workload &&
+        loom_jit_disk_cache_load(request, compiled)) {  // 1bit: compiled in an earlier process
         return true;
     }
     std::vector<ggml_hrx_loom_jit_config_binding> configs;
@@ -86,16 +88,20 @@ static bool compile_kernel(ggml_hrx_loom_jit_amdgpu *         jit,
     compile_options.dependency_count                  = request.dependencies.size();
     compile_options.config_bindings                   = configs.data();
     compile_options.config_binding_count              = configs.size();
-    compile_options.workload_arguments                = request.workload.data();
-    compile_options.workload_argument_count           = request.workload.size();
-    compile_options.evaluate_launch_config            = true;
+    compile_options.workload_arguments      = request.specialize_workload ? request.workload.data() : nullptr;
+    compile_options.workload_argument_count = request.specialize_workload ? request.workload.size() : 0;
+    compile_options.specialize_workload     = request.specialize_workload;
+    compile_options.load_launch_config      = !request.specialize_workload;
+    compile_options.evaluate_launch_config  = request.specialize_workload;
 
     if (ErrorResult error = take_status(ggml_hrx_loom_jit_amdgpu_compile(jit, &compile_options, &compiled))) {
         error_message = "compile " + key + ": " + *error;
         GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
         return false;
     }
-    loom_jit_disk_cache_store(request, compiled);  // 1bit
+    if (request.specialize_workload) {
+        loom_jit_disk_cache_store(request, compiled);  // 1bit
+    }
     return true;
 }
 

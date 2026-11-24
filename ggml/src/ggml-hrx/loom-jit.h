@@ -10,6 +10,7 @@
 #include <cstdint>
 
 struct ggml_hrx_loom_jit_amdgpu;
+struct ggml_hrx_loom_jit_launch_program;
 
 enum class ggml_hrx_loom_jit_source_format {
     Text,
@@ -61,6 +62,9 @@ struct ggml_hrx_loom_jit_compile_options {
     size_t                                   config_binding_count    = 0;
     const int64_t *                          workload_arguments      = nullptr;
     size_t                                   workload_argument_count = 0;
+    // false: do not bake workload values into the source, keep the launch program for per-dispatch evaluation
+    bool                                     specialize_workload     = true;
+    bool                                     load_launch_config      = false;
     bool                                     evaluate_launch_config  = false;
 };
 
@@ -82,7 +86,8 @@ struct ggml_hrx_loom_jit_compile_result {
     size_t                          compile_report_json_size = 0;
     char *                          final_module_text        = nullptr;
     size_t                          final_module_text_size   = 0;
-    ggml_hrx_loom_jit_launch_config launch_config;
+    ggml_hrx_loom_jit_launch_program * launch_program = nullptr;
+    ggml_hrx_loom_jit_launch_config    launch_config;
 };
 
 hrx_status_t ggml_hrx_loom_jit_amdgpu_create(const ggml_hrx_loom_jit_amdgpu_options * options,
@@ -93,3 +98,10 @@ void ggml_hrx_loom_jit_amdgpu_release(ggml_hrx_loom_jit_amdgpu * jit);
 hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *                jit,
                                               const ggml_hrx_loom_jit_compile_options * options,
                                               ggml_hrx_loom_jit_compile_result *        out_result);
+
+void ggml_hrx_loom_jit_launch_program_release(ggml_hrx_loom_jit_launch_program * program);
+
+hrx_status_t ggml_hrx_loom_jit_launch_program_evaluate(ggml_hrx_loom_jit_launch_program * program,
+                                                       const int64_t *                    workload_arguments,
+                                                       size_t                             workload_argument_count,
+                                                       ggml_hrx_loom_jit_launch_config *  out_launch_config);
