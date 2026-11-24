@@ -6,6 +6,7 @@
 #include "kernel-corpus/kernel-corpus.h"
 #include "runtime/graph-replay.h"
 #include "runtime/host-memory.h"
+#include "runtime/loom-kernel-jit.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -107,6 +108,8 @@ struct HostWeightBinding {
 struct PreparedKernelCommand {
     KernelSpecialization                specialization;
     std::shared_ptr<KernelExecutable>   executable;
+    // launch geometry of this dispatch: the executable's for an exact workload, the launch program's for a dynamic one
+    ggml_hrx_loom_jit_launch_config     launch;
     std::vector<uint8_t>                constants;
     std::vector<PreparedCommandBinding> bindings;
 };

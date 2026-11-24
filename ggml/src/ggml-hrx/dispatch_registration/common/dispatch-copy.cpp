@@ -61,6 +61,7 @@ static void add_concat_strided_source_parameters(KernelSpecialization & kernel, 
     }
 }
 
+// engine#3382: a packed copy takes element_count as a workload argument, so one program serves any count
 static bool make_copy_f32_dispatch(const Value & source, const Value & output, Dispatch & dispatch) {
     if (source.type != GGML_TYPE_F32 || output.type != GGML_TYPE_F32 || !output.contiguous ||
         !packed_f32_layout(output) || !f32_element_strides(source) || source.element_count <= 0 ||
@@ -72,6 +73,7 @@ static bool make_copy_f32_dispatch(const Value & source, const Value & output, D
     size_t source_span = source.byte_count;
     if (packed_f32_layout(source)) {
         dispatch.kernel = make_kernel_specialization(kCopyF32Kernel);
+        dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     } else {
         if (!strided_f32_storage_span_bytes(source, source_span)) {
             return false;

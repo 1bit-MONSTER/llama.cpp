@@ -471,6 +471,13 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-gtt-reserve PRIVATE ggml)
     add_test(NAME test-hrx-gtt-reserve COMMAND test-hrx-gtt-reserve)
 
+    # engine#3382: the dynamic workload specialization the generic ops select, and the one-program-per-class key.
+    # Plans and compiles only, no device: one compile of scale_f32 and two of concat_dim0_f32.
+    add_executable(test-hrx-dynamic-workload test-hrx-dynamic-workload.cpp)
+    target_link_libraries(test-hrx-dynamic-workload PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-dynamic-workload PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-dynamic-workload COMMAND test-hrx-dynamic-workload)
+
     add_executable(test-hrx-rope-claim-params test-hrx-rope-claim-params.cpp)
     target_include_directories(test-hrx-rope-claim-params PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-rope-claim-params COMMAND test-hrx-rope-claim-params)

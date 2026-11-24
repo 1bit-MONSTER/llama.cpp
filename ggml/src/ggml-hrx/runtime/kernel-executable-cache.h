@@ -19,10 +19,13 @@ class KernelExecutableCacheEntry;
 struct KernelExecutable {
     ~KernelExecutable();
 
-    hrx_executable_t                executable     = nullptr;
-    uint32_t                        export_ordinal = 0;
-    hrx_executable_export_info_t    export_info    = {};
-    ggml_hrx_loom_jit_launch_config launch;
+    hrx_executable_t                  executable     = nullptr;
+    uint32_t                          export_ordinal = 0;
+    hrx_executable_export_info_t      export_info    = {};
+    ggml_hrx_loom_jit_launch_config   launch;
+    // A dynamic workload keeps the compiled launch program and evaluates it for each dispatch's workload values.
+    ggml_hrx_loom_jit_launch_program * launch_program = nullptr;
+    std::vector<std::string>          workload_parameter_names;
 };
 
 struct KernelExecutablePrepareContext {

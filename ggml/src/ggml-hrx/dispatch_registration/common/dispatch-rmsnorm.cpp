@@ -1016,6 +1016,8 @@ static bool match_rmsnorm_f32_dispatch(const DispatchMatchContext & context, Dis
 
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kRmsNormF32Kernel);
+    // engine#3382: the kernel takes token_count as a workload argument, so one program serves any token count
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     dispatch.kernel.integer_parameters.emplace("token_count", rms_match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_f32.hidden_size", to_config_value(rms_match.hidden_size));
     dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_f32.rms_epsilon", to_config_value(rms_match.epsilon));
