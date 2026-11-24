@@ -4481,12 +4481,18 @@ static void run_mixed_weight_layout_program_case(ggml_type weight_type) {
     auto decode_lookup = state->graph_programs.get_or_build(
         *hrx_decode_graph, ggml::hrx::get_qwen_kernel_corpus(), state->device->architecture);
     REQUIRE(decode_lookup.valid());
+    // A ValueId is only meaningful inside the graph it came from: the mixed and the decode programs are separate
+    // imports, and a tensor has a different id in each (the mixed program meets the weight before the gather, the
+    // decode program meets it after the activation). The decode bindings are therefore matched against the weight's
+    // value in the decode program's own graph - engine#3389.
+    const ggml::hrx::Value * decode_weight_value = decode_lookup.program->graph().values().find_tensor(hrx_weight);
+    REQUIRE(decode_weight_value != nullptr);
     bool decode_bound = false;
     bool decode_packed = false;
     bool decode_native = false;
     for (const auto & command : decode_lookup.program->commands().commands) {
         for (const auto & binding : command.bindings) {
-            if (binding.value != weight_value->id) {
+            if (binding.value != decode_weight_value->id) {
                 continue;
             }
             decode_bound = true;
@@ -4533,6 +4539,8 @@ static void run_mixed_weight_layout_program_case(ggml_type weight_type) {
         // Two resident copies of one weight, in two different device buffers.
         auto resident_buffer = [&](ggml_cgraph & graph, ggml::hrx::GraphProgram & program,
                                    size_t & length) -> hrx_buffer_t {
+            const ggml::hrx::Value * program_weight = program.graph().values().find_tensor(hrx_weight);
+            REQUIRE(program_weight != nullptr);
             auto match = program.match_trusted_graph(graph, true);
             REQUIRE(match.valid());
             std::vector<ggml::hrx::CommandProgramBinding> external;
@@ -4553,7 +4561,7 @@ static void run_mixed_weight_layout_program_case(ggml_type weight_type) {
             auto prepared = ggml::hrx::prepare_command_program(execution_context, program.commands(), bindings);
             REQUIRE(prepared.valid());
             for (const auto & resident : prepared.resident_host_weights) {
-                if (resident.value == weight_value->id) {
+                if (resident.value == program_weight->id) {
                     length = resident.source.materialized_length;
                     return resident.lease.buffer();
                 }
