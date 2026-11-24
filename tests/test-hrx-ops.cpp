@@ -532,6 +532,12 @@ static void run_alternate_value_alias_lookup_checks() {
         make_test_value(partial_alias, storage, root, root, 0, full_bytes, GGML_TYPE_F32, element_count / 2));
     REQUIRE(status.success());
 
+    // engine#3383: the fallback needs the graph index to know what produced a value, so the aliases are real nodes.
+    graph.add_node(GGML_OP_RESHAPE, full_alias, { root });
+    graph.add_node(GGML_OP_VIEW, partial_alias, { root });
+    status = graph.build_index();
+    REQUIRE(status.success());
+
     REQUIRE(plan.metadata.append_alternate_value({ root, q8_alternate, GGML_TYPE_Q8_1, q8_bytes, "q8" }, status));
     REQUIRE(plan.metadata.append_alternate_value({ root, f16_alternate, GGML_TYPE_F16, f16_bytes, "f16" }, status));
 
