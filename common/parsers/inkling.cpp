@@ -50,8 +50,21 @@ static void inkling_split_media(common_chat_prompt & prompt) {
 //   <|message_model|><|content_text|>...<|end_message|>
 //   <|message_model|>NAME<|content_invoke_tool_json|>{"name":"NAME","args":{...}}<|end_message|>
 common_chat_params common_chat_params_init_inkling(const common_chat_template &          tmpl,
-                                                   const autoparser::generation_params & inputs) {
+                                                   const autoparser::generation_params & inputs_in) {
     common_chat_params data;
+
+    // fork: the template reads only reasoning_effort (default 0.9), not enable_thinking: map thinking off to its "none"
+    const bool has_effort = inputs_in.extra_context.is_object() && inputs_in.extra_context.contains("reasoning_effort");
+    const bool map_off    = !inputs_in.enable_thinking && !has_effort;
+    autoparser::generation_params off_inputs;
+    if (map_off) {
+        off_inputs = inputs_in;
+        if (!off_inputs.extra_context.is_object()) {
+            off_inputs.extra_context = json::object();
+        }
+        off_inputs.extra_context["reasoning_effort"] = "none";
+    }
+    const autoparser::generation_params & inputs = map_off ? off_inputs : inputs_in;
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);

@@ -3274,6 +3274,27 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             }
         }
 
+        // Inkling: thinking off must render the template's "none" effort, an explicit effort still wins
+        for (const char * path : { "models/templates/thinkingmachines-Inkling.jinja", "models/templates/thinkingmachines-Inkling-2-Small.jinja", "models/templates/thinkingmachines-Inkling-2-Mini.jinja" }) {
+            auto tmpls = read_templates(path);
+            auto render = [&](bool enable_thinking, const std::string & effort) {
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_user };
+                inputs.add_generation_prompt = true;
+                inputs.enable_thinking       = enable_thinking;
+                if (!effort.empty()) {
+                    inputs.chat_template_kwargs["reasoning_effort"] = "\"" + effort + "\"";
+                }
+                return common_chat_templates_apply(tmpls.get(), inputs).prompt.str();
+            };
+            const std::string L = "Thinking effort level: ";
+            if (render(true, "").find(L + "0.9<") == std::string::npos ||
+                render(false, "").find(L + "0<") == std::string::npos ||
+                render(false, "low").find(L + "0.2<") == std::string::npos) {
+                throw std::runtime_error(std::string("Inkling: wrong thinking effort for enable_thinking in ") + path);
+            }
+        }
+
         {
             // StepFun trimming regression test (see https://github.com/ggml-org/llama.cpp/pull/25238)
             auto tmpls = read_templates("models/templates/StepFun3.5-Flash.jinja");
@@ -5336,6 +5357,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Thinking block, then content block
         tst.test(P + "<|content_thinking|>I'm thinking" + E + H + "<|content_text|>Hello, world!\nWhat's up?" + E)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", "I'm thinking"))
+            .run();
+
+        // Thinking off with an explicit effort: the model may still think, and it is still extracted
+        tst.test(P + "<|content_thinking|>I'm thinking" + E + H + "<|content_text|>Hello, world!\nWhat's up?" + E)
+            .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(simple_assist_msg("Hello, world!\nWhat's up?", "I'm thinking"))
             .run();
