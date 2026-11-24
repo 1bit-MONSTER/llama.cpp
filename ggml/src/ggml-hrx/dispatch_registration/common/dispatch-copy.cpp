@@ -26,7 +26,8 @@ static const Value * graph_value(const Graph & graph, ValueId id) {
 static bool packed_f32_layout(const Value & value) {
     size_t expected_stride = sizeof(float);
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-        if (value.nb[i] != expected_stride) {
+        // a dimension of extent 1 has no layout: its stride is never read
+        if (value.ne[i] > 1 && value.nb[i] != expected_stride) {
             return false;
         }
         expected_stride *= static_cast<size_t>(value.ne[i]);
