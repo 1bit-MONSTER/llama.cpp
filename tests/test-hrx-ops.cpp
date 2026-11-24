@@ -2740,6 +2740,10 @@ static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool includ
         // for a consumer, and here the normalised value is the graph root, so the publication is not
         // scheduled. The plan is flash attention, one mul_mat_bias postops dispatch (projection, residual and
         // the next RMSNorm) and the RMSNorm+binary; this asserts that plan instead of the publication.
+        // engine#3380: the residual in this fixture is a graph input (ValueKind::External), so the fused
+        // attention-output route is refused by its in-place residual clause (#95) before anything else runs.
+        // hrx-ops-test's qwen_decode_attention_output_next_q8 rows build the graph-internal residual and assert
+        // that route.
         REQUIRE(plan.dispatches.size() == (include_get_rows_selectors ? 4u : 3u));
         REQUIRE(kernel_name_for_id(plan.dispatches.front().kernel.kernel_id) ==
                 "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");

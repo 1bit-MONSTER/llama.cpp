@@ -484,6 +484,12 @@ static bool match_qwen_attention_output_next_q8_dispatch(const DispatchMatchCont
 }
 
 void register_qwen_matmul_dispatches(DispatchRegistryBuilder & registry) {
+    // Fuses o_proj MUL_MAT + residual ADD + RMS_NORM + MUL into one dispatch and publishes the normalized row as q8_1 x4.
+    // Two limits bound it: its residual must be graph-internal (Transient) because the kernel accumulates into the
+    // residual buffer, so a caller-owned residual is refused on purpose (#95); and it sits at 300, while the private
+    // add-on's one-token GEMV (hip.gemv_wide, fused 329) claims a one-token Q4_K projection first when the FA route has
+    // already published that projection's q8_1 input - which is the shipped build. That GEMV binds the same alternate
+    // (its matcher asks for an existing q8_1 input), so the copy is read there instead of being wasted. engine#3380.
     registry.add({
         "qwen.matmul.attention_output_q4k_q8_1_x4_next_q8",
         GGML_OP_MUL_MAT,

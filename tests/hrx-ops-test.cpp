@@ -5496,6 +5496,14 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
 }
 
+// engine#3380: the fused attention-output route is o_proj MUL_MAT -> residual ADD -> RMS_NORM -> MUL, then the next
+// projection reads the normalized row as q8_1 x4. Its kernel accumulates the projection into the residual buffer
+// (qwen3_moe.dense_quantized.output_accumulation=1, dispatch-qwen-matmul.cpp:437), so the residual input must be a
+// value the plan owns: writing a caller-owned value is what the matcher refuses (#95). The shipped Qwen3-MoE graph
+// supplies such a value -- inpSA is the layer input, produced inside the same graph (src/models/qwen3moe.cpp:83, 127,
+// 155, 161). This builds the residual from a producer for the same reason. A leaf residual is a graph input
+// (ValueKind::External) and is the one shape the matcher may not fuse; this row used one until engine#3380, so its own
+// decline read as "selected in no configuration".
 static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool include_get_rows_selectors) {
     constexpr int64_t query_token_count     = 1;
     constexpr int64_t key_value_token_count = 512;
@@ -5514,7 +5522,9 @@ static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool includ
     ggml_tensor * attention_output = ggml_reshape_2d(ctx, attention.output, attention_hidden_size, query_token_count);
     ggml_tensor * output_weight    = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, attention_hidden_size, kQwenHiddenSize);
     ggml_tensor * projection       = ggml_mul_mat(ctx, output_weight, attention_output);
-    ggml_tensor * residual_input   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenHiddenSize, query_token_count);
+    ggml_tensor * residual_left    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenHiddenSize, query_token_count);
+    ggml_tensor * residual_right   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenHiddenSize, query_token_count);
+    ggml_tensor * residual_input   = ggml_add(ctx, residual_left, residual_right);
     ggml_tensor * selected_projection = projection;
     ggml_tensor * selected_residual   = residual_input;
     ggml_tensor * row_indices         = nullptr;
@@ -5535,6 +5545,8 @@ static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool includ
     REQUIRE(attention_output != nullptr);
     REQUIRE(output_weight != nullptr);
     REQUIRE(projection != nullptr);
+    REQUIRE(residual_left != nullptr);
+    REQUIRE(residual_right != nullptr);
     REQUIRE(residual_input != nullptr);
     REQUIRE(residual != nullptr);
     REQUIRE(norm_weight != nullptr);
@@ -5554,14 +5566,31 @@ static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool includ
     REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }, &diagnostics));
     const ggml::hrx::CommandPlan & plan = scheduler.plan();
     REQUIRE(plan.valid());
-    REQUIRE(plan.dispatches.size() == 3);
-    REQUIRE(plan.completion_counter_requests.size() == 2);
-
     const auto projection_it = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
         return kernel_name_for_id(dispatch.kernel.kernel_id) ==
                "qwen3_moe:qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8";
     });
+    // engine#3085: a tree that builds the private add-on has its own one-token MUL_MAT matchers, and hip.gemv_wide
+    // (fused, 329) claims a one-token Q4_K projection whose q8_1 input already exists before this route at 300 is tried.
+    // That is the shipped build; say what is no longer asserted instead of aborting on a name no add-on build produces.
+    if (projection_it == plan.dispatches.end()) {
+        for (const ggml::hrx::Dispatch & dispatch : plan.dispatches) {
+            const std::string scheduled_name = kernel_name_for_id(dispatch.kernel.kernel_id);
+            if (scheduled_name.compare(0, 4, "hip:") == 0) {
+                std::fprintf(stderr,
+                             "engine#3380: an add-on kernel (%s) is in this plan and the loom attention-output route is "
+                             "not selected, so this row does NOT assert it (engine#3085 pattern; "
+                             "GGML_HRX_LOG_DISPATCH=1 names the registration that took the node)\n",
+                             scheduled_name.c_str());
+                ggml_free(ctx);
+                return;
+            }
+        }
+    }
     REQUIRE(projection_it != plan.dispatches.end());
+    // The residual's producer is a dispatch of its own: FA, residual, the fused route, the next projection.
+    REQUIRE(plan.dispatches.size() == 4);
+    REQUIRE(plan.completion_counter_requests.size() == 2);
     const ggml::hrx::Dispatch & projection_dispatch = *projection_it;
     REQUIRE(kernel_name_for_id(projection_dispatch.kernel.kernel_id) ==
             "qwen3_moe:qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8");
@@ -5579,6 +5608,9 @@ static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool includ
     const ggml::hrx::Value * normalized_value     = imported.graph.values().find_tensor(normalized);
     REQUIRE(flash_output_value != nullptr);
     REQUIRE(residual_input_value != nullptr);
+    // The property the leaf fixture lacked, and the reason the matcher refused it: only a graph-internal value may be
+    // the in-place residual target (dispatch-qwen-matmul.cpp's residual clause, #95).
+    REQUIRE(residual_input_value->kind == ggml::hrx::ValueKind::Transient);
     REQUIRE(residual_value != nullptr);
     REQUIRE(normalized_value != nullptr);
     const ggml::hrx::CommandPlanAlternateValue * attention_q8 =
@@ -10203,14 +10235,12 @@ static void register_flash_attention_cases(Suite & suite) {
     suite.device_case("qwen_decode_split_flash_attention.query4.kv513.masked.head96.value64", [] {
         run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f));
     });
-    suite.known_fail_device_case("qwen_decode_attention_output_next_q8.no_selectors",
-                                 "engine#3380: the fused attention-output next-q8 matcher is selected in no "
-                                 "configuration",
-                                 [] { run_qwen_decode_attention_output_next_q8_scheduling_case(false); });
-    suite.known_fail_device_case("qwen_decode_attention_output_next_q8.selectors",
-                                 "engine#3380: the fused attention-output next-q8 matcher is selected in no "
-                                 "configuration",
-                                 [] { run_qwen_decode_attention_output_next_q8_scheduling_case(true); });
+    // Host-tier: the case builds a graph and reads the plan back, it never opens a device. As a device case it was
+    // skipped everywhere except a GPU box, so nothing checked this route on a host (engine#3380).
+    suite.host_case("qwen_decode_attention_output_next_q8.no_selectors",
+                    [] { run_qwen_decode_attention_output_next_q8_scheduling_case(false); });
+    suite.host_case("qwen_decode_attention_output_next_q8.selectors",
+                    [] { run_qwen_decode_attention_output_next_q8_scheduling_case(true); });
 }
 
 static void register_hrx_ops_cases(Suite & suite) {
