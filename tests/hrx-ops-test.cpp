@@ -9441,10 +9441,9 @@ using test_runner::Suite;
 static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.route_outcome", [] { run_route_outcome_checks(); });   // engine#3120: the route decision
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
-    suite.known_fail_host_case("support.alternate_value_alias_lookup",
-                               "engine#3383: find_alternate_value hands a transposed view or a CPY into the same "
-                               "storage the root's alternate",
-                               [] { run_alternate_value_alias_lookup_checks(); });
+    // engine#3383: the fallback takes an alternate only through a full ordered layout alias, never through a reordering
+    // view or a write that reuses the storage.
+    suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
     suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });
     suite.device_case("add_f32.cpu_reference", [] { run_add_f32_cpu_reference_case(); });
     suite.device_case("dynamic_generic_ops.cpu_reference", [] { run_dynamic_generic_ops_cpu_reference_case(); });

@@ -73,64 +73,7 @@ inline bool same_full_value_range(const Value & lhs, const Value & rhs) {
     return lhs.storage == rhs.storage && lhs.storage_offset == rhs.storage_offset && lhs.byte_count == rhs.byte_count;
 }
 
-inline const CommandPlanAlternateValue * find_alternate_value(const Graph &       graph,
-                                                              const CommandPlan & plan,
-                                                              ValueId             graph_value,
-                                                              ggml_type           type,
-                                                              size_t              byte_count,
-                                                              int                 scale_log2 = 0) {
-    const CommandPlanAlternateValue * exact = find_alternate_value(plan, graph_value, type, byte_count, scale_log2);
-    if (exact != nullptr) {
-        return exact;
-    }
-
-    const Value * value = graph.values().find(graph_value);
-    if (value == nullptr) {
-        return nullptr;
-    }
-
-    auto find_if_same_range = [&](ValueId candidate_id) -> const CommandPlanAlternateValue * {
-        const Value * candidate = graph.values().find(candidate_id);
-        if (candidate == nullptr || !same_full_value_range(*value, *candidate)) {
-            return nullptr;
-        }
-        return find_alternate_value(plan, candidate_id, type, byte_count, scale_log2);
-    };
-
-    ValueId alias = value->alias_source;
-    for (size_t i = 0; alias.value >= 0 && i < graph.values().size(); ++i) {
-        const CommandPlanAlternateValue * alternate = find_if_same_range(alias);
-        if (alternate != nullptr) {
-            return alternate;
-        }
-        const Value * alias_value = graph.values().find(alias);
-        if (alias_value == nullptr) {
-            break;
-        }
-        alias = alias_value->alias_source;
-    }
-
-    const CommandPlanAlternateValue * root_alternate = find_if_same_range(value->storage_root);
-    if (root_alternate != nullptr) {
-        return root_alternate;
-    }
-
-    for (const CommandPlanAlternateValue & alternate : plan.metadata.alternate_values()) {
-        // the scale is part of what a reader asks for: a copy stored at another scale is a different value (engine #2159)
-        if (alternate.type != type || alternate.byte_count != byte_count || alternate.scale_log2 != scale_log2) {
-            continue;
-        }
-        const Value * alternate_value = graph.values().find(alternate.graph_value);
-        if (alternate_value != nullptr && same_full_value_range(*value, *alternate_value)) {
-            return &alternate;
-        }
-    }
-    return nullptr;
-}
-
-// AMD's generated-resource lookup, restored verbatim from the pin: the comparators it takes as lambdas, the
-// detail:: helper that walks full-ordered value ranges, and the free find_generated_resource the dispatch
-// registrations and the ops test call. Shares no names with our find_alternate_value path.
+// The layout comparators AMD's generated-resource lookup takes as lambdas, restored verbatim from the pin.
 inline bool same_full_storage_range(const Value & lhs, const Value & rhs) {
     return lhs.storage == rhs.storage && lhs.storage_offset == rhs.storage_offset && lhs.byte_count == rhs.byte_count;
 }
@@ -150,7 +93,91 @@ inline bool same_q8_1_x4_geometry(const Value & lhs, const Value & rhs) {
            rhs.ne[0] % 128 == 0;
 }
 
+// The format decides how much of the source's row geometry a reader needs: an F16 row only needs the element order, a
+// Q8_1 x4 copy needs 128-element rows, and every other format keeps the packed rows. engine#3383
+inline bool alternate_value_layout_compatible(ggml_type type, const Value & lhs, const Value & rhs) {
+    if (type == GGML_TYPE_F16) {
+        return same_full_ordered_value_range(lhs, rhs);
+    }
+    if (type == GGML_TYPE_Q8_1) {
+        return same_q8_1_x4_geometry(lhs, rhs);
+    }
+    return same_packed_row_geometry(lhs, rhs);
+}
 
+inline const CommandPlanAlternateValue * find_alternate_value(const Graph &       graph,
+                                                              const CommandPlan & plan,
+                                                              ValueId             graph_value,
+                                                              ggml_type           type,
+                                                              size_t              byte_count,
+                                                              int                 scale_log2 = 0) {
+    const CommandPlanAlternateValue * exact = find_alternate_value(plan, graph_value, type, byte_count, scale_log2);
+    if (exact != nullptr) {
+        return exact;
+    }
+
+    const Value * value = graph.values().find(graph_value);
+    if (value == nullptr) {
+        return nullptr;
+    }
+
+    // A fallback takes the alternate of a source that this value reads in the same order. Only a layout alias keeps the
+    // source's bytes: a write that reuses the storage (CPY, SET_ROWS) makes the value's bytes its own. The graph index is
+    // the only record of what produced the value, so the fallback needs an indexed graph. engine#3383
+    if (!graph.has_index()) {
+        return nullptr;
+    }
+    const GraphNode * producer = graph.index().producer(value->id);
+    if (producer != nullptr && !is_layout_alias_node(graph, *producer)) {
+        return nullptr;
+    }
+
+    auto find_if_compatible = [&](ValueId candidate_id) -> const CommandPlanAlternateValue * {
+        const Value * candidate = graph.values().find(candidate_id);
+        if (candidate == nullptr || !alternate_value_layout_compatible(type, *candidate, *value)) {
+            return nullptr;
+        }
+        return find_alternate_value(plan, candidate_id, type, byte_count, scale_log2);
+    };
+
+    ValueId alias = value->alias_source;
+    for (size_t i = 0; alias.value >= 0 && i < graph.values().size(); ++i) {
+        const CommandPlanAlternateValue * alternate = find_if_compatible(alias);
+        if (alternate != nullptr) {
+            return alternate;
+        }
+        const Value * alias_value = graph.values().find(alias);
+        if (alias_value == nullptr) {
+            break;
+        }
+        // a writer produced this value, so it does not carry its alias source's bytes
+        const GraphNode * alias_producer = graph.index().producer(alias_value->id);
+        if (alias_producer != nullptr && !is_layout_alias_node(graph, *alias_producer)) {
+            break;
+        }
+        alias = alias_value->alias_source;
+    }
+
+    const CommandPlanAlternateValue * root_alternate = find_if_compatible(value->storage_root);
+    if (root_alternate != nullptr) {
+        return root_alternate;
+    }
+
+    for (const CommandPlanAlternateValue & alternate : plan.metadata.alternate_values()) {
+        // the scale is part of what a reader asks for: a copy stored at another scale is a different value (engine #2159)
+        if (alternate.type != type || alternate.byte_count != byte_count || alternate.scale_log2 != scale_log2) {
+            continue;
+        }
+        const Value * alternate_value = graph.values().find(alternate.graph_value);
+        if (alternate_value != nullptr && alternate_value_layout_compatible(type, *alternate_value, *value)) {
+            return &alternate;
+        }
+    }
+    return nullptr;
+}
+
+// The rest of AMD's generated-resource lookup, restored verbatim from the pin: the detail:: helper that walks
+// full-ordered value ranges, and the free find_generated_resource the dispatch registrations and the ops test call.
 namespace detail {
 
 template <typename Resource, typename Resources, typename SourceValue, typename Matches, typename Compatible>
