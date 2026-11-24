@@ -759,6 +759,11 @@ if (TARGET ggml-hrx)
     add_executable(hrx-ops-test hrx-ops-test.cpp)
     target_link_libraries(hrx-ops-test PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(hrx-ops-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    if (GGML_HRX_HIP_ADDON_DIR)
+        # engine#3488: five native-weight rows are known-fail in a no-add-on build and must pass here, so the test
+        # needs the build's own answer rather than a runtime probe.
+        target_compile_definitions(hrx-ops-test PRIVATE GGML_HRX_HIP_ADDON)
+    endif()
     add_test(NAME hrx-ops-test COMMAND hrx-ops-test
         --hrx-test-jobs 4 --hrx-test-output all --hrx-test-filter ".*")
 
