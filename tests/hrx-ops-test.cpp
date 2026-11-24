@@ -10215,10 +10215,12 @@ static void register_flash_attention_cases(Suite & suite) {
                       [] { run_qwen_decode_split_flash_attention_scheduling_case(4, 513); });
     suite.device_case("qwen_decode_split_flash_attention.query1.kv512.masked",
                       [] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true); });
-    suite.device_case("qwen_decode_split_flash_attention.query1.kv512.masked.head96.value64", [] {
+    // Host-tier: like the attention-output rows above, these two build a graph and read the plan back; they never open
+    // a device. engine#3380's ordered-reshape regression made them fail only on a GPU box, so no host run saw it.
+    suite.host_case("qwen_decode_split_flash_attention.query1.kv512.masked.head96.value64", [] {
         run_qwen_decode_split_flash_attention_scheduling_case(1, 512, true, 96, 64, 1.0f / std::sqrt(96.0f));
     });
-    suite.device_case("qwen_decode_split_flash_attention.query4.kv513.masked.head96.value64", [] {
+    suite.host_case("qwen_decode_split_flash_attention.query4.kv513.masked.head96.value64", [] {
         run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f));
     });
     // Host-tier: the case builds a graph and reads the plan back, it never opens a device. As a device case it was
