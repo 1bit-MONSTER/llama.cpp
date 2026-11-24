@@ -9437,6 +9437,23 @@ static std::string type_name(ggml_type type) {
 
 using test_runner::Suite;
 
+// engine#3488: five rows below assert behaviour only the HIP add-on's kernels provide -- a `*_lowtoken_dot`
+// body the Loom corpus has no kernel for, or a native-weight binding the no-add-on path never materialises.
+// The add-on build passes all five; the no-add-on build is the configuration that fails them, and it is not
+// expected to meet them until the native path grows those kernels (the open decision in engine#3488). They are
+// labelled known-fail ONLY in a build without the add-on, so the add-on build keeps asserting them and a
+// no-add-on fix turns into an UNEXPECTED-PASS that must retire the label, instead of staying hidden behind it.
+#if defined(GGML_HRX_HIP_ADDON)
+template <typename F> static void addon_kernel_case(Suite & suite, std::string name, const char * reason, F && run) {
+    (void) reason;  // the add-on build asserts the row: its kernels are the reason it passes
+    suite.device_case(std::move(name), std::forward<F>(run));
+}
+#else
+template <typename F> static void addon_kernel_case(Suite & suite, std::string name, const char * reason, F && run) {
+    suite.known_fail_device_case(std::move(name), reason, std::forward<F>(run));
+}
+#endif
+
 static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.route_outcome", [] { run_route_outcome_checks(); });   // engine#3120: the route decision
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
@@ -9805,16 +9822,23 @@ static void register_dense_matmul_cases(Suite & suite) {
             });
     }
     for (const int64_t tokens : { 1, 2, 5 }) {
-        suite.device_case(
-            "dense_matmul_swiglu.q4_k.q4_k.swiglu.tokens" + std::to_string(tokens) + ".outputs16384.input4096",
-            [tokens] {
-                // engine#3120: 1 token here is dense_decode_kquant (HRX_ID_dense_q4k_swiglu_q8_decode), the rest
-                // kquant_tokens_q8 -- both add-on families, so the row accepts the add-on route.
-                run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
-                                                           "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
-                                                           tokens, 16384, GGML_GLU_OP_SWIGLU, 4096, false, true,
-                                                           "kquant_tokens_q8/dense_decode_kquant");
-            });
+        const std::string name =
+            "dense_matmul_swiglu.q4_k.q4_k.swiglu.tokens" + std::to_string(tokens) + ".outputs16384.input4096";
+        auto run = [tokens] {
+            // engine#3120: 1 token here is dense_decode_kquant (HRX_ID_dense_q4k_swiglu_q8_decode), the rest
+            // kquant_tokens_q8 -- both add-on families, so the row accepts the add-on route.
+            run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+                                                       "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", tokens,
+                                                       16384, GGML_GLU_OP_SWIGLU, 4096, false, true,
+                                                       "kquant_tokens_q8/dense_decode_kquant");
+        };
+        if (tokens == 1) {
+            // engine#3120's dense_decode_kquant route exists only in the add-on; engine#3488 labels the no-add-on arm.
+            addon_kernel_case(suite, name,
+                              "engine#3488: no-add-on build has no dense_decode_kquant / lowtoken_dot body", run);
+        } else {
+            suite.device_case(name, run);
+        }
     }
     suite.device_case("dense_matmul_swiglu.q4_k.q4_k.reglu.tokens3.outputs16384.input4352", [] {
         run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
@@ -10072,16 +10096,19 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("mixed_weight_layout_program.q6_k",
                       [] { run_mixed_weight_layout_program_case(GGML_TYPE_Q6_K); });
     // Standard GGUF weights are immutable: native host copies can be retained across token inputs.
-    suite.device_case("cpu_host_native_weight.q4_k", [] {
+    const char * kNativeWeightLayout =
+        "engine#3488: no-add-on build retains no native-weight layout (binding.layout == decode_layout)";
+    addon_kernel_case(suite, "cpu_host_native_weight.q4_k", kNativeWeightLayout, [] {
         run_imported_packed_weight_case(GGML_TYPE_Q4_K, PackedWeightSourceKind::CpuHost);
     });
     suite.device_case("cpu_host_native_weight.q6_k", [] {
         run_imported_packed_weight_case(GGML_TYPE_Q6_K, PackedWeightSourceKind::CpuHost);
     });
-    suite.device_case("hrx_host_native_weight.q4_k", [] {
+    addon_kernel_case(suite, "hrx_host_native_weight.q4_k", kNativeWeightLayout, [] {
         run_imported_packed_weight_case(GGML_TYPE_Q4_K, PackedWeightSourceKind::HrxHost);
     });
-    suite.device_case("coherent_subregion_native_weight.q4_k", [] {
+    addon_kernel_case(suite, "coherent_subregion_native_weight.q4_k",
+                      "engine#3488: no-add-on build rematerialises the packed weight every token", [] {
         run_imported_packed_weight_case(GGML_TYPE_Q4_K, PackedWeightSourceKind::CoherentSubregion);
     });
     suite.device_case("q6_decode_source_eligibility.q6_k", [] { run_q6_decode_source_eligibility_case(); });
@@ -10089,12 +10116,14 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
         run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, kF32Wmma, 1, 128, 2048, false, false, GGML_TYPE_COUNT,
                                             true);
     });
-    suite.device_case("uploaded_native_gated_q4", [] {
-        // engine#3120: served by the add-on's fused q4_k/q4_k swiglu (kquant_tokens_q8), as the lowtoken rows are.
-        run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
-                                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2, 128,
-                                                   GGML_GLU_OP_SWIGLU, 2048, true, false, "kquant_tokens_q8");
-    });
+    addon_kernel_case(suite, "uploaded_native_gated_q4",
+                      "engine#3488: no-add-on build has no ggml_mul_mat_swiglu_f32_f32_lowtoken_dot body", [] {
+                          // engine#3120: served by the add-on's fused q4_k/q4_k swiglu (kquant_tokens_q8), as the
+                          // lowtoken rows are.
+                          run_dense_matmul_swiglu_cpu_reference_case(
+                              GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 2,
+                              128, GGML_GLU_OP_SWIGLU, 2048, true, false, "kquant_tokens_q8");
+                      });
     suite.device_case("mixed_symmetric_source_eligibility", [] { run_mixed_symmetric_source_eligibility_case(); });
     for (int64_t tokens : { 1, 2, 8 }) {
         for (int64_t stride : { 8, 128 }) {
