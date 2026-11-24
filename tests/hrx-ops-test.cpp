@@ -5104,13 +5104,13 @@ static void run_router_common_matmul_case(int64_t expert_count, int64_t token_co
     ggml_backend_free(backend);
 }
 
+// engine#3380: the decode-split FA kernel computes the attention output's Q8_1 x4 alternate for the projection that
+// follows it, and this graph has no such consumer, so the plan must not register the alternate at all. Plan-only:
+// the case builds the graph and reads the plan back (like the other engine#3380 rows, #506), so a host run reaches it.
 static void run_qwen_flash_attention_case() {
     // engine#2774: decode-split declines a K/V shorter than one 64-token block (engine#2494), so use a full block.
     static constexpr int64_t kQueryTokenCount    = 2;
     static constexpr int64_t kKeyValueTokenCount = 64;
-
-    ggml_backend_t backend = ggml_backend_hrx_init(0);
-    REQUIRE(backend != nullptr);
 
     ggml_init_params params = {};
     params.mem_size         = 2 * 1024 * 1024;
@@ -5165,34 +5165,7 @@ static void run_qwen_flash_attention_case() {
                                { "loom_libs:ggml_flash_attention_f32_f16_wmma" });
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
 
-    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
-    REQUIRE(buffer != nullptr);
-
-    const std::vector<float>       query_data = make_flash_query(kQueryTokenCount);
-    const std::vector<ggml_fp16_t> key_data   = make_flash_key_value(kKeyValueTokenCount, 3);
-    const std::vector<ggml_fp16_t> value_data = make_flash_key_value(kKeyValueTokenCount, 11);
-    const std::vector<ggml_fp16_t> mask_data  = make_flash_mask(kQueryTokenCount, kKeyValueTokenCount);
-    const std::vector<float>       expected =
-        flash_attention_reference(query_data, key_data, value_data, mask_data, kQueryTokenCount, kKeyValueTokenCount);
-
-    ggml_backend_tensor_set(query, query_data.data(), 0, query_data.size() * sizeof(float));
-    ggml_backend_tensor_set(key, key_data.data(), 0, key_data.size() * sizeof(ggml_fp16_t));
-    ggml_backend_tensor_set(value, value_data.data(), 0, value_data.size() * sizeof(ggml_fp16_t));
-    ggml_backend_tensor_set(mask, mask_data.data(), 0, mask_data.size() * sizeof(ggml_fp16_t));
-
-    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-
-    std::vector<float> actual(expected.size());
-    ggml_backend_tensor_get(output, actual.data(), 0, actual.size() * sizeof(float));
-    for (size_t i = 0; i < actual.size(); ++i) {
-        const float diff = std::fabs(actual[i] - expected[i]);
-        REQUIRE(diff <= 5.0e-2f);
-    }
-
-    ggml_backend_buffer_free(buffer);
     ggml_free(ctx);
-    ggml_backend_free(backend);
 }
 
 static constexpr const char * kDecodeSplitKernelName =
@@ -10174,10 +10147,9 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
                               [=] { run_router_common_matmul_case(experts, tokens); });
         }
     }
-    suite.known_fail_device_case("qwen_flash_attention",
-                                 "engine#3380: decode-split FA always publishes a Q8_1 alternate that no "
-                                 "consumer reads",
-                                 [] { run_qwen_flash_attention_case(); });
+    // engine#3380: the decode-split publish is consumer-driven now, so this graph (FA alone, no q8 consumer) plans
+    // no alternate. Host-tier like the other plan-only rows of this issue.
+    suite.host_case("qwen_flash_attention", [] { run_qwen_flash_attention_case(); });
 }
 
 static void register_flash_attention_cases(Suite & suite) {

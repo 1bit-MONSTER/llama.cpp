@@ -1,5 +1,6 @@
 #include "dispatch-attention-sink.h"
 #include "dispatch-flash-attention.h"
+#include "dispatch-q8-publication.h"
 #include "dispatch-query-chunks.h"
 #include "ubatch-token-limits.h"
 
@@ -656,6 +657,24 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     return true;
 }
 
+// Consumer qualification for the split decode attention publication (engine #449). The split kernel computes the
+// attention output's Q8_1 x4 alternate so the next projection can read it instead of quantizing the activation
+// itself, so the publication is worth its buffer only when such a projection is in the graph. This answers that on
+// the graph alone, through full ordered layout aliases: production reads the [value_head_size, heads, tokens] result
+// as the [hidden_size, tokens] reshape input of the next MUL_MAT (engine#3384), and a projection whose weight is not
+// a k-quant never reads the alternate at all. "Unqualified" means publish nothing: the cost is one separate quantize
+// dispatch at the consumer, while a wrong "yes" publishes a value nobody reads (engine#3380).
+static bool has_qualified_q8_consumer(const Graph & graph, const Value & value) {
+    if (!graph.has_index() || value.type != GGML_TYPE_F32 || !value.contiguous) {
+        return false;
+    }
+    bool qualified = false;
+    common_for_each_q8_consumer(graph, value, [&](const GraphNode & consumer, const Value & activation) {
+        qualified = qualified || common_q8_consumer_is_qualified_projection(graph, consumer, activation);
+    });
+    return qualified;
+}
+
 static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMatchContext & context,
                                                                 DispatchMatch &              dispatch_match) {
     const DecodeSplitFlashAttentionMatch match =
@@ -699,12 +718,18 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
         static_cast<uint32_t>(match.key_value_head_count),
     });
 
-    Status metadata_status;
-    if (!dispatch_match.metadata.append_alternate_value({ match.output->id, q8_output, GGML_TYPE_Q8_1, q8_output_bytes,
-                                                          "common.decode.flash_attention.next_q8_output" },
-                                                        metadata_status)) {
-        dispatch_match.status.append(metadata_status);
-        return false;
+    // engine#3380: publish the alternate only when a qualified q8 projection reads this value. The q8 output stays a
+    // private transient either way -- it is a kernel binding, and only the next_q8 kernel exists for this shape -- so
+    // an unqualified graph keeps the dispatch and loses only the (unread) alternate registration.
+    if (has_qualified_q8_consumer(context.graph, *match.output)) {
+        Status metadata_status;
+        if (!dispatch_match.metadata.append_alternate_value({ match.output->id, q8_output, GGML_TYPE_Q8_1,
+                                                              q8_output_bytes,
+                                                              "common.decode.flash_attention.next_q8_output" },
+                                                            metadata_status)) {
+            dispatch_match.status.append(metadata_status);
+            return false;
+        }
     }
 
     const size_t query_row_bytes  = static_cast<size_t>(query_hidden_size) * sizeof(float);
