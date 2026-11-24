@@ -93,6 +93,15 @@ inline bool same_q8_1_x4_geometry(const Value & lhs, const Value & rhs) {
            rhs.ne[0] % 128 == 0;
 }
 
+// A Q8_1 x4 copy is row-geometry dependent: its 128-element rows are the *requested* value's rows. The alias source
+// may be a differently shaped view of the same ordered bytes - the split-FA output is [value_head_size, heads,
+// tokens] and its consumer reads the [hidden_size, tokens] reshape - so the source's own ne[0] is not the row width
+// the copy was written with; only the requested value's is. The bytes still have to be the same ordered range, which
+// is what refuses a transposed view or a write's storage. engine#3383 / engine#3380
+inline bool q8_1_x4_rows_compatible(const Value & source, const Value & requested) {
+    return same_full_ordered_value_range(source, requested) && requested.ne[0] > 0 && requested.ne[0] % 128 == 0;
+}
+
 // The format decides how much of the source's row geometry a reader needs: an F16 row only needs the element order, a
 // Q8_1 x4 copy needs 128-element rows, and every other format keeps the packed rows. engine#3383
 inline bool alternate_value_layout_compatible(ggml_type type, const Value & lhs, const Value & rhs) {
@@ -100,7 +109,7 @@ inline bool alternate_value_layout_compatible(ggml_type type, const Value & lhs,
         return same_full_ordered_value_range(lhs, rhs);
     }
     if (type == GGML_TYPE_Q8_1) {
-        return same_q8_1_x4_geometry(lhs, rhs);
+        return q8_1_x4_rows_compatible(lhs, rhs);
     }
     return same_packed_row_geometry(lhs, rhs);
 }
