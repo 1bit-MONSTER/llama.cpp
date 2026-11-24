@@ -51,6 +51,32 @@ inline bool common_q8_consumer_is_qualified_projection(const Graph &     graph,
     return decode || prefill;
 }
 
+// Calls `visit(consumer, activation)` for every consumer of `value` and for every consumer of a full ordered
+// layout alias over it, where `activation` is the value that consumer reads. A contiguous reshape keeps the
+// bytes in order, so the projection behind it still reads the published value; a layout alias that does not
+// cover the whole ordered value is not seen through, because its bytes are not the value's (engine#3384).
+template <typename Visit>
+inline void common_for_each_q8_consumer(const Graph & graph, const Value & value, Visit && visit, size_t depth = 0) {
+    if (!graph.has_index() || depth >= graph.values().size()) {
+        return;
+    }
+    for (const GraphNode * consumer : graph.index().consumers(value.id)) {
+        if (consumer == nullptr) {
+            continue;
+        }
+        if (!is_layout_alias_node(graph, *consumer) || consumer->inputs.size() != 1) {
+            visit(*consumer, value);
+            continue;
+        }
+        const Value * aliased = graph.values().find(consumer->output);
+        if (aliased == nullptr || aliased->type != value.type || !aliased->contiguous ||
+            !same_full_ordered_value_range(*aliased, value)) {
+            continue;
+        }
+        common_for_each_q8_consumer(graph, *aliased, visit, depth + 1);
+    }
+}
+
 // True when `value` feeds a qualified q8 projection, either directly or through ordered layout
 // aliases that cover the whole value (a reshape of the normalized row does not disqualify it).
 inline bool common_has_qualified_q8_projection_consumer(const Graph & graph, const Value & value) {

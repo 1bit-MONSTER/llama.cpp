@@ -6823,12 +6823,10 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q4_K); });
     add(suite, "routed_moe_decode.q6_k",
         [=] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K); });
-    // engine#3384: with the gate/up input behind a reshape alias the decode q8 publish declines, so the fused gate/up
-    // route this row expects is not taken (hrx-ops-test's decode_routed_moe.q6_k.alias_gate_input is its twin).
-    suite.known_fail_device_case("routed_moe_decode.q6_k.true",
-                                 "engine#3384: the decode q8 publish declines when the gate/up input is a "
-                                 "reshape alias",
-                                 [=] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, true); });
+    // engine#3384: the gate/up input behind a reshape alias still publishes q8, so this row takes the fused gate/up
+    // route (hrx-ops-test's decode_routed_moe.q6_k.alias_gate_input is its twin).
+    add(suite, "routed_moe_decode.q6_k.true",
+        [=] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, true); });
     // engine #2186: one-token routed decode with a block scaled sum above the f16 range (3000 and 30000)
     for (float scale : { 1.0f, 1000.0f, 3000.0f, 30000.0f }) {
         add(suite, std::string("decode_routed_moe.q4_K.large_activation.") + std::to_string(static_cast<int>(scale)),
