@@ -673,7 +673,7 @@ class _Qwen35MRopeMixin:
 
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", "Qwen3_5TextModel", "Qwen3_5Model", "Qwen35ForCausalLM")
 @ModelBase.example("Qwen/Qwen3.5-9B")
-class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
+class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
     def __init__(self, dir_model, *args, **kwargs):
@@ -794,7 +794,7 @@ class OpenJevModel(Qwen3_5TextModel):
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM", "Qwen3_5MoEForCausalLM")
 @ModelBase.example("Qwen/Qwen3.5-35B-A3B")
-class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
+class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
 
