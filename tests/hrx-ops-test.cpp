@@ -10049,10 +10049,9 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("decode_attention_qkv.scheduling", [] { run_decode_attention_qkv_scheduling_case(); });
     suite.device_case("decode_routed_moe.q4_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q4_K); });
     suite.device_case("decode_routed_moe.q6_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K); });
-    suite.known_fail_device_case("decode_routed_moe.q6_k.alias_gate_input",
-                                 "engine#3384: the decode q8 publish declines when the gate/up input is a "
-                                 "reshape alias",
-                                 [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, true); });
+    // engine#3384: the gate/up input is a reshape alias of the rmsnorm-mul output, and the publish still happens.
+    suite.device_case("decode_routed_moe.q6_k.alias_gate_input",
+                      [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, true); });
     suite.device_case("rmsnorm_mul.hidden256.tokens1", [] { run_rmsnorm_mul_case(256, 1); });
     suite.device_case("rmsnorm_mul.hidden256.tokens4", [] { run_rmsnorm_mul_case(256, 4); });
     suite.device_case("rmsnorm_mul.hidden2048.tokens1", [] { run_rmsnorm_mul_case(2048, 1); });

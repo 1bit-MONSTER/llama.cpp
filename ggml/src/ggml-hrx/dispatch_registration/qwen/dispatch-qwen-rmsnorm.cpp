@@ -63,12 +63,11 @@ static bool has_qualified_q8_consumer(const Graph & graph, const Value & value) 
         kQwen30BMoeDispatchProfile.expert_count,
         kQwen30BMoeDispatchProfile.route_count,
     };
-    for (const GraphNode * consumer : graph.index().consumers(value.id)) {
-        if (consumer != nullptr && common_q8_consumer_is_qualified_routed_projection(graph, *consumer, value, profile)) {
-            return true;
-        }
-    }
-    return false;
+    bool routed = false;
+    common_for_each_q8_consumer(graph, value, [&](const GraphNode & consumer, const Value & activation) {
+        routed = routed || common_q8_consumer_is_qualified_routed_projection(graph, consumer, activation, profile);
+    });
+    return routed;
 }
 
 static size_t q8_1_x4_byte_count(int64_t token_count, int64_t hidden_size) {
