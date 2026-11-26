@@ -7,13 +7,26 @@ int llama_model_inkling2_loop::layer_phys(int il) const {
 void llama_model_inkling2_loop::load_arch_hparams(llama_model_loader & ml) {
     llama_model_inkling2::load_arch_hparams(ml);
 
-    ml.get_key(LLM_KV_LOOP_START,     core_start);
-    ml.get_key(LLM_KV_LOOP_END,       core_end);
-    ml.get_key(LLM_KV_LOOP_COUNT,     n_passes);
-    ml.get_key(LLM_KV_LOOP_GATE_RANK, gate_rank);
-    ml.get_key(LLM_KV_LOOP_VARYING,   varying, false);
+    // two spellings of the same metadata: our converter writes loop.start/loop.end/loop.count,
+    // the upstream inkling2 export writes loop.core_start/loop.core_end/num_loops
+    if (!ml.get_key(LLM_KV_LOOP_START,     core_start, false)) { ml.get_key("inkling2.loop.core_start", core_start); }
+    if (!ml.get_key(LLM_KV_LOOP_END,       core_end,   false)) { ml.get_key("inkling2.loop.core_end",   core_end);   }
+    if (!ml.get_key(LLM_KV_LOOP_COUNT,     n_passes,   false)) { ml.get_key(LLM_KV_NUM_LOOPS,          n_passes);   }
+    ml.get_key(LLM_KV_LOOP_GATE_RANK,     gate_rank);
+    ml.get_key(LLM_KV_LOOP_VARYING,       varying, false);
 
     n_phys = hparams.n_layer();
+
+    // block_count may count executed blocks (physical + the repeated core) instead of weight sets:
+    // when removing the repetitions lands on a real physical count, that is the convention in use
+    if (n_passes > 1 && core_end > core_start && n_phys > (n_passes - 1)*(core_end - core_start)) {
+        const uint32_t phys = n_phys - (n_passes - 1)*(core_end - core_start);
+        if (phys > core_end && phys < n_phys) {
+            LLAMA_LOG_INFO("%s: block_count %u counts executed blocks, %u weight sets\n", __func__, n_phys, phys);
+            n_phys = phys;
+            hparams.n_layer_all = phys;
+        }
+    }
     const uint32_t block = hparams.attn_res_block_size;
     // a fixed loop needs at least 2 passes, a variable loop at least 1
     if (n_passes < (varying ? 1u : 2u) || !gate_rank || !core_start || core_start >= core_end || core_end > (uint32_t) n_phys ||

@@ -416,6 +416,16 @@ llama_model * llama_model_create(llama_model_loader & ml, const llama_model_para
         throw std::runtime_error("unknown model architecture: '" + ml.get_arch_name() + "'");
     }
 
+    // an inkling2 file that declares its loop is the looped model: the loop class derives from the
+    // base class, so both arch spellings load through the same implementation
+    if (arch == LLM_ARCH_INKLING2) {
+        uint32_t n_loops = 1;
+        ml.get_key(LLM_KV_NUM_LOOPS, n_loops, false);
+        if (n_loops > 1) {
+            arch = LLM_ARCH_INKLING2_LOOP;
+        }
+    }
+
     return llama_model_create(arch, params);
 }
 
