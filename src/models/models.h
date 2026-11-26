@@ -2539,6 +2539,10 @@ struct llama_model_inkling2 : public llama_model_base {
 
     struct loop_layer {
         ggml_tensor * msg_query = nullptr;
+        // the upstream export keeps the four queries of a layer in two global [n_embd, 2*n_core]
+        // matrices instead: msg_res holds the q rows, msg_kv the kv rows, both indexed by 2*layer
+        ggml_tensor * msg_res = nullptr;
+        ggml_tensor * msg_kv  = nullptr;
         ggml_tensor * ctrl_down[LOOP_CTRL_COUNT]   = {};
         ggml_tensor * ctrl_gain[LOOP_CTRL_COUNT]   = {};
         ggml_tensor * ctrl_forget[LOOP_CTRL_COUNT] = {};
@@ -2605,6 +2609,8 @@ struct llama_model_inkling2_loop : public llama_model_inkling2 {
 
     struct graph : public llama_model_inkling2::graph {
         graph(const llama_model_inkling2_loop & model, const llm_graph_params & params);
+        // the [n_embd, LOOP_CTRL_COUNT] queries of loop layer i, synthesised when the file keeps them global
+        ggml_tensor * loop_msg(const loop_layer & loop, int i);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

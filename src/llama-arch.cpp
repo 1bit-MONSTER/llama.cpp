@@ -594,6 +594,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_FFN_RES_QUERY, "blk.%d.ffn_res_query" },
     { LLM_TENSOR_OUTPUT_RES_QUERY, "output_res_query" },
     { LLM_TENSOR_LOOP_MSG_QUERY, "blk.%d.loop_msg_query" },
+    { LLM_TENSOR_LOOP_RES_QUERY,    "loop_res_query" },
+    { LLM_TENSOR_LOOP_KV_RES_QUERY, "loop_kv_res_query" },
     { LLM_TENSOR_LOOP_Q_CTRL_DOWN, "blk.%d.loop_q_ctrl_down" },
     { LLM_TENSOR_LOOP_Q_CTRL_GAIN, "blk.%d.loop_q_ctrl_gain" },
     { LLM_TENSOR_LOOP_Q_CTRL_FORGET, "blk.%d.loop_q_ctrl_forget" },
@@ -945,6 +947,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_FFN_POST_CONV, {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_CONV}},
     {LLM_TENSOR_FFN_RES_QUERY, {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_LOOP_MSG_QUERY, {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_RES_QUERY, {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_KV_RES_QUERY, {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_LOOP_Q_CTRL_DOWN, {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_LOOP_Q_CTRL_GAIN, {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_LOOP_Q_CTRL_FORGET, {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -1336,6 +1340,10 @@ LLM_TN_IMPL::LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, 
     : arch(arch), tensor(tensor), suffix(suffix), bid(bid), xid(xid) {}
 
 std::string LLM_TN_IMPL::str() const {
+    if (literal != nullptr) {
+        return literal;
+    }
+
     if (LLM_TENSOR_NAMES.find(tensor) == LLM_TENSOR_NAMES.end()) {
         GGML_ABORT("unknown tensor name for tensor id %d", static_cast<int>(tensor));
     }

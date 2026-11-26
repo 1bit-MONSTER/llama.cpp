@@ -62,15 +62,39 @@ void llama_model_inkling2_loop::load_arch_tensors(llama_model_loader & ml) {
     const llm_tensor gain[LOOP_CTRL_COUNT]   = { LLM_TENSOR_LOOP_Q_CTRL_GAIN,   LLM_TENSOR_LOOP_K_CTRL_GAIN,   LLM_TENSOR_LOOP_V_CTRL_GAIN,   LLM_TENSOR_LOOP_FFN_CTRL_GAIN   };
     const llm_tensor forget[LOOP_CTRL_COUNT] = { LLM_TENSOR_LOOP_Q_CTRL_FORGET, LLM_TENSOR_LOOP_K_CTRL_FORGET, LLM_TENSOR_LOOP_V_CTRL_FORGET, LLM_TENSOR_LOOP_FFN_CTRL_FORGET };
 
+    // the upstream inkling2 export spells the same four controllers loop_attn_/loop_k_/loop_v_/loop_mlp_*
+    const char * const alt[LOOP_CTRL_COUNT] = { "attn", "k", "v", "mlp" };
+
+    // ... and keeps the q and kv queries in two global [n_embd, 2*n_core] matrices, two rows per core layer
+    ggml_tensor * msg_res = nullptr;
+    ggml_tensor * msg_kv  = nullptr;
+
     loop_layers.resize(core_end - core_start);
     for (uint32_t il = core_start; il < core_end; ++il) {
         auto & l = loop_layers[il - core_start];
         // the q, k, v and ffn message queries
-        l.msg_query = create_tensor(tn(LLM_TENSOR_LOOP_MSG_QUERY, "weight", il), {n_embd, LOOP_CTRL_COUNT}, 0);
+        l.msg_query = create_tensor(tn(LLM_TENSOR_LOOP_MSG_QUERY, "weight", il), {n_embd, LOOP_CTRL_COUNT}, TENSOR_NOT_REQUIRED);
+        if (!l.msg_query) {
+            if (!msg_res) {
+                const int64_t n_core = core_end - core_start;
+                msg_res = create_tensor(tn(LLM_TENSOR_LOOP_RES_QUERY,    "weight"), {n_embd, 2*n_core}, 0);
+                msg_kv  = create_tensor(tn(LLM_TENSOR_LOOP_KV_RES_QUERY, "weight"), {n_embd, 2*n_core}, 0);
+            }
+            l.msg_res = msg_res;
+            l.msg_kv  = msg_kv;
+        }
+        auto load_ctrl = [&](int c, llm_tensor t, const char * kind, std::initializer_list<int64_t> ne) {
+            ggml_tensor * w = create_tensor(tn(t, "weight", il), ne, TENSOR_NOT_REQUIRED);
+            if (w) {
+                return w;
+            }
+            const std::string name = format("blk.%d.loop_%s_%s.weight", il, alt[c], kind);
+            return create_tensor(LLM_TN_IMPL(name.c_str()), ne, 0);
+        };
         for (int c = 0; c < LOOP_CTRL_COUNT; ++c) {
-            l.ctrl_down[c]   = create_tensor(tn(down[c],   "weight", il), {2*n_embd, rank}, 0);
-            l.ctrl_gain[c]   = create_tensor(tn(gain[c],   "weight", il), {rank, n_embd}, 0);
-            l.ctrl_forget[c] = create_tensor(tn(forget[c], "weight", il), {rank, n_embd}, 0);
+            l.ctrl_down[c]   = load_ctrl(c, down[c],   "down", {2*n_embd, rank});
+            l.ctrl_gain[c]   = load_ctrl(c, gain[c],   "gain", {rank, n_embd});
+            l.ctrl_forget[c] = load_ctrl(c, forget[c], "forget", {rank, n_embd});
         }
     }
 }
@@ -84,6 +108,22 @@ void llama_model_inkling2_loop::post_arch_tensors(llama_model_loader &) {
 
 std::unique_ptr<llm_graph_context> llama_model_inkling2_loop::build_arch_graph(const llm_graph_params & params) const {
     return std::make_unique<graph>(*this, params);
+}
+
+// the four queries of loop layer i: the file's own loop_msg_query when it has one, else the upstream export's
+// two global matrices, whose two rows per layer interleave as [q[2i], kv[2i], kv[2i+1], q[2i+1]]
+ggml_tensor * llama_model_inkling2_loop::graph::loop_msg(const loop_layer & loop, int i) {
+    if (loop.msg_query) {
+        return loop.msg_query;
+    }
+
+    auto row = [&](ggml_tensor * t, int64_t r) {
+        return ggml_view_2d(ctx0, t, n_embd, 1, t->nb[1], r*t->nb[1]);
+    };
+    ggml_tensor * qk = ggml_concat(ctx0, row(loop.msg_res, 2*i),     row(loop.msg_kv, 2*i),     1);
+    ggml_tensor * vf = ggml_concat(ctx0, row(loop.msg_kv, 2*i + 1), row(loop.msg_res, 2*i + 1), 1);
+
+    return ggml_concat(ctx0, qk, vf, 1);
 }
 
 llama_model_inkling2_loop::graph::graph(const llama_model_inkling2_loop & m, const llm_graph_params & params) : llama_model_inkling2::graph(m, params, no_build{}) {
@@ -116,7 +156,7 @@ llama_model_inkling2_loop::graph::graph(const llama_model_inkling2_loop & m, con
                 continue;
             }
             const auto & loop = m.loop_layers[ip - start];
-            cur = build_layer(il, ip, cur, blocks, mix(bank, bank_out, loop.msg_query), &loop);
+            cur = build_layer(il, ip, cur, blocks, mix(bank, bank_out, loop_msg(loop, ip - start)), &loop);
         }
     }
 

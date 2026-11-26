@@ -545,6 +545,8 @@ enum llm_tensor {
     LLM_TENSOR_FFN_RES_QUERY,
     LLM_TENSOR_OUTPUT_RES_QUERY,
     LLM_TENSOR_LOOP_MSG_QUERY,
+    LLM_TENSOR_LOOP_RES_QUERY,
+    LLM_TENSOR_LOOP_KV_RES_QUERY,
     LLM_TENSOR_LOOP_Q_CTRL_DOWN,
     LLM_TENSOR_LOOP_Q_CTRL_GAIN,
     LLM_TENSOR_LOOP_Q_CTRL_FORGET,
@@ -954,8 +956,12 @@ struct LLM_TN_IMPL {
     const char * const suffix;
     const int bid;
     const int xid;
+    // the whole tensor name, for a file that spells a tensor we know differently; str() returns it verbatim
+    const char * const literal = nullptr;
 
     LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid);
+    explicit LLM_TN_IMPL(const char * literal) :
+        arch(LLM_ARCH_UNKNOWN), tensor(LLM_TENSOR_TOKEN_EMBD), suffix(nullptr), bid(-1), xid(-1), literal(literal) {}
 
     std::string str() const;
 
