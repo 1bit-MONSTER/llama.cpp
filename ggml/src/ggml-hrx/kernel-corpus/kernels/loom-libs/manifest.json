@@ -735,6 +735,9 @@
    "path": "ops/normalization/rmsnorm_mul_rope_f32.loom"
   },
   {
+   "path": "ops/pad_tail_f32.loom"
+  },
+  {
    "path": "ops/reduction/amax_scale_f32.loom"
   },
   {
@@ -1252,6 +1255,49 @@
     "mode": "direct",
     "primary_sources": [
      "ops/copy_f32.loom"
+    ],
+    "library_sources": []
+   },
+   "compile_dependencies": []
+  },
+  {
+   "name": "ggml_pad_tail_f32",
+   "family": "loom_libs",
+   "symbol": "ggml_pad_tail_f32",
+   "source": "ops/pad_tail_f32.loom",
+   "workload_parameters": [
+    {
+     "name": "element_count",
+     "type": "index"
+    },
+    {
+     "name": "source_count",
+     "type": "index"
+    }
+   ],
+   "launch_parameters": [
+    {
+     "name": "element_count",
+     "type": "index"
+    },
+    {
+     "name": "source_count",
+     "type": "index"
+    }
+   ],
+   "bindings": [
+    "source",
+    "output"
+   ],
+   "binding_access": [
+    "read",
+    "read_write"
+   ],
+   "target_selector": "",
+   "compile_recipe": {
+    "mode": "direct",
+    "primary_sources": [
+     "ops/pad_tail_f32.loom"
     ],
     "library_sources": []
    },

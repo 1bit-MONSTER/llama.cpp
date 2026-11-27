@@ -1,0 +1,54 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// engine#3577: PAD whose output is the source's bytes followed by zeros - a contiguous f32 PAD that grows only the
+// outermost dimension it changes, at its end (every dimension above it 1, no left padding). The no-KV-cache attention
+// path of an encoder (llama-graph.cpp, build_attn without a cache) pads K and V that way along the token dimension.
+// One pass: out[i] = i < source_count ? source[i] : 0. The source index is clamped, so no load reads past the source.
+
+amdgpu.target<gfx11-generic> @ggml_pad_tail_f32_gfx11_wave64 {subgroup_size = 64}
+
+kernel.def target(@ggml_pad_tail_f32_gfx11_wave64) export("ggml_pad_tail_f32") @ggml_pad_tail_f32(%element_count: index, %source_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroup_count = index.div %rounded, %twofiftysix : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%element_count: index, %source_count: index, %source: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 1073741824)] : index
+  %have = index.assume %source_count [range(%source_count, 1, 1073741824)] : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %twofiftysix = index.constant 256 : index
+  %c0 = index.constant 0 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %base = index.mul %workgroup, %twofiftysix : index
+  %linear0 = index.add %base, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073742079)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %in_source = index.cmp ult, %linear, %have : index
+  %read_at = scf.select %in_source, %linear, %c0 : index
+  %zero_offset = index.constant 0 : offset
+  %source_noalias, %output_noalias = buffer.assume.noalias %source, %output : buffer, buffer
+  %source_view = buffer.view %source_noalias[%zero_offset] : buffer -> view<[%have]xf32>
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%count]xf32>
+  scf.if %in_bounds {
+    %loaded = view.load %source_view[%read_at] : view<[%have]xf32> -> f32
+    %value = scf.select %in_source, %loaded, %zero_f32 : f32
+    view.store %value, %output_view[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}
