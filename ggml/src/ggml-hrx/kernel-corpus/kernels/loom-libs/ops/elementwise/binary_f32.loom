@@ -7,27 +7,27 @@ amdgpu.target<gfx11-generic> @ggml_binary_f32_gfx11_wave64 {subgroup_size = 64}
 
 config.decl @ggml.binary_f32.op : %value: index where [range(%value, 0, 8)]
 
-config.decl @ggml.binary_f32.ne0 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.ne0 : %value: index where [range(%value, 1, 536870912)]
 
-config.decl @ggml.binary_f32.ne1 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.ne1 : %value: index where [range(%value, 1, 536870912)]
 
-config.decl @ggml.binary_f32.ne2 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.ne2 : %value: index where [range(%value, 1, 536870912)]
 
-config.decl @ggml.binary_f32.src0_stride1 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src0_stride1 : %value: index where [range(%value, 1, 536870912)]
 
-config.decl @ggml.binary_f32.src0_stride2 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src0_stride2 : %value: index where [range(%value, 1, 536870912)]
 
-config.decl @ggml.binary_f32.src0_stride3 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src0_stride3 : %value: index where [range(%value, 1, 536870912)]
 
-config.decl @ggml.binary_f32.src1_stride1 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src1_stride1 : %value: index where [range(%value, 1, 536870912)]
 
-config.decl @ggml.binary_f32.src1_stride2 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src1_stride2 : %value: index where [range(%value, 1, 536870912)]
 
-config.decl @ggml.binary_f32.src1_stride3 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src1_stride3 : %value: index where [range(%value, 1, 536870912)]
 
-config.decl @ggml.binary_f32.src0_span : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src0_span : %value: index where [range(%value, 1, 536870912)]
 
-config.decl @ggml.binary_f32.src1_span : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src1_span : %value: index where [range(%value, 1, 536870912)]
 
 kernel.def target(@ggml_binary_f32_gfx11_wave64) export("ggml_binary_f32") @ggml_binary_f32(%element_count: index) {
   %one = index.constant 1 : index
@@ -37,7 +37,7 @@ kernel.def target(@ggml_binary_f32_gfx11_wave64) export("ggml_binary_f32") @ggml
   %workgroup_count = index.div %rounded, %twofiftysix : index
   kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
 } launch(%element_count: index, %lhs: buffer, %rhs: buffer, %output: buffer) {
-  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %count = index.assume %element_count [range(%element_count, 1, 536870912)] : index
   %n0 = config.get @ggml.binary_f32.ne0 : index
   %n1 = config.get @ggml.binary_f32.ne1 : index
   %n2 = config.get @ggml.binary_f32.ne2 : index
@@ -56,7 +56,7 @@ kernel.def target(@ggml_binary_f32_gfx11_wave64) export("ggml_binary_f32") @ggml
   %zero = index.constant 0 : index
   %base0 = index.mul %workgroup, %twofiftysix : index
   %linear0 = index.add %base0, %workitem : index
-  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 536871167)] : index
   %in_bounds = index.cmp ult, %linear, %count : index
   %zero_offset = index.constant 0 : offset
   %lhs_view = buffer.view %lhs[%zero_offset] : buffer -> view<[%src0_count]xf32>
