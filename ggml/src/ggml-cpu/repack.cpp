@@ -4698,7 +4698,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             // ggml_quantize_mat_t reads its 4 rows packed (row r at x + r * ne10). src1 can be a view whose rows are
             // further apart (Mamba's ssm_dt reads the dt slice of the x_proj output: nb11 is the whole x_proj row),
             // and then rows 1..3 of each group came from the wrong columns (engine#3531: KLD ~21 at q4_0 / iq4_nl,
-            // the repacked types). Such a group is gathered into a packed per-thread copy first.
+            // the repacked types). Such a group is gathered into a packed per-thread copy first. This loop only takes
+            // FULL groups of four (the bound is ne11 - ne11 % 4; the remainder goes through from_float below), and
+            // higher dims are already applied: data_ptr includes i12 * nb12, and ne13 == 1 is asserted above.
             const bool rows_packed = nb10 == sizeof(float) && nb11 == ne10 * sizeof(float);
             for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
                 const float * rows = (const float *) (data_ptr + i11 * nb11);
