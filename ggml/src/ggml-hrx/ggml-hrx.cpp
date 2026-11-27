@@ -38,6 +38,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -637,6 +638,19 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
     int64_t              off_unexplained       = 0;
     ggml_tensor *        first_off = nullptr;
     ggml_tensor *        first_unexplained = nullptr;
+    // engine#3491: GGML_HRX_PLACEMENT_DETAIL=1 lists the off-HRX nodes grouped by shape, with WHY each group is off:
+    // claimed=0 means device_supports_op said no (no matcher, or a claim predicate refuses the shape); claimed=1 means
+    // HRX would take the node and the scheduler put it on the CPU anyway (a host-resident source, or a neighbour's
+    // split). The op counts above cannot tell the two apart, and they need different fixes.
+    const char * detail_env = std::getenv("GGML_HRX_PLACEMENT_DETAIL");
+    const bool   detail     = detail_env != nullptr && std::atoi(detail_env) > 0;
+    std::map<std::string, int64_t> detail_rows;
+    const auto describe = [](const ggml_tensor * t) {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%s[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "]", ggml_type_name(t->type),
+                      t->ne[0], t->ne[1], t->ne[2], t->ne[3]);
+        return std::string(buf);
+    };
     for (int i = 0; i < graph->n_nodes; i++) {
         ggml_tensor * node = graph->nodes[i];
         // the scheduler splits on non-view nodes and does not assign backends to views
@@ -672,6 +686,31 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
             }
         }
         const bool by_design = ggml::hrx::placement_node_is_by_design(facts);
+        if (detail) {
+            bool host_src = facts.src_host_weight;
+            std::string key = std::string(ggml_op_desc(node)) + " " + describe(node);
+            for (int s = 0; s < GGML_MAX_SRC; ++s) {
+                const ggml_tensor * src = node->src[s];
+                if (src == nullptr) {
+                    continue;
+                }
+                key += " src" + std::to_string(s) + "=" + describe(src);
+                const ggml_tensor * root = src->view_src != nullptr ? src->view_src : src;
+                host_src = host_src || ggml::hrx::tensor_is_host_resident(root);
+            }
+            if (node->op == GGML_OP_SOFT_MAX || node->op == GGML_OP_SCALE) {
+                // these matchers key on their parameters (softmax_rows takes scale 1 / max_bias 0 only)
+                float p0 = 0.0f, p1 = 0.0f;
+                std::memcpy(&p0, (const char *) node->op_params, sizeof(float));
+                std::memcpy(&p1, (const char *) node->op_params + sizeof(float), sizeof(float));
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), " params=(%g,%g)", (double) p0, (double) p1);
+                key += buf;
+            }
+            key += std::string(" claimed=") + (ggml_backend_supports_op(hrx, node) ? "1" : "0") +
+                   " by_design=" + (by_design ? "1" : "0") + " host_src=" + (host_src ? "1" : "0");
+            detail_rows[key]++;
+        }
         if (by_design) {
             off_by_design++;
         } else {
@@ -695,6 +734,20 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
                     break;   // per node, like the counters above
                 }
             }
+        }
+    }
+
+    if (detail && !detail_rows.empty()) {
+        std::vector<std::pair<int64_t, std::string>> rows;
+        for (const auto & [key, count] : detail_rows) {
+            rows.emplace_back(count, key);
+        }
+        std::sort(rows.begin(), rows.end(), [](const auto & l, const auto & r) { return l.first > r.first; });
+        // stderr, not GGML_LOG_INFO: the CLI's log sink drops INFO, and this is only ever asked for on purpose
+        std::fprintf(stderr, "ggml_hrx placement detail: %zu shape group(s), %" PRId64 " off-HRX node(s)\n",
+                     rows.size(), off_nodes);
+        for (const auto & [count, key] : rows) {
+            std::fprintf(stderr, "ggml_hrx placement detail: %5" PRId64 "  %s\n", count, key.c_str());
         }
     }
 
