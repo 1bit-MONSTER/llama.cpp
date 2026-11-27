@@ -1,5 +1,7 @@
 #include "dispatch-binary.h"
 
+#include "../../binary-limits.h"
+
 #include "dispatch-layout-utils.h"
 #include "dispatch-mul-mat-common.h"
 #include "ggml.h"
@@ -259,6 +261,32 @@ static bool match_binary_swiglu_symmetric_i4_dispatch(const DispatchMatchContext
     return match.status.success();
 }
 
+// engine#3521: decline a launch past the ranges the kernel declares, so the node stays off HRX instead of failing.
+static bool binary_f32_launch_fits(const Value & lhs, size_t lhs_byte_count, const Value & rhs, size_t rhs_byte_count,
+                                   const Value & output) {
+    binary_launch_facts f;
+    f.element_count = static_cast<uint64_t>(output.element_count);
+    for (int i = 0; i < 3; ++i) {
+        f.ne[i]          = static_cast<uint64_t>(output.ne[i]);
+        f.src0_stride[i] = lhs.nb[i + 1] / sizeof(float);
+        f.src1_stride[i] = rhs.nb[i + 1] / sizeof(float);
+    }
+    f.src0_span = lhs_byte_count / sizeof(float);
+    f.src1_span = rhs_byte_count / sizeof(float);
+    return binary_launch_fits(f, kBinaryF32MaxElements);
+}
+
+static bool binary_bc_f32_launch_fits(const Value & lhs, const Value & rhs, const Value & output) {
+    binary_launch_facts f;
+    f.element_count = static_cast<uint64_t>(output.element_count);
+    for (int i = 0; i < 3; ++i) {
+        f.ne[i] = static_cast<uint64_t>(output.ne[i]);
+    }
+    f.src0_span = static_cast<uint64_t>(lhs.element_count);
+    f.src1_span = static_cast<uint64_t>(rhs.element_count);
+    return binary_launch_fits(f, kBinaryBcF32MaxElements);
+}
+
 static bool match_binary_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
     const GraphNode * node = context.root_node;
     if (node == nullptr || node->inputs.size() != 2) {
@@ -291,6 +319,9 @@ static bool match_binary_f32_dispatch(const DispatchMatchContext & context, Disp
 
     Dispatch dispatch;
     if (same_shape(*lhs, *output) && same_shape(*rhs, *output)) {
+        if (!binary_f32_launch_fits(*lhs, lhs_byte_count, *rhs, rhs_byte_count, *output)) {
+            return false;
+        }
         dispatch.kernel = make_kernel_specialization(kBinaryF32Kernel);
         add_binary_strided_parameters(dispatch, *lhs, *rhs, *output, lhs_byte_count, rhs_byte_count);
         dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.op",
@@ -299,7 +330,8 @@ static bool match_binary_f32_dispatch(const DispatchMatchContext & context, Disp
         if (!lhs->contiguous || !rhs->contiguous || !packed_f32_layout(*lhs) || !packed_f32_layout(*rhs)) {
             return false;
         }
-        if (!binary_kind_allows_broadcast(params->op, *lhs, *rhs, *output)) {
+        if (!binary_kind_allows_broadcast(params->op, *lhs, *rhs, *output) ||
+            !binary_bc_f32_launch_fits(*lhs, *rhs, *output)) {
             return false;
         }
         dispatch.kernel = make_kernel_specialization(kBinaryBcF32Kernel);

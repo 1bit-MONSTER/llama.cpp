@@ -1,5 +1,7 @@
 #include "dispatch-glu.h"
 
+#include "../../binary-limits.h"
+
 #include "dispatch-layout-utils.h"
 #include "dispatch-mul-mat-common.h"
 #include "ggml.h"
@@ -165,6 +167,20 @@ static bool match_packed_glu_f32_dispatch(const DispatchMatchContext & context, 
         !packed_glu_half_span_bytes(*input, *output, half_offset, half_span) ||
         !strided_f32_storage_span_bytes(*input, input_span) ||
         !storage_ranges_disjoint(*input, 0, input_span, *output, 0, output->byte_count)) {
+        return false;
+    }
+
+    // engine#3521: the same declared ranges as ggml_binary_f32 (add_packed_glu_parameters fills its configuration)
+    binary_launch_facts fit;
+    fit.element_count = static_cast<uint64_t>(output->element_count);
+    for (int i = 0; i < 3; ++i) {
+        fit.ne[i]          = static_cast<uint64_t>(output->ne[i]);
+        fit.src0_stride[i] = input->nb[i + 1] / sizeof(float);
+        fit.src1_stride[i] = input->nb[i + 1] / sizeof(float);
+    }
+    fit.src0_span = half_span / sizeof(float);
+    fit.src1_span = half_span / sizeof(float);
+    if (!binary_launch_fits(fit, kBinaryF32MaxElements)) {
         return false;
     }
 

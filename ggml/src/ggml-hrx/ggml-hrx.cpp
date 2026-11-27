@@ -20,6 +20,7 @@
 #include "qwen4exp-hrx-support.h"
 #include "hrx_runtime.h"
 #include "kernel-corpus/kernel-corpus.h"
+#include "binary-limits.h"
 #include "loom-jit.h"
 #include "runtime/hrx-sleeping-wait.h"
 #include "runtime/host-memory.h"
@@ -1574,7 +1575,25 @@ static bool supported_binary_f32_tensor(const ggml_tensor * op) {
         return false;
     }
 
-    return true;
+    // engine#3521: the kernel the matcher picks declares a range for every one of these values; past it the node
+    // must stay off HRX (it used to be claimed and come back as 0 generated tokens).
+    ggml::hrx::binary_launch_facts fit;
+    fit.element_count = static_cast<uint64_t>(ggml_nelements(op));
+    for (int i = 0; i < 3; ++i) {
+        fit.ne[i] = static_cast<uint64_t>(op->ne[i]);
+    }
+    if (ggml_are_same_shape(op->src[0], op) && ggml_are_same_shape(op->src[1], op)) {
+        for (int i = 0; i < 3; ++i) {
+            fit.src0_stride[i] = op->src[0]->nb[i + 1] / sizeof(float);
+            fit.src1_stride[i] = op->src[1]->nb[i + 1] / sizeof(float);
+        }
+        fit.src0_span = lhs_byte_count / sizeof(float);
+        fit.src1_span = rhs_byte_count / sizeof(float);
+        return ggml::hrx::binary_launch_fits(fit, ggml::hrx::kBinaryF32MaxElements);
+    }
+    fit.src0_span = static_cast<uint64_t>(ggml_nelements(op->src[0]));
+    fit.src1_span = static_cast<uint64_t>(ggml_nelements(op->src[1]));
+    return ggml::hrx::binary_launch_fits(fit, ggml::hrx::kBinaryBcF32MaxElements);
 }
 
 static bool supported_scale_f32_tensor(const ggml_tensor * op) {

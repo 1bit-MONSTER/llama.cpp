@@ -11,8 +11,8 @@ config.decl @ggml.binary_f32.op : %value: index where [range(%value, 0, 8)]
 config.decl @ggml.binary_f32.ne0 : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 config.decl @ggml.binary_f32.src0_stride1 : %value: index where [range(%value, 128, 1048576)]
 config.decl @ggml.binary_f32.src1_stride1 : %value: index where [range(%value, 128, 1048576)]
-config.decl @ggml.binary_f32.src0_span : %value: index where [range(%value, 128, 134217728)]
-config.decl @ggml.binary_f32.src1_span : %value: index where [range(%value, 128, 134217728)]
+config.decl @ggml.binary_f32.src0_span : %value: index where [range(%value, 128, 536870912)]
+config.decl @ggml.binary_f32.src1_span : %value: index where [range(%value, 128, 536870912)]
 
 kernel.def target(@ggml_binary_publish_q8_gfx11_wave32) export("ggml_binary_f32_publish_q8_1_x4") @ggml_binary_f32_publish_q8_1_x4(%token_count: index) {
   %c1 = index.constant 1 : index

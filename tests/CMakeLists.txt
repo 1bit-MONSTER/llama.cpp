@@ -524,6 +524,13 @@ if (TARGET ggml-hrx)
     add_test(NAME test-hrx-host-resident COMMAND test-hrx-host-resident)
     target_include_directories(test-hrx-placement-classification PRIVATE ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-placement-classification COMMAND test-hrx-placement-classification)
+    # engine#3521: binary launches past the Loom kernels' declared ranges are refused, and the host caps are the
+    # kernels' own numbers (header-only helper plus the kernel sources as text: no device, no ggml link)
+    add_executable(test-hrx-binary-span-cap test-hrx-binary-span-cap.cpp)
+    target_include_directories(test-hrx-binary-span-cap PRIVATE ../ggml/src/ggml-hrx)
+    target_compile_definitions(test-hrx-binary-span-cap PRIVATE
+        HRX_LOOM_OPS_DIR="${PROJECT_SOURCE_DIR}/ggml/src/ggml-hrx/kernel-corpus/kernels/loom-libs/ops")
+    add_test(NAME test-hrx-binary-span-cap COMMAND test-hrx-binary-span-cap)
     # engine#2704: the GET_ROWS accept predicate both the placement path and the matchers call. Compiles the predicate's
     # own translation unit only -- no device, no libhrx, no graph -- because the defect it prevents is the two callers
     # disagreeing, which neither caller's own test can catch.
