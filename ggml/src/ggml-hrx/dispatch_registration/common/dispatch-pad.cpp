@@ -13,12 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "dispatch-pad.h"
+#include "dispatch-layout-utils.h"
 
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cstdint>
+#include <string>
 #include <utility>
 
 namespace ggml::hrx {
@@ -40,9 +42,10 @@ static bool packed_f32(const Value & value) {
     return true;
 }
 
-// engine#3577: a contiguous f32 PAD is "the source's bytes, then zeros" exactly when every left pad is 0, no pad is
-// circular, the dimensions below some axis k are unchanged, axis k grows at its end, and every dimension above k is 1
-// in both. The no-KV-cache attention path pads K and V that way (along the token axis, k = 2).
+// engine#3577: an f32 PAD with a packed output is "the source's elements in order, then zeros" exactly when every left
+// pad is 0, no pad is circular, the axes below some axis k are unchanged, axis k grows at its end, and every axis above
+// k is 1 in both. The no-KV-cache attention path pads K and V that way (along the token axis, k = 2); V is a strided
+// view of the fused QKV output there, so the source may have any f32 element strides (read through them by the kernel).
 static bool pad_is_tail(const PadParams & p, const Value & source, const Value & output) {
     if (p.circular != 0 || p.lp0 != 0 || p.lp1 != 0 || p.lp2 != 0 || p.lp3 != 0) {
         return false;
@@ -80,17 +83,31 @@ static bool match_pad_tail_f32(const DispatchMatchContext & context, DispatchMat
     const Value *     source = context.graph.values().find(node->inputs[0]);
     const Value *     output = context.graph.values().find(node->output);
     if (params == nullptr || source == nullptr || output == nullptr || source->type != GGML_TYPE_F32 ||
-        output->type != GGML_TYPE_F32 || !packed_f32(*source) || !packed_f32(*output) ||
+        output->type != GGML_TYPE_F32 || !packed_f32(*output) ||
         output->alias_source.value >= 0 || source->storage == output->storage ||
         source->element_count <= 0 || output->element_count < source->element_count ||
         output->element_count >= kPadTailMaxElements || !pad_is_tail(*params, *source, *output)) {
+        return false;
+    }
+    size_t source_span = 0;
+    if (!strided_f32_storage_span_bytes(*source, source_span) ||
+        static_cast<int64_t>(source_span / sizeof(float)) >= kPadTailMaxElements) {
         return false;
     }
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kPadTailKernel);
     dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
     dispatch.kernel.integer_parameters.emplace("source_count", source->element_count);
-    dispatch.bindings.push_back({ source->id, 0, source->byte_count });
+    dispatch.kernel.integer_parameters.emplace("source_span", static_cast<int64_t>(source_span / sizeof(float)));
+    dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.ne0", std::to_string(source->ne[0]));
+    dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.ne1", std::to_string(source->ne[1]));
+    dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.ne2", std::to_string(source->ne[2]));
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.stride" + std::to_string(i),
+                                                   std::to_string(source->nb[i] / sizeof(float)));
+    }
+    // the source's whole strided span, from its storage root (a view's own id would bind only its byte_count)
+    dispatch.bindings.push_back({ source->storage_root, source->storage_offset, source_span });
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
     match.covered_nodes.push_back(context.root_index);
     match.dispatches.push_back(std::move(dispatch));

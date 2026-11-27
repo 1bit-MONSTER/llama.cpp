@@ -454,6 +454,68 @@ static std::vector<std::string> scheduled_kernel_sequence(ggml_cgraph * graph) {
     return names;
 }
 
+// engine#3577: common.pad_tail_f32 takes a contiguous f32 PAD whose output is the source's bytes followed by zeros -
+// one axis grown at its end, every axis above it 1, no left padding - and nothing else. Host only: the plan is built
+// for gfx1151 without a device (the values are test-backend-ops' PAD_EXT cases).
+static void run_pad_tail_schedule_checks() {
+    // v_view: the source is V as build_qkv hands it over - a [head_dim, heads, tokens] view of the fused QKV output,
+    // whose token stride is the fused row (3 * head_dim * heads); otherwise a packed tensor
+    const auto plan_for = [](const std::array<int64_t, 4> & ne, int lp2, int rp0, int rp2, int rp3, bool v_view,
+                             std::vector<std::string> & kernels) {
+        ggml_init_params params = {};
+        params.mem_size         = 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        ggml_tensor * src = nullptr;
+        if (v_view) {
+            ggml_tensor * qkv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3 * ne[0] * ne[1], ne[2]);
+            src = ggml_view_3d(ctx, qkv, ne[0], ne[1], ne[2], ne[0] * sizeof(float), qkv->nb[1],
+                               2 * ne[0] * ne[1] * sizeof(float));
+        } else {
+            src = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
+        }
+        ggml_tensor * out = ggml_pad_ext(ctx, src, 0, rp0, 0, 0, lp2, rp2, 0, rp3);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, out);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        const bool scheduled = scheduler.schedule_graph(imported.graph, { "gfx1151" });
+        kernels.clear();
+        if (scheduled) {
+            for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+                kernels.push_back(kernel_name_for_id(dispatch.kernel.kernel_id));
+            }
+        }
+        ggml_free(ctx);
+        return scheduled;
+    };
+    const auto one = [](const std::vector<std::string> & kernels, const char * name) {
+        return kernels.size() == 1 && kernels.front() == name;
+    };
+    // a packed source also matches the add-on's general hip.pad_f32 (priority 100), which then serves it (engine#3120:
+    // an add-on route is accepted by name); a strided source only this kernel takes
+    const auto pad_route = [&one](const std::vector<std::string> & kernels) {
+        return one(kernels, "loom_libs:ggml_pad_tail_f32") ||
+               (kernels.size() == 1 && kernels.front().compare(0, 4, "hip:") == 0);
+    };
+    std::vector<std::string> kernels;
+    // the encoder's V: a strided view, padded at the end of the token axis - the 12 PADs strict refused
+    REQUIRE(plan_for({ 64, 12, 200, 1 }, 0, 0, 56, 0, true, kernels) && one(kernels, "loom_libs:ggml_pad_tail_f32"));
+    // the encoder's K: packed (the RoPE output)
+    REQUIRE(plan_for({ 64, 12, 200, 1 }, 0, 0, 56, 0, false, kernels) && pad_route(kernels));
+    // the outermost axis, every axis below unchanged
+    REQUIRE(plan_for({ 64, 12, 3, 5 }, 0, 0, 0, 2, false, kernels) && pad_route(kernels));
+    // never this kernel: a left pad (zeros BEFORE the source), two padded axes, or an inner axis padded under an
+    // outer axis above 1 - each interleaves zeros with the source
+    REQUIRE(!plan_for({ 64, 12, 200, 1 }, 1, 0, 55, 0, true, kernels) || !one(kernels, "loom_libs:ggml_pad_tail_f32"));
+    REQUIRE(!plan_for({ 64, 12, 200, 1 }, 0, 1, 56, 0, false, kernels) ||
+            !one(kernels, "loom_libs:ggml_pad_tail_f32"));
+    REQUIRE(!plan_for({ 64, 12, 200, 2 }, 0, 0, 56, 0, false, kernels) ||
+            !one(kernels, "loom_libs:ggml_pad_tail_f32"));
+}
+
 // Each weight is bound at least once, and every binding uses `layout`.
 static void require_weight_binding_layout(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights,
                                           const char * layout) {
@@ -9457,6 +9519,7 @@ template <typename F> static void addon_kernel_case(Suite & suite, std::string n
 static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.route_outcome", [] { run_route_outcome_checks(); });   // engine#3120: the route decision
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
+    suite.host_case("pad_tail.schedule", [] { run_pad_tail_schedule_checks(); });   // engine#3577
     // engine#3383: the fallback takes an alternate only through a full ordered layout alias, never through a reordering
     // view or a write that reuses the storage.
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
