@@ -262,6 +262,15 @@ static ggml::hrx::LoomKernelCompileRequest make_request(const PlannedKernel & pl
     request.symbol               = kernel.symbol != nullptr ? kernel.symbol : "";
     request.launch_config_symbol = kernel.name != nullptr ? kernel.name : "";
     request.specialize_workload  = specialize;
+    // The corpus embeds the kernels as compiled Loom modules when the build sets
+    // GGML_HRX_KERNEL_CORPUS_SOURCE_FORMAT=binary (the CMake default), so the format has to travel with
+    // the source: production does this in kernel-executable-cache.cpp's to_jit_source_format. Without it
+    // the JIT parses the module magic as source text and fails PARSE/003 "unexpected token 'LOOM'".
+    // Workload specialization itself only applies to text sources (loom-jit.cpp:792), so a binary build
+    // compiles the module as it stands.
+    request.source_format = source.contents->source.format == ggml::hrx::KERNEL_SOURCE_FORMAT_BINARY
+                                ? ggml_hrx_loom_jit_source_format::Bytecode
+                                : ggml_hrx_loom_jit_source_format::Text;
     for (const ggml::hrx::KernelCompileConfig & config : kernel.compile_config) {
         request.config_storage.emplace_back(config.key != nullptr ? config.key : "",
                                             config.value != nullptr ? config.value : "");
