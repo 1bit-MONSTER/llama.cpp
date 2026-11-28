@@ -10950,6 +10950,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F16));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    // engine#3549: a vision projector's patch embedding (16x16 patches, stride 16, f16 columns)
+    test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {96, 64, 3, 1}, {16, 16, 3, 768}, 16, 16, 0, 0, 1, 1, true));
     for (int s0 : {1, 3}) {
         for (int s1 : {1, 3}) {
             for (int p0 : {0, 3}) {

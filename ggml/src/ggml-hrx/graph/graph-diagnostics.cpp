@@ -210,6 +210,11 @@ json op_params_json(const OpParams & params) {
                     { "kind",       "upscale"        },
                     { "mode_flags", value.mode_flags },
                 };
+            } else if constexpr (std::is_same_v<T, Im2colParams>) {
+                return {
+                    { "kind", "im2col" }, { "s0", value.s0 }, { "s1", value.s1 }, { "p0", value.p0 },
+                    { "p1", value.p1 },   { "d0", value.d0 }, { "d1", value.d1 }, { "is_2d", value.is_2d },
+                };
             }
         },
         params);
@@ -264,6 +269,10 @@ OpParams parse_op_params(const json & item) {
     }
     if (kind == "unary") {
         return UnaryParams{ static_cast<UnaryKind>(item.value("op", static_cast<int>(UnaryKind::Abs))) };
+    }
+    if (kind == "im2col") {
+        return Im2colParams{ item.value("s0", 0), item.value("s1", 0), item.value("p0", 0), item.value("p1", 0),
+                             item.value("d0", 0), item.value("d1", 0), item.value("is_2d", 0) };
     }
     if (kind == "upscale") {
         return UpscaleParams{ item.value("mode_flags", 0) };

@@ -1,0 +1,124 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// GGML_OP_IM2COL, 2-D, f32 source -> f16 output (engine#3549: a vision projector's patch embedding, ggml_conv_2d with
+// an f16 kernel over the f32 image). One work-item per output element. The output is packed [N, OH, OW, IC*KH*KW]
+// (kw fastest); the source [N, IC, IH, IW] may be strided (strides in elements, IW's is 1). Same arithmetic as
+// ggml-cpu's ggml_compute_forward_im2col_f16: iiw = ow*s0 + kw*d0 - p0, iih = oh*s1 + kh*d1 - p1, 0 outside the image.
+
+amdgpu.target<gfx11-generic> @ggml_im2col_f32_f16_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.im2col_f32_f16.kw : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.im2col_f32_f16.kh : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.im2col_f32_f16.ic : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.im2col_f32_f16.ow : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.im2col_f32_f16.oh : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.im2col_f32_f16.iw : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.im2col_f32_f16.ih : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.im2col_f32_f16.s0 : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.im2col_f32_f16.s1 : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.im2col_f32_f16.p0 : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.im2col_f32_f16.p1 : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.im2col_f32_f16.d0 : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.im2col_f32_f16.d1 : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.im2col_f32_f16.stride_h : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.im2col_f32_f16.stride_c : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.im2col_f32_f16.stride_n : %value: index where [range(%value, 1, 1073741824)]
+
+kernel.def target(@ggml_im2col_f32_f16_gfx11_wave64) export("ggml_im2col_f32_f16") @ggml_im2col_f32_f16(%element_count: index, %source_span: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroup_count = index.div %rounded, %twofiftysix : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%element_count: index, %source_span: index, %source: buffer, %output: buffer) {
+  %twofiftysix = index.constant 256 : index
+  %count = index.assume %element_count [range(%element_count, 1, 1073741824)] : index
+  %span = index.assume %source_span [range(%source_span, 1, 1073741824)] : index
+  %kw_n = config.get @ggml.im2col_f32_f16.kw : index
+  %kh_n = config.get @ggml.im2col_f32_f16.kh : index
+  %ic_n = config.get @ggml.im2col_f32_f16.ic : index
+  %ow_n = config.get @ggml.im2col_f32_f16.ow : index
+  %oh_n = config.get @ggml.im2col_f32_f16.oh : index
+  %iw_n = config.get @ggml.im2col_f32_f16.iw : index
+  %ih_n = config.get @ggml.im2col_f32_f16.ih : index
+  %s0 = config.get @ggml.im2col_f32_f16.s0 : index
+  %s1 = config.get @ggml.im2col_f32_f16.s1 : index
+  %p0 = config.get @ggml.im2col_f32_f16.p0 : index
+  %p1 = config.get @ggml.im2col_f32_f16.p1 : index
+  %d0 = config.get @ggml.im2col_f32_f16.d0 : index
+  %d1 = config.get @ggml.im2col_f32_f16.d1 : index
+  %st_h = config.get @ggml.im2col_f32_f16.stride_h : index
+  %st_c = config.get @ggml.im2col_f32_f16.stride_c : index
+  %st_n = config.get @ggml.im2col_f32_f16.stride_n : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %base = index.mul %workgroup, %twofiftysix : index
+  %linear0 = index.add %base, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073742079)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %zero_offset = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %source_noalias, %output_noalias = buffer.assume.noalias %source, %output : buffer, buffer
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%count]xf16>
+  scf.if %in_bounds {
+    %kw = index.rem %linear, %kw_n : index
+    %r0 = index.div %linear, %kw_n : index
+    %kh = index.rem %r0, %kh_n : index
+    %r1 = index.div %r0, %kh_n : index
+    %ic = index.rem %r1, %ic_n : index
+    %r2 = index.div %r1, %ic_n : index
+    %ow = index.rem %r2, %ow_n : index
+    %r3 = index.div %r2, %ow_n : index
+    %oh = index.rem %r3, %oh_n : index
+    %n = index.div %r3, %oh_n : index
+    // the source position before the padding is taken off: never negative, so the image test is unsigned
+    %w_s = index.mul %ow, %s0 : index
+    %w_d = index.mul %kw, %d0 : index
+    %w_raw = index.add %w_s, %w_d : index
+    %h_s = index.mul %oh, %s1 : index
+    %h_d = index.mul %kh, %d1 : index
+    %h_raw = index.add %h_s, %h_d : index
+    %w_end = index.add %iw_n, %p0 : index
+    %h_end = index.add %ih_n, %p1 : index
+    %w_lo = index.cmp uge, %w_raw, %p0 : index
+    %w_hi = index.cmp ult, %w_raw, %w_end : index
+    %h_lo = index.cmp uge, %h_raw, %p1 : index
+    %h_hi = index.cmp ult, %h_raw, %h_end : index
+    %w_ok = scalar.andi %w_lo, %w_hi : i1
+    %h_ok = scalar.andi %h_lo, %h_hi : i1
+    %inside = scalar.andi %w_ok, %h_ok : i1
+    %value = scf.if %inside -> (f32) {
+      %iiw = index.sub %w_raw, %p0 : index
+      %iih = index.sub %h_raw, %p1 : index
+      %row = index.mul %iih, %st_h : index
+      %chan = index.mul %ic, %st_c : index
+      %batch = index.mul %n, %st_n : index
+      %rc = index.add %row, %chan : index
+      %rcb = index.add %rc, %batch : index
+      %source_index0 = index.add %rcb, %iiw : index
+      %source_index, %view_span = index.assume %source_index0, %span [lt(%source_index0, %span)] : index, index
+      %source_view = buffer.view %source_noalias[%zero_offset] : buffer -> view<[%view_span]xf32>
+      %loaded = view.load %source_view[%source_index] : view<[%view_span]xf32> -> f32
+      scf.yield %loaded : f32
+    } else {
+      scf.yield %zero_f32 : f32
+    }
+    %half = scalar.fptrunc %value : f32 to f16
+    view.store %half, %output_view[%linear] : f16, view<[%count]xf16>
+  }
+  kernel.return
+}

@@ -322,6 +322,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-softplus.h
     dispatch_registration/common/dispatch-upscale.cpp
     dispatch_registration/common/dispatch-upscale.h
+    dispatch_registration/common/dispatch-im2col.cpp
+    dispatch_registration/common/dispatch-im2col.h
     dispatch_registration/common/dispatch-flash-attention-streams.cpp
     dispatch_registration/common/dispatch-flash-attention-streams.h
     dispatch_registration/common/dispatch-scale.h

@@ -144,6 +144,11 @@ struct UpscaleParams {
     int32_t mode_flags = 0;
 };
 
+// ggml_im2col's op-params 0..6: stride, padding, dilation (x then y) and is_2D; part of the program-cache key (engine#3549)
+struct Im2colParams {
+    int32_t s0 = 0, s1 = 0, p0 = 0, p1 = 0, d0 = 0, d1 = 0, is_2d = 0;
+};
+
 // clang-format off
 using OpParams = std::variant<
     std::monostate,
@@ -161,7 +166,8 @@ using OpParams = std::variant<
     UnaryParams,
     RopeParams,
     MulMatParams,
-    UpscaleParams>;
+    UpscaleParams,
+    Im2colParams>;
 // clang-format on
 
 template <typename T> const T * op_params_as(const OpParams & params) {

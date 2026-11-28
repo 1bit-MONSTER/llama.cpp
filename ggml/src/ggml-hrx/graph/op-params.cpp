@@ -287,6 +287,11 @@ OpParams import_op_params(const ggml_tensor & tensor) {
             return FillParams{ ggml_get_op_params_f32(&tensor, 0) };
         case GGML_OP_UPSCALE:
             return UpscaleParams{ ggml_get_op_params_i32(&tensor, 0) };
+        case GGML_OP_IM2COL:
+            return Im2colParams{ ggml_get_op_params_i32(&tensor, 0), ggml_get_op_params_i32(&tensor, 1),
+                                 ggml_get_op_params_i32(&tensor, 2), ggml_get_op_params_i32(&tensor, 3),
+                                 ggml_get_op_params_i32(&tensor, 4), ggml_get_op_params_i32(&tensor, 5),
+                                 ggml_get_op_params_i32(&tensor, 6) };
         case GGML_OP_ARGSORT:
             return ArgsortParams{ static_cast<ggml_sort_order>(ggml_get_op_params_i32(&tensor, 0)) };
         case GGML_OP_CLAMP:
@@ -398,6 +403,15 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
         case GGML_OP_UPSCALE:
             return std::holds_alternative<UpscaleParams>(lhs) && std::holds_alternative<UpscaleParams>(rhs) &&
                    std::get<UpscaleParams>(lhs).mode_flags == std::get<UpscaleParams>(rhs).mode_flags;
+        case GGML_OP_IM2COL:
+            if (!std::holds_alternative<Im2colParams>(lhs) || !std::holds_alternative<Im2colParams>(rhs)) {
+                return false;
+            } else {
+                const Im2colParams & a = std::get<Im2colParams>(lhs);
+                const Im2colParams & b = std::get<Im2colParams>(rhs);
+                return a.s0 == b.s0 && a.s1 == b.s1 && a.p0 == b.p0 && a.p1 == b.p1 && a.d0 == b.d0 && a.d1 == b.d1 &&
+                       a.is_2d == b.is_2d;
+            }
         default:
             return lhs.index() == rhs.index();
     }
