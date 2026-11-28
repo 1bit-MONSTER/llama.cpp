@@ -454,6 +454,51 @@ static std::vector<std::string> scheduled_kernel_sequence(ggml_cgraph * graph) {
     return names;
 }
 
+// engine#3554: OpenELM's per-head q norm reads a view of the fused QKV row, f32[64, 16, tokens] whose token stride is
+// the whole fused row (16 + 4 + 4 heads). common.rmsnorm_strided_f32 densifies it and runs the packed rmsnorm; a
+// layout the kernel reads directly keeps common.rmsnorm_f32. Host only: the plan is built for gfx1151 without a device.
+static void run_rmsnorm_strided_schedule_checks() {
+    const auto plan_for = [](int view, std::vector<std::string> & kernels) {
+        ggml_init_params params = {};
+        params.mem_size         = 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        ggml_tensor * x = nullptr;
+        if (view == 1) {        // OpenELM: [head_dim, q heads, tokens] out of the fused [head_dim * 24, tokens]
+            ggml_tensor * qkv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64 * 24, 2);
+            x = ggml_view_3d(ctx, qkv, 64, 16, 2, 64 * sizeof(float), qkv->nb[1], 0);
+        } else if (view == 2) { // the head and token strides line up: one stride, read in place
+            ggml_tensor * rows = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 80, 32);
+            x = ggml_view_3d(ctx, rows, 64, 16, 2, rows->nb[1], rows->nb[1] * 16, 0);
+        } else {
+            x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 64, 16, 2);
+        }
+        ggml_tensor * out   = ggml_rms_norm(ctx, x, 1e-6f);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, out);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        const bool scheduled = scheduler.schedule_graph(imported.graph, { "gfx1151" });
+        kernels.clear();
+        if (scheduled) {
+            for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+                kernels.push_back(kernel_name_for_id(dispatch.kernel.kernel_id));
+            }
+        }
+        ggml_free(ctx);
+        return scheduled;
+    };
+    std::vector<std::string> kernels;
+    // the fused-QKV view: the strided-source copy, then the packed rmsnorm
+    REQUIRE(plan_for(1, kernels) && kernels.size() == 2 && kernels[0] == "loom_libs:ggml_copy_strided_source_f32" &&
+            kernels[1] == "loom_libs:ggml_rmsnorm_f32");
+    // one row stride and packed: the rmsnorm alone, as before (no copy)
+    REQUIRE(plan_for(2, kernels) && kernels.size() == 1 && kernels[0] == "loom_libs:ggml_rmsnorm_f32");
+    REQUIRE(plan_for(0, kernels) && kernels.size() == 1 && kernels[0] == "loom_libs:ggml_rmsnorm_f32");
+}
+
 // Each weight is bound at least once, and every binding uses `layout`.
 static void require_weight_binding_layout(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights,
                                           const char * layout) {
@@ -9457,6 +9502,7 @@ template <typename F> static void addon_kernel_case(Suite & suite, std::string n
 static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.route_outcome", [] { run_route_outcome_checks(); });   // engine#3120: the route decision
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
+    suite.host_case("rmsnorm.strided.schedule", [] { run_rmsnorm_strided_schedule_checks(); });   // engine#3554
     // engine#3383: the fallback takes an alternate only through a full ordered layout alias, never through a reordering
     // view or a write that reuses the storage.
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
