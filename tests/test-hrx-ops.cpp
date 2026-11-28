@@ -1220,7 +1220,9 @@ static void run_add_f32_long_span_cpu_reference_case(int64_t ne0, int64_t ne1, i
     REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(cpu_backend);
     ggml_backend_synchronize(hrx_backend);
-    // f32 addition is exact and order-free, so every element must match, including the ones past 2^27 and 2^28
+    // tolerance 0: each output is one IEEE round-to-nearest add of the same two operands on both backends, and the
+    // pattern's small multiples of 1/8 and 1/4 make every sum exactly representable, so CPU and HRX agree bit for bit.
+    // make_pattern_f32 has period 97 (prime), so an index that wraps at any power of two reads a different value.
     require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 0.0f);
     std::printf("add_f32_long_span: %zu elements (%lld x %lld x %lld) match the CPU exactly\n", count, (long long) ne0,
                 (long long) ne1, (long long) ne2);
@@ -1232,8 +1234,9 @@ static void run_add_f32_long_span_cpu_reference_case(int64_t ne0, int64_t ne1, i
     ggml_backend_free(hrx_backend);
 }
 
-// engine#3521: the HRX backend claims a binary node inside the kernel's declared range and declines one past it, so
-// the node runs elsewhere instead of failing the JIT specialization. No allocation: supports_op only.
+// engine#3521: the HRX backend claims a binary node inside the kernel's declared range and declines one past it, so a
+// node past the cap never fails the JIT specialization: with GGML_HRX_STRICT=0 it runs on the CPU; under strict placement
+// (1bit serve's default on HRX) the graph aborts with a placement message naming it. No allocation: supports_op only.
 static void run_binary_span_cap_placement_case() {
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
