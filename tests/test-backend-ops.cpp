@@ -12769,6 +12769,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_interpolate(GGML_TYPE_F32, {2, 5, 7, 11}, {5, 7, 11, 13}, (ggml_scale_mode)(mode | (int) GGML_SCALE_FLAG_ALIGN_CORNERS)));
         test_cases.emplace_back(new test_interpolate(GGML_TYPE_F32, {1, 4, 3, 2}, {2, 8, 3, 2}, (ggml_scale_mode)(mode | (int) GGML_SCALE_FLAG_ALIGN_CORNERS)));
         test_cases.emplace_back(new test_interpolate(GGML_TYPE_F32, {4, 1, 3, 2}, {1, 1, 3, 2}, (ggml_scale_mode)(mode | (int) GGML_SCALE_FLAG_ALIGN_CORNERS)));
+        // engine#3549: a vision projector's position-embedding resize (bilinear | align corners, dims 0 and 1 only)
+        test_cases.emplace_back(new test_interpolate(GGML_TYPE_F32, {48, 48, 768, 1}, {6, 6, 768, 1}, (ggml_scale_mode)(mode | (int) GGML_SCALE_FLAG_ALIGN_CORNERS)));
     }
 
     test_cases.emplace_back(new test_sum());

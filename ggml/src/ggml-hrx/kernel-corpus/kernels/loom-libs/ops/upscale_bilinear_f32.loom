@@ -1,0 +1,153 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// GGML_OP_UPSCALE, GGML_SCALE_MODE_BILINEAR (no antialias), f32, over dims 0 and 1 (engine#3549: the vision projector
+// resizes its learned position embeddings with BILINEAR | ALIGN_CORNERS). One work-item per output element; the output
+// is packed, the source may be strided (its strides are in elements). Dims 2 and 3 are copied 1:1 (the matcher only
+// takes ne2 == ne02 and ne3 == ne03). The arithmetic is ggml-cpu's ggml_compute_forward_upscale_f32 BILINEAR branch:
+//   y = (i1 + po) / sf1 - po; y0 = clamp(floor(y)); y1 = clamp(floor(y) + 1); dy = clamp(y - y0, 0, 1)  (x likewise)
+//   out = a(1-dx)(1-dy) + b dx(1-dy) + c(1-dx)dy + d dx dy
+// with po = 0.5 and sf = ne / ne_src, or po = 0 and sf = (ne - 1) / (ne_src - 1) under ALIGN_CORNERS; the matcher
+// computes both on the host exactly as the CPU does and passes them in.
+
+amdgpu.target<gfx11-generic> @ggml_upscale_bilinear_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.upscale_bilinear_f32.ne0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.upscale_bilinear_f32.ne1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.upscale_bilinear_f32.ne2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.upscale_bilinear_f32.src_ne0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.upscale_bilinear_f32.src_ne1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.upscale_bilinear_f32.stride0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.upscale_bilinear_f32.stride1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.upscale_bilinear_f32.stride2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.upscale_bilinear_f32.stride3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.upscale_bilinear_f32.sf0 : f32
+config.decl @ggml.upscale_bilinear_f32.sf1 : f32
+config.decl @ggml.upscale_bilinear_f32.pixel_offset : f32
+
+kernel.def target(@ggml_upscale_bilinear_f32_gfx11_wave64) export("ggml_upscale_bilinear_f32") @ggml_upscale_bilinear_f32(%element_count: index, %source_span: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroup_count = index.div %rounded, %twofiftysix : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%element_count: index, %source_span: index, %source: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 1073741824)] : index
+  %span = index.assume %source_span [range(%source_span, 1, 1073741824)] : index
+  %n0 = config.get @ggml.upscale_bilinear_f32.ne0 : index
+  %n1 = config.get @ggml.upscale_bilinear_f32.ne1 : index
+  %n2 = config.get @ggml.upscale_bilinear_f32.ne2 : index
+  %src_n0 = config.get @ggml.upscale_bilinear_f32.src_ne0 : index
+  %src_n1 = config.get @ggml.upscale_bilinear_f32.src_ne1 : index
+  %s0 = config.get @ggml.upscale_bilinear_f32.stride0 : index
+  %s1 = config.get @ggml.upscale_bilinear_f32.stride1 : index
+  %s2 = config.get @ggml.upscale_bilinear_f32.stride2 : index
+  %s3 = config.get @ggml.upscale_bilinear_f32.stride3 : index
+  %sf0 = config.get @ggml.upscale_bilinear_f32.sf0 : f32
+  %sf1 = config.get @ggml.upscale_bilinear_f32.sf1 : f32
+  %po = config.get @ggml.upscale_bilinear_f32.pixel_offset : f32
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %base = index.mul %workgroup, %twofiftysix : index
+  %linear0 = index.add %base, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073742079)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %zero_offset = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %one_f32 = scalar.constant 1.0 : f32
+  %source_noalias, %output_noalias = buffer.assume.noalias %source, %output : buffer, buffer
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%count]xf32>
+  scf.if %in_bounds {
+    %i0 = index.rem %linear, %n0 : index
+    %r0 = index.div %linear, %n0 : index
+    %i1 = index.rem %r0, %n1 : index
+    %r1 = index.div %r0, %n1 : index
+    %i2 = index.rem %r1, %n2 : index
+    %i3 = index.div %r1, %n2 : index
+    // source coordinate along dim 1 (y) and dim 0 (x), clamped to the source the way the CPU clamps its integers
+    %src_max1_i32 = index.cast %src_n1 : index to i32
+    %src_max0_i32 = index.cast %src_n0 : index to i32
+    %src_max1_f = scalar.sitofp %src_max1_i32 : i32 to f32
+    %src_max0_f = scalar.sitofp %src_max0_i32 : i32 to f32
+    %last1 = scalar.subf %src_max1_f, %one_f32 : f32
+    %last0 = scalar.subf %src_max0_f, %one_f32 : f32
+    %i1_i32 = index.cast %i1 : index to i32
+    %i0_i32 = index.cast %i0 : index to i32
+    %i1_f = scalar.sitofp %i1_i32 : i32 to f32
+    %i0_f = scalar.sitofp %i0_i32 : i32 to f32
+    %y_num = scalar.addf %i1_f, %po : f32
+    %y_div = scalar.divf %y_num, %sf1 : f32
+    %y = scalar.subf %y_div, %po : f32
+    %x_num = scalar.addf %i0_f, %po : f32
+    %x_div = scalar.divf %x_num, %sf0 : f32
+    %x = scalar.subf %x_div, %po : f32
+    %y_floor = scalar.floorf %y : f32
+    %x_floor = scalar.floorf %x : f32
+    %y_floor1 = scalar.addf %y_floor, %one_f32 : f32
+    %x_floor1 = scalar.addf %x_floor, %one_f32 : f32
+    %y0_f = scalar.clampf<number> %y_floor, %zero_f32, %last1 : f32
+    %y1_f = scalar.clampf<number> %y_floor1, %zero_f32, %last1 : f32
+    %x0_f = scalar.clampf<number> %x_floor, %zero_f32, %last0 : f32
+    %x1_f = scalar.clampf<number> %x_floor1, %zero_f32, %last0 : f32
+    %dy_raw = scalar.subf %y, %y0_f : f32
+    %dx_raw = scalar.subf %x, %x0_f : f32
+    %dy = scalar.clampf<number> %dy_raw, %zero_f32, %one_f32 : f32
+    %dx = scalar.clampf<number> %dx_raw, %zero_f32, %one_f32 : f32
+    %y0_i32 = scalar.fptosi %y0_f : f32 to i32
+    %y1_i32 = scalar.fptosi %y1_f : f32 to i32
+    %x0_i32 = scalar.fptosi %x0_f : f32 to i32
+    %x1_i32 = scalar.fptosi %x1_f : f32 to i32
+    %y0 = index.cast %y0_i32 : i32 to index
+    %y1 = index.cast %y1_i32 : i32 to index
+    %x0 = index.cast %x0_i32 : i32 to index
+    %x1 = index.cast %x1_i32 : i32 to index
+    // element offsets of the four neighbours in the (possibly strided) source
+    %plane2 = index.mul %i2, %s2 : index
+    %plane3 = index.mul %i3, %s3 : index
+    %plane = index.add %plane2, %plane3 : index
+    %row0 = index.mul %y0, %s1 : index
+    %row1 = index.mul %y1, %s1 : index
+    %col0 = index.mul %x0, %s0 : index
+    %col1 = index.mul %x1, %s0 : index
+    %base0 = index.add %plane, %row0 : index
+    %base1 = index.add %plane, %row1 : index
+    %ia0 = index.add %base0, %col0 : index
+    %ib0 = index.add %base0, %col1 : index
+    %ic0 = index.add %base1, %col0 : index
+    %id0 = index.add %base1, %col1 : index
+    %ia, %ib, %ic, %id, %view_span = index.assume %ia0, %ib0, %ic0, %id0, %span [lt(%ia0, %span), lt(%ib0, %span), lt(%ic0, %span), lt(%id0, %span)] : index, index, index, index, index
+    %source_view = buffer.view %source_noalias[%zero_offset] : buffer -> view<[%view_span]xf32>
+    %a = view.load %source_view[%ia] : view<[%view_span]xf32> -> f32
+    %b = view.load %source_view[%ib] : view<[%view_span]xf32> -> f32
+    %c = view.load %source_view[%ic] : view<[%view_span]xf32> -> f32
+    %d = view.load %source_view[%id] : view<[%view_span]xf32> -> f32
+    %one_minus_dx = scalar.subf %one_f32, %dx : f32
+    %one_minus_dy = scalar.subf %one_f32, %dy : f32
+    %wa = scalar.mulf %one_minus_dx, %one_minus_dy : f32
+    %wb = scalar.mulf %dx, %one_minus_dy : f32
+    %wc = scalar.mulf %one_minus_dx, %dy : f32
+    %wd = scalar.mulf %dx, %dy : f32
+    %ta = scalar.mulf %a, %wa : f32
+    %tb = scalar.mulf %b, %wb : f32
+    %tc = scalar.mulf %c, %wc : f32
+    %td = scalar.mulf %d, %wd : f32
+    %tab = scalar.addf %ta, %tb : f32
+    %tcd = scalar.addf %tc, %td : f32
+    %value = scalar.addf %tab, %tcd : f32
+    view.store %value, %output_view[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

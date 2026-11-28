@@ -807,6 +807,9 @@
    "path": "ops/softplus_f32.loom"
   },
   {
+   "path": "ops/upscale_bilinear_f32.loom"
+  },
+  {
    "path": "ops/ssm_conv/decode_dconv4_silu_f32.loom"
   },
   {
@@ -14267,6 +14270,49 @@
     "mode": "direct",
     "primary_sources": [
      "ops/softplus_f32.loom"
+    ],
+    "library_sources": []
+   },
+   "compile_dependencies": []
+  },
+  {
+   "name": "ggml_upscale_bilinear_f32",
+   "family": "loom_libs",
+   "symbol": "ggml_upscale_bilinear_f32",
+   "source": "ops/upscale_bilinear_f32.loom",
+   "workload_parameters": [
+    {
+     "name": "element_count",
+     "type": "index"
+    },
+    {
+     "name": "source_span",
+     "type": "index"
+    }
+   ],
+   "launch_parameters": [
+    {
+     "name": "element_count",
+     "type": "index"
+    },
+    {
+     "name": "source_span",
+     "type": "index"
+    }
+   ],
+   "bindings": [
+    "source",
+    "output"
+   ],
+   "binding_access": [
+    "read",
+    "read_write"
+   ],
+   "target_selector": "",
+   "compile_recipe": {
+    "mode": "direct",
+    "primary_sources": [
+     "ops/upscale_bilinear_f32.loom"
     ],
     "library_sources": []
    },

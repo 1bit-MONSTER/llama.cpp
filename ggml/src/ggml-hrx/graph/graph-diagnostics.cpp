@@ -205,6 +205,11 @@ json op_params_json(const OpParams & params) {
                     { "beta_slow",   value.beta_slow   },
                     { "sections",    value.sections    },
                 };
+            } else if constexpr (std::is_same_v<T, UpscaleParams>) {
+                return {
+                    { "kind",       "upscale"        },
+                    { "mode_flags", value.mode_flags },
+                };
             }
         },
         params);
@@ -259,6 +264,9 @@ OpParams parse_op_params(const json & item) {
     }
     if (kind == "unary") {
         return UnaryParams{ static_cast<UnaryKind>(item.value("op", static_cast<int>(UnaryKind::Abs))) };
+    }
+    if (kind == "upscale") {
+        return UpscaleParams{ item.value("mode_flags", 0) };
     }
     if (kind == "rope") {
         std::array<int, GGML_MROPE_SECTIONS> sections = {};

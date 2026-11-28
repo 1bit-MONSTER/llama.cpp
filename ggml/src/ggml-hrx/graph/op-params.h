@@ -138,6 +138,12 @@ struct RopeParams {
     int n_offs = 0;
 };
 
+// ggml_upscale / ggml_interpolate's mode and flags (op-param 0: mode | GGML_SCALE_FLAG_*): part of the program-cache key,
+// so a cached bilinear UPSCALE never replays for a nearest or align-corners one (engine#3549)
+struct UpscaleParams {
+    int32_t mode_flags = 0;
+};
+
 // clang-format off
 using OpParams = std::variant<
     std::monostate,
@@ -154,7 +160,8 @@ using OpParams = std::variant<
     BinaryParams,
     UnaryParams,
     RopeParams,
-    MulMatParams>;
+    MulMatParams,
+    UpscaleParams>;
 // clang-format on
 
 template <typename T> const T * op_params_as(const OpParams & params) {

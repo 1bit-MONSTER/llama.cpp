@@ -1328,6 +1328,7 @@ static bool eager_capability_declared(enum ggml_op op) {
         case GGML_OP_SUM_ROWS:
         case GGML_OP_TRANSPOSE:
         case GGML_OP_UNARY:
+        case GGML_OP_UPSCALE:  // bilinear only, common/dispatch-upscale.cpp (engine#3549)
         case GGML_OP_VIEW:
             return true;
         default:

@@ -285,6 +285,8 @@ OpParams import_op_params(const ggml_tensor & tensor) {
             };
         case GGML_OP_FILL:
             return FillParams{ ggml_get_op_params_f32(&tensor, 0) };
+        case GGML_OP_UPSCALE:
+            return UpscaleParams{ ggml_get_op_params_i32(&tensor, 0) };
         case GGML_OP_ARGSORT:
             return ArgsortParams{ static_cast<ggml_sort_order>(ggml_get_op_params_i32(&tensor, 0)) };
         case GGML_OP_CLAMP:
@@ -393,6 +395,9 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
                    std::memcmp(&std::get<FillParams>(lhs).value, &std::get<FillParams>(rhs).value, sizeof(float)) == 0;
         case GGML_OP_ROPE:
             return rope_params_equivalent(lhs, rhs);
+        case GGML_OP_UPSCALE:
+            return std::holds_alternative<UpscaleParams>(lhs) && std::holds_alternative<UpscaleParams>(rhs) &&
+                   std::get<UpscaleParams>(lhs).mode_flags == std::get<UpscaleParams>(rhs).mode_flags;
         default:
             return lhs.index() == rhs.index();
     }
