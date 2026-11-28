@@ -131,6 +131,8 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
 
     tok_embd        = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,       "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+    // newer DFlash2 exports norm the noise embeddings (token_embd_norm); older ones do not carry it
+    tok_norm        = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM,  "weight", 0), { n_embd }, TENSOR_NOT_REQUIRED);
 
     // reduced draft vocab (optional): d2t maps draft rows to target token ids
     int64_t n_vocab_draft = n_vocab;
@@ -969,6 +971,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     }
 
     ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp_tokens);
+    if (model.tok_norm) {
+        inpL = build_norm(inpL, model.tok_norm, nullptr, LLM_NORM_RMS, -1);
+    }
     if (hparams.f_embedding_scale != 0.0f) {
         inpL = ggml_scale(ctx0, inpL, hparams.f_embedding_scale);
     }
@@ -1085,6 +1090,17 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     }
 
     cur = build_lora_mm(output, cur, output_s);
+
+    // a target with a padded vocabulary (inkling2: n_vocab_padded rows in its lm_head) would let the drafter
+    // propose ids past the tokenizer; keep the real tokens only, as the target's own graph does. Bound by the
+    // target's tokenizer too: some exports (ufrik) list the padded rows in the drafter's own tokenizer
+    int64_t n_tokens_vocab = (int64_t) model.vocab.n_tokens();
+    if (cparams.ctx_other != nullptr) {
+        n_tokens_vocab = std::min(n_tokens_vocab, (int64_t) llama_get_model(cparams.ctx_other)->vocab.n_tokens());
+    }
+    if (!model.d2t && n_tokens_vocab > 0 && cur->ne[0] > n_tokens_vocab) {
+        cur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_tokens_vocab, cur->ne[1], cur->nb[1], 0));
+    }
 
     // DFlash2 feeds these logits to the selector, so they need the target's output
     // transforms; DFlash1 and DSpark read them through the sampler instead
