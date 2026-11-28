@@ -20,6 +20,7 @@
 #include <unordered_set>
 
 #include "arg.h"
+#include "onebit-no-gpu.h"
 #include "build-info.h"
 #include "common.h"
 #include "download.h"
@@ -2267,6 +2268,7 @@ static std::unique_ptr<printer> create_printer(output_formats format) {
 int llama_bench(int argc, char ** argv);
 
 int llama_bench(int argc, char ** argv) {
+    onebit_no_gpu_disable_hrx(argc, argv);   // engine#3590: llama-bench has its own parser, so set it here too
     std::setlocale(LC_NUMERIC, "C");
     // try to set locale for unicode characters in markdown
     std::setlocale(LC_CTYPE, ".UTF-8");

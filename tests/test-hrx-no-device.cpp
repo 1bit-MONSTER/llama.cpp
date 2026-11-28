@@ -92,6 +92,7 @@ int main() {
     check("no --device at all is NOT no GPU (the default offloads)", !no_gpu({ "-m", "x.gguf" }));
     check("`-ngl 0` alone is NOT no GPU (other ops can still run on a device)", !no_gpu({ "-ngl", "0" }));
     check("a named device is NOT no GPU", !no_gpu({ "--device", "HRX0" }));
+    check("a llama-bench sweep `-dev none,HRX0` is NOT no GPU", !no_gpu({ "-dev", "none,HRX0" }));
     check("the last --device wins: none then HRX0 is NOT no GPU", !no_gpu({ "-dev", "none", "-dev", "HRX0" }));
     check("the last --device wins: HRX0 then none IS no GPU", no_gpu({ "-dev", "HRX0", "-dev", "none" }));
     check("--device none with a GPU draft model is NOT no GPU", !no_gpu({ "-dev", "none", "-devd", "HRX0" }));

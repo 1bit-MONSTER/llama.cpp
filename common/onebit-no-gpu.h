@@ -25,6 +25,8 @@
 // True when the command line asks for no GPU device: --device none (or LLAMA_ARG_DEVICE=none with no --device),
 // and no other option selects a device (-mmdev, -devd/--device-draft/--spec-draft-device other than none,
 // -ot/--override-tensor, --list-devices).
+// A value equal to exactly "none" counts; a list such as llama-bench's "none,HRX0" does not. Values of other options are
+// not skipped, so a prompt token "--device" followed by "none" would count: it can only turn HRX off, never on.
 inline bool common_args_request_no_gpu(int argc, char ** argv) {
     bool main_none = false, main_given = false, other_device = false;
     for (int i = 1; i < argc; ++i) {
