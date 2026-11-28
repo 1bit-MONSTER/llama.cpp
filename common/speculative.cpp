@@ -1295,6 +1295,21 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
 
+        // a drafter whose tokenizer lists the target's padded vocab rows (inkling2) can propose ids the target lacks:
+        // cut the draft at the first one (engine #3613)
+        const int32_t n_vocab_tgt = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(params.ctx_tgt)));
+        auto clip_to_target = [n_vocab_tgt](llama_tokens & result, std::vector<std::vector<llama_token_data>> * result_q) {
+            for (size_t i = 0; i < result.size(); ++i) {
+                if (result[i] < 0 || result[i] >= n_vocab_tgt) {
+                    result.resize(i);
+                    if (result_q && result_q->size() > i) {
+                        result_q->resize(i);
+                    }
+                    return;
+                }
+            }
+        };
+
         batch.clear();
 
         // build one batch holding every drafting sequence's noise block into a single decode)
@@ -1421,6 +1436,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     result.push_back((llama_token) row[predecessor]);
                 }
 
+                clip_to_target(result, sample ? dp.result_q : nullptr);
                 if (result.size() < (size_t) params.n_min) {
                     result.clear();
                     if (sample) {
@@ -1483,6 +1499,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 }
             }
 
+            clip_to_target(result, nullptr);
             if (result.size() < (size_t) params.n_min) {
                 result.clear();
             }
