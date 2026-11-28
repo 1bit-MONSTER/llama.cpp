@@ -11529,6 +11529,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // in-place tests
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 5, 4, 3}, false, 1e-6f, true));
+    // engine#3554: a per-head view whose head and token strides do not line up (OpenELM's q/k norm reads a view
+    // of the fused QKV row): the view halves every dim, so rows of 64 / 128 at the kernel's sizes
+    for (int64_t n : { 128, 256 }) {
+        test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, { n, 32, 4, 2 }, true, 1e-6f));
+    }
     // shapes below exceed the CUDA gridDim.y/gridDim.z limit of 65535 (#27901)
     test_cases.emplace_back(new test_norm        (GGML_TYPE_F32, {4, 1, 65536, 1}, false, 1e-6f));
     test_cases.emplace_back(new test_rms_norm    (GGML_TYPE_F32, {4, 1, 65536, 1}, false, 1e-6f, false));
