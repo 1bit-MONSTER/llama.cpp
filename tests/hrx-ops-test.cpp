@@ -459,19 +459,6 @@ static std::vector<std::string> scheduled_kernel_sequence(ggml_cgraph * graph) {
 // for gfx1151 without a device.
 static void run_softmax_rows_scale_schedule_checks() {
     const auto plan_for = [](int64_t cols, int64_t rows, float scale, bool mask, std::vector<std::string> & kernels) {
-// engine#3577: common.pad_tail_f32 takes a contiguous f32 PAD whose output is the source's bytes followed by zeros -
-// one axis grown at its end, every axis above it 1, no left padding - and nothing else. Host only: the plan is built
-// for gfx1151 without a device (the values are test-backend-ops' PAD_EXT cases).
-static void run_pad_tail_schedule_checks() {
-    // v_view: the source is V as build_qkv hands it over - a [head_dim, heads, tokens] view of the fused QKV output,
-    // whose token stride is the fused row (3 * head_dim * heads); otherwise a packed tensor
-    const auto plan_for = [](const std::array<int64_t, 4> & ne, int lp2, int rp0, int rp2, int rp3, bool v_view,
-                             std::vector<std::string> & kernels) {
-// engine#3491: Inkling's MoE SITU activation scales and sigmoids `gate` / `up`, views of the fused gate_up output
-// (1152 of every 2304 columns). common.scale_strided_f32 / common.unary_strided_f32 densify the view and run the packed
-// kernel; a packed input keeps the packed matcher. Host only: the plan is built for gfx1151 without a device.
-static void run_strided_elementwise_schedule_checks() {
-    const auto plan_for = [](bool view, bool sigmoid, std::vector<std::string> & kernels) {
         ggml_init_params params = {};
         params.mem_size         = 1024 * 1024;
         params.no_alloc         = true;
@@ -481,24 +468,6 @@ static void run_strided_elementwise_schedule_checks() {
         ggml_tensor * m      = mask ? ggml_new_tensor_2d(ctx, GGML_TYPE_F16, cols, rows) : nullptr;
         ggml_tensor * out    = ggml_soft_max_ext(ctx, logits, m, scale, 0.0f);
         ggml_cgraph * graph  = ggml_new_graph(ctx);
-        ggml_tensor * src = nullptr;
-        if (v_view) {
-            ggml_tensor * qkv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3 * ne[0] * ne[1], ne[2]);
-            src = ggml_view_3d(ctx, qkv, ne[0], ne[1], ne[2], ne[0] * sizeof(float), qkv->nb[1],
-                               2 * ne[0] * ne[1] * sizeof(float));
-        } else {
-            src = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
-        }
-        ggml_tensor * out = ggml_pad_ext(ctx, src, 0, rp0, 0, 0, lp2, rp2, 0, rp3);
-        ggml_tensor * x = nullptr;
-        if (view) {
-            ggml_tensor * gate_up = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2304, 8);
-            x = ggml_view_2d(ctx, gate_up, 1152, 8, gate_up->nb[1], 0);
-        } else {
-            x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1152, 8);
-        }
-        ggml_tensor * out   = sigmoid ? ggml_sigmoid(ctx, x) : ggml_scale(ctx, x, 0.04f);
-        ggml_cgraph * graph = ggml_new_graph(ctx);
         ggml_build_forward_expand(graph, out);
         ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
@@ -524,6 +493,45 @@ static void run_strided_elementwise_schedule_checks() {
     REQUIRE(plan_for(16, 3, 1.0f, false, kernels) && rows_kernel(kernels));   // the unscaled form, as before
     REQUIRE(!plan_for(3, 1, -0.5f, false, kernels) || !rows_kernel(kernels));  // negative: the max pass would be wrong
     REQUIRE(!plan_for(3, 1, 1.0f / 48.0f, true, kernels) || !rows_kernel(kernels));   // a mask is not this kernel
+}
+
+// engine#3577: common.pad_tail_f32 takes a contiguous f32 PAD whose output is the source's bytes followed by zeros -
+// one axis grown at its end, every axis above it 1, no left padding - and nothing else. Host only: the plan is built
+// for gfx1151 without a device (the values are test-backend-ops' PAD_EXT cases).
+static void run_pad_tail_schedule_checks() {
+    // v_view: the source is V as build_qkv hands it over - a [head_dim, heads, tokens] view of the fused QKV output,
+    // whose token stride is the fused row (3 * head_dim * heads); otherwise a packed tensor
+    const auto plan_for = [](const std::array<int64_t, 4> & ne, int lp2, int rp0, int rp2, int rp3, bool v_view,
+                             std::vector<std::string> & kernels) {
+        ggml_init_params params = {};
+        params.mem_size         = 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        ggml_tensor * src = nullptr;
+        if (v_view) {
+            ggml_tensor * qkv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3 * ne[0] * ne[1], ne[2]);
+            src = ggml_view_3d(ctx, qkv, ne[0], ne[1], ne[2], ne[0] * sizeof(float), qkv->nb[1],
+                               2 * ne[0] * ne[1] * sizeof(float));
+        } else {
+            src = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
+        }
+        ggml_tensor * out = ggml_pad_ext(ctx, src, 0, rp0, 0, 0, lp2, rp2, 0, rp3);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, out);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        const bool scheduled = scheduler.schedule_graph(imported.graph, { "gfx1151" });
+        kernels.clear();
+        if (scheduled) {
+            for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+                kernels.push_back(kernel_name_for_id(dispatch.kernel.kernel_id));
+            }
+        }
+        ggml_free(ctx);
+        return scheduled;
+    };
     const auto one = [](const std::vector<std::string> & kernels, const char * name) {
         return kernels.size() == 1 && kernels.front() == name;
     };
@@ -547,6 +555,41 @@ static void run_strided_elementwise_schedule_checks() {
             !one(kernels, "loom_libs:ggml_pad_tail_f32"));
     REQUIRE(!plan_for({ 64, 12, 200, 2 }, 0, 0, 56, 0, false, kernels) ||
             !one(kernels, "loom_libs:ggml_pad_tail_f32"));
+}
+
+// engine#3491: Inkling's MoE SITU activation scales and sigmoids `gate` / `up`, views of the fused gate_up output
+// (1152 of every 2304 columns). common.scale_strided_f32 / common.unary_strided_f32 densify the view and run the packed
+// kernel; a packed input keeps the packed matcher. Host only: the plan is built for gfx1151 without a device.
+static void run_strided_elementwise_schedule_checks() {
+    const auto plan_for = [](bool view, bool sigmoid, std::vector<std::string> & kernels) {
+        ggml_init_params params = {};
+        params.mem_size         = 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        ggml_tensor * x = nullptr;
+        if (view) {
+            ggml_tensor * gate_up = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2304, 8);
+            x = ggml_view_2d(ctx, gate_up, 1152, 8, gate_up->nb[1], 0);
+        } else {
+            x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1152, 8);
+        }
+        ggml_tensor * out   = sigmoid ? ggml_sigmoid(ctx, x) : ggml_scale(ctx, x, 0.04f);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, out);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        const bool scheduled = scheduler.schedule_graph(imported.graph, { "gfx1151" });
+        kernels.clear();
+        if (scheduled) {
+            for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+                kernels.push_back(kernel_name_for_id(dispatch.kernel.kernel_id));
+            }
+        }
+        ggml_free(ctx);
+        return scheduled;
+    };
     const auto ends_with = [](const std::vector<std::string> & kernels, const char * last) {
         return !kernels.empty() && kernels.back() == last;
     };
