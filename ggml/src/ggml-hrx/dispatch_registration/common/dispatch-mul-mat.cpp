@@ -1369,6 +1369,8 @@ static bool build_mul_mat_dispatch(const DispatchMatchContext & context,
                                    const CommonMulMatMatch &  match,
                                    DispatchMatch &            dispatch_match,
                                    CommonQ8ActivationPolicy   q8_policy = CommonQ8ActivationPolicy::ExistingAlternateOnly) {
+    // narrow_split_k4 assumes these bounds (index.assume in ops/mul_mat_f32_f32_wmma.loom): its reduction walks 4-wide
+    // vectors, so output_size % 4 == 0 is required for correctness, not only speed (engine#3585). Widen both together.
     const bool split_k = match.weight_format == CommonMulMatWeightFormat::Q4K && !match.has_fused_unary &&
                          match.input_size >= 4096 && match.input_size % 1024 == 0 &&
                          match.output_size <= 64 && match.output_size % 4 == 0 &&

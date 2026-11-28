@@ -6173,6 +6173,16 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128); });
     add(suite, "dense.q4_k.mul_mat_f32_f32_wmma.1.128",
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 1, 128); });
+    // engine#3585: Q4_K weights, input >= 4096 (a multiple of 1024), output <= 64 (a multiple of 4), 128..992 tokens
+    // take the split-K variant. Its reduction tail's 4-wide loads failed the JIT's bounds proof at 512 tokens x 48
+    // outputs (Qwen3.8-27B's 5120 -> 48 GDN projections in a Q4_K GGUF): llama-bench's prompt warmup failed. The
+    // second case is the other edge of the rule (fewest tokens, widest output).
+    add(suite, "dense.q4_k.mul_mat_f32_f32_narrow_split_k4.512.48.5120",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_narrow_split_k4", 512, 48,
+                                                  5120); });
+    add(suite, "dense.q4_k.mul_mat_f32_f32_narrow_split_k4.128.64.4096",
+        [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_narrow_split_k4", 128, 64,
+                                                  4096); });
     add(suite, "dense.q4_k.llm_attention_v_matmul_set_rows_f32_f32_wmma.1.1024.2048.f16",
         [=] { run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K,
                                    "loom_libs:llm_attention_v_matmul_set_rows_f32_f32_wmma",

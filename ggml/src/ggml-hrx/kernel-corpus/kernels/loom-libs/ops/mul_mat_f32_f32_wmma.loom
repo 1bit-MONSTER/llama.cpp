@@ -415,7 +415,8 @@ kernel.def target(@ggml_mul_mat_gfx11_wave64) @ggml_mul_mat_f32_f32_narrow_split
   %zero = index.constant 0 : index
   %four = index.constant 4 : index
   %tile_m = index.constant 32 : index
-  %step = index.constant 512 : index
+  // the reduction loop steps in 4-wide vectors: one per thread (128 threads) per pass
+  %step = index.constant 128 : index
   %zero_i32 = scalar.constant 0 : i32
   %one_i32 = scalar.constant 1 : i32
   %three_i32 = scalar.constant 3 : i32
@@ -446,11 +447,16 @@ kernel.def target(@ggml_mul_mat_gfx11_wave64) @ggml_mul_mat_f32_f32_narrow_split
     %partial3 = buffer.view %output[%plane3] : buffer -> view<[%bounded_token_count]x[%output_size]xf32>
     %final_view = buffer.view %final_output[%base] : buffer -> view<[%bounded_token_count]x[%output_size]xf32>
     %token_origin = index.mul %token_tile, %tile_m : index
-    %elements = index.mul %tile_m, %output_size : index
-    %first_element = index.mul %tid, %four : index
-    scf.for %linear = [%first_element to %elements step %step] {
-      %row = index.div %linear, %output_size : index
-      %channel = index.rem %linear, %output_size : index
+    // Walk the tile in 4-wide vectors, not elements (engine#3585): with %channel = %linear rem %output_size the
+    // bounds proof only knows %channel < %output_size, not %channel + 4 <= %output_size, and the JIT rejected the
+    // vector loads (SUBRANGE/010 at token_count 512, output_size 48). Counting vectors gives %channel = 4 * %channel4
+    // with %channel4 < %output_size / 4, which proves it. Same elements, same order: one vector per thread per step.
+    %output_vectors = index.div %output_size, %four : index
+    %vectors = index.mul %tile_m, %output_vectors : index
+    scf.for %linear4 = [%tid to %vectors step %step] {
+      %row = index.div %linear4, %output_vectors : index
+      %channel4 = index.rem %linear4, %output_vectors : index
+      %channel = index.mul %channel4, %four : index
       %token = index.add %token_origin, %row : index
       %v0 = vector.load %partial0[%token, %channel] : view<[%bounded_token_count]x[%output_size]xf32> -> vector<4xf32>
       %v1 = vector.load %partial1[%token, %channel] : view<[%bounded_token_count]x[%output_size]xf32> -> vector<4xf32>
