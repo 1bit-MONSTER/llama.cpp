@@ -12561,6 +12561,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                     // the per-section position read is checked on a batch-sized launch
                                     test_cases.emplace_back(new test_rope(type, {128,  16, 300, 1}, 128, GGML_ROPE_TYPE_IMROPE,  512, fs, ef, af, ff, v, fw));
                                     test_cases.emplace_back(new test_rope(type, { 80,  16, 2, 1},  80, GGML_ROPE_TYPE_VISION, 512, fs, ef, af, ff, v, fw)); // rope_multi,m-rope (qwen2vl ViT)
+                                    // engine#3549: the Qwen3.5 vision encoder's rotation (head 64, 12 heads, 256 patches)
+                                    test_cases.emplace_back(new test_rope(type, { 64,  12, 256, 1},  64, GGML_ROPE_TYPE_VISION, 512, fs, ef, af, ff, v, fw));
                                     test_cases.emplace_back(new test_rope(type, {128,  16, 2, 1}, 128, GGML_ROPE_TYPE_IMROPE, 512, fs, ef, af, ff, v, fw)); // rope_multi,m-rope (qwen3vl)
                                     test_cases.emplace_back(new test_rope(type, {16, 16, 8192, 1}, 16, GGML_ROPE_TYPE_IMROPE, 512, fs, ef, af, ff, v, fw));
                                 }

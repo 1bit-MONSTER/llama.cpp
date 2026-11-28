@@ -28,6 +28,7 @@
 #include "dispatch-swiglu-oai.h"
 #include "dispatch-unary.h"
 #include "dispatch-im2col.h"
+#include "dispatch-rope-vision.h"
 #include "dispatch-upscale.h"
 #include "hip/hip-dispatches.h"
 
@@ -62,6 +63,7 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_unary_dispatch(registry);
     register_upscale_dispatches(registry);
     register_im2col_dispatches(registry);
+    register_rope_vision_dispatches(registry);
     register_rmsnorm_dispatches(registry);
     register_hip_dispatches(registry);
 }

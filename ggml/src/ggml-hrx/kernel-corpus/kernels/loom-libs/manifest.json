@@ -813,6 +813,9 @@
    "path": "ops/im2col_f32_f16.loom"
   },
   {
+   "path": "ops/rope_vision_f32.loom"
+  },
+  {
    "path": "ops/ssm_conv/decode_dconv4_silu_f32.loom"
   },
   {
@@ -14359,6 +14362,59 @@
     "mode": "direct",
     "primary_sources": [
      "ops/im2col_f32_f16.loom"
+    ],
+    "library_sources": []
+   },
+   "compile_dependencies": []
+  },
+  {
+   "name": "ggml_rope_vision_f32",
+   "family": "loom_libs",
+   "symbol": "ggml_rope_vision_f32",
+   "source": "ops/rope_vision_f32.loom",
+   "workload_parameters": [
+    {
+     "name": "pair_count",
+     "type": "index"
+    },
+    {
+     "name": "source_span",
+     "type": "index"
+    },
+    {
+     "name": "position_count",
+     "type": "index"
+    }
+   ],
+   "launch_parameters": [
+    {
+     "name": "pair_count",
+     "type": "index"
+    },
+    {
+     "name": "source_span",
+     "type": "index"
+    },
+    {
+     "name": "position_count",
+     "type": "index"
+    }
+   ],
+   "bindings": [
+    "source",
+    "positions",
+    "output"
+   ],
+   "binding_access": [
+    "read",
+    "read",
+    "read_write"
+   ],
+   "target_selector": "",
+   "compile_recipe": {
+    "mode": "direct",
+    "primary_sources": [
+     "ops/rope_vision_f32.loom"
     ],
     "library_sources": []
    },

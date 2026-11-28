@@ -1,0 +1,155 @@
+// Copyright 2026 bong-water-water-bong
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// GGML_OP_ROPE, mode GGML_ROPE_TYPE_VISION, f32, standalone (engine#3549: a vision projector rotates its strided Q/K
+// views with ggml_rope_multi(..., VISION); HRX only had fused rotations). One work-item per rotated pair. For pair k
+// (0 <= k < n_dims, n_dims = ne0 / 2) element k rotates with element k + n_dims, as ggml-cpu's rotate_pairs(ne0,
+// n_dims, ...). Its angle is ggml_mrope_cache_init's with independent sections: sector = k mod sect_dims picks the
+// position stream (t, h, w, e) and the section start, and theta = p * theta_scale^(sector - start), built by repeated
+// multiplication as the CPU does. ext_factor is 0 (the matcher requires it), so theta * freq_scale is the angle and
+// attn_factor the magnitude. Source strided (innermost stride 1), output packed [ne0, ne1, ne2, ne3].
+
+amdgpu.target<gfx11-generic> @ggml_rope_vision_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.rope_vision_f32.n_dims : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.rope_vision_f32.ne1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.rope_vision_f32.ne2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.rope_vision_f32.stride1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.rope_vision_f32.stride2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.rope_vision_f32.stride3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.rope_vision_f32.sect_dims : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.rope_vision_f32.sec_h : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rope_vision_f32.sec_w : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rope_vision_f32.sec_e : %value: index where [range(%value, 0, 65536)]
+config.decl @ggml.rope_vision_f32.theta_scale : f32
+config.decl @ggml.rope_vision_f32.freq_scale : f32
+config.decl @ggml.rope_vision_f32.attn_factor : f32
+
+kernel.def target(@ggml_rope_vision_f32_gfx11_wave64) export("ggml_rope_vision_f32") @ggml_rope_vision_f32(%pair_count: index, %source_span: index, %position_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %pair_count, %rounding : index
+  %workgroup_count = index.div %rounded, %twofiftysix : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%pair_count: index, %source_span: index, %position_count: index, %source: buffer, %positions: buffer, %output: buffer) {
+  %twofiftysix = index.constant 256 : index
+  %pairs = index.assume %pair_count [range(%pair_count, 1, 536870912)] : index
+  %span = index.assume %source_span [range(%source_span, 1, 1073741824)] : index
+  %pos_n = index.assume %position_count [range(%position_count, 1, 1073741824)] : index
+  %n_dims = config.get @ggml.rope_vision_f32.n_dims : index
+  %n1 = config.get @ggml.rope_vision_f32.ne1 : index
+  %n2 = config.get @ggml.rope_vision_f32.ne2 : index
+  %s1 = config.get @ggml.rope_vision_f32.stride1 : index
+  %s2 = config.get @ggml.rope_vision_f32.stride2 : index
+  %s3 = config.get @ggml.rope_vision_f32.stride3 : index
+  %sect_dims = config.get @ggml.rope_vision_f32.sect_dims : index
+  %sec_h = config.get @ggml.rope_vision_f32.sec_h : index
+  %sec_w = config.get @ggml.rope_vision_f32.sec_w : index
+  %sec_e = config.get @ggml.rope_vision_f32.sec_e : index
+  %theta_scale = config.get @ggml.rope_vision_f32.theta_scale : f32
+  %freq_scale = config.get @ggml.rope_vision_f32.freq_scale : f32
+  %attn_factor = config.get @ggml.rope_vision_f32.attn_factor : f32
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %base = index.mul %workgroup, %twofiftysix : index
+  %linear0 = index.add %base, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 536871167)] : index
+  %in_bounds = index.cmp ult, %linear, %pairs : index
+  %zero_offset = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one_i = index.constant 1 : index
+  %two = index.constant 2 : index
+  %source_noalias, %positions_noalias, %output_noalias = buffer.assume.noalias %source, %positions, %output : buffer, buffer, buffer
+  scf.if %in_bounds {
+    %k = index.rem %linear, %n_dims : index
+    %r0 = index.div %linear, %n_dims : index
+    %i1 = index.rem %r0, %n1 : index
+    %r1 = index.div %r0, %n1 : index
+    %i2 = index.rem %r1, %n2 : index
+    %i3 = index.div %r1, %n2 : index
+    // which position stream this pair reads, and where its section starts
+    %sector = index.rem %k, %sect_dims : index
+    %in_t = index.cmp ult, %sector, %sec_h : index
+    %in_h = index.cmp ult, %sector, %sec_w : index
+    %in_w = index.cmp ult, %sector, %sec_e : index
+    %stream, %start = scf.if %in_t -> (index, index) {
+      scf.yield %zero, %zero : index, index
+    } else {
+      %sh, %sth = scf.if %in_h -> (index, index) {
+        scf.yield %one_i, %sec_h : index, index
+      } else {
+        %sw, %stw = scf.if %in_w -> (index, index) {
+          scf.yield %two, %sec_w : index, index
+        } else {
+          %three = index.constant 3 : index
+          scf.yield %three, %sec_e : index, index
+        }
+        scf.yield %sw, %stw : index, index
+      }
+      scf.yield %sh, %sth : index, index
+    }
+    %stream_base = index.mul %stream, %n2 : index
+    %pos_index0 = index.add %stream_base, %i2 : index
+    %pos_index, %pos_span = index.assume %pos_index0, %pos_n [lt(%pos_index0, %pos_n)] : index, index
+    %positions_view = buffer.view %positions_noalias[%zero_offset] : buffer -> view<[%pos_span]xi32>
+    %p_i32 = view.load %positions_view[%pos_index] : view<[%pos_span]xi32> -> i32
+    %p = scalar.sitofp %p_i32 : i32 to f32
+    // theta = p * theta_scale^(sector - start), by repeated multiplication (ggml_mrope_cache_init)
+    %steps = index.sub %sector, %start : index
+    %theta = scf.for %step = [%zero to %steps step %one_i](%acc = %p : f32) -> (f32) {
+      %next = scalar.mulf %acc, %theta_scale : f32
+      scf.yield %next : f32
+    }
+    %angle = scalar.mulf %theta, %freq_scale : f32
+    %cos0 = scalar.cosf<afn> %angle : f32
+    %sin0 = scalar.sinf<afn> %angle : f32
+    %cos_t = scalar.mulf %cos0, %attn_factor : f32
+    %sin_t = scalar.mulf %sin0, %attn_factor : f32
+    // the pair (k, k + n_dims) of row (i1, i2, i3)
+    %row1 = index.mul %i1, %s1 : index
+    %row2 = index.mul %i2, %s2 : index
+    %row3 = index.mul %i3, %s3 : index
+    %row12 = index.add %row1, %row2 : index
+    %row = index.add %row12, %row3 : index
+    %src_a0 = index.add %row, %k : index
+    %src_b0 = index.add %src_a0, %n_dims : index
+    %src_a, %src_b, %view_span = index.assume %src_a0, %src_b0, %span [lt(%src_a0, %span), lt(%src_b0, %span)] : index, index, index
+    %source_view = buffer.view %source_noalias[%zero_offset] : buffer -> view<[%view_span]xf32>
+    %x0 = view.load %source_view[%src_a] : view<[%view_span]xf32> -> f32
+    %x1 = view.load %source_view[%src_b] : view<[%view_span]xf32> -> f32
+    %x0c = scalar.mulf %x0, %cos_t : f32
+    %x1s = scalar.mulf %x1, %sin_t : f32
+    %y0 = scalar.subf %x0c, %x1s : f32
+    %x0s = scalar.mulf %x0, %sin_t : f32
+    %x1c = scalar.mulf %x1, %cos_t : f32
+    %y1 = scalar.addf %x0s, %x1c : f32
+    // packed output: ne0 = 2 * n_dims per row
+    %ne0 = index.mul %n_dims, %two : index
+    %out_rows0 = index.mul %i3, %n2 : index
+    %out_rows1 = index.add %out_rows0, %i2 : index
+    %out_rows2 = index.mul %out_rows1, %n1 : index
+    %out_row_index = index.add %out_rows2, %i1 : index
+    %out_row = index.mul %out_row_index, %ne0 : index
+    %dst_a0 = index.add %out_row, %k : index
+    %dst_b0 = index.add %dst_a0, %n_dims : index
+    %total0 = index.mul %pairs, %two : index
+    %dst_a, %dst_b, %out_span = index.assume %dst_a0, %dst_b0, %total0 [lt(%dst_a0, %total0), lt(%dst_b0, %total0)] : index, index, index
+    %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%out_span]xf32>
+    view.store %y0, %output_view[%dst_a] : f32, view<[%out_span]xf32>
+    view.store %y1, %output_view[%dst_b] : f32, view<[%out_span]xf32>
+  }
+  kernel.return
+}
