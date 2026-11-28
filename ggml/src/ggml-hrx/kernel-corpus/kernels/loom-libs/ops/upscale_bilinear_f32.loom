@@ -45,6 +45,7 @@ kernel.def target(@ggml_upscale_bilinear_f32_gfx11_wave64) export("ggml_upscale_
   %workgroup_count = index.div %rounded, %twofiftysix : index
   kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
 } launch(%element_count: index, %source_span: index, %source: buffer, %output: buffer) {
+  %twofiftysix = index.constant 256 : index
   %count = index.assume %element_count [range(%element_count, 1, 1073741824)] : index
   %span = index.assume %source_span [range(%source_span, 1, 1073741824)] : index
   %n0 = config.get @ggml.upscale_bilinear_f32.ne0 : index
