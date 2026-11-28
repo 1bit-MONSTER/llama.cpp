@@ -13,12 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// engine#3627: dflash_pad_logits_to_vocab (src/models/dflash-logits.h) on the CPU backend. A drafter whose tokenizer
-// lists more tokens than the target's (ufrik Inkling-2-Mini: 201024 vs 200058) must still hand llama-context rows of
-// the drafter's width, with the ids the target does not know at -INF.
+// engine#3627: llama-context's logits copy (src/llama-logits-rows.h) when a DFlash drafter's logits are narrower than
+// the context's n_vocab (the ufrik Inkling-2-Mini drafter lists 201024 tokens, its logits are cropped to the target's
+// 200058). Each row must land at the n_vocab stride with -INF beyond the real columns; equal widths stay a plain copy.
 #include "ggml.h"
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
 #include "ggml-cpu.h"
-#include "models/dflash-logits.h"
+#include "llama-logits-rows.h"
 
 #include <cmath>
 #include <cstdio>
@@ -32,78 +34,73 @@ static void check(bool ok, const char * what) {
     fails += ok ? 0 : 1;
 }
 
-// pad an [n, m] tensor of known values to n_row; optionally apply a softcap AFTER (as dflash.cpp) or BEFORE the pad
-static std::vector<float> run(int64_t n, int64_t m, int64_t n_row, float cap, bool cap_before_pad, std::vector<float> & in,
-                              int64_t * ne0_out, bool * same_tensor) {
-    ggml_init_params ip = { size_t(n_row) * size_t(m) * 4 * 8 + 64 * 1024 * 1024, nullptr, false };
-    ggml_context * ctx = ggml_init(ip);
-    ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, m);
-    std::mt19937 rng(7);
+static std::vector<float> randn(size_t n, unsigned seed) {
+    std::mt19937 rng(seed);
     std::normal_distribution<float> nd(0.0f, 3.0f);
-    in.resize(size_t(n * m));
-    for (auto & v : in) v = nd(rng);
-    std::memcpy(x->data, in.data(), in.size() * sizeof(float));
-    auto softcap = [&](ggml_tensor * t) { return ggml_scale(ctx, ggml_tanh(ctx, ggml_scale(ctx, t, 1.0f / cap)), cap); };
-    ggml_tensor * cur = x;
-    if (cap > 0 && !cap_before_pad) cur = softcap(cur);
-    ggml_tensor * padded = dflash_pad_logits_to_vocab(ctx, cur, n_row);
-    *same_tensor = padded == cur;
-    cur = padded;
-    if (cap > 0 && cap_before_pad) cur = softcap(cur);
-    ggml_cgraph * gf = ggml_new_graph(ctx);
-    ggml_build_forward_expand(gf, cur);
-    ggml_graph_compute_with_ctx(ctx, gf, 4);
-    *ne0_out = cur->ne[0];
-    std::vector<float> out(size_t(cur->ne[0] * cur->ne[1]));
-    std::memcpy(out.data(), cur->data, out.size() * sizeof(float));
+    std::vector<float> v(n);
+    for (auto & x : v) x = nd(rng);
+    return v;
+}
+
+// rows of ne0 at stride n_vocab, then -INF: the property every case checks
+static bool widened_ok(const std::vector<float> & src, int64_t ne0, const std::vector<float> & dst, int64_t n_vocab, int64_t n_rows) {
+    for (int64_t r = 0; r < n_rows; r++) for (int64_t c = 0; c < n_vocab; c++) {
+        const float v = dst[size_t(r * n_vocab + c)];
+        if (c < ne0 ? v != src[size_t(r * ne0 + c)] : !(std::isinf(v) && v < 0)) return false;
+    }
+    return true;
+}
+
+// the backend path: a CPU-backend tensor [ne0, n_rows] read with llama_get_logit_rows into rows of n_vocab
+static std::vector<float> via_backend(const std::vector<float> & src, int64_t ne0, int64_t n_rows, int64_t n_vocab) {
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    ggml_init_params ip = { ggml_tensor_overhead() * 4, nullptr, true };
+    ggml_context * ctx = ggml_init(ip);
+    ggml_tensor * t = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne0, n_rows);
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, cpu);
+    ggml_backend_tensor_set(t, src.data(), 0, src.size() * sizeof(float));
+    std::vector<float> dst(size_t(n_rows * n_vocab), 12345.0f);   // poison: every slot must be written
+    llama_get_logit_rows(cpu, t, dst.data(), n_rows, n_vocab);
+    ggml_backend_synchronize(cpu);
+    ggml_backend_buffer_free(buf);
     ggml_free(ctx);
-    return out;
+    ggml_backend_free(cpu);
+    return dst;
 }
 
 int main() {
-    std::vector<float> in;
-    int64_t ne0 = 0;
-    bool same = false;
-
-    {   // 1. pad 5 -> 8: the real columns unchanged, the added ones -INF
-        auto out = run(5, 3, 8, 0.0f, false, in, &ne0, &same);
-        bool head = true, tail = true;
-        for (int r = 0; r < 3; r++) for (int c = 0; c < 8; c++) {
-            const float v = out[size_t(r * 8 + c)];
-            if (c < 5) head &= v == in[size_t(r * 5 + c)];
-            else       tail &= std::isinf(v) && v < 0;
-        }
-        check(ne0 == 8, "pad 5 -> 8: width is the drafter's n_row");
-        check(head, "pad 5 -> 8: the real columns are bit-identical");
-        check(tail, "pad 5 -> 8: the added columns are -INF");
+    {   // 1. the pure host widening, small
+        const int64_t ne0 = 5, n_vocab = 8, n_rows = 3;
+        auto src = randn(size_t(ne0 * n_rows), 1);
+        std::vector<float> dst(size_t(n_vocab * n_rows), 12345.0f);
+        llama_widen_logit_rows(src.data(), ne0, dst.data(), n_vocab, n_rows);
+        check(widened_ok(src, ne0, dst, n_vocab, n_rows), "5 -> 8, 3 rows: each row at the n_vocab stride, the rest -INF");
     }
-    {   // 2. tokenizers agree: nothing changes (the same tensor comes back)
-        run(8, 2, 8, 0.0f, false, in, &ne0, &same);
-        check(same && ne0 == 8, "width already n_row: the tensor is returned unchanged");
-    }
-    {   // 3. the ufrik shape: 200058 real tokens in a 201024-wide row; argmax stays in the real vocabulary
-        const int64_t n = 200058, n_row = 201024, m = 2;
-        auto out = run(n, m, n_row, 0.0f, false, in, &ne0, &same);
-        bool tail = true, argmax_real = true;
-        for (int64_t r = 0; r < m; r++) {
+    {   // 2. the ufrik shape through the backend copy, as llama-context runs it
+        const int64_t ne0 = 200058, n_vocab = 201024, n_rows = 3;
+        auto src = randn(size_t(ne0 * n_rows), 2);
+        auto dst = via_backend(src, ne0, n_rows, n_vocab);
+        check(widened_ok(src, ne0, dst, n_vocab, n_rows), "ufrik 200058 -> 201024 via the CPU backend: rows aligned, 966 -INF each");
+        bool argmax_real = true;
+        for (int64_t r = 0; r < n_rows; r++) {
             int64_t best = 0;
-            for (int64_t c = 0; c < n_row; c++) {
-                const float v = out[size_t(r * n_row + c)];
-                if (c >= n) tail &= std::isinf(v) && v < 0;
-                if (v > out[size_t(r * n_row + best)]) best = c;
-            }
-            argmax_real &= best < n;
+            for (int64_t c = 1; c < n_vocab; c++) if (dst[size_t(r * n_vocab + c)] > dst[size_t(r * n_vocab + best)]) best = c;
+            argmax_real &= best < ne0;
         }
-        check(ne0 == n_row, "ufrik 200058 -> 201024: width is the drafter's n_row");
-        check(tail, "ufrik: all 966 padded ids are -INF");
         check(argmax_real, "ufrik: the argmax of every row is a real token");
     }
-    {   // 4. why dflash.cpp pads AFTER the softcap: before it, -INF becomes the finite -cap
-        auto after = run(5, 2, 8, 30.0f, false, in, &ne0, &same);
-        auto before = run(5, 2, 8, 30.0f, true, in, &ne0, &same);
-        check(std::isinf(after[7]) && after[7] < 0, "softcap then pad (dflash.cpp's order): masked ids stay -INF");
-        check(std::isfinite(before[7]) && std::fabs(before[7] + 30.0f) < 1e-3f,
-              "pad then softcap would give -cap (finite): the order matters");
+    {   // 3. equal widths (every model whose tokenizers agree): the plain copy, bit-identical
+        const int64_t n = 64, n_rows = 4;
+        auto src = randn(size_t(n * n_rows), 3);
+        auto dst = via_backend(src, n, n_rows, n);
+        check(std::memcmp(dst.data(), src.data(), src.size() * sizeof(float)) == 0, "equal widths: the plain copy, bit-identical");
+    }
+    {   // 4. the old behaviour, for contrast: a flat copy of n_rows*ne0 floats puts row 1 at column ne0 of row 0
+        const int64_t ne0 = 5, n_vocab = 8, n_rows = 2;
+        auto src = randn(size_t(ne0 * n_rows), 4);
+        std::vector<float> flat(size_t(n_vocab * n_rows), 0.0f);
+        std::memcpy(flat.data(), src.data(), src.size() * sizeof(float));
+        check(!widened_ok(src, ne0, flat, n_vocab, n_rows), "a flat copy (the old shape) misaligns the rows: what the fix prevents");
     }
     std::printf("test-dflash-logits: %s\n", fails ? "FAIL" : "ok");
     return fails ? 1 : 0;

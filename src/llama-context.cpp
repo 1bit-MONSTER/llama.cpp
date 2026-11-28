@@ -1,4 +1,5 @@
 #include "llama-context.h"
+#include "llama-logits-rows.h"
 #include "llama-zha-dump.h"
 
 #include "ggml.h"
@@ -1722,7 +1723,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
         GGML_ASSERT(backend_res != nullptr);
         GGML_ASSERT(logits.data != nullptr);
 
-        ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_outputs*n_vocab*sizeof(float));
+        llama_get_logit_rows(backend_res, t_logits, logits.data, n_outputs, n_vocab);   // engine#3627: may be narrower
     }
 
     // extract embeddings
@@ -2112,7 +2113,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
-                ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+                llama_get_logit_rows(backend_res, t_logits, logits_out, n_outputs, n_vocab);   // engine#3627: may be narrower
             }
         }
 
