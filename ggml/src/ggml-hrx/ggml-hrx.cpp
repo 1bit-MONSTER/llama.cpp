@@ -39,10 +39,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -597,17 +599,31 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
     constexpr int            kFallbackScanGraphs = 16;
     // The old guard returned whenever no report was asked for, which also silenced the load-time fallback line
     // (engine #991). Keep the cheap exit, but only once that line is either said, deliberately silenced, or out of scan budget.
+    // engine#3491: GGML_HRX_PLACEMENT_DETAIL=1 (below) prints each DISTINCT off-HRX table once per process - so a
+    // server run shows its prefill and its decode tables without one per decode token - whatever the report level or
+    // the quiet switch. A graph the normal guard skips is then scanned for the table alone: no summary, no fallback
+    // line.
+    static const bool detail = [] {
+        const char * env = std::getenv("GGML_HRX_PLACEMENT_DETAIL");
+        return env != nullptr && std::atoi(env) > 0;
+    }();
+    static std::atomic<int> detail_tables{ 0 };
+    static std::atomic<int> detail_scans{ 0 };   // graphs scanned for the table alone (bounds the per-token cost)
+    constexpr int           kMaxDetailTables = 8;
+    constexpr int           kMaxDetailScans  = 64;
+    bool                    skip             = false;
     if (!strict) {
         if (level >= 2) {
             // report every graph
         } else if (level == 1) {
-            if (reported.load()) {
-                return;
-            }
-        } else if (fallback_reported.load() || placement_fallback_quiet() ||
-                   fallback_graphs_seen.fetch_add(1) >= kFallbackScanGraphs) {
-            return;
+            skip = reported.load();
+        } else {
+            skip = fallback_reported.load() || placement_fallback_quiet() ||
+                   fallback_graphs_seen.fetch_add(1) >= kFallbackScanGraphs;
         }
+    }
+    if (skip && !(detail && detail_tables.load() < kMaxDetailTables && detail_scans.fetch_add(1) < kMaxDetailScans)) {
+        return;
     }
 
     ggml_backend_t hrx                = static_cast<ggml_backend_t>(user_data);
@@ -638,6 +654,17 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
     int64_t              off_unexplained       = 0;
     ggml_tensor *        first_off = nullptr;
     ggml_tensor *        first_unexplained = nullptr;
+    // engine#3491: GGML_HRX_PLACEMENT_DETAIL=1 lists the off-HRX nodes grouped by shape, with WHY each group is off:
+    // claimed=0 means device_supports_op said no (no matcher, or a claim predicate refuses the shape); claimed=1 means
+    // HRX would take the node and the scheduler put it on the CPU anyway (a host-resident source, or a neighbour's
+    // split). The op counts above cannot tell the two apart, and they need different fixes.
+    std::map<std::string, int64_t> detail_rows;
+    const auto describe = [](const ggml_tensor * t) {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%s[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64 "]", ggml_type_name(t->type),
+                      t->ne[0], t->ne[1], t->ne[2], t->ne[3]);
+        return std::string(buf);
+    };
     for (int i = 0; i < graph->n_nodes; i++) {
         ggml_tensor * node = graph->nodes[i];
         // the scheduler splits on non-view nodes and does not assign backends to views
@@ -673,6 +700,36 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
             }
         }
         const bool by_design = ggml::hrx::placement_node_is_by_design(facts);
+        if (detail) {
+            bool host_src = facts.src_host_weight;
+            std::string key = std::string(ggml_op_desc(node)) + " " + describe(node);
+            for (int s = 0; s < GGML_MAX_SRC; ++s) {
+                const ggml_tensor * src = node->src[s];
+                if (src == nullptr) {
+                    continue;
+                }
+                key += " src" + std::to_string(s) + "=" + describe(src);
+                const ggml_tensor * root = src->view_src != nullptr ? src->view_src : src;
+                host_src = host_src || ggml::hrx::tensor_is_host_resident(root);
+            }
+            if (node->op == GGML_OP_SOFT_MAX || node->op == GGML_OP_SCALE) {
+                // these matchers key on their parameters (softmax_rows takes scale 1 / max_bias 0 only)
+                float p0 = 0.0f, p1 = 0.0f;
+                std::memcpy(&p0, (const char *) node->op_params, sizeof(float));
+                std::memcpy(&p1, (const char *) node->op_params + sizeof(float), sizeof(float));
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), " params=(%g,%g)", (double) p0, (double) p1);
+                key += buf;
+            }
+            const bool claimed = ggml_backend_supports_op(hrx, node);
+            // the reason in plain words: no-matcher (claimed=0: no matcher, or a claim predicate refuses the shape),
+            // by-design, host-resident (a source in host memory), split (HRX would take it; the scheduler put it on
+            // another backend, e.g. a neighbour's split)
+            const char * why = !claimed ? "no-matcher" : by_design ? "by-design" : host_src ? "host-resident" : "split";
+            key += std::string(" claimed=") + (claimed ? "1" : "0") + " by_design=" + (by_design ? "1" : "0") +
+                   " host_src=" + (host_src ? "1" : "0") + " why=" + why;
+            detail_rows[key]++;
+        }
         if (by_design) {
             off_by_design++;
         } else {
@@ -697,6 +754,37 @@ static void placement_observer(ggml_backend_sched_t sched, ggml_cgraph * graph, 
                 }
             }
         }
+    }
+
+    if (detail && !detail_rows.empty()) {
+        // once per distinct table (a decode step rebuilds the same graph every token)
+        static std::mutex       detail_mutex;
+        static std::set<std::string> detail_seen;
+        std::string             signature;
+        for (const auto & [key, count] : detail_rows) {
+            signature += std::to_string(count) + " " + key + "\n";
+        }
+        bool fresh = false;
+        {
+            std::lock_guard<std::mutex> lock(detail_mutex);
+            fresh = detail_seen.insert(signature).second;
+        }
+        if (fresh && detail_tables.fetch_add(1) < kMaxDetailTables) {
+            std::vector<std::pair<int64_t, std::string>> rows;
+            for (const auto & [key, count] : detail_rows) {
+                rows.emplace_back(count, key);
+            }
+            std::sort(rows.begin(), rows.end(), [](const auto & l, const auto & r) { return l.first > r.first; });
+            // stderr, not GGML_LOG_INFO: the CLI's log sink drops INFO, and this is only ever asked for on purpose
+            std::fprintf(stderr, "ggml_hrx placement detail: %zu shape group(s), %" PRId64 " off-HRX node(s)\n",
+                         rows.size(), off_nodes);
+            for (const auto & [count, key] : rows) {
+                std::fprintf(stderr, "ggml_hrx placement detail: %5" PRId64 "  %s\n", count, key.c_str());
+            }
+        }
+    }
+    if (skip) {
+        return;   // scanned only for the detail table: the normal report and fallback line stay as they were
     }
 
     // THE PARTS SUM TO THE WHOLE. Every off-device node is by design, host-non-weight, or neither; if that ever fails
