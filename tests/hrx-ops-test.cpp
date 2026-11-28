@@ -459,6 +459,14 @@ static std::vector<std::string> scheduled_kernel_sequence(ggml_cgraph * graph) {
 // for gfx1151 without a device.
 static void run_softmax_rows_scale_schedule_checks() {
     const auto plan_for = [](int64_t cols, int64_t rows, float scale, bool mask, std::vector<std::string> & kernels) {
+// engine#3577: common.pad_tail_f32 takes a contiguous f32 PAD whose output is the source's bytes followed by zeros -
+// one axis grown at its end, every axis above it 1, no left padding - and nothing else. Host only: the plan is built
+// for gfx1151 without a device (the values are test-backend-ops' PAD_EXT cases).
+static void run_pad_tail_schedule_checks() {
+    // v_view: the source is V as build_qkv hands it over - a [head_dim, heads, tokens] view of the fused QKV output,
+    // whose token stride is the fused row (3 * head_dim * heads); otherwise a packed tensor
+    const auto plan_for = [](const std::array<int64_t, 4> & ne, int lp2, int rp0, int rp2, int rp3, bool v_view,
+                             std::vector<std::string> & kernels) {
         ggml_init_params params = {};
         params.mem_size         = 1024 * 1024;
         params.no_alloc         = true;
@@ -468,6 +476,16 @@ static void run_softmax_rows_scale_schedule_checks() {
         ggml_tensor * m      = mask ? ggml_new_tensor_2d(ctx, GGML_TYPE_F16, cols, rows) : nullptr;
         ggml_tensor * out    = ggml_soft_max_ext(ctx, logits, m, scale, 0.0f);
         ggml_cgraph * graph  = ggml_new_graph(ctx);
+        ggml_tensor * src = nullptr;
+        if (v_view) {
+            ggml_tensor * qkv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3 * ne[0] * ne[1], ne[2]);
+            src = ggml_view_3d(ctx, qkv, ne[0], ne[1], ne[2], ne[0] * sizeof(float), qkv->nb[1],
+                               2 * ne[0] * ne[1] * sizeof(float));
+        } else {
+            src = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
+        }
+        ggml_tensor * out = ggml_pad_ext(ctx, src, 0, rp0, 0, 0, lp2, rp2, 0, rp3);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
         ggml_build_forward_expand(graph, out);
         ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
@@ -493,6 +511,29 @@ static void run_softmax_rows_scale_schedule_checks() {
     REQUIRE(plan_for(16, 3, 1.0f, false, kernels) && rows_kernel(kernels));   // the unscaled form, as before
     REQUIRE(!plan_for(3, 1, -0.5f, false, kernels) || !rows_kernel(kernels));  // negative: the max pass would be wrong
     REQUIRE(!plan_for(3, 1, 1.0f / 48.0f, true, kernels) || !rows_kernel(kernels));   // a mask is not this kernel
+    const auto one = [](const std::vector<std::string> & kernels, const char * name) {
+        return kernels.size() == 1 && kernels.front() == name;
+    };
+    // a packed source also matches the add-on's general hip.pad_f32 (priority 100), which then serves it (engine#3120:
+    // an add-on route is accepted by name); a strided source only this kernel takes
+    const auto pad_route = [&one](const std::vector<std::string> & kernels) {
+        return one(kernels, "loom_libs:ggml_pad_tail_f32") ||
+               (kernels.size() == 1 && kernels.front().compare(0, 4, "hip:") == 0);
+    };
+    std::vector<std::string> kernels;
+    // the encoder's V: a strided view, padded at the end of the token axis - the 12 PADs strict refused
+    REQUIRE(plan_for({ 64, 12, 200, 1 }, 0, 0, 56, 0, true, kernels) && one(kernels, "loom_libs:ggml_pad_tail_f32"));
+    // the encoder's K: packed (the RoPE output)
+    REQUIRE(plan_for({ 64, 12, 200, 1 }, 0, 0, 56, 0, false, kernels) && pad_route(kernels));
+    // the outermost axis, every axis below unchanged
+    REQUIRE(plan_for({ 64, 12, 3, 5 }, 0, 0, 0, 2, false, kernels) && pad_route(kernels));
+    // never this kernel: a left pad (zeros BEFORE the source), two padded axes, or an inner axis padded under an
+    // outer axis above 1 - each interleaves zeros with the source
+    REQUIRE(!plan_for({ 64, 12, 200, 1 }, 1, 0, 55, 0, true, kernels) || !one(kernels, "loom_libs:ggml_pad_tail_f32"));
+    REQUIRE(!plan_for({ 64, 12, 200, 1 }, 0, 1, 56, 0, false, kernels) ||
+            !one(kernels, "loom_libs:ggml_pad_tail_f32"));
+    REQUIRE(!plan_for({ 64, 12, 200, 2 }, 0, 0, 56, 0, false, kernels) ||
+            !one(kernels, "loom_libs:ggml_pad_tail_f32"));
 }
 
 // Each weight is bound at least once, and every binding uses `layout`.
@@ -9499,6 +9540,7 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.route_outcome", [] { run_route_outcome_checks(); });   // engine#3120: the route decision
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
     suite.host_case("softmax_rows.scale.schedule", [] { run_softmax_rows_scale_schedule_checks(); });   // engine#3491
+    suite.host_case("pad_tail.schedule", [] { run_pad_tail_schedule_checks(); });   // engine#3577
     // engine#3383: the fallback takes an alternate only through a full ordered layout alias, never through a reordering
     // view or a write that reuses the storage.
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });

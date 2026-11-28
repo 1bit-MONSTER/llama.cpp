@@ -1305,6 +1305,7 @@ static bool eager_capability_declared(enum ggml_op op) {
         case GGML_OP_CLAMP:
         case GGML_OP_CONCAT:
         case GGML_OP_CONT:
+        case GGML_OP_PAD:   // engine#3577: common.pad_tail_f32; the registry decides each node
         case GGML_OP_CPY:
         case GGML_OP_DIV:
         case GGML_OP_FLASH_ATTN_EXT:

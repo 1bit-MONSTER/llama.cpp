@@ -16,6 +16,7 @@
 #include "dispatch-rope-set-rows.h"
 #include "dispatch-scale.h"
 #include "dispatch-grouped-mul-mat.h"
+#include "dispatch-pad.h"
 #include "dispatch-small-rows.h"
 #include "dispatch-mul-mat-id-decode.h"
 #include "dispatch-res-scale-pair.h"
@@ -48,6 +49,7 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_rope_set_rows_dispatches(registry);
     register_scale_dispatch(registry);
     register_small_rows_dispatches(registry);
+    register_pad_dispatches(registry);
     register_mul_mat_id_decode_dispatches(registry);
     register_res_scale_pair_dispatches(registry);
     register_hadamard_dispatches(registry);

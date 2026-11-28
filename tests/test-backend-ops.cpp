@@ -12840,6 +12840,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {4, 70000, 1, 1}, 1, 1, false));
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {4, 70000, 1, 1}, 1, 1, true));
     test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {4, 2, 300, 300}, 1, 1, 0, 0, 0, 0, 0, 0, 0, false));
+    // engine#3577: the no-KV-cache attention path pads K and V at the end of the token axis only (HRX pad_tail_f32)
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {64, 12, 200, 1}, 0, 0, 0, 0, 0, 56, 0, 0, 0, false));
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {64, 12, 256, 1}, 0, 0, 0, 0, 0, 0, 0, 0, 0, false));
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {64, 12, 3, 5}, 0, 0, 0, 0, 0, 0, 0, 2, 0, false));
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {64, 12, 200, 1}, 0, 0, 0, 0, 1, 55, 0, 0, 0, false));
 
     test_cases.emplace_back(new test_pad_reflect_1d());
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
