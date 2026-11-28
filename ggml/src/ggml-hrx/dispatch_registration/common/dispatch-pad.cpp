@@ -114,9 +114,13 @@ static bool match_pad_tail_f32(const DispatchMatchContext & context, DispatchMat
     dispatch.kernel.integer_parameters.emplace("source_ne2", source->ne[2]);
     dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.ne0", std::to_string(source->ne[0]));
     dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.ne1", std::to_string(source->ne[1]));
+    // An axis of size 1 always has coordinate 0, so its stride is never read; ggml still sets it from the axes below
+    // (a 3-D view's nb[3] = nb[2] * ne[2], the token count again), so it is emitted as 1: otherwise every input length
+    // would be its own program after all (PR #523 review).
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        const int64_t stride = source->ne[i] == 1 ? 1 : static_cast<int64_t>(source->nb[i] / sizeof(float));
         dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.stride" + std::to_string(i),
-                                                   std::to_string(source->nb[i] / sizeof(float)));
+                                                   std::to_string(stride));
     }
     // the source's whole strided span, from its storage root (a view's own id would bind only its byte_count)
     dispatch.bindings.push_back({ source->storage_root, source->storage_offset, source_span });
