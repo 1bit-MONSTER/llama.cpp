@@ -24,6 +24,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 namespace ggml::hrx {
 
@@ -46,6 +47,35 @@ inline hrx_wait_flags_t completion_wait_flags() {
 // (the device owns it) and lives as long as the device.
 inline hrx_queue_t device_queue(hrx_device_t device) {
     return device != nullptr ? hrx_device_get_queue(device, 0, 0) : nullptr;
+}
+
+// Opens every "amdgpu" device as one sealed group (the v0.3.0 replacement for hrx_gpu_initialize + device_get), with
+// the completion_wait_flags() policy. On success *runtime and *group own references the caller releases (group first);
+// zero devices leaves *group NULL and still returns ok. The backend's registry uses its own copy (it also sets the
+// event sink); this one is for tools and tests.
+inline hrx_status_t open_gpu_group(hrx_runtime_t * runtime, hrx_device_group_t * group) {
+    *runtime = nullptr;
+    *group   = nullptr;
+    hrx_runtime_options_t options = {};
+    hrx_status_t status = hrx_runtime_create(&options, hrx_host_allocator_system(), runtime);
+    if (!hrx_status_is_ok(status)) {
+        return status;
+    }
+    hrx_device_info_t * infos = nullptr;
+    size_t count = 0;
+    status = hrx_runtime_query_available_devices(*runtime, "amdgpu", hrx_host_allocator_system(), &count, &infos);
+    if (hrx_status_is_ok(status) && count > 0) {
+        std::vector<hrx_device_create_params_t> params(count);
+        for (size_t i = 0; i < count; ++i) {
+            params[i].uri                   = infos[i].uri;
+            params[i].completion_wait_flags = completion_wait_flags();
+        }
+        status = hrx_device_group_create(*runtime, count, params.data(), group);
+    }
+    if (infos != nullptr) {
+        hrx_host_allocator_free(hrx_host_allocator_system(), infos);
+    }
+    return status;
 }
 
 }  // namespace ggml::hrx

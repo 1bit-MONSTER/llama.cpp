@@ -1,3 +1,4 @@
+#include "ggml-hrx-wait-flags.h"
 #include "backend-context.h"
 #include "backend-buffer-binding.h"
 #include "dispatch/dispatch-scheduler.h"
@@ -3385,7 +3386,7 @@ static void run_mutable_host_input_after_writeback_case(bool hrx_host) {
             // The recorded launch advances once; the queued host-download tail must advance again.
             REQUIRE(after_writer.value >= before_writer.value + 2);
         }
-        REQUIRE(!ggml::hrx::take_status(hrx_stream_synchronize(backend_state->stream)));
+        REQUIRE(!ggml::hrx::take_status(hrx_stream_synchronize(backend_state->stream, ggml::hrx::completion_wait_flags())));
         REQUIRE(!backend_state->graph_replay_state.has_pending_host_writebacks());
         // Qwen's metadata initialization writes staged inputs; the next microbatch supplies new host values.
         ggml_backend_tensor_set(input, current.data(), 0, ggml_nbytes(input));
@@ -3813,7 +3814,7 @@ static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
     REQUIRE(pending_stats.allocation_count == 1);
     REQUIRE(pending_stats.resident_bytes == packed_source.materialized_length);
 
-    REQUIRE(!ggml::hrx::take_status(hrx_stream_synchronize(state->stream)));
+    REQUIRE(!ggml::hrx::take_status(hrx_stream_synchronize(state->stream, ggml::hrx::completion_wait_flags())));
     require_close(get_f32_tensor(backend, hrx_output), expected, 2.0e-2f, 3.0e-2f);
     REQUIRE(sole_resource.expired() == uncached);
     const auto completed = state->host_weights.stats();

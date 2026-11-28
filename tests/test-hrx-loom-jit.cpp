@@ -1,3 +1,4 @@
+#include "ggml-hrx-wait-flags.h"
 #include "dispatch/dispatch.h"
 #include "hrx-interop-utils.h"
 #include "kernel-corpus/kernel-corpus.h"
@@ -34,30 +35,24 @@ class HrxTestDevice {
         if (device != nullptr) {
             hrx_device_release(device);
         }
+        // [1bit] hrx-system v0.3.0: the group owns the devices, the runtime the group's services
+        if (group != nullptr) {
+            hrx_device_group_release(group);
+        }
+        if (runtime != nullptr) {
+            hrx_runtime_release(runtime);
+        }
     }
 
     bool open() {
-        hrx_status_t init_status = hrx_gpu_initialize(0);
-        if (!hrx_status_is_ok(init_status)) {
-            if (hrx_status_code(init_status) == HRX_STATUS_ALREADY_EXISTS) {
-                hrx_status_ignore(init_status);
-            } else {
-                hrx_status_ignore(init_status);
-                return false;
-            }
-        }
-
-        int count = 0;
-        if (ggml::hrx::ErrorResult error = ggml::hrx::take_status(hrx_gpu_device_count(&count))) {
-            std::fprintf(stderr, "skip executable cache materialization: device count failed: %s\n", error->c_str());
+        // [1bit] hrx-system v0.3.0: one runtime + a sealed group of every amdgpu device (was hrx_gpu_initialize)
+        if (ggml::hrx::ErrorResult error = ggml::hrx::take_status(ggml::hrx::open_gpu_group(&runtime, &group))) {
+            std::fprintf(stderr, "skip executable cache materialization: HRX runtime: %s\n", error->c_str());
             return false;
         }
+        const int count = group != nullptr ? (int) hrx_device_group_device_count(group) : 0;
         for (int i = 0; i < count; ++i) {
-            hrx_device_t candidate = nullptr;
-            if (ggml::hrx::ErrorResult error = ggml::hrx::take_status(hrx_gpu_device_get(i, &candidate))) {
-                std::fprintf(stderr, "skip HRX device %d: %s\n", i, error->c_str());
-                continue;
-            }
+            hrx_device_t candidate = hrx_device_group_get_device(group, (size_t) i);   // borrowed; retained below
             if (candidate == nullptr) {
                 continue;
             }
@@ -76,6 +71,8 @@ class HrxTestDevice {
     }
 
     hrx_device_t device = nullptr;
+    hrx_runtime_t      runtime = nullptr;   // [1bit] hrx-system v0.3.0
+    hrx_device_group_t group   = nullptr;
     std::string  architecture;
 
   private:

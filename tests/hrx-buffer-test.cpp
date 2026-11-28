@@ -1,3 +1,4 @@
+#include "ggml-hrx-wait-flags.h"
 #include "backend-buffer-binding.h"
 #include "backend-context.h"
 #include "ggml-backend-impl.h"
@@ -131,8 +132,8 @@ static void run_host_buffer_checks(ggml_backend_t backend) {
 
     const uint32_t pattern = 0x12345678;
     require_hrx_status(
-        hrx_stream_fill_buffer(context->stream, buffer_context->buffer, 0, 4096, &pattern, sizeof(pattern)));
-    require_hrx_status(hrx_stream_synchronize(context->stream));
+        hrx_stream_fill_buffer_linear(context->stream, buffer_context->buffer, 0, 4096, &pattern, sizeof(pattern)));
+    require_hrx_status(hrx_stream_synchronize(context->stream, ggml::hrx::completion_wait_flags()));
     const auto * words = static_cast<const uint32_t *>(ggml_backend_buffer_get_base(buffer));
     for (size_t i = 0; i < 4096 / sizeof(uint32_t); ++i) {
         REQUIRE(words[i] == pattern);
@@ -346,7 +347,7 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     REQUIRE(direct_binding.host_data == nullptr);
     REQUIRE(direct_binding.offset == 256);
     const uint32_t queued_value = 0x456789ab;
-    require_hrx_status(hrx_stream_fill_buffer(backend_context(backend)->stream, coherent_context->buffer,
+    require_hrx_status(hrx_stream_fill_buffer_linear(backend_context(backend)->stream, coherent_context->buffer,
                                               256, 32 * sizeof(uint32_t), &queued_value, sizeof(queued_value)));
     std::array<uint32_t, 32> ordered_readback = {};
     ggml_backend_tensor_get_async(backend, subtensor, ordered_readback.data(), 0, sizeof(ordered_readback));
@@ -354,7 +355,7 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
         REQUIRE(value == queued_value);
     }
     const uint32_t ordered_write = 0x13579bdf;
-    require_hrx_status(hrx_stream_fill_buffer(backend_context(backend)->stream, coherent_context->buffer,
+    require_hrx_status(hrx_stream_fill_buffer_linear(backend_context(backend)->stream, coherent_context->buffer,
                                               256, 32 * sizeof(uint32_t), &queued_value, sizeof(queued_value)));
     ggml_backend_tensor_set_async(backend, subtensor, &ordered_write, 0, sizeof(ordered_write));
     ggml_backend_synchronize(backend);
@@ -371,7 +372,7 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     std::array<uint32_t, 32> cpu_values = {};
     cpu_values.fill(0x2468ace0);
     ggml_backend_tensor_set(cpu_tensor, cpu_values.data(), 0, sizeof(cpu_values));
-    require_hrx_status(hrx_stream_fill_buffer(backend_context(backend)->stream, coherent_context->buffer,
+    require_hrx_status(hrx_stream_fill_buffer_linear(backend_context(backend)->stream, coherent_context->buffer,
                                               256, sizeof(cpu_values), &queued_value, sizeof(queued_value)));
     ggml_backend_tensor_copy_async(cpu, backend, cpu_tensor, subtensor);
     ggml_backend_synchronize(backend);
@@ -478,7 +479,7 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
     REQUIRE(ggml::hrx::allocate_host_staging_buffer(context->device->device, 64, staging).success());
 
     const std::array<uint8_t, 64> zero = {};
-    require_hrx_status(hrx_synchronous_h2d(context->device->device, zero.data(), staging.buffer, 0, zero.size()));
+    require_hrx_status(hrx_synchronous_h2d_linear(ggml::hrx::device_queue(context->device->device), zero.data(), staging.buffer, 0, zero.size()));
 
     std::array<uint8_t, 64> host = {};
     for (size_t i = 0; i < host.size(); ++i) {
@@ -490,11 +491,11 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
     ggml::hrx::HostTransferStats stats = transfers.stats();
     REQUIRE(stats.uploads == 1);
     REQUIRE(stats.upload_bytes == 24);
-    require_hrx_status(hrx_stream_synchronize(context->stream));
+    require_hrx_status(hrx_stream_synchronize(context->stream, ggml::hrx::completion_wait_flags()));
 
     std::array<uint8_t, 64> upload_result = {};
     require_hrx_status(
-        hrx_synchronous_d2h(context->device->device, staging.buffer, 0, upload_result.data(), upload_result.size()));
+        hrx_synchronous_d2h_linear(ggml::hrx::device_queue(context->device->device), staging.buffer, 0, upload_result.data(), upload_result.size()));
     for (size_t i = 0; i < upload_result.size(); ++i) {
         const uint8_t expected = i >= 16 && i < 40 ? host[i - 8] : 0;
         REQUIRE(upload_result[i] == expected);
@@ -505,7 +506,7 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
         device_values[i] = static_cast<uint8_t>(0xa0 + i);
     }
     require_hrx_status(
-        hrx_synchronous_h2d(context->device->device, device_values.data(), staging.buffer, 0, device_values.size()));
+        hrx_synchronous_h2d_linear(ggml::hrx::device_queue(context->device->device), device_values.data(), staging.buffer, 0, device_values.size()));
 
     std::array<uint8_t, 48> download_result = {};
     REQUIRE(
@@ -513,7 +514,7 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
     stats = transfers.stats();
     REQUIRE(stats.downloads == 1);
     REQUIRE(stats.download_bytes == 20);
-    require_hrx_status(hrx_stream_synchronize(context->stream));
+    require_hrx_status(hrx_stream_synchronize(context->stream, ggml::hrx::completion_wait_flags()));
     for (size_t i = 0; i < download_result.size(); ++i) {
         const uint8_t expected = i >= 4 && i < 24 ? device_values[i + 8] : 0;
         REQUIRE(download_result[i] == expected);
@@ -585,7 +586,7 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
 
     std::array<uint8_t, 32> first_bytes = {};
     require_hrx_status(
-        hrx_synchronous_d2h(context->device->device, first.lease.buffer(), 0, first_bytes.data(), first_bytes.size()));
+        hrx_synchronous_d2h_linear(ggml::hrx::device_queue(context->device->device), first.lease.buffer(), 0, first_bytes.data(), first_bytes.size()));
     for (size_t i = 0; i < first_bytes.size(); ++i) {
         REQUIRE(first_bytes[i] == host[source.offset + i]);
     }
@@ -658,7 +659,7 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(other_shape.valid());
     REQUIRE(other_shape.lease.buffer() == region.lease.buffer());
     std::array<uint8_t, 32> aliased_bytes = {};
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, other_shape.lease.buffer(), 0,
+    require_hrx_status(hrx_synchronous_d2h_linear(ggml::hrx::device_queue(context->device->device), other_shape.lease.buffer(), 0,
                                          aliased_bytes.data(), aliased_bytes.size()));
     for (size_t i = 0; i < aliased_bytes.size(); ++i) {
         REQUIRE(aliased_bytes[i] == host[source.offset + i]);
@@ -733,7 +734,7 @@ static void run_packed_weight_identity_checks(ggml_backend_hrx_context * context
     auto first = weights.acquire(context->device->device, context->stream, transfers, source);
     REQUIRE(first.valid());
     std::vector<uint8_t> first_bytes(source_bytes);
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, first.lease.buffer(), 0,
+    require_hrx_status(hrx_synchronous_d2h_linear(ggml::hrx::device_queue(context->device->device), first.lease.buffer(), 0,
                                          first_bytes.data(), first_bytes.size()));
 
     // Equal source/output byte lengths can still require different packed byte orders.
@@ -743,7 +744,7 @@ static void run_packed_weight_identity_checks(ggml_backend_hrx_context * context
     REQUIRE(reshaped.valid());
     REQUIRE(reshaped.lease.buffer() != first.lease.buffer());
     std::vector<uint8_t> reshaped_bytes(source_bytes);
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, reshaped.lease.buffer(), 0,
+    require_hrx_status(hrx_synchronous_d2h_linear(ggml::hrx::device_queue(context->device->device), reshaped.lease.buffer(), 0,
                                          reshaped_bytes.data(), reshaped_bytes.size()));
     REQUIRE(reshaped_bytes != first_bytes);
     auto alias = weights.acquire(context->device->device, context->stream, transfers, source);
