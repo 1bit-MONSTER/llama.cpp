@@ -12839,6 +12839,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {64, 12, 256, 1}, 0, 0, 0, 0, 0, 0, 0, 0, 0, false));
     test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {64, 12, 3, 5}, 0, 0, 0, 0, 0, 0, 0, 2, 0, false));
     test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {64, 12, 200, 1}, 0, 0, 0, 0, 1, 55, 0, 0, 0, false));
+    // engine#3577 on device: a STRIDED source (tfrm 1 = a half-size view of a, keeping a's strides) padded at the end of
+    // the token axis, the encoder's V case. Packed sources can go to the add-on's hip.pad_f32; only a strided one is
+    // sure to reach common.pad_tail_f32 (review cl-flm)
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {128, 24, 400, 1}, 0, 0, 0, 0, 0, 56, 0, 0, 1, false));
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {128, 24, 6, 10}, 0, 0, 0, 0, 0, 0, 0, 2, 1, false));
 
     test_cases.emplace_back(new test_pad_reflect_1d());
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));

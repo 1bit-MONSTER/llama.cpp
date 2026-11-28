@@ -94,6 +94,14 @@ static bool match_pad_tail_f32(const DispatchMatchContext & context, DispatchMat
         static_cast<int64_t>(source_span / sizeof(float)) >= kPadTailMaxElements) {
         return false;
     }
+    // the kernel declares every stride as range(1, 2^30): a zero stride (a broadcast view) or a larger one would fail the
+    // kernel's compile instead of leaving the node to another route (review cl-flm)
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        const size_t stride = source->nb[i] / sizeof(float);
+        if (stride < 1 || static_cast<int64_t>(stride) >= kPadTailMaxElements) {
+            return false;
+        }
+    }
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kPadTailKernel);
     dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
