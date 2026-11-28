@@ -24,26 +24,27 @@ amdgpu.target<gfx11-generic> @ggml_pad_tail_f32_gfx11_wave64 {subgroup_size = 64
 
 config.decl @ggml.pad_tail_f32.ne0 : %value: index where [range(%value, 1, 1073741824)]
 config.decl @ggml.pad_tail_f32.ne1 : %value: index where [range(%value, 1, 1073741824)]
-config.decl @ggml.pad_tail_f32.ne2 : %value: index where [range(%value, 1, 1073741824)]
 config.decl @ggml.pad_tail_f32.stride0 : %value: index where [range(%value, 1, 1073741824)]
 config.decl @ggml.pad_tail_f32.stride1 : %value: index where [range(%value, 1, 1073741824)]
 config.decl @ggml.pad_tail_f32.stride2 : %value: index where [range(%value, 1, 1073741824)]
 config.decl @ggml.pad_tail_f32.stride3 : %value: index where [range(%value, 1, 1073741824)]
 
-kernel.def target(@ggml_pad_tail_f32_gfx11_wave64) export("ggml_pad_tail_f32") @ggml_pad_tail_f32(%element_count: index, %source_count: index, %source_span: index) {
+kernel.def target(@ggml_pad_tail_f32_gfx11_wave64) export("ggml_pad_tail_f32") @ggml_pad_tail_f32(%element_count: index, %source_count: index, %source_span: index, %source_ne2: index) {
   %one = index.constant 1 : index
   %twofiftysix = index.constant 256 : index
   %rounding = index.constant 255 : index
   %rounded = index.add %element_count, %rounding : index
   %workgroup_count = index.div %rounded, %twofiftysix : index
   kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
-} launch(%element_count: index, %source_count: index, %source_span: index, %source: buffer, %output: buffer) {
+} launch(%element_count: index, %source_count: index, %source_span: index, %source_ne2: index, %source: buffer, %output: buffer) {
   %count = index.assume %element_count [range(%element_count, 1, 1073741824)] : index
   %have = index.assume %source_count [range(%source_count, 1, 1073741824)] : index
   %span = index.assume %source_span [range(%source_span, 1, 1073741824)] : index
   %n0 = config.get @ggml.pad_tail_f32.ne0 : index
   %n1 = config.get @ggml.pad_tail_f32.ne1 : index
-  %n2 = config.get @ggml.pad_tail_f32.ne2 : index
+  // ne2 is a launch argument, not a compile parameter: for the encoder's V it is the token count, which changes with
+  // every input length (one program for all of them)
+  %n2 = index.assume %source_ne2 [range(%source_ne2, 1, 1073741824)] : index
   %s0 = config.get @ggml.pad_tail_f32.stride0 : index
   %s1 = config.get @ggml.pad_tail_f32.stride1 : index
   %s2 = config.get @ggml.pad_tail_f32.stride2 : index

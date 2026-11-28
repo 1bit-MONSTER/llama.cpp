@@ -104,12 +104,16 @@ static bool match_pad_tail_f32(const DispatchMatchContext & context, DispatchMat
     }
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kPadTailKernel);
+    // Dynamic: element_count, source_count, source_span and source_ne2 all follow the input length; Exact would
+    // compile one program per length (PR #523 review)
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
     dispatch.kernel.integer_parameters.emplace("source_count", source->element_count);
     dispatch.kernel.integer_parameters.emplace("source_span", static_cast<int64_t>(source_span / sizeof(float)));
+    // the source token count (ne2 for the encoder's V): a launch argument, so one program serves every input length
+    dispatch.kernel.integer_parameters.emplace("source_ne2", source->ne[2]);
     dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.ne0", std::to_string(source->ne[0]));
     dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.ne1", std::to_string(source->ne[1]));
-    dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.ne2", std::to_string(source->ne[2]));
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         dispatch.kernel.compile_parameters.emplace("ggml.pad_tail_f32.stride" + std::to_string(i),
                                                    std::to_string(source->nb[i] / sizeof(float)));

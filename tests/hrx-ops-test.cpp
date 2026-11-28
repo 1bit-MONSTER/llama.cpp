@@ -514,6 +514,37 @@ static void run_pad_tail_schedule_checks() {
             !one(kernels, "loom_libs:ggml_pad_tail_f32"));
     REQUIRE(!plan_for({ 64, 12, 200, 2 }, 0, 0, 56, 0, false, kernels) ||
             !one(kernels, "loom_libs:ggml_pad_tail_f32"));
+
+    // PR #523 review: one program for every input length. The encoder's V pad at two token counts (and two mask
+    // lengths) must compile identically - the token-dependent values are launch arguments of a Dynamic kernel.
+    const auto pad_spec = [](int64_t tokens, int rp2) {
+        ggml_init_params params = {};
+        params.mem_size         = 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        ggml_tensor * qkv   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3 * 64 * 12, tokens);
+        ggml_tensor * v     = ggml_view_3d(ctx, qkv, 64, 12, tokens, 64 * sizeof(float), qkv->nb[1],
+                                           2 * 64 * 12 * sizeof(float));
+        ggml_tensor * out   = ggml_pad_ext(ctx, v, 0, 0, 0, 0, 0, rp2, 0, 0);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, out);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
+        REQUIRE(scheduler.plan().dispatches.size() == 1);
+        ggml::hrx::KernelSpecialization spec = scheduler.plan().dispatches.front().kernel;
+        ggml_free(ctx);
+        return spec;
+    };
+    const ggml::hrx::KernelSpecialization short_input = pad_spec(7, 25);
+    const ggml::hrx::KernelSpecialization long_input  = pad_spec(200, 56);
+    REQUIRE(kernel_name_for_id(short_input.kernel_id) == "loom_libs:ggml_pad_tail_f32");
+    REQUIRE(short_input.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+    REQUIRE(short_input.compile_parameters == long_input.compile_parameters);
+    REQUIRE(short_input.integer_parameters.at("source_ne2") == 7);
+    REQUIRE(long_input.integer_parameters.at("source_ne2") == 200);
 }
 
 // Each weight is bound at least once, and every binding uses `layout`.
