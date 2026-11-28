@@ -467,6 +467,11 @@ static void run_pad_tail_schedule_checks() {
     // whose token stride is the fused row (3 * head_dim * heads); otherwise a packed tensor
     const auto plan_for = [](const std::array<int64_t, 4> & ne, int lp2, int rp0, int rp2, int rp3, bool v_view,
                              std::vector<std::string> & kernels) {
+// engine#3491: Inkling's MoE SITU activation scales and sigmoids `gate` / `up`, views of the fused gate_up output
+// (1152 of every 2304 columns). common.scale_strided_f32 / common.unary_strided_f32 densify the view and run the packed
+// kernel; a packed input keeps the packed matcher. Host only: the plan is built for gfx1151 without a device.
+static void run_strided_elementwise_schedule_checks() {
+    const auto plan_for = [](bool view, bool sigmoid, std::vector<std::string> & kernels) {
         ggml_init_params params = {};
         params.mem_size         = 1024 * 1024;
         params.no_alloc         = true;
@@ -485,6 +490,14 @@ static void run_pad_tail_schedule_checks() {
             src = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
         }
         ggml_tensor * out = ggml_pad_ext(ctx, src, 0, rp0, 0, 0, lp2, rp2, 0, rp3);
+        ggml_tensor * x = nullptr;
+        if (view) {
+            ggml_tensor * gate_up = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2304, 8);
+            x = ggml_view_2d(ctx, gate_up, 1152, 8, gate_up->nb[1], 0);
+        } else {
+            x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1152, 8);
+        }
+        ggml_tensor * out   = sigmoid ? ggml_sigmoid(ctx, x) : ggml_scale(ctx, x, 0.04f);
         ggml_cgraph * graph = ggml_new_graph(ctx);
         ggml_build_forward_expand(graph, out);
         ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
@@ -534,6 +547,17 @@ static void run_pad_tail_schedule_checks() {
             !one(kernels, "loom_libs:ggml_pad_tail_f32"));
     REQUIRE(!plan_for({ 64, 12, 200, 2 }, 0, 0, 56, 0, false, kernels) ||
             !one(kernels, "loom_libs:ggml_pad_tail_f32"));
+    const auto ends_with = [](const std::vector<std::string> & kernels, const char * last) {
+        return !kernels.empty() && kernels.back() == last;
+    };
+    std::vector<std::string> kernels;
+    // the view: a densify copy, then the packed kernel
+    REQUIRE(plan_for(true, false, kernels) && kernels.size() == 2 &&
+            ends_with(kernels, "loom_libs:ggml_scale_bias_f32"));
+    REQUIRE(plan_for(true, true, kernels) && kernels.size() == 2 && ends_with(kernels, "loom_libs:ggml_unary_f32"));
+    // packed: one dispatch, as before (no densify)
+    REQUIRE(plan_for(false, false, kernels) && kernels.size() == 1);
+    REQUIRE(plan_for(false, true, kernels) && kernels.size() == 1 && ends_with(kernels, "loom_libs:ggml_unary_f32"));
 }
 
 // Each weight is bound at least once, and every binding uses `layout`.
@@ -9541,6 +9565,7 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
     suite.host_case("softmax_rows.scale.schedule", [] { run_softmax_rows_scale_schedule_checks(); });   // engine#3491
     suite.host_case("pad_tail.schedule", [] { run_pad_tail_schedule_checks(); });   // engine#3577
+    suite.host_case("strided_elementwise.schedule", [] { run_strided_elementwise_schedule_checks(); });   // engine#3491
     // engine#3383: the fallback takes an alternate only through a full ordered layout alias, never through a reordering
     // view or a write that reuses the storage.
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
