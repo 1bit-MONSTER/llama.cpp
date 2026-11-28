@@ -96,9 +96,10 @@ static bool match_pad_tail_f32(const DispatchMatchContext & context, DispatchMat
     }
     // the kernel declares every stride as range(1, 2^30): a zero stride (a broadcast view) or a larger one would fail the
     // kernel's compile instead of leaving the node to another route (review cl-flm)
+    // (checked on the stride as emitted below: a size-1 axis is emitted as 1, whatever ggml set it to)
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-        const size_t stride = source->nb[i] / sizeof(float);
-        if (stride < 1 || static_cast<int64_t>(stride) >= kPadTailMaxElements) {
+        const int64_t stride = source->ne[i] == 1 ? 1 : static_cast<int64_t>(source->nb[i] / sizeof(float));
+        if (stride < 1 || stride >= kPadTailMaxElements) {
             return false;
         }
     }
