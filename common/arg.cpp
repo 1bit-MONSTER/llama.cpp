@@ -1,4 +1,5 @@
 #include "arg.h"
+#include "onebit-no-gpu.h"
 
 #include "build-info.h"
 #include "chat.h"
@@ -1303,6 +1304,7 @@ static utf8_argv make_utf8_argv() {
 #endif
 
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
+    onebit_no_gpu_disable_hrx(argc, argv);   // engine#3590: before anything builds the backend registry
 #ifdef _WIN32
     auto utf8 = make_utf8_argv();
     // repair argv only when it matches the process command line

@@ -1958,6 +1958,12 @@ static const ggml_backend_reg_i registry_i = { registry_name, registry_device_co
 
 static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
     auto         context = std::make_unique<ggml_backend_hrx_reg_context>();
+    // engine#3590: no GPU device was asked for, so do not open /dev/kfd. HRX stays registered with zero devices.
+    if (environment_flag_enabled("GGML_HRX_DISABLE")) {
+        GGML_LOG_INFO("ggml_hrx: GGML_HRX_DISABLE is set (no GPU device requested): the HRX runtime is not "
+                      "initialised and /dev/kfd is not opened (engine#3590)\n");
+        return context;
+    }
     if (environment_flag_enabled("GGML_HRX_LOG_DEVICE_EVENTS")) {
         hrx_device_event_sink_t sink = { log_hrx_device_event, nullptr };
         if (!HRX_CHECK(hrx_runtime_set_device_event_sink(sink))) {
