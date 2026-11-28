@@ -13,11 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "dispatch-small-rows.h"
+#include "dispatch-mul-mat-common.h"
 
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <sstream>
@@ -102,11 +104,14 @@ static bool match_softmax_rows(const DispatchMatchContext & context, DispatchMat
         return false;
     }
     const SoftMaxParams * params = op_params_as<SoftMaxParams>(context.root_node->params);
-    if (params == nullptr || params->scale != 1.0f || params->max_bias != 0.0f) {
+    // engine#3491: a positive scale is the kernel's compile parameter (Inkling's loop controller softmaxes 2..5 logits
+    // at scale 1/48); a mask (a second input) and ALiBi (max_bias) stay refused
+    if (params == nullptr || !std::isfinite(params->scale) || params->scale <= 0.0f || params->max_bias != 0.0f) {
         return false;
     }
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kSoftmaxRowsKernel);
+    dispatch.kernel.compile_parameters.emplace("ggml.softmax_rows_f32.scale", common_to_config_value(params->scale));
     dispatch.kernel.integer_parameters.emplace("column_count", input->ne[0]);
     dispatch.kernel.integer_parameters.emplace("row_count", rows_of(*input));
     dispatch.bindings.push_back({ input->id, 0, input->byte_count });
