@@ -12485,6 +12485,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {16, 2, 32, 1}, mask, sinks, GGML_TYPE_F16, {1, 1}, 0.1f, 0.0f, true));
         }
     }
+    // engine#3491: Inkling's loop controller softmaxes 2..5 logits per row at scale 1/48, no mask (HRX softmax_rows)
+    for (int64_t ne0 : {2, 3, 4, 5}) {
+        for (int64_t ne1 : {1, 3, 4}) {
+            test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {ne0, ne1, 369, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f/48.0f, 0.0f));
+        }
+    }
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {16, 2, 32, 1}, true,  true,  GGML_TYPE_F32, {1, 1}, 0.1f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {16, 2, 32, 1}, true,  false, GGML_TYPE_F16, {1, 1}, 0.1f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {16, 2, 32, 1}, false, true,  GGML_TYPE_F32, {1, 1}, 0.1f, 0.0f));

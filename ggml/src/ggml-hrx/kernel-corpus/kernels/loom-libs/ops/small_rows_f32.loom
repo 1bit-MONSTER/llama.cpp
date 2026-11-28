@@ -13,13 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Row ops for short rows (MoE routers, head groups): SOFT_MAX (no mask, scale 1), SUM_ROWS,
+// Row ops for short rows (MoE routers, head groups): SOFT_MAX (no mask, scale > 0), SUM_ROWS,
 // ARGSORT and GET_ROWS; and NORM (LayerNorm without affine, as encoders such as ModernBERT use),
 // one workgroup per row. They run where a model's router or head-group reduction would
 // otherwise leave the GPU for a few dozen floats per token. One workitem per row (softmax,
 // sum) or per element (argsort rank, gather); rows are short, so no cross-lane reduction.
 
 amdgpu.target<gfx11-generic> @ggml_small_rows_f32_gfx11_wave64 {subgroup_size = 64}
+
+// engine#3491: SOFT_MAX's scale (softmax(scale * x)). Positive only, so the row's largest x is also its largest
+// scale * x and the max pass needs no change; exp(scale * (x - max)) is then the shifted term.
+// 1 for an unscaled softmax.
+config.decl @ggml.softmax_rows_f32.scale : f32
 
 kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_softmax_rows_f32") @ggml_softmax_rows_f32(%column_count: index, %row_count: index) {
   %one = index.constant 1 : index
@@ -36,6 +41,7 @@ kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_softmax_rows_f
   %c64 = index.constant 64 : index
   %c0_f32 = scalar.constant 0.0 : f32
   %lowest = scalar.constant -3.40282347e+38 : f32
+  %scale = config.get @ggml.softmax_rows_f32.scale : f32
   %zero_offset = index.constant 0 : offset
   %group = kernel.workgroup.id<x> : index
   %lane = kernel.workitem.id<x> : index
@@ -54,7 +60,8 @@ kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_softmax_rows_f
   %total = scf.for %column = [%c0 to %cols step %c1](%running = %c0_f32 : f32) -> (f32) {
     %value = view.load %input_view[%row, %column] : view<[%rows]x[%cols]xf32> -> f32
     %shifted = scalar.subf %value, %maximum : f32
-    %exponential = scalar.expf<afn> %shifted : f32
+    %scaled = scalar.mulf %shifted, %scale : f32
+    %exponential = scalar.expf<afn> %scaled : f32
     %next = scalar.addf %running, %exponential : f32
     scf.yield %next : f32
   }
@@ -62,7 +69,8 @@ kernel.def target(@ggml_small_rows_f32_gfx11_wave64) export("ggml_softmax_rows_f
     %unused = scf.for %column = [%c0 to %cols step %c1](%carry = %c0_f32 : f32) -> (f32) {
       %value = view.load %input_view[%row, %column] : view<[%rows]x[%cols]xf32> -> f32
       %shifted = scalar.subf %value, %maximum : f32
-      %exponential = scalar.expf<afn> %shifted : f32
+      %scaled = scalar.mulf %shifted, %scale : f32
+      %exponential = scalar.expf<afn> %scaled : f32
       %probability = scalar.divf %exponential, %total : f32
       view.store %probability, %output_view[%row, %column] : f32, view<[%rows]x[%cols]xf32>
       scf.yield %carry : f32
