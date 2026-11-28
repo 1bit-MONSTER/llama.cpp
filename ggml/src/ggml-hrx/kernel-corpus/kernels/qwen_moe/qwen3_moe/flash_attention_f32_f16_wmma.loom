@@ -69,13 +69,13 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
   %attention_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %head_size_f32 : f32
   %c0_f16 = scalar.constant 0.0 : f16
   %c1_f32 = scalar.constant 1.0 : f32
-  %output_zero0 = vector.constant 0.0 : vector<4xf16>
-  %output_zero1 = vector.constant 0.0 : vector<4xf16>
-  %output_zero2 = vector.constant 0.0 : vector<4xf16>
-  %output_zero3 = vector.constant 0.0 : vector<4xf16>
-  %c0_f16x8 = vector.constant 0.0 : vector<8xf16>
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
-  %negative_f32x4 = vector.constant -1e+30 : vector<4xf32>
+  %output_zero0 = vector.splatf 0.0 : vector<4xf16>
+  %output_zero1 = vector.splatf 0.0 : vector<4xf16>
+  %output_zero2 = vector.splatf 0.0 : vector<4xf16>
+  %output_zero3 = vector.splatf 0.0 : vector<4xf16>
+  %c0_f16x8 = vector.splatf 0.0 : vector<8xf16>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
+  %negative_f32x4 = vector.splatf -1e+30 : vector<4xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -209,7 +209,7 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
       %score_key_origin0 = index.add %key_origin, %subgroup_score_column : index
       %last_full_key_tile_start = index.sub %bounded_key_value_token_count, %c15 : index
       %score_key_origin = index.assume %score_key_origin0 [lt(%score_key_origin0, %last_full_key_tile_start)] : index
-      %score_init_values = vector.constant 0.0 : vector<4xf32>
+      %score_init_values = vector.splatf 0.0 : vector<4xf32>
       %score_init = vector.fragment<init> %score_init_values shape [%m, %n] : vector<4xf32>
       %score_fragment = scf.for %head_tile = [%c0 to %c128 step %c16](%score_accumulator = %score_init : vector<4xf32>) -> (vector<4xf32>) unroll schedule(recurrence) {
         %key_channel = index.add %key_value_head_base, %head_tile : index
@@ -336,7 +336,7 @@ kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_
     scf.if %tail_score_wave {
       %tail_score_subgroup = index.assume %subgroup [range(%subgroup, 0, 1)] : index
       %tail_score_column = index.mul %tail_score_subgroup, %c16 : index
-      %tail_score_init_values = vector.constant 0.0 : vector<4xf32>
+      %tail_score_init_values = vector.splatf 0.0 : vector<4xf32>
       %tail_score_init = vector.fragment<init> %tail_score_init_values shape [%m, %n] : vector<4xf32>
       %tail_score_fragment = scf.for %head_tile = [%c0 to %c128 step %c16](%score_accumulator = %tail_score_init : vector<4xf32>) -> (vector<4xf32>) unroll {
         %key_fragment = vector.fragment.load<lhs> %tail_key_value_stage_view[%tail_score_column, %head_tile] shape [%m, %k] : view<32x128xf16> -> vector<16xf16>
@@ -621,7 +621,7 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_selected_row_case {
   %output = check.generate.fill value(-1.0) : tensor<1x1x128xf32>
   %expected = check.generate.iota offset(0.0) step(0.125) : tensor<1x1x128xf32>
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<1x1x128xf32>, tensor<64x1x128xf16>, tensor<64x1x128xf16>, tensor<1x64xf16>, tensor<1x1x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>, tensor<1x1x128xf32>
   check.return
 }
 
@@ -640,7 +640,7 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_multirow_selected_case
   %output = check.generate.fill value(-1.0) : tensor<4x1x128xf32>
   %expected = check.generate.iota offset(0.0) step(0.125) : tensor<4x1x128xf32>
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<4x1x128xf32>, tensor<32x1x128xf16>, tensor<32x1x128xf16>, tensor<4x32xf16>, tensor<4x1x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<4x1x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<4x1x128xf32>, tensor<4x1x128xf32>
   check.return
 }
 
@@ -660,7 +660,7 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_multirow_online_case {
   %output = check.generate.fill value(-1.0) : tensor<4x1x128xf32>
   %expected = check.generate.iota offset(0.01818677224124075) step(0.000244140625) : tensor<4x1x128xf32>
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<4x1x128xf32>, tensor<32x1x128xf16>, tensor<32x1x128xf16>, tensor<4x32xf16>, tensor<4x1x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<4x1x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<4x1x128xf32>, tensor<4x1x128xf32>
   check.return
 }
 
@@ -709,10 +709,10 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_multirow_differential_
   kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row3](%query_token_count, %key_value_token_count, %row3, %query, %mask, %row_query, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%c1, %key_value_token_count](%c1, %key_value_token_count, %row_query, %key, %value, %row_mask, %expected3) : [index, index](index, index, tensor<1x32x128xf32>, tensor<14x4x128xf16>, tensor<14x4x128xf16>, tensor<1x14xf16>, tensor<1x32x128xf32>)
   kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row3](%query_token_count, %key_value_token_count, %row3, %actual, %mask, %actual3, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
-  check.expect.close actual(%actual0) expected(%expected0) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>
-  check.expect.close actual(%actual1) expected(%expected1) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>
-  check.expect.close actual(%actual2) expected(%expected2) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>
-  check.expect.close actual(%actual3) expected(%expected3) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>
+  check.expect.approximate actual(%actual0) expected(%expected0) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>, tensor<1x32x128xf32>
+  check.expect.approximate actual(%actual1) expected(%expected1) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>, tensor<1x32x128xf32>
+  check.expect.approximate actual(%actual2) expected(%expected2) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>, tensor<1x32x128xf32>
+  check.expect.approximate actual(%actual3) expected(%expected3) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>, tensor<1x32x128xf32>
   check.return
 }
 
@@ -729,7 +729,7 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_query_tail_case {
   %output = check.generate.fill value(-1.0) : tensor<17x1x128xf32>
   %expected = check.generate.fill value(2.0) : tensor<17x1x128xf32>
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<17x1x128xf32>, tensor<64x1x128xf16>, tensor<64x1x128xf16>, tensor<17x64xf16>, tensor<17x1x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<17x1x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<17x1x128xf32>, tensor<17x1x128xf32>
   check.return
 }
 
@@ -746,7 +746,7 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_key_value_tail_case {
   %output = check.generate.fill value(-1.0) : tensor<1x1x128xf32>
   %expected = check.generate.iota offset(1024.0) step(0.125) : tensor<1x1x128xf32>
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<1x1x128xf32>, tensor<65x1x128xf16>, tensor<65x1x128xf16>, tensor<1x65xf16>, tensor<1x1x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>, tensor<1x1x128xf32>
   check.return
 }
 
@@ -763,7 +763,7 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_pruned_block_case {
   %output = check.generate.fill value(-1.0) : tensor<1x1x128xf32>
   %expected = check.generate.iota offset(0.0) step(0.125) : tensor<1x1x128xf32>
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<1x1x128xf32>, tensor<128x1x128xf16>, tensor<128x1x128xf16>, tensor<1x128xf16>, tensor<1x1x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>, tensor<1x1x128xf32>
   check.return
 }
 
@@ -777,7 +777,7 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case {
   %output = check.generate.fill value(1.0) : tensor<[%query_token_count]x32x128xf32>
   %expected = check.generate.fill value(0.0) : tensor<[%query_token_count]x32x128xf32>
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<[%query_token_count]x32x128xf32>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%query_token_count]x[%key_value_token_count]xf16>, tensor<[%query_token_count]x32x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%query_token_count]x32x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%query_token_count]x32x128xf32>, tensor<[%query_token_count]x32x128xf32>
   check.return
 }
 
@@ -794,7 +794,7 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_pruned_half_benchmark_
   %output = check.generate.fill value(1.0) : tensor<512x32x128xf32>
   %expected = check.generate.fill value(0.0) : tensor<512x32x128xf32>
   kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<512x32x128xf32>, tensor<512x4x128xf16>, tensor<512x4x128xf16>, tensor<512x512xf16>, tensor<512x32x128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<512x32x128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<512x32x128xf32>, tensor<512x32x128xf32>
   check.return
 }
 

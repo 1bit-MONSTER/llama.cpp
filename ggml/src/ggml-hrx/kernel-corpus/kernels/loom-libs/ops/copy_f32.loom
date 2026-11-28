@@ -92,7 +92,7 @@ kernel.def target(@ggml_copy_f16_k16_major_target) export("ggml_copy_f16_k16_maj
       %source = buffer.view %input_noalias[%c0] : buffer -> view<[%tokens]x[%width]xf32>
       %loaded = vector.load %source[%bounded_row, %bounded_k] : view<[%tokens]x[%width]xf32> -> vector<8xf32>
       // Stored as value * 2^-6: an activation above the f16 maximum stays finite, the reader scales back (engine #1962).
-      %f16_range_prescale = vector.constant 0.015625 : vector<8xf32>
+      %f16_range_prescale = vector.splatf 0.015625 : vector<8xf32>
       %prescaled = vector.mulf %loaded, %f16_range_prescale : vector<8xf32>
       %converted = vector.fptrunc %prescaled : vector<8xf32> to vector<8xf16>
       scf.yield %converted : vector<8xf16>
@@ -175,7 +175,7 @@ check.case public @ggml_copy_f32_small_case {
   %output = check.generate.fill value(0.0) : tensor<4xf32>
   %expected = check.generate.iota offset(-2.0) step(1.0) : tensor<4xf32>
   kernel.launch @ggml_copy_f32[%four](%four, %source, %output) : [index](index, tensor<4xf32>, tensor<4xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<4xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<4xf32>, tensor<4xf32>
   check.return
 }
 
@@ -209,7 +209,7 @@ kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_f32_f16") @ggml
   scf.if %valid {
     %values = vector.load %source_view[%linear] : view<[%count]xf32> -> vector<4xf32>
     // Stored as value * 2^-6: an activation above the f16 maximum stays finite, the reader scales back (engine #1962).
-    %f16_range_prescale = vector.constant 0.015625 : vector<4xf32>
+    %f16_range_prescale = vector.splatf 0.015625 : vector<4xf32>
     %prescaled = vector.mulf %values, %f16_range_prescale : vector<4xf32>
     %converted = vector.fptrunc %prescaled : vector<4xf32> to vector<4xf16>
     vector.store %converted, %output_view[%linear] : vector<4xf16>, view<[%count]xf16>
@@ -223,7 +223,7 @@ check.case public @ggml_copy_f32_f16_small_case {
   %output = check.generate.fill value(0.0) : tensor<12xf16>
   %expected = check.generate.iota offset(-0.03125) step(0.0078125) : tensor<12xf16>
   kernel.launch @ggml_copy_f32_f16[%count](%count, %source, %output) : [index](index, tensor<12xf32>, tensor<12xf16>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<12xf16>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<12xf16>, tensor<12xf16>
   check.return
 }
 
@@ -297,7 +297,7 @@ check.case public @ggml_copy_strided_source_f32_small_case {
   %output = check.generate.fill value(-1.0) : tensor<6xf32>
   %expected = check.generate.iota offset(0.0) step(1.0) period(3) : tensor<6xf32>
   kernel.launch @ggml_copy_strided_source_f32[%six, %eight](%six, %eight, %source, %output) : [index, index](index, index, tensor<10xf32>, tensor<6xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<6xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<6xf32>, tensor<6xf32>
   check.return
 }
 

@@ -64,7 +64,7 @@ kernel.def target(@qwen3_moe_routed_down_next_norm_q8_gfx11_wave32) @qwen3_moe_r
   %c0_f32 = scalar.constant 0.0 : f32
   %c1_f32 = scalar.constant 1.0 : f32
   %c127 = scalar.constant 127.0 : f32
-  %c0_f32x8 = vector.constant 0.0 : vector<8xf32>
+  %c0_f32x8 = vector.splatf 0.0 : vector<8xf32>
   %active_token = index.cmp ult, %token0, %bounded_token_count : index
   %safe_token0 = scf.select %active_token, %token0, %c0 : index
   %token, %launch_token_count = index.assume %safe_token0, %bounded_token_count [lt(%safe_token0, %bounded_token_count)] : index, index
@@ -91,7 +91,7 @@ kernel.def target(@qwen3_moe_routed_down_next_norm_q8_gfx11_wave32) @qwen3_moe_r
       %routed_f16 = vector.load %routed_output_view[%assignment, %channel] : view<[%assignment_count]x[%output_size]xf16> -> vector<8xf16>
       // engine #2186: the routed down plane is stored at 2^-6 (see mul_mat_id_swiglu_f16_f16_wmma_body.loom)
       %routed_stored = vector.extf %routed_f16 : vector<8xf16> to vector<8xf32>
-      %plane_unscale = vector.constant 64.0 : vector<8xf32>
+      %plane_unscale = vector.splatf 64.0 : vector<8xf32>
       %routed = vector.mulf %routed_stored, %plane_unscale : vector<8xf32>
       %route_weight = view.load %route_weights_view[%token, %route] : view<[%launch_token_count]x[%route_count]xf32> -> f32
       %route_weight_x8 = vector.splat %route_weight : vector<8xf32>
@@ -232,7 +232,7 @@ check.case public @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_di
   kernel.launch @qwen3_moe_rmsnorm_f32[%token_count](%token_count, %expected_hidden_state, %next_norm_weight, %normalized) : [index](index, tensor<14x2048xf32>, tensor<2048xf32>, tensor<14x2048xf32>)
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %normalized, %expected_q8) : [index, index](index, index, tensor<14x2048xf32>, tensor<14x2304xi8>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4[%token_count](%token_count, %route_weights, %routed_output, %actual_hidden_state, %next_norm_weight, %actual_q8) : [index](index, tensor<14x8xf32>, tensor<14x8x2048xf16>, tensor<14x2048xf32>, tensor<2048xf32>, tensor<14x2304xi8>)
-  check.expect.close actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<14x2048xf32>
+  check.expect.approximate actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<14x2048xf32>, tensor<14x2048xf32>
   check.expect.equal actual(%actual_q8) expected(%expected_q8) : tensor<14x2304xi8>
   check.return
 }

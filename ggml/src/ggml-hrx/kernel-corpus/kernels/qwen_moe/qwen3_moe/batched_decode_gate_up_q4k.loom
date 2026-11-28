@@ -284,7 +284,7 @@ check.case public @qwen3_moe_batched_decode_gate_up_q4k_rows2_differential_case 
   kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %assignment_ordinals, %queue_counts, %queue_descriptors) : [index, index, index, index](index, index, index, index, tensor<2x8xi32>, tensor<16xi32>, tensor<4xi32>, tensor<4x32x4xi32>)
   kernel.launch @qwen3_moe_routed_gate_up_swiglu_q4k_q8[%token_count, %route_count, %route_stride, %expert_count, %output_size](%token_count, %route_count, %route_stride, %expert_count, %output_size, %q8_input, %route_ids, %gate_weight, %up_weight, %expected) : [index, index, index, index, index](index, index, index, index, index, tensor<2x576xi8>, tensor<2x8xi32>, tensor<32x32x2x144xi8>, tensor<32x32x2x144xi8>, tensor<2x8x32xf32>)
   kernel.launch @qwen3_moe_batched_decode_gate_up_q4k_rows2[%descriptor_count, %queue_ordinal, %token_count, %route_count, %expert_count, %output_size](%descriptor_count, %queue_ordinal, %token_count, %route_count, %expert_count, %output_size, %queue_descriptors, %assignment_ordinals, %q8_input, %gate_weight, %up_weight, %actual) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<4x32x4xi32>, tensor<16xi32>, tensor<2x576xi8>, tensor<32x32x2x144xi8>, tensor<32x32x2x144xi8>, tensor<2x8x32xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(0.25) rtol(9.9999999999999995e-07) nan(same) : tensor<2x8x32xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(0.25) rtol(9.9999999999999995e-07) nan(same) : tensor<2x8x32xf32>, tensor<2x8x32xf32>
   check.return
 }
 

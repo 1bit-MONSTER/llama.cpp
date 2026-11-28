@@ -210,8 +210,8 @@ check.case public @ggml_zaya_cca_qk_norm_decode_exact_case {
   %q_expected = check.generate.fill value(1.0) : tensor<256xf32>
   %k_expected = check.generate.fill value(3.0) : tensor<128xf32>
   kernel.launch @ggml_zaya_cca_qk_norm_decode_f32[](%conv, %qraw, %kraw, %k_scale, %q_out, %k_out) : [](tensor<384xf32>, tensor<256xf32>, tensor<128xf32>, tensor<2xf32>, tensor<256xf32>, tensor<128xf32>)
-  check.expect.close actual(%q_out) expected(%q_expected) atol(1.0e-5) rtol(1.0e-5) nan(same) : tensor<256xf32>
-  check.expect.close actual(%k_out) expected(%k_expected) atol(1.0e-5) rtol(1.0e-5) nan(same) : tensor<128xf32>
+  check.expect.approximate actual(%q_out) expected(%q_expected) atol(1.0e-5) rtol(1.0e-5) nan(same) : tensor<256xf32>, tensor<256xf32>
+  check.expect.approximate actual(%k_out) expected(%k_expected) atol(1.0e-5) rtol(1.0e-5) nan(same) : tensor<128xf32>, tensor<128xf32>
   check.return
 }
 
@@ -231,7 +231,7 @@ check.case public @ggml_zaya_cca_qk_norm_decode_random_case {
   %k_expected = check.generate.fill value(7.0) : tensor<128xf32>
   kernel.launch @ggml_zaya_cca_qk_norm_decode_reference_f32[](%conv, %qraw, %kraw, %k_scale, %q_expected, %k_expected) : [](tensor<384xf32>, tensor<256xf32>, tensor<128xf32>, tensor<2xf32>, tensor<256xf32>, tensor<128xf32>)
   kernel.launch @ggml_zaya_cca_qk_norm_decode_f32[](%conv, %qraw, %kraw, %k_scale, %q_out, %k_out) : [](tensor<384xf32>, tensor<256xf32>, tensor<128xf32>, tensor<2xf32>, tensor<256xf32>, tensor<128xf32>)
-  check.expect.close actual(%q_out) expected(%q_expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<256xf32>
-  check.expect.close actual(%k_out) expected(%k_expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<128xf32>
+  check.expect.approximate actual(%q_out) expected(%q_expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<256xf32>, tensor<256xf32>
+  check.expect.approximate actual(%k_out) expected(%k_expected) atol(1.0e-5) rtol(1.0e-4) nan(same) : tensor<128xf32>, tensor<128xf32>
   check.return
 }

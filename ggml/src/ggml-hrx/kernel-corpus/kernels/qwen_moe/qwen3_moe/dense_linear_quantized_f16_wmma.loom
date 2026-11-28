@@ -71,9 +71,9 @@ func.def inline @qwen3_moe_dense_q4k_wmma_vector4(%weight: buffer, %row_byte_bas
   %code_offset = index.constant 16 : offset
   %c2_i32 = scalar.constant 2 : i32
   %c4_i32 = scalar.constant 4 : i32
-  %c15 = vector.constant 15 : vector<1xi32>
-  %c48 = vector.constant 48 : vector<1xi32>
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %c15 = vector.splati 15 : vector<1xi32>
+  %c48 = vector.splati 48 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %bounded_group = index.assume %q4_group [range(%q4_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
   %block_byte_add = index.scale %q4_block, %block_bytes : index, offset -> offset
@@ -332,9 +332,9 @@ template.def<@qwen3_moe.dense_quantized.body> device @qwen3_moe_dense_linear_qua
   %activation_stage_bytes = index.constant 2560 : offset
   %wave_result_stage_bytes = index.constant 512 : offset
   %result_stage_bytes = index.constant 1024 : offset
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
-  %zero_accumulator = vector.constant 0.0 : vector<8xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
+  %zero_accumulator = vector.splatf 0.0 : vector<8xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -655,7 +655,7 @@ check.case public @qwen3_moe_dense_linear_q4k_f16_wmma_differential_case {
   kernel.launch @qwen3_moe_build_expert_table[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expert_table) : [index, index, index, index](index, index, index, index, tensor<33x1xi32>, tensor<34xi32>)
   kernel.launch @qwen3_moe_routed_linear_q4k_f16_wmma[%token_count](%token_count, %input, %expert_table, %weight, %expected) : [index](index, tensor<33x512xf32>, tensor<34xi32>, tensor<1x65x2x144xi8>, tensor<33x65xf32>)
   kernel.launch @qwen3_moe_dense_linear_q4k_f16_wmma[%token_count](%token_count, %input, %weight, %actual) : [index](index, tensor<33x512xf32>, tensor<1x65x2x144xi8>, tensor<33x65xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(0.01) rtol(0.01) nan(same) : tensor<33x65xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(0.01) rtol(0.01) nan(same) : tensor<33x65xf32>, tensor<33x65xf32>
   check.return
 }
 
@@ -674,7 +674,7 @@ check.case public @qwen3_moe_dense_linear_q6k_f16_wmma_differential_case {
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %input, %q8_input) : [index, index](index, index, tensor<33x512xf32>, tensor<33x576xi8>)
   kernel.launch @ggml_linear_q6k_q8_1_x4[%token_count, %input_size, %output_size](%token_count, %input_size, %output_size, %q8_input, %weight, %expected) : [index, index, index](index, index, index, tensor<33x576xi8>, tensor<65x2x210xi8>, tensor<33x65xf32>)
   kernel.launch @qwen3_moe_dense_linear_q6k_f16_wmma[%token_count](%token_count, %input, %weight, %actual) : [index](index, tensor<33x512xf32>, tensor<65x2x210xi8>, tensor<33x65xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<33x65xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<33x65xf32>, tensor<33x65xf32>
   check.return
 }
 
@@ -700,8 +700,8 @@ check.case public @qwen3_moe_dense_linear_q4k_f16_wmma_o_differential_case {
   kernel.launch @qwen3_moe_routed_linear_q4k_f16_wmma[%token_count](%token_count, %input, %expert_table, %weight, %expected) : [index](index, tensor<1x4096xf32>, tensor<2xi32>, tensor<1x2048x16x144xi8>, tensor<1x2048xf32>)
   kernel.launch @qwen3_moe_dense_linear_q4k_f16_wmma[%token_count](%token_count, %input, %weight, %actual) : [index](index, tensor<1x4096xf32>, tensor<1x2048x16x144xi8>, tensor<1x2048xf32>)
   kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %weight, %direct) : [index](index, tensor<1x4608xi8>, tensor<1x2048x16x144xi8>, tensor<1x2048xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(0.01) rtol(0.01) nan(same) : tensor<1x2048xf32>
-  check.expect.close actual(%direct) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<1x2048xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(0.01) rtol(0.01) nan(same) : tensor<1x2048xf32>, tensor<1x2048xf32>
+  check.expect.approximate actual(%direct) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<1x2048xf32>, tensor<1x2048xf32>
   check.return
 }
 
@@ -718,7 +718,7 @@ check.case public @qwen3_moe_dense_linear_q4k_q8_1_x4_differential_case {
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %input, %q8_input) : [index, index](index, index, tensor<2x512xf32>, tensor<2x576xi8>)
   kernel.launch @qwen3_moe_dense_linear_q4k_f16_wmma[%token_count](%token_count, %input, %weight, %expected) : [index](index, tensor<2x512xf32>, tensor<65x2x144xi8>, tensor<2x65xf32>)
   kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %weight, %actual) : [index](index, tensor<2x576xi8>, tensor<65x2x144xi8>, tensor<2x65xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<2x65xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(0.25) rtol(0.01) nan(same) : tensor<2x65xf32>, tensor<2x65xf32>
   check.return
 }
 
@@ -735,7 +735,7 @@ check.case public @qwen3_moe_dense_linear_q4k_q8_1_x4_accumulation_case {
   %expected = check.generate.fill value(1.25) : tensor<2x65xf32>
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %input, %q8_input) : [index, index](index, index, tensor<2x512xf32>, tensor<2x576xi8>)
   kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %weight, %actual) : [index](index, tensor<2x576xi8>, tensor<65x2x144xi8>, tensor<2x65xf32>)
-  check.expect.close actual(%actual) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<2x65xf32>
+  check.expect.approximate actual(%actual) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<2x65xf32>, tensor<2x65xf32>
   check.return
 }
 
@@ -768,10 +768,10 @@ check.case public @qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8_differential_case 
   kernel.launch @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4[%token_count](%token_count, %expected_output, %norm_weight, %expected_normalized, %expected_q8) : [index](index, tensor<1x2048xf32>, tensor<2048xf32>, tensor<1x2048xf32>, tensor<4608xi8>)
   kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8[%token_count](%token_count, %actual_q8_0, %weight, %actual_output_0, %norm_weight, %actual_normalized_0, %completion_counter, %actual_q8_0) : [index](index, tensor<4608xi8>, tensor<2048x16x144xi8>, tensor<1x2048xf32>, tensor<2048xf32>, tensor<1x2048xf32>, tensor<1xi32>, tensor<4608xi8>)
   kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8[%token_count](%token_count, %actual_q8_1, %weight, %actual_output_1, %norm_weight, %actual_normalized_1, %completion_counter, %actual_q8_1) : [index](index, tensor<4608xi8>, tensor<2048x16x144xi8>, tensor<1x2048xf32>, tensor<2048xf32>, tensor<1x2048xf32>, tensor<1xi32>, tensor<4608xi8>)
-  check.expect.close actual(%actual_output_0) expected(%expected_output) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>
-  check.expect.close actual(%actual_output_1) expected(%expected_output) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>
-  check.expect.close actual(%actual_normalized_0) expected(%expected_normalized) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>
-  check.expect.close actual(%actual_normalized_1) expected(%expected_normalized) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>
+  check.expect.approximate actual(%actual_output_0) expected(%expected_output) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>, tensor<1x2048xf32>
+  check.expect.approximate actual(%actual_output_1) expected(%expected_output) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>, tensor<1x2048xf32>
+  check.expect.approximate actual(%actual_normalized_0) expected(%expected_normalized) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>, tensor<1x2048xf32>
+  check.expect.approximate actual(%actual_normalized_1) expected(%expected_normalized) atol(0.0) rtol(0.0) nan(same) : tensor<1x2048xf32>, tensor<1x2048xf32>
   check.expect.equal actual(%actual_q8_0) expected(%expected_q8) : tensor<4608xi8>
   check.expect.equal actual(%actual_q8_1) expected(%expected_q8) : tensor<4608xi8>
   check.expect.equal actual(%completion_counter) expected(%expected_counter) : tensor<1xi32>
@@ -809,7 +809,7 @@ check.case public @qwen3_moe_dense_linear_q4k_f16_wmma_q_projection_benchmark_ca
   %output = check.generate.fill value(1.0) : tensor<[%token_count]x4096xf32>
   %expected = check.generate.fill value(0.0) : tensor<[%token_count]x4096xf32>
   kernel.launch @qwen3_moe_dense_linear_q4k_f16_wmma[%token_count](%token_count, %input, %weight, %output) : [index](index, tensor<[%token_count]x2048xf32>, tensor<4096x8x144xi8>, tensor<[%token_count]x4096xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x4096xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x4096xf32>, tensor<[%token_count]x4096xf32>
   check.return
 }
 
@@ -823,7 +823,7 @@ check.case public @qwen3_moe_dense_linear_q4k_q8_1_x4_q_projection_benchmark_cas
   %expected = check.generate.fill value(0.0) : tensor<[%token_count]x4096xf32>
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %input, %q8_input) : [index, index](index, index, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2304xi8>)
   kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %weight, %output) : [index](index, tensor<[%token_count]x2304xi8>, tensor<4096x8x144xi8>, tensor<[%token_count]x4096xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x4096xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x4096xf32>, tensor<[%token_count]x4096xf32>
   check.return
 }
 
@@ -834,7 +834,7 @@ check.case public @qwen3_moe_dense_linear_q4k_f16_wmma_k_projection_benchmark_ca
   %output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
   %expected = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
   kernel.launch @qwen3_moe_dense_linear_q4k_f16_wmma[%token_count](%token_count, %input, %weight, %output) : [index](index, tensor<[%token_count]x2048xf32>, tensor<512x8x144xi8>, tensor<[%token_count]x512xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>, tensor<[%token_count]x512xf32>
   check.return
 }
 
@@ -848,7 +848,7 @@ check.case public @qwen3_moe_dense_linear_q4k_q8_1_x4_k_projection_benchmark_cas
   %expected = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %input, %q8_input) : [index, index](index, index, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2304xi8>)
   kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %weight, %output) : [index](index, tensor<[%token_count]x2304xi8>, tensor<512x8x144xi8>, tensor<[%token_count]x512xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>, tensor<[%token_count]x512xf32>
   check.return
 }
 
@@ -859,7 +859,7 @@ check.case public @qwen3_moe_dense_linear_q6k_f16_wmma_v_projection_benchmark_ca
   %output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
   %expected = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
   kernel.launch @qwen3_moe_dense_linear_q6k_f16_wmma[%token_count](%token_count, %input, %weight, %output) : [index](index, tensor<[%token_count]x2048xf32>, tensor<512x8x210xi8>, tensor<[%token_count]x512xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>, tensor<[%token_count]x512xf32>
   check.return
 }
 
@@ -870,7 +870,7 @@ check.case public @qwen3_moe_dense_linear_q4k_f16_wmma_o_projection_benchmark_ca
   %output = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
   %expected = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
   kernel.launch @qwen3_moe_dense_linear_q4k_f16_wmma[%token_count](%token_count, %input, %weight, %output) : [index](index, tensor<[%token_count]x4096xf32>, tensor<2048x16x144xi8>, tensor<[%token_count]x2048xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>
   check.return
 }
 
@@ -884,7 +884,7 @@ check.case public @qwen3_moe_dense_linear_q4k_q8_1_x4_o_projection_benchmark_cas
   %expected = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %input, %q8_input) : [index, index](index, index, tensor<[%token_count]x4096xf32>, tensor<[%token_count]x4608xi8>)
   kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %weight, %output) : [index](index, tensor<[%token_count]x4608xi8>, tensor<2048x16x144xi8>, tensor<[%token_count]x2048xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>
   check.return
 }
 
