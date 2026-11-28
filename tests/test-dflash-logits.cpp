@@ -73,7 +73,7 @@ int main() {
         const int64_t ne0 = 5, n_vocab = 8, n_rows = 3;
         auto src = randn(size_t(ne0 * n_rows), 1);
         std::vector<float> dst(size_t(n_vocab * n_rows), 12345.0f);
-        llama_widen_logit_rows(src.data(), ne0, dst.data(), n_vocab, n_rows);
+        llama_restride_logit_rows(src.data(), ne0, dst.data(), n_vocab, n_rows);
         check(widened_ok(src, ne0, dst, n_vocab, n_rows), "5 -> 8, 3 rows: each row at the n_vocab stride, the rest -INF");
     }
     {   // 2. the ufrik shape through the backend copy, as llama-context runs it
@@ -95,7 +95,21 @@ int main() {
         auto dst = via_backend(src, n, n_rows, n);
         check(std::memcmp(dst.data(), src.data(), src.size() * sizeof(float)) == 0, "equal widths: the plain copy, bit-identical");
     }
-    {   // 4. the old behaviour, for contrast: a flat copy of n_rows*ne0 floats puts row 1 at column ne0 of row 0
+    {   // 4. wider than the vocabulary (cl-hf's case): the first n_vocab columns of each row, no abort
+        const int64_t ne0 = 12, n_vocab = 8, n_rows = 3;
+        auto src = randn(size_t(ne0 * n_rows), 5);
+        auto dst = via_backend(src, ne0, n_rows, n_vocab);
+        bool ok = true;
+        for (int64_t r = 0; r < n_rows; r++) for (int64_t c = 0; c < n_vocab; c++) ok &= dst[size_t(r * n_vocab + c)] == src[size_t(r * ne0 + c)];
+        check(ok, "wider 12 -> 8 via the CPU backend: each row's first n_vocab columns, at the n_vocab stride");
+    }
+    {   // 5. the scratch buffer is reused across calls: a narrow call after a larger one still writes the right rows
+        const int64_t ne0 = 5, n_vocab = 8, n_rows = 2;
+        auto src = randn(size_t(ne0 * n_rows), 6);
+        auto dst = via_backend(src, ne0, n_rows, n_vocab);
+        check(widened_ok(src, ne0, dst, n_vocab, n_rows), "reused scratch: a small call after a large one is still exact");
+    }
+    {   // 6. the old behaviour, for contrast: a flat copy of n_rows*ne0 floats puts row 1 at column ne0 of row 0
         const int64_t ne0 = 5, n_vocab = 8, n_rows = 2;
         auto src = randn(size_t(ne0 * n_rows), 4);
         std::vector<float> flat(size_t(n_vocab * n_rows), 0.0f);
