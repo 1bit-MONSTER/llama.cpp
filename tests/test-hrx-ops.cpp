@@ -1178,6 +1178,83 @@ static void run_rmsnorm_mul_case(int64_t hidden_size, int64_t token_count) {
     ggml_backend_free(backend);
 }
 
+// engine#3521: ggml_binary_f32 declares range(1, 2^29). This compares an ADD just past 2^28 elements with the CPU
+// (the shape class of the 36,991-token Inkling prefill that used to fail at 2^27). About 6.6 GB of tensors plus
+// 4.4 GB of host copies, so it is registered only with HRX_OPS_LONG=1 (see add_cases): without it the case does not
+// exist, rather than reporting a pass it never ran.
+static void run_add_f32_long_span_cpu_reference_case(int64_t ne0, int64_t ne1, int64_t ne2) {
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+    ggml_init_params params = {};
+    params.mem_size         = 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * cpu_ctx  = ggml_init(params);
+    ggml_context * hrx_ctx  = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr && hrx_ctx != nullptr);
+    ggml_tensor * cpu_a      = ggml_new_tensor_3d(cpu_ctx, GGML_TYPE_F32, ne0, ne1, ne2);
+    ggml_tensor * cpu_b      = ggml_new_tensor_3d(cpu_ctx, GGML_TYPE_F32, ne0, ne1, ne2);
+    ggml_tensor * cpu_output = ggml_add(cpu_ctx, cpu_a, cpu_b);
+    ggml_tensor * hrx_a      = ggml_new_tensor_3d(hrx_ctx, GGML_TYPE_F32, ne0, ne1, ne2);
+    ggml_tensor * hrx_b      = ggml_new_tensor_3d(hrx_ctx, GGML_TYPE_F32, ne0, ne1, ne2);
+    ggml_tensor * hrx_output = ggml_add(hrx_ctx, hrx_a, hrx_b);
+    REQUIRE(ggml_nelements(hrx_output) > (int64_t{ 1 } << 28));
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    ggml_build_forward_expand(cpu_graph, cpu_output);
+    ggml_build_forward_expand(hrx_graph, hrx_output);
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "loom_libs:ggml_binary_f32" });
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr && hrx_buffer != nullptr);
+    const size_t count = static_cast<size_t>(ggml_nelements(hrx_output));
+    {
+        const std::vector<float> a = make_pattern_f32(count, 3, 0.125f);
+        set_tensor_pair_bytes(cpu_backend, cpu_a, hrx_backend, hrx_a, a.data(), a.size() * sizeof(float));
+    }
+    {
+        const std::vector<float> b = make_pattern_f32(count, 4, 0.25f);
+        set_tensor_pair_bytes(cpu_backend, cpu_b, hrx_backend, hrx_b, b.data(), b.size() * sizeof(float));
+    }
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    // f32 addition is exact and order-free, so every element must match, including the ones past 2^27 and 2^28
+    require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 0.0f);
+    std::printf("add_f32_long_span: %zu elements (%lld x %lld x %lld) match the CPU exactly\n", count, (long long) ne0,
+                (long long) ne1, (long long) ne2);
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
+// engine#3521: the HRX backend claims a binary node inside the kernel's declared range and declines one past it, so
+// the node runs elsewhere instead of failing the JIT specialization. No allocation: supports_op only.
+static void run_binary_span_cap_placement_case() {
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+    ggml_init_params params = {};
+    params.mem_size         = 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    auto add_of = [&](int64_t ne2) {
+        return ggml_add(ctx, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 11264, 512, ne2),
+                        ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 11264, 512, ne2));
+    };
+    ggml_tensor * inside  = add_of(48);   // 276,824,064 elements: past 2^28, inside 2^29
+    ggml_tensor * outside = add_of(94);   // 542,113,792 elements: past 2^29
+    REQUIRE(ggml_nelements(outside) > (int64_t{ 1 } << 29));
+    REQUIRE(ggml_backend_supports_op(hrx_backend, inside));
+    REQUIRE(!ggml_backend_supports_op(hrx_backend, outside));
+    ggml_free(ctx);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_rmsnorm_binary_add_cpu_reference_case() {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
@@ -6769,6 +6846,12 @@ static void add_cases(test_runner::Suite & suite) {
         [=] { run_strided_rmsnorm_cpu_reference_case(23); });
     add(suite, "rmsnorm_binary_add_cpu_reference",
         [=] { run_rmsnorm_binary_add_cpu_reference_case(); });
+    if (std::getenv("HRX_OPS_LONG") != nullptr) {   // ~11 GB: opt-in, and absent (not a silent pass) without it
+        add(suite, "add_f32_long_span_cpu_reference",
+            [=] { run_add_f32_long_span_cpu_reference_case(11264, 512, 48); });
+    }
+    add(suite, "binary_span_cap_placement",
+        [=] { run_binary_span_cap_placement_case(); });
     add(suite, "rmsnorm_gate.128.1.7.silu",
         [=] { run_rmsnorm_gate_cpu_reference_case(128, 1, 7, GGML_UNARY_OP_SILU); });
     add(suite, "rmsnorm_gate.256.3.3.gelu",
