@@ -1,5 +1,4 @@
 #include "models.h"
-#include "dflash-logits.h"
 #include "llama-dsv41-compat.h"
 
 #include "llama-impl.h"
@@ -1114,9 +1113,8 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         }
     }
 
-    // engine#3627: as wide as llama-context copies per row; after the transforms above (softcap turns -INF finite)
+    // engine#3627: llama_context copies vocab.n_tokens() floats per output row; the crop above makes it so
     if (const int64_t n_row = (int64_t) model.vocab.n_tokens(); !model.d2t && n_row > 0) {
-        cur = dflash_pad_logits_to_vocab(ctx0, cur, n_row);
         GGML_ASSERT(cur->ne[0] == n_row && "draft logits must be as wide as llama-context copies");
     }
 
