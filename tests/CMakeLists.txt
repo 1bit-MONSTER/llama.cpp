@@ -208,6 +208,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
     llama_build_and_test(test-kv-zero.cpp)
     target_include_directories(test-kv-zero PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    llama_build_and_test(test-speculative-clip.cpp  LABEL "main behavior")  # engine#3613/#3627
     llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-sampling-fast-greedy.cpp LABEL behavior)
@@ -386,8 +387,6 @@ if (NOT GGML_BACKEND_DL AND GGML_CPU)
     llama_build_and_test(test-barrier.cpp  LABEL "main behavior"  LINK ggml)
     llama_build_and_test(test-quantize-fns.cpp  LABEL "main behavior"  LINK ggml)
     llama_build_and_test(test-cpu-repack-strided.cpp  LABEL "main behavior backend"  LINK ggml)  # engine#3531
-    llama_build_and_test(test-dflash-logits.cpp  LABEL "main behavior backend"  LINK ggml)  # engine#3627
-    target_include_directories(test-dflash-logits PRIVATE ${PROJECT_SOURCE_DIR}/src)
     llama_build_and_test(test-quantize-perf.cpp  LABEL "main behavior backend"  LINK ggml)
     llama_build_and_test(test-rope.cpp  LABEL "main behavior backend"  LINK ggml)
     llama_build_and_test(test-col2im-1d.cpp  LABEL "main behavior backend"  LINK ggml)

@@ -1,5 +1,4 @@
 #include "models.h"
-#include "dflash-logits.h"
 #include "llama-dsv41-compat.h"
 
 #include "llama-impl.h"
@@ -1092,13 +1091,11 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     cur = build_lora_mm(output, cur, output_s);
 
-    // a target with a padded vocabulary (inkling2: n_vocab_padded rows in its lm_head) would let the drafter
-    // propose ids past the tokenizer; keep the real tokens only, as the target's own graph does. Bound by the
-    // target's tokenizer too: some exports (ufrik) list the padded rows in the drafter's own tokenizer
-    int64_t n_tokens_vocab = (int64_t) model.vocab.n_tokens();
-    if (cparams.ctx_other != nullptr) {
-        n_tokens_vocab = std::min(n_tokens_vocab, (int64_t) llama_get_model(cparams.ctx_other)->vocab.n_tokens());
-    }
+    // a target with a padded vocabulary (inkling2: n_vocab_padded rows in its lm_head) gives more logits than the
+    // drafter's tokenizer has tokens; keep the drafter's own n_tokens, which is also the row width
+    // llama_context::decode copies the logits out with. Ids the target's tokenizer lacks (some exports, e.g. ufrik,
+    // list the padded rows in the drafter's tokenizer) are cut from the draft in common/speculative.cpp.
+    const int64_t n_tokens_vocab = (int64_t) model.vocab.n_tokens();
     if (!model.d2t && n_tokens_vocab > 0 && cur->ne[0] > n_tokens_vocab) {
         cur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_tokens_vocab, cur->ne[1], cur->nb[1], 0));
     }
@@ -1116,9 +1113,8 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         }
     }
 
-    // engine#3627: as wide as llama-context copies per row; after the transforms above (softcap turns -INF finite)
+    // engine#3627: llama_context copies vocab.n_tokens() floats per output row; the crop above makes it so
     if (const int64_t n_row = (int64_t) model.vocab.n_tokens(); !model.d2t && n_row > 0) {
-        cur = dflash_pad_logits_to_vocab(ctx0, cur, n_row);
         GGML_ASSERT(cur->ne[0] == n_row && "draft logits must be as wide as llama-context copies");
     }
 

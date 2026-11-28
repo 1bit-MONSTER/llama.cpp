@@ -1,4 +1,5 @@
 #include "speculative.h"
+#include "speculative-clip.h"
 
 #include "common.h"
 #include "ggml.h"
@@ -1295,6 +1296,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
 
+        // engine#3613: ids the target's tokenizer lacks are cut from the draft (common/speculative-clip.h)
+        const int32_t n_vocab_tgt = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(params.ctx_tgt)));
+
         batch.clear();
 
         // build one batch holding every drafting sequence's noise block into a single decode)
@@ -1421,6 +1425,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     result.push_back((llama_token) row[predecessor]);
                 }
 
+                common_speculative_clip_to_vocab(result, sample ? dp.result_q : nullptr, n_vocab_tgt);
                 if (result.size() < (size_t) params.n_min) {
                     result.clear();
                     if (sample) {
@@ -1483,6 +1488,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 }
             }
 
+            common_speculative_clip_to_vocab(result, nullptr, n_vocab_tgt);
             if (result.size() < (size_t) params.n_min) {
                 result.clear();
             }
