@@ -44,7 +44,10 @@ class BlackMambaModel(TextModel):
         self._experts: dict[int, dict[str, Tensor]] = {}
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        sd = torch.load(self.dir_model / "pytorch_model.bin", map_location="cpu", weights_only=False)
+        # weights_only=True, like every other torch.load in the converter (engine#3576): Zyphra's BlackMamba-1.5B and
+        # -2.8B pickles reference only collections.OrderedDict, torch.BFloat16Storage and torch._utils._rebuild_tensor_v2,
+        # all in torch's weights-only allowlist, so nothing else in a downloaded file can run at load.
+        sd = torch.load(self.dir_model / "pytorch_model.bin", map_location="cpu", weights_only=True)
         sd = sd.get("model", sd)
         return {name: (lambda t=t: t) for name, t in sd.items()}
 
