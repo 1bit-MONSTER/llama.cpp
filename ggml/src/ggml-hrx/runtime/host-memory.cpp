@@ -1,3 +1,4 @@
+#include "../ggml-hrx-wait-flags.h"
 #include "host-memory.h"
 
 #include "model-buffer-from-mmap.h"
@@ -1226,7 +1227,6 @@ static Status allocate_device_buffer(hrx_device_t device, size_t size, hrx_buffe
         HRX_MEMORY_TYPE_DEVICE_LOCAL,
         HRX_MEMORY_ACCESS_ALL,
         HRX_BUFFER_USAGE_DEFAULT,
-        0,
     };
     if (ErrorResult error =
             take_status(hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, size, &buffer))) {
@@ -1254,8 +1254,7 @@ Status allocate_mapped_host_staging_buffer(hrx_device_t device, size_t size, hrx
         HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE | HRX_MEMORY_TYPE_HOST_COHERENT,
         HRX_MEMORY_ACCESS_ALL,
         HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED | HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
-        0,
-    };
+    };   // [1bit] hrx-system v0.3.0 dropped queue_affinity (we passed 0)
     if (ErrorResult error =
             take_status(hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, size, &buffer))) {
         status.log("allocate mapped HRX host staging buffer: %s", error->c_str());
@@ -1287,11 +1286,11 @@ Status HostTransferManager::upload_synchronous(hrx_stream_t stream,
         status.log("query HRX upload device failed: %s", error->c_str());
         return status;
     }
-    if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+    if (ErrorResult error = take_status(hrx_stream_synchronize(stream, ggml::hrx::completion_wait_flags()))) {
         status.log("synchronize before HRX host upload failed: %s", error->c_str());
         return status;
     }
-    if (ErrorResult error = take_status(hrx_synchronous_h2d(device, host_source, destination, offset, size))) {
+    if (ErrorResult error = take_status(hrx_synchronous_h2d_linear(ggml::hrx::device_queue(device), host_source, destination, offset, size))) {
         status.log("synchronous HRX host upload failed: %s", error->c_str());
         return status;
     }
@@ -1327,7 +1326,7 @@ Status HostTransferManager::upload_async(hrx_stream_t stream,
         const size_t remaining  = size - uploaded;
         const size_t chunk_size = remaining < kMaxInlineUploadBytes ? remaining : kMaxInlineUploadBytes;
         if (ErrorResult error = take_status(
-                hrx_stream_update_buffer(stream, host_bytes + uploaded, chunk_size, destination, offset + uploaded))) {
+                hrx_stream_update_buffer_linear(stream, host_bytes + uploaded, chunk_size, destination, offset + uploaded))) {
             status.log("HRX async host upload failed: %s", error->c_str());
             return status;
         }
@@ -1358,11 +1357,11 @@ Status HostTransferManager::download_synchronous(hrx_stream_t stream,
         status.log("query HRX download device failed: %s", error->c_str());
         return status;
     }
-    if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+    if (ErrorResult error = take_status(hrx_stream_synchronize(stream, ggml::hrx::completion_wait_flags()))) {
         status.log("synchronize before HRX host download failed: %s", error->c_str());
         return status;
     }
-    if (ErrorResult error = take_status(hrx_synchronous_d2h(device, source, offset, host_destination, size))) {
+    if (ErrorResult error = take_status(hrx_synchronous_d2h_linear(ggml::hrx::device_queue(device), source, offset, host_destination, size))) {
         status.log("synchronous HRX host download failed: %s", error->c_str());
         return status;
     }
@@ -1633,7 +1632,7 @@ bool HostWeightCache::arena_make_room(hrx_stream_t stream, size_t aligned) {
         return false;
     }
     if (stream != nullptr) {
-        if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(stream, ggml::hrx::completion_wait_flags()))) {
             GGML_LOG_WARN("%s: synchronize before evicting resident host weights: %s\n", __func__, error->c_str());
             return false;
         }
@@ -1747,7 +1746,7 @@ bool HostWeightCache::arena_reserve(hrx_device_t device,
         return false;
     }
     if (stream != nullptr) {
-        if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(stream, ggml::hrx::completion_wait_flags()))) {
             GGML_LOG_ERROR("%s: synchronize before growing the host weight arena: %s\n", __func__, error->c_str());
             return false;
         }
@@ -1861,7 +1860,7 @@ void HostWeightCache::evict_for(hrx_stream_t stream, size_t needed) {
     // A command program from an earlier split may still be executing against these buffers; the cache is about to
     // free them, so this is the one place that has to establish completion first.
     if (stream != nullptr) {
-        if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(stream, ggml::hrx::completion_wait_flags()))) {
             GGML_LOG_WARN("%s: synchronize before evicting resident host weights: %s\n", __func__, error->c_str());
             return;
         }

@@ -1,3 +1,4 @@
+#include "../ggml-hrx-wait-flags.h"
 #include "graph-executor.h"
 
 #include "backend-buffer-binding.h"
@@ -190,7 +191,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     // fill's -inf for every cell and every logit is NaN. Publish here, i.e. copy the materialised host output back
     // before the graph compute returns.
     if (context_.graph_replay_state.has_pending_host_writebacks()) {
-        if (ErrorResult error = take_status(hrx_stream_synchronize(context_.stream))) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context_.stream, ggml::hrx::completion_wait_flags()))) {
             result.status.log("synchronize HRX stream to publish host writebacks: %s", error->c_str());
             result.code = GGML_STATUS_FAILED;
         }

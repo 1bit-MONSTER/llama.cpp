@@ -1,3 +1,4 @@
+#include "../ggml-hrx-wait-flags.h"
 #include "command-program-executor.h"
 
 #include "dispatch/command-program-diagnostics.h"
@@ -232,7 +233,7 @@ class DebugSerialExecutionTrace {
             return true;
         }
         log("sync-begin", phase, detail);
-        if (ErrorResult error = take_status(hrx_stream_synchronize(context_.stream))) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context_.stream, ggml::hrx::completion_wait_flags()))) {
             GGML_LOG_ERROR("HRX debug serial sync failed phase=%s %s: %s\n", phase, detail.c_str(), error->c_str());
             return false;
         }
@@ -462,7 +463,7 @@ static Status initialize_command_program_completion_counters(const CommandProgra
     }
     const uint32_t zero_pattern = 0;
     if (ErrorResult error = take_status(
-            hrx_stream_fill_buffer(context.stream, allocation.buffer, commands.completion_counters.arena_offset,
+            hrx_stream_fill_buffer_linear(context.stream, allocation.buffer, commands.completion_counters.arena_offset,
                                    commands.completion_counters.byte_count, &zero_pattern, sizeof(zero_pattern)))) {
         status.log("failed to initialize completion counters: %s", error->c_str());
     }
@@ -1097,7 +1098,6 @@ static Status prepare_program_constant_buffers(const CommandProgramExecutionCont
         HRX_MEMORY_TYPE_DEVICE_LOCAL,
         HRX_MEMORY_ACCESS_ALL,
         HRX_BUFFER_USAGE_DEFAULT,
-        0,
     };
     for (const ProgramConstantImage & image : images) {
         if (!image.read) {
@@ -1260,7 +1260,7 @@ static Status upload_prepared_host_staging(const CommandProgramExecutionContext 
         }
         Status upload_status;
         if (staging.source_host_buffer.valid()) {
-            if (ErrorResult error = take_status(hrx_stream_copy_buffer(context.stream, staging.source_host_buffer.buffer(),
+            if (ErrorResult error = take_status(hrx_stream_copy_buffer_linear(context.stream, staging.source_host_buffer.buffer(),
                                                                        staging.source_host_buffer.offset(),
                                                                        staging.buffer, 0, staging.length))) {
                 upload_status.log("HRX host staging buffer copy failed: %s", error->c_str());
@@ -1286,7 +1286,7 @@ static void mark_graph_replay_synchronized(const CommandProgramExecutionContext 
 
 static Status enqueue_stream_execution_barrier(const CommandProgramExecutionContext & context, const char * label) {
     Status status;
-    if (ErrorResult error = take_status(hrx_stream_execution_barrier(context.stream))) {
+    if (ErrorResult error = take_status(hrx_stream_barrier(context.stream, nullptr))) {
         status.log("%s failed: %s", label, error->c_str());
     }
     return status;
@@ -1344,7 +1344,7 @@ static Status download_prepared_host_staging(const CommandProgramExecutionContex
             status.append(allocation_status);
             return status;
         }
-        if (ErrorResult error = take_status(hrx_stream_copy_buffer(context.stream, staging.buffer, 0,
+        if (ErrorResult error = take_status(hrx_stream_copy_buffer_linear(context.stream, staging.buffer, 0,
                                                                    download_buffer, 0, staging.length))) {
             status.log("HRX host download staging copy failed for value %d: %s", staging.value, error->c_str());
             hrx_buffer_release(download_buffer);
@@ -1882,7 +1882,7 @@ static RecordedCommandGraph record_prepared_command_graph(const CommandProgramEx
     retain_prepared_command_graph_resources(prepared, allocation, recorded);
 
     hrx_graph_exec_t exec = nullptr;
-    if (ErrorResult error = take_status(hrx_graph_instantiate(recorded.graph, 0, &exec))) {
+    if (ErrorResult error = take_status(hrx_graph_instantiate(recorded.graph, ggml::hrx::device_queue(context.device), 0, &exec))) {
         recorded.status.log("instantiate HRX graph replay: %s", error->c_str());
         return recorded;
     }
@@ -1901,7 +1901,7 @@ static bool execute_prepared_kernel_command_via_graph(const CommandProgramExecut
     Status                 status = record_prepared_kernel_command(graph, dependencies, command);
     hrx_graph_exec_t       exec   = nullptr;
     if (status.success()) {
-        if (ErrorResult error = take_status(hrx_graph_instantiate(graph, 0, &exec))) {
+        if (ErrorResult error = take_status(hrx_graph_instantiate(graph, ggml::hrx::device_queue(context.device), 0, &exec))) {
             status.log("instantiate diagnostic graph: %s", error->c_str());
         }
     }
@@ -1911,7 +1911,7 @@ static bool execute_prepared_kernel_command_via_graph(const CommandProgramExecut
         }
     }
     if (status.success()) {
-        if (ErrorResult error = take_status(hrx_stream_synchronize(context.stream))) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context.stream, ggml::hrx::completion_wait_flags()))) {
             status.log("synchronize diagnostic graph: %s", error->c_str());
         }
     }
@@ -1941,7 +1941,7 @@ static bool execute_prepared_command_prefix_via_graph(const CommandProgramExecut
 
     hrx_graph_exec_t exec = nullptr;
     if (status.success()) {
-        if (ErrorResult error = take_status(hrx_graph_instantiate(graph, 0, &exec))) {
+        if (ErrorResult error = take_status(hrx_graph_instantiate(graph, ggml::hrx::device_queue(context.device), 0, &exec))) {
             status.log("instantiate diagnostic prefix graph: %s", error->c_str());
         }
     }
@@ -1951,7 +1951,7 @@ static bool execute_prepared_command_prefix_via_graph(const CommandProgramExecut
         }
     }
     if (status.success()) {
-        if (ErrorResult error = take_status(hrx_stream_synchronize(context.stream))) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context.stream, ggml::hrx::completion_wait_flags()))) {
             status.log("synchronize diagnostic prefix graph: %s", error->c_str());
         }
     }
@@ -2378,7 +2378,7 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
                                  (diagnostic_sync_size != nullptr && diagnostic_sync_size[0] != '\0' &&
                                   recorded.dispatch_count == std::strtoull(diagnostic_sync_size, nullptr, 0));
     if (diagnostic_sync) {
-        if (ErrorResult error = take_status(hrx_stream_synchronize(context.stream))) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context.stream, ggml::hrx::completion_wait_flags()))) {
             result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
             result.status.log("synchronize diagnostic graph replay: %s", error->c_str());
             result.event = HrxGraphReplayEvent::LaunchFailed;

@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <dlfcn.h>
 
 namespace ggml::hrx {
@@ -29,8 +30,19 @@ bool export_dmabuf(void * device_ptr, size_t size, int * fd, size_t * offset) {
         void * lib = dlopen(path != nullptr ? path : "libhsa-runtime64.so.1", RTLD_NOW | RTLD_NOLOAD);
         return lib != nullptr ? (export_fn) dlsym(lib, "hsa_amd_portable_export_dmabuf") : nullptr;
     }();
+    // [1bit] hrx-system v0.3.0 runs on libamdf, not ROCr: no libhsa is in the process, so there is no export to look up.
+    // Say so once instead of failing silently (cl-hrxsys STATE: libhrx has no public buffer->dma-buf export yet).
+    if (hsa_export == nullptr) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            fprintf(stderr, "ggml_hrx: dma-buf export unavailable: no ROCr libhsa in this process (hrx-system on "
+                            "libamdf has no public buffer->dma-buf export); zero-copy GPU->NPU sharing is off\n");
+        }
+        return false;
+    }
     uint64_t off = 0;
-    if (hsa_export == nullptr || device_ptr == nullptr || hsa_export(device_ptr, size, fd, &off) != 0) {
+    if (device_ptr == nullptr || hsa_export(device_ptr, size, fd, &off) != 0) {
         return false;
     }
     *offset = (size_t) off;

@@ -16,6 +16,7 @@
 // ggml-hrx-hip-smoke: loads the embedded hip_smoke code object through HRX (no HIP runtime),
 // dispatches both kernels and checks the results on the host. Exit 0 = pass.
 
+#include "../ggml-hrx-wait-flags.h"
 #include "hip/hip-code-objects.h"
 #include "hrx_runtime.h"
 
@@ -39,9 +40,22 @@
     } while (0)
 
 int main() {
-    CHECK(hrx_gpu_initialize(0));
-    hrx_device_t device = nullptr;
-    CHECK(hrx_gpu_device_get(0, &device));
+    // [1bit] hrx-system v0.3.0: runtime -> inventory -> a one-device group (was hrx_gpu_initialize + device_get)
+    hrx_runtime_t runtime = nullptr;
+    hrx_runtime_options_t options = {};
+    CHECK(hrx_runtime_create(&options, hrx_host_allocator_system(), &runtime));
+    hrx_device_info_t * infos = nullptr;
+    size_t info_count = 0;
+    CHECK(hrx_runtime_query_available_devices(runtime, "amdgpu", hrx_host_allocator_system(), &info_count, &infos));
+    if (info_count == 0) {
+        std::fprintf(stderr, "FAIL no amdgpu device in the inventory\n");
+        return 1;
+    }
+    hrx_device_create_params_t params = {infos[0].uri, HRX_WAIT_FLAG_YIELD};
+    hrx_device_group_t group = nullptr;
+    CHECK(hrx_device_group_create(runtime, 1, &params, &group));
+    hrx_host_allocator_free(hrx_host_allocator_system(), infos);
+    hrx_device_t device = hrx_device_group_get_device(group, 0);
     char arch[64] = {};
     CHECK(hrx_device_get_property(device, HRX_DEVICE_PROPERTY_ARCHITECTURE, arch, sizeof(arch)));
     size_t       size = 0;
@@ -64,14 +78,14 @@ int main() {
     }
 
     hrx_stream_t stream = nullptr;
-    CHECK(hrx_stream_create(device, 0, &stream));
+    CHECK(hrx_stream_create(ggml::hrx::device_queue(device), 0, &stream));
     const uint32_t n = 1000003, blocks = (n + 255) / 256;
     hrx_buffer_t   x = nullptr, y = nullptr, out = nullptr;
     const hrx_memory_type_t mem = HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE;
     CHECK(hrx_buffer_allocate(stream, n * sizeof(float), mem, HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED, &x));
     CHECK(hrx_buffer_allocate(stream, n * sizeof(float), mem, HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED, &y));
     CHECK(hrx_buffer_allocate(stream, blocks * sizeof(float), mem, HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED, &out));
-    CHECK(hrx_stream_synchronize(stream));
+    CHECK(hrx_stream_synchronize(stream, ggml::hrx::completion_wait_flags()));
     float * px = nullptr;
     float * py = nullptr;
     CHECK(hrx_buffer_map(x, HRX_MAP_WRITE, 0, n * sizeof(float), (void **) &px));
@@ -93,7 +107,7 @@ int main() {
     uint32_t         sum_constants = n;
     hrx_buffer_ref_t sum_refs[2]   = { { y, 0, n * sizeof(float) }, { out, 0, blocks * sizeof(float) } };
     CHECK(hrx_stream_dispatch(stream, executable, block_sum, &config, &sum_constants, sizeof(sum_constants), sum_refs, 2, 0));
-    CHECK(hrx_stream_synchronize(stream));
+    CHECK(hrx_stream_synchronize(stream, ggml::hrx::completion_wait_flags()));
 
     CHECK(hrx_buffer_map(y, HRX_MAP_READ, 0, n * sizeof(float), (void **) &py));
     float * pout = nullptr;
@@ -120,6 +134,8 @@ int main() {
     hrx_buffer_release(out);
     hrx_stream_release(stream);
     hrx_executable_release(executable);
+    hrx_device_group_release(group);
+    hrx_runtime_release(runtime);
     const bool pass = bad == 0 && max_err < 1e-5;
     std::printf("%s\n", pass ? "PASS" : "FAIL");
     return pass ? 0 : 1;

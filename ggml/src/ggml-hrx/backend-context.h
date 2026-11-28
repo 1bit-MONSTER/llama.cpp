@@ -95,6 +95,9 @@ struct ggml_backend_hrx_context {
 
 struct ggml_backend_hrx_reg_context {
     bool                                                          initialized = false;
+    // [1bit] hrx-system v0.3.0 (libamdf): devices come from a runtime-owned group, not a process-global GPU init
+    hrx_runtime_t                                                 runtime     = nullptr;
+    hrx_device_group_t                                            group       = nullptr;
     std::vector<std::unique_ptr<ggml_backend_hrx_device_context>> device_contexts;
     std::vector<ggml_backend_device>                              devices;
 

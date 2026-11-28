@@ -1,3 +1,4 @@
+#include "../ggml-hrx-wait-flags.h"
 #include "transient-arena.h"
 
 #include "hrx-1bit-safety.h"   // engine#1711: the pool ledger (pool_reserve/pool_release)
@@ -108,7 +109,7 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         if (diagnostic_fresh) {
             diagnostic_retired_buffers_.push_back(buffer_);
         } else {
-        if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(stream, ggml::hrx::completion_wait_flags()))) {
             status.log("synchronize before growing transient arena: %s", error->c_str());
             return status;
         }
@@ -129,7 +130,6 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         HRX_MEMORY_TYPE_DEVICE_LOCAL,
         HRX_MEMORY_ACCESS_ALL,
         HRX_BUFFER_USAGE_DEFAULT,
-        0,
     };
     hrx_buffer_t allocation = nullptr;
     if (ErrorResult error = take_status(

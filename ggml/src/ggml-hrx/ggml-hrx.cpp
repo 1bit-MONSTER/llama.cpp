@@ -1,3 +1,4 @@
+#include "ggml-hrx-wait-flags.h"
 #include "dispatch_registration/common/dispatch-get-rows-support.h"
 #include "dispatch_registration/common/dispatch-small-rows.h"
 #include "dispatch_registration/common/moe-placement-guard.h"
@@ -108,12 +109,16 @@ ggml_backend_hrx_reg_context::~ggml_backend_hrx_reg_context() {
             hrx_device_release(context->device);
         }
     }
-    if (initialized) {
-        hrx_status_t status = hrx_gpu_shutdown();
-        if (!hrx_status_is_ok(status)) {
-            hrx_status_ignore(status);
-        }
+    // [1bit] hrx-system v0.3.0: the group owns the devices, the runtime owns the group's services; release in that order
+    if (group != nullptr) {
+        hrx_device_group_release(group);
+        group = nullptr;
     }
+    if (runtime != nullptr) {
+        hrx_runtime_release(runtime);
+        runtime = nullptr;
+    }
+    initialized = false;
 }
 
 namespace {
@@ -176,7 +181,7 @@ static bool buffer_submit_and_wait(ggml_backend_hrx_device_context * device,
         ggml::hrx::onebit::poison_device(0, 0);
         return false;
     }
-    if (!HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+    if (!HRX_CHECK(hrx_stream_synchronize(device->buffer_stream, ggml::hrx::completion_wait_flags()))) {
         ggml::hrx::onebit::poison_device(0, 0);
         return false;
     }
@@ -192,7 +197,7 @@ struct FillBufferArgs {
 
 static hrx_status_t submit_fill_buffer(hrx_stream_t stream, void * user_data) {
     auto * args = static_cast<FillBufferArgs *>(user_data);
-    return hrx_stream_fill_buffer(stream, args->buffer, args->offset, args->size, &args->value, sizeof(args->value));
+    return hrx_stream_fill_buffer_linear(stream, args->buffer, args->offset, args->size, &args->value, sizeof(args->value));
 }
 
 struct CopyBufferArgs {
@@ -205,7 +210,7 @@ struct CopyBufferArgs {
 
 static hrx_status_t submit_copy_buffer(hrx_stream_t stream, void * user_data) {
     auto * args = static_cast<CopyBufferArgs *>(user_data);
-    return hrx_stream_copy_buffer(stream, args->source, args->source_offset, args->destination,
+    return hrx_stream_copy_buffer_linear(stream, args->source, args->source_offset, args->destination,
                                   args->destination_offset, args->size);
 }
 
@@ -297,9 +302,9 @@ static bool ordered_upload(ggml_backend_hrx_device_context * device,
     for (size_t done = 0; done < size; done += chunk) {
         const size_t n = std::min(chunk, size - done);
         std::memcpy(device->copy_staging_mapped, source + done, n);
-        if (!HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, device->copy_staging, 0, destination,
+        if (!HRX_CHECK(hrx_stream_copy_buffer_linear(device->buffer_stream, device->copy_staging, 0, destination,
                                               offset + done, n)) ||
-            !HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+            !HRX_CHECK(hrx_stream_synchronize(device->buffer_stream, ggml::hrx::completion_wait_flags()))) {
             return false;
         }
     }
@@ -319,9 +324,9 @@ static bool ordered_download(ggml_backend_hrx_device_context * device,
     auto * destination = static_cast<uint8_t *>(data);
     for (size_t done = 0; done < size; done += chunk) {
         const size_t n = std::min(chunk, size - done);
-        if (!HRX_CHECK(hrx_stream_copy_buffer(device->buffer_stream, source, offset + done, device->copy_staging, 0,
+        if (!HRX_CHECK(hrx_stream_copy_buffer_linear(device->buffer_stream, source, offset + done, device->copy_staging, 0,
                                               n)) ||
-            !HRX_CHECK(hrx_stream_synchronize(device->buffer_stream))) {
+            !HRX_CHECK(hrx_stream_synchronize(device->buffer_stream, ggml::hrx::completion_wait_flags()))) {
             return false;
         }
         std::memcpy(destination + done, device->copy_staging_mapped, n);
@@ -392,12 +397,12 @@ static bool buffer_copy(ggml_backend_buffer_t buffer, const ggml_tensor * source
     if (both_imported) {
         std::memmove(destination_context->base + destination_offset, source_context->base + source_offset, size);
     } else if (source_imported) {
-        if (!HRX_CHECK(hrx_synchronous_h2d(destination_context->device->device, source_context->base + source_offset,
+        if (!HRX_CHECK(hrx_synchronous_h2d_linear(ggml::hrx::device_queue(destination_context->device->device), source_context->base + source_offset,
                                            destination_context->buffer, destination_offset, size))) {
             return false;
         }
     } else if (destination_imported) {
-        if (!HRX_CHECK(hrx_synchronous_d2h(source_context->device->device, source_context->buffer, source_offset,
+        if (!HRX_CHECK(hrx_synchronous_d2h_linear(ggml::hrx::device_queue(source_context->device->device), source_context->buffer, source_offset,
                                            destination_context->base + destination_offset, size))) {
             return false;
         }
@@ -465,8 +470,7 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         host_visible ?
             HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED | HRX_BUFFER_USAGE_MAPPING_PERSISTENT :
             HRX_BUFFER_USAGE_DEFAULT,
-        0,
-    };
+    };   // [1bit] hrx-system v0.3.0 dropped queue_affinity (we passed 0)
     // one call into our safety layer: charge the pool, and say no when it would not fit
     if (size > 0 && !ggml::hrx::onebit::pool_reserve(type_context->device->memory_budget, size,
                                                     host_visible ? "a host buffer" : "a device buffer")) {
@@ -918,7 +922,7 @@ static void backend_set_tensor_async(ggml_backend_t backend,
     ggml::hrx::HostBufferRef source = backend_context->device->host_buffers.find(data, size);
     if (source.valid()) {
         // Registered host buffers can participate directly in the stream command buffer.
-        HRX_CHECK(hrx_stream_copy_buffer(backend_context->stream, source.buffer(), source.offset(), context->buffer,
+        HRX_CHECK(hrx_stream_copy_buffer_linear(backend_context->stream, source.buffer(), source.offset(), context->buffer,
                                          tensor_base + offset, size));
     } else {
         synchronous_upload_fallback(backend_context, data, context->buffer, tensor_base + offset, size);
@@ -955,7 +959,7 @@ static void backend_get_tensor_async(ggml_backend_t      backend,
     ggml::hrx::HostBufferRef destination = backend_context->device->host_buffers.find(data, size);
     if (destination.valid()) {
         // Registered host buffers can participate directly in the stream command buffer.
-        HRX_CHECK(hrx_stream_copy_buffer(backend_context->stream, context->buffer, tensor_base + offset,
+        HRX_CHECK(hrx_stream_copy_buffer_linear(backend_context->stream, context->buffer, tensor_base + offset,
                                          destination.buffer(), destination.offset(), size));
     } else {
         synchronous_download_fallback(backend_context, context->buffer, tensor_base + offset, data, size);
@@ -991,7 +995,7 @@ static bool backend_copy_tensor_async(ggml_backend_t      backend_src,
                 destination->view_src != nullptr ? destination->view_src->buffer : destination->buffer;
             return buffer_copy(destination_buffer, source, destination);
         }
-        return HRX_CHECK(hrx_stream_copy_buffer(destination_backend->stream, source_context->buffer, source_offset,
+        return HRX_CHECK(hrx_stream_copy_buffer_linear(destination_backend->stream, source_context->buffer, source_offset,
                                                 destination_context->buffer, destination_offset, size));
     }
     ggml_backend_buffer_t source_buffer = source->view_src != nullptr ? source->view_src->buffer : source->buffer;
@@ -1172,7 +1176,7 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
     GGML_UNUSED(parameters);
     auto *       device_ctx = device_context(device);
     hrx_stream_t stream     = nullptr;
-    if (!HRX_CHECK(hrx_stream_create(device_ctx->device, 0, &stream))) {
+    if (!HRX_CHECK(hrx_stream_create(ggml::hrx::device_queue(device_ctx->device), 0, &stream))) {
         return nullptr;
     }
     auto * context = new (std::nothrow) ggml_backend_hrx_context;
@@ -1925,10 +1929,18 @@ static ggml_backend_dev_t registry_device(ggml_backend_reg_t registry, size_t in
 
 // [1bit] zero-copy sharing: proc "ggml_backend_buffer_export_dmabuf" (ggml-hrx-dmabuf.cpp)
 static bool ggml_backend_hrx_buffer_export_dmabuf(ggml_backend_buffer_t buffer, int * fd, size_t * offset) {
-    void * device_ptr = nullptr;
-    return buffer != nullptr && buffer->iface.get_base == ggml_backend_hrx_buffer_base &&
-           HRX_CHECK(hrx_buffer_get_device_ptr(buffer_context(buffer)->buffer, &device_ptr)) &&
-           ggml::hrx::export_dmabuf(device_ptr, buffer->size, fd, offset);
+    if (buffer == nullptr || buffer->iface.get_base != ggml_backend_hrx_buffer_base) {
+        return false;
+    }
+    // [1bit] hrx-system v0.3.0: the device address is a scoped query (the device's queue-family site)
+    ggml_backend_hrx_buffer_context * ctx    = buffer_context(buffer);
+    hrx_memory_scope_t                scope  = {};
+    uint64_t                          address = 0;
+    if (!HRX_CHECK(hrx_device_query_queue_family_memory_scope(ctx->device->device, 0, HRX_MEMORY_SITE_QUEUE, &scope)) ||
+        !HRX_CHECK(hrx_buffer_query_address(ctx->buffer, scope, HRX_BUFFER_INTERFACE_DEVICE_ADDRESS, &address))) {
+        return false;
+    }
+    return ggml::hrx::export_dmabuf(reinterpret_cast<void *>(static_cast<uintptr_t>(address)), buffer->size, fd, offset);
 }
 
 // engine #2500: the loader's file mapping is a MAPPED weight (host memory the runtime packs once, model_buffer_from_mmap),
@@ -1958,17 +1970,34 @@ static const ggml_backend_reg_i registry_i = { registry_name, registry_device_co
 
 static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
     auto         context = std::make_unique<ggml_backend_hrx_reg_context>();
+    // [1bit] hrx-system v0.3.0 (libamdf, no ROCr): one runtime, its device inventory, one sealed group of every GPU.
+    // The event sink is a runtime option now (it was a process-global setter).
+    hrx_runtime_options_t options = {};
     if (environment_flag_enabled("GGML_HRX_LOG_DEVICE_EVENTS")) {
-        hrx_device_event_sink_t sink = { log_hrx_device_event, nullptr };
-        if (!HRX_CHECK(hrx_runtime_set_device_event_sink(sink))) {
-            return context;
-        }
+        options.event_sink = { log_hrx_device_event, nullptr };
     }
-    hrx_status_t status  = hrx_gpu_initialize(0);
+    hrx_status_t status = hrx_runtime_create(&options, hrx_host_allocator_system(), &context->runtime);
+    hrx_device_info_t * infos      = nullptr;
+    size_t              info_count = 0;
     if (hrx_status_is_ok(status)) {
-        context->initialized = true;
-    } else if (hrx_status_code(status) == HRX_STATUS_ALREADY_EXISTS) {
-        hrx_status_ignore(status);
+        status = hrx_runtime_query_available_devices(context->runtime, "amdgpu", hrx_host_allocator_system(),
+                                                     &info_count, &infos);
+    }
+    if (hrx_status_is_ok(status) && info_count > 0) {
+        // the completion-observation policy: GGML_HRX_COMPLETION_WAIT (ggml-hrx-wait-flags.h), the same knob as host waits
+        const hrx_wait_flags_t wait = ggml::hrx::completion_wait_flags();
+        std::vector<hrx_device_create_params_t> params(info_count);
+        for (size_t i = 0; i < info_count; ++i) {
+            params[i].uri                   = infos[i].uri;
+            params[i].completion_wait_flags = wait;
+        }
+        status = hrx_device_group_create(context->runtime, info_count, params.data(), &context->group);
+    }
+    if (infos != nullptr) {
+        hrx_host_allocator_free(hrx_host_allocator_system(), infos);
+    }
+    if (hrx_status_is_ok(status)) {
+        context->initialized = context->group != nullptr;
     } else {
         // NOT silent (engine #1766): a failed init registers zero devices, and then every downstream symptom points at
         // something else -- `llama-bench --list-devices` prints "(none)", and `--device HRX0` is rejected as "invalid
@@ -1976,21 +2005,21 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         // status goes through hrx_check() so the line reads like every other HRX failure in this file (same
         // file:line:expression prefix, same status consumption); the first attempt found the cause to be a ROCr whose
         // libhsa-runtime64 does not export hsa_amd_queue_create, which that message names by symbol.
-        hrx_check(status, "hrx_gpu_initialize(0)", __FILE__, __LINE__);
+        hrx_check(status, "hrx_runtime_create / hrx_device_group_create", __FILE__, __LINE__);
         GGML_LOG_ERROR("ggml_hrx: the HRX runtime did not initialise, so this backend registers no devices: "
                        "--list-devices will print none and --device HRX0 will be rejected as an invalid device. "
                        "The line above is the reason (engine #1766)\n");
         return context;
     }
-    int count = 0;
-    if (!HRX_CHECK(hrx_gpu_device_count(&count))) {
-        return context;
+    if (context->group == nullptr) {
+        return context;   // no GPU in the inventory: zero devices, as before
     }
+    const int count = (int) hrx_device_group_device_count(context->group);
     context->device_contexts.reserve(count);
     context->devices.reserve(count);
     for (int i = 0; i < count; ++i) {
-        hrx_device_t hrx_device = nullptr;
-        if (!HRX_CHECK(hrx_gpu_device_get(i, &hrx_device)) || hrx_device == nullptr) {
+        hrx_device_t hrx_device = hrx_device_group_get_device(context->group, (size_t) i);   // borrowed; retained below
+        if (hrx_device == nullptr) {
             continue;
         }
         hrx_device_retain(hrx_device);
@@ -2015,7 +2044,7 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             hrx_device_release(hrx_device);
             continue;
         }
-        if (!HRX_CHECK(hrx_stream_create(hrx_device, 0, &device_ctx->buffer_stream))) {
+        if (!HRX_CHECK(hrx_stream_create(ggml::hrx::device_queue(hrx_device), 0, &device_ctx->buffer_stream))) {
             hrx_device_release(hrx_device);
             continue;
         }

@@ -36,6 +36,7 @@
 //
 // ONEBIT_HRX_BLOCKING_WAIT=1 turns the sleep off.
 
+#include "../ggml-hrx-wait-flags.h"
 #include "hrx-sleeping-wait.h"
 
 #include <algorithm>
@@ -84,7 +85,7 @@ int64_t expected_ns(const WaitHistory & history) {
 
 hrx_status_t stream_wait_sleeping(hrx_stream_t stream, WaitHistory & history) {
     if (blocking_wait() || stream == nullptr) {
-        return hrx_stream_wait(stream);
+        return hrx_stream_wait(stream, ggml::hrx::completion_wait_flags());
     }
     const auto    start     = Clock::now();
     const int64_t expected  = expected_ns(history);
@@ -104,7 +105,7 @@ hrx_status_t stream_wait_sleeping(hrx_stream_t stream, WaitHistory & history) {
             overslept = complete;
         }
     }
-    hrx_status_t status = hrx_stream_wait(stream);
+    hrx_status_t status = hrx_stream_wait(stream, ggml::hrx::completion_wait_flags());
     if (hrx_status_is_ok(status)) {
         if (overslept) {
             history.count = 0;
