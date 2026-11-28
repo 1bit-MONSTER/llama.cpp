@@ -454,6 +454,47 @@ static std::vector<std::string> scheduled_kernel_sequence(ggml_cgraph * graph) {
     return names;
 }
 
+// engine#3491: common.softmax_rows_f32 takes a SOFT_MAX with a positive scale and no mask (Inkling's loop controller
+// softmaxes 2..5 logits at scale 1/48); a non-positive scale, a mask or ALiBi stay off it. Host only: the plan is built
+// for gfx1151 without a device.
+static void run_softmax_rows_scale_schedule_checks() {
+    const auto plan_for = [](int64_t cols, int64_t rows, float scale, bool mask, std::vector<std::string> & kernels) {
+        ggml_init_params params = {};
+        params.mem_size         = 1024 * 1024;
+        params.no_alloc         = true;
+        ggml_context * ctx      = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        ggml_tensor * logits = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, cols, rows, 369);
+        ggml_tensor * m      = mask ? ggml_new_tensor_2d(ctx, GGML_TYPE_F16, cols, rows) : nullptr;
+        ggml_tensor * out    = ggml_soft_max_ext(ctx, logits, m, scale, 0.0f);
+        ggml_cgraph * graph  = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, out);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        const bool scheduled = scheduler.schedule_graph(imported.graph, { "gfx1151" });
+        kernels.clear();
+        if (scheduled) {
+            for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+                kernels.push_back(kernel_name_for_id(dispatch.kernel.kernel_id));
+            }
+        }
+        ggml_free(ctx);
+        return scheduled;
+    };
+    const auto rows_kernel = [](const std::vector<std::string> & kernels) {
+        return kernels.size() == 1 && kernels.front() == "loom_libs:ggml_softmax_rows_f32";
+    };
+    std::vector<std::string> kernels;
+    for (int64_t cols : { 2, 3, 4, 5 }) {
+        REQUIRE(plan_for(cols, 1, 1.0f / 48.0f, false, kernels) && rows_kernel(kernels));
+        REQUIRE(plan_for(cols, 4, 1.0f / 48.0f, false, kernels) && rows_kernel(kernels));
+    }
+    REQUIRE(plan_for(16, 3, 1.0f, false, kernels) && rows_kernel(kernels));   // the unscaled form, as before
+    REQUIRE(!plan_for(3, 1, -0.5f, false, kernels) || !rows_kernel(kernels));  // negative: the max pass would be wrong
+    REQUIRE(!plan_for(3, 1, 1.0f / 48.0f, true, kernels) || !rows_kernel(kernels));   // a mask is not this kernel
+}
+
 // Each weight is bound at least once, and every binding uses `layout`.
 static void require_weight_binding_layout(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights,
                                           const char * layout) {
@@ -9457,6 +9498,7 @@ template <typename F> static void addon_kernel_case(Suite & suite, std::string n
 static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.route_outcome", [] { run_route_outcome_checks(); });   // engine#3120: the route decision
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
+    suite.host_case("softmax_rows.scale.schedule", [] { run_softmax_rows_scale_schedule_checks(); });   // engine#3491
     // engine#3383: the fallback takes an alternate only through a full ordered layout alias, never through a reordering
     // view or a write that reuses the storage.
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
